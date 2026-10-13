@@ -12,6 +12,7 @@
 #include <QVector3D>
 
 #include <functional>
+#include <optional>
 
 namespace classiCAD {
 
@@ -68,6 +69,7 @@ bool compositeRasterWorkbenchSurfaces(
     bool antialias,
     bool useWeightedOit,
     const ViewportShadingSettings &shadingSettings,
+    const std::optional<QVector3D> &sceneLinearBackground,
     const std::function<void(QPainter &, const ViewportRenderObject &,
                              RasterWorkbenchFragmentSink *)> &drawObject,
     RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr);

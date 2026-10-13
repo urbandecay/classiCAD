@@ -1431,6 +1431,48 @@ depth domain. Visual depth comparison remains open.
   8-unit camera produced an invalid OIT color comparison despite matching
   screen-space bounds. This controlled scene-camera comparison isolates OIT
   depth weighting; it does not capture a live Blender `RegionView3D` viewport.
+
+### QPainter scene-linear transparency integration (2026-10-13)
+
+- The ordinary QPainter Solid surface path now records scene-linear opaque and
+  transparent fragments, retains nearest per-pixel opaque depth, filters
+  transparent fragments against that depth, resolves Blender's weighted OIT
+  over opaque color and a scene-linear World/Custom background, and applies
+  the configured display transform once. The existing per-object QPainter
+  coverage image supplies edge coverage. Theme gradients remain on the prior
+  composition path because the current background input is a flat color; the
+  native-renderer failure fallback also keeps its post-display legacy path.
+- Polygon-mesh X-Ray now multiplies material/source alpha by `xrayAlpha` before
+  the fragment sink and display raster, matching the Blender 5.2.2 transparent
+  accumulation shader. Per-object fragment selection keeps only the nearest
+  captured triangle at each pixel, and the opaque pass selects the same object
+  as the existing projected-depth buffer.
+- Headless contracts cover scene-linear per-pixel bases, transparent overlap,
+  per-fragment opaque-depth rejection, and matching X-Ray/material alpha.
+  Against the matched 640×480 Blender `TRANSPARENT_OVERLAP` capture, the
+  overlap region has display MAE `0.333/255`, p95 `1/255`, maximum `1/255`;
+  the center is `[170,112,172]` versus `[169,112,172]`. Full-frame MAE is
+  `0.191/255`; 615 pixels exceed a 2-value threshold, all at surface boundary
+  coverage, where the maximum error is 141. QPainter cavity/effect ordering,
+  Theme-gradient integration, native-fallback composition, and boundary
+  coverage parity remain open.
+- The ordinary QPainter Solid surface compositor now gathers opaque and
+  transparent mesh/NURBS fragments before display conversion, selects the
+  nearest opaque fragment per pixel, rejects transparent fragments hidden by
+  opaque depth, resolves Blender's weighted transparency over a per-pixel
+  scene-linear base, then applies the view transform once. World and Custom
+  solid backgrounds enter that base; the Theme gradient and the native-renderer
+  failure fallback still use their existing display-referred composition.
+  X-Ray alpha now multiplies polygon-mesh source alpha before OIT, matching the
+  existing QPainter curve/NURBS behavior and Blender's transparent pass.
+  Headless contracts cover per-pixel bases, hidden-depth behavior, matched
+  background composition, and mesh X-Ray alpha. On the matched 640×480
+  overlapping-quad fixture, overlap-region display MAE is `0.333/255`, p95 and
+  max are `1/255`, and the center pixel is `[170,112,172]` versus Blender's
+  `[169,112,172]`. The full-frame MAE is `0.191/255`; its remaining 615 pixels
+  above a 2-value error threshold lie on surface boundaries, with maximum
+  error 141 from coverage/edge differences. QPainter cavity/effect ordering,
+  theme-gradient integration, and native-fallback composition remain open.
 - The offscreen AA-off presentation contract now exercises the final scene
   resolve with a scene-linear World color, an sRGB viewport background, a
   missing World background, and transparent film. It checks the AgX display

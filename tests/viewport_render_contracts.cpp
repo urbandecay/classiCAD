@@ -48,6 +48,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 
 using namespace classiCAD;
@@ -433,7 +434,7 @@ int main(int argc, char *argv[])
         const QColor background = QColor::fromRgbF(
             backgroundDisplay.x(), backgroundDisplay.y(),
             backgroundDisplay.z());
-        image.fill(background);
+        image.fill(Qt::transparent);
         CurveHitTester transparencyHitTester;
         ViewportRenderer renderer(transform, transparencyHitTester);
         renderer.setShadingSettings(shading);
@@ -453,7 +454,7 @@ int main(int argc, char *argv[])
         RasterWorkbenchSurfaceLayers layers;
         const bool rendered = compositeRasterWorkbenchSurfaces(
             &image, objects, transform, size, 1.0, false, true, shading,
-            drawObject, &layers);
+            backgroundLinear, drawObject, &layers);
         const QString capturePath = qEnvironmentVariable(
             "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_CAPTURE");
         const bool saved = capturePath.isEmpty() || image.save(capturePath);
@@ -462,15 +463,15 @@ int main(int argc, char *argv[])
         const QString frontCapturePath = qEnvironmentVariable(
             "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_FRONT_CAPTURE");
         QImage rearImage(size, QImage::Format_ARGB32_Premultiplied);
-        rearImage.fill(background);
+        rearImage.fill(Qt::transparent);
         QImage frontImage(size, QImage::Format_ARGB32_Premultiplied);
-        frontImage.fill(background);
+        frontImage.fill(Qt::transparent);
         const bool rearRendered = compositeRasterWorkbenchSurfaces(
             &rearImage, {objects[0]}, transform, size, 1.0, false, true,
-            shading, drawObject);
+            shading, backgroundLinear, drawObject);
         const bool frontRendered = compositeRasterWorkbenchSurfaces(
             &frontImage, {objects[1]}, transform, size, 1.0, false, true,
-            shading, drawObject);
+            shading, backgroundLinear, drawObject);
         const bool isolatedSaved =
             (rearCapturePath.isEmpty() || rearImage.save(rearCapturePath)) &&
             (frontCapturePath.isEmpty() || frontImage.save(frontCapturePath));
@@ -504,10 +505,10 @@ int main(int argc, char *argv[])
         const QVector<ViewportRenderObject> depthOrderedObjects{
             depthFront, depthRear};
         QImage depthOrderedImage(size, QImage::Format_ARGB32_Premultiplied);
-        depthOrderedImage.fill(background);
+        depthOrderedImage.fill(Qt::transparent);
         const bool depthOrderedRendered = compositeRasterWorkbenchSurfaces(
             &depthOrderedImage, depthOrderedObjects, transform, size, 1.0,
-            false, true, shading, drawObject);
+            false, true, shading, backgroundLinear, drawObject);
         const QString depthCapturePath = qEnvironmentVariable(
             "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_DEPTH_CAPTURE");
         const bool depthSaved = depthCapturePath.isEmpty() ||
@@ -517,6 +518,34 @@ int main(int argc, char *argv[])
                             depthOrderedImage.pixelColor(460, 200) == frontOnly &&
                             depthOrderedImage.pixelColor(320, 240) == overlap,
                         "weighted QPainter transparency must preserve pixels when object iteration order is reversed");
+
+        ViewportRenderObject halfAlphaObject = objects[0];
+        halfAlphaObject.workbenchMaterial.alpha = 0.5f;
+        halfAlphaObject.meshMaterials = {halfAlphaObject.workbenchMaterial};
+        QImage halfAlphaImage(size, QImage::Format_ARGB32_Premultiplied);
+        halfAlphaImage.fill(Qt::transparent);
+        renderer.setShadingSettings(shading);
+        const bool halfAlphaRendered = compositeRasterWorkbenchSurfaces(
+            &halfAlphaImage, {halfAlphaObject}, transform, size, 1.0,
+            false, true, shading, backgroundLinear, drawObject);
+
+        ViewportShadingSettings xraySettings = shading;
+        xraySettings.xray = true;
+        xraySettings.xrayAlpha = 0.5;
+        ViewportRenderObject xrayObject = objects[0];
+        xrayObject.workbenchMaterial.alpha = 1.0f;
+        xrayObject.meshMaterials = {xrayObject.workbenchMaterial};
+        QImage xrayImage(size, QImage::Format_ARGB32_Premultiplied);
+        xrayImage.fill(Qt::transparent);
+        renderer.setShadingSettings(xraySettings);
+        const bool xrayRendered = compositeRasterWorkbenchSurfaces(
+            &xrayImage, {xrayObject}, transform, size, 1.0, false, true,
+            xraySettings, backgroundLinear, drawObject);
+        passed &= check(halfAlphaRendered && xrayRendered &&
+                            halfAlphaImage.pixelColor(300, 220) ==
+                                xrayImage.pixelColor(300, 220),
+                        "QPainter mesh X-Ray alpha must multiply source alpha before weighted transparency resolve");
+        renderer.setShadingSettings(shading);
     }
 
     ViewportTransform perspectiveDofTransform = orthographicDofTransform;
@@ -1886,7 +1915,7 @@ int main(int argc, char *argv[])
                             compositeRasterWorkbenchSurfaces(
                                 &image, objects, surfaceTransform,
                                 surfaceViewportSize, 1.0, false, true,
-                                settings,
+                                settings, std::nullopt,
                                 [&](QPainter &painter,
                                     const ViewportRenderObject &object,
                                     RasterWorkbenchFragmentSink *fragmentSink) {

@@ -113,6 +113,24 @@ int main()
                         near(resolved[0].blue, weightedResult[0].blue) &&
                         near(resolved[0].alpha, weightedResult[0].alpha),
                     "weighted OIT must be independent of transparent object order");
+    const std::vector<RasterWorkbenchLinearPixel> variedBase{
+        background,
+        RasterWorkbenchLinearPixel::fromStraight(0.4f, 0.3f, 0.2f, 1.0f),
+    };
+    passed &= check(resolveRasterWorkbenchWeightedOitFragments(
+                        2, 1, variedBase, weightedFragments, &resolved) &&
+                        resolved.size() == 2 &&
+                        near(resolved[1].red, variedBase[1].red) &&
+                        near(resolved[1].green, variedBase[1].green) &&
+                        near(resolved[1].blue, variedBase[1].blue) &&
+                        near(resolved[1].alpha, variedBase[1].alpha),
+                    "weighted OIT must preserve independently supplied per-pixel scene bases");
+    std::vector<RasterWorkbenchLinearPixel> unchangedBase{{9.0f, 8.0f, 7.0f, 1.0f}};
+    passed &= check(!resolveRasterWorkbenchWeightedOitFragments(
+                        2, 1, std::vector<RasterWorkbenchLinearPixel>{background},
+                        weightedFragments, &unchangedBase) &&
+                        unchangedBase.size() == 1 && unchangedBase[0].red == 9.0f,
+                    "weighted OIT must reject a base buffer with the wrong pixel count without mutating output");
 
     const QVector3D straightLinear(opaqueResolved.red / opaqueResolved.alpha,
                                    opaqueResolved.green / opaqueResolved.alpha,

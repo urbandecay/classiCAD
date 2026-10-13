@@ -1950,6 +1950,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             normalView, incidentView,
                             shadingSettings_.specularLighting);
                     }
+                    if (shadingSettings_.xrayEnabled()) {
+                        pixelAlpha *= shadingSettings_.xrayAlpha;
+                    }
                     if (fragmentSink != nullptr) {
                         const Point3D &point0 = triangle.worldPoints[0];
                         const Point3D &point1 = triangle.worldPoints[1];

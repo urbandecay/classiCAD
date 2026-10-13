@@ -9120,6 +9120,18 @@ protected:
             }
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 !surfaceDrawObjects.isEmpty()) {
+                std::optional<QVector3D> rasterSceneLinearBackground;
+                if (viewportShadingSettings_.backgroundMode ==
+                    ViewportBackgroundMode::World) {
+                    rasterSceneLinearBackground =
+                        viewportWorldColorSceneLinear;
+                } else if (viewportShadingSettings_.backgroundMode ==
+                           ViewportBackgroundMode::Custom) {
+                    const QColor color =
+                        viewportShadingSettings_.customBackgroundColor;
+                    rasterSceneLinearBackground = workbenchSrgbToSceneLinear(
+                        QVector3D(color.redF(), color.greenF(), color.blueF()));
+                }
                 rasterSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
                     &committedSceneLayer, surfaceDrawObjects,
                     viewportTransform_, renderFrame.viewportSize,
@@ -9127,6 +9139,7 @@ protected:
                     viewportAaMode_ != 0,
                     true,
                     renderShadingSettings,
+                    rasterSceneLinearBackground,
                     [this](QPainter &surfacePainter,
                            const ViewportRenderObject &object,
                            RasterWorkbenchFragmentSink *fragmentSink) {
@@ -10983,6 +10996,7 @@ protected:
                     viewportTransform_, renderFrame.viewportSize,
                     fallbackDpr, viewportAaMode_ != 0, false,
                     renderShadingSettings,
+                    std::nullopt,
                     [this](QPainter &surfacePainter,
                            const ViewportRenderObject &object,
                            RasterWorkbenchFragmentSink *fragmentSink) {

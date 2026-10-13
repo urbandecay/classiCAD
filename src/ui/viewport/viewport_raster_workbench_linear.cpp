@@ -112,13 +112,33 @@ bool resolveRasterWorkbenchWeightedOitFragments(
     const std::vector<RasterWorkbenchLinearFragment> &fragments,
     std::vector<RasterWorkbenchLinearPixel> *output)
 {
-    if (output == nullptr || width <= 0 || height <= 0 || !finite(base)) {
-        return false;
-    }
+    if (width <= 0 || height <= 0 || !finite(base)) return false;
+    const std::size_t w = static_cast<std::size_t>(width);
+    const std::size_t h = static_cast<std::size_t>(height);
+    if (w > std::numeric_limits<std::size_t>::max() / h) return false;
+    return resolveRasterWorkbenchWeightedOitFragments(
+        width, height, std::vector<RasterWorkbenchLinearPixel>(w * h, base),
+        fragments, output);
+}
+
+bool resolveRasterWorkbenchWeightedOitFragments(
+    int width, int height,
+    const std::vector<RasterWorkbenchLinearPixel> &basePixels,
+    const std::vector<RasterWorkbenchLinearFragment> &fragments,
+    std::vector<RasterWorkbenchLinearPixel> *output)
+{
+    if (output == nullptr || width <= 0 || height <= 0) return false;
     const std::size_t w = static_cast<std::size_t>(width);
     const std::size_t h = static_cast<std::size_t>(height);
     if (w > std::numeric_limits<std::size_t>::max() / h) return false;
     const std::size_t pixelCount = w * h;
+    if (basePixels.size() != pixelCount ||
+        !std::all_of(basePixels.begin(), basePixels.end(),
+                     [](const RasterWorkbenchLinearPixel &pixel) {
+                         return finite(pixel);
+                     })) {
+        return false;
+    }
 
     struct Accumulation {
         float red = 0.0f;
@@ -148,7 +168,7 @@ bool resolveRasterWorkbenchWeightedOitFragments(
         accumulation.revealage *= 1.0f - fragment.alpha;
     }
 
-    std::vector<RasterWorkbenchLinearPixel> resolved(pixelCount, base);
+    std::vector<RasterWorkbenchLinearPixel> resolved = basePixels;
     for (std::size_t index = 0; index < pixelCount; ++index) {
         const Accumulation &accumulation = accumulations[index];
         if (accumulation.weight <= 0.0f) continue;

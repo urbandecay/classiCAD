@@ -61,5 +61,10 @@ bool resolveRasterWorkbenchWeightedOitFragments(
     int width, int height, const RasterWorkbenchLinearPixel &base,
     const std::vector<RasterWorkbenchLinearFragment> &fragments,
     std::vector<RasterWorkbenchLinearPixel> *output);
+bool resolveRasterWorkbenchWeightedOitFragments(
+    int width, int height,
+    const std::vector<RasterWorkbenchLinearPixel> &basePixels,
+    const std::vector<RasterWorkbenchLinearFragment> &fragments,
+    std::vector<RasterWorkbenchLinearPixel> *output);
 
 } // namespace classiCAD

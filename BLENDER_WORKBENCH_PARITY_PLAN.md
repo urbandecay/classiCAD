@@ -1260,13 +1260,23 @@ depth domain. Visual depth comparison remains open.
   match exactly at 2,316 pixels each, XOR 0, IoU 1.0; effect-delta MAE is
   10.48/255 and maximum error 35/255. This confirms effect coverage, while
   outline intensity/edge values still differ.
-- World cavity is not pixel-matched: classiCAD changes 20,503 pixels and
-  Blender 26,048; mask XOR is 9,919, IoU 0.649, and effect-delta MAE over the
-  mask union is 1.32/255 (maximum 14/255). Source review confirms
-  `cavityViewPosition` uses negative forward view depth, the same sign as
-  Blender. The earlier proposed background-offset sign change was therefore
-  incorrect and was reverted; no cavity shader change is justified by that
-  hypothesis. The sampling and edge-mask difference remains open.
+- World cavity's first measured mask mismatch was caused in part by the depth
+  sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
+  while Blender binds its Workbench depth texture with the default sampler,
+  which disables linear filtering. classiCAD now uses nearest filtering so
+  jittered cavity samples do not blend depths across face and silhouette
+  boundaries. Pinned references are Blender's
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1153-L1165)
+  depth binding and [`GPU_texture.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/GPU_texture.hh#L2660-L2678)
+  default filtering definition.
+- At 640×480 with an RGB effect-delta threshold of 2, the classiCAD changed
+  mask moved from 20,503 to 27,002 pixels after nearest filtering; Blender's
+  reference mask is 26,048 pixels. XOR fell from 9,919 to 3,862, and IoU rose
+  from 0.649 to 0.864. Effect-delta MAE over the new mask union is 0.420/255,
+  p95 is 1/255, and maximum error is 16/255. This supports the depth-filter
+  cause; remaining mask and edge-value differences are still open. The earlier
+  proposed background-offset sign change remains reverted: source review
+  confirms `cavityViewPosition` has Blender's negative-forward depth sign.
 - The first transparent overlap capture isolated a resolve-coordinate bug, not
   a geometry or OIT accumulation bug. The weighted resolve used an oversized
   fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so

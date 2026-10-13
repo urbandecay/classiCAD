@@ -2676,8 +2676,12 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
                      pixelSize.width(), pixelSize.height(), 0,
                      GL_DEPTH_STENCIL,
                      GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // Blender's Workbench cavity pass binds its depth texture with the
+        // default nearest sampler. Linear filtering blends unrelated depths
+        // across face and silhouette boundaries before reconstructing sample
+        // positions, changing the cavity mask.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }

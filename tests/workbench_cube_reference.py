@@ -96,6 +96,26 @@ def arguments():
         help="set the cube object display RGB in Blender scene-linear values",
     )
     parser.add_argument(
+        "--background-source",
+        choices=("WORLD", "VIEWPORT"),
+        default="WORLD",
+        help="Workbench background source (default: WORLD)",
+    )
+    parser.add_argument("--world-color", nargs=3, type=float, metavar=("R", "G", "B"),
+                        default=(0.12, 0.07, 0.035))
+    parser.add_argument("--viewport-background-color", nargs=3, type=float,
+                        metavar=("R", "G", "B"), default=(0.25, 0.45, 0.65))
+    parser.add_argument(
+        "--view-transform",
+        choices=("AgX", "Standard", "Khronos PBR Neutral", "Filmic"),
+        default="AgX",
+        help="Blender scene view transform (default: AgX)",
+    )
+    parser.add_argument("--exposure", type=float, default=0.0,
+                        help="Blender scene exposure (default: 0)")
+    parser.add_argument("--gamma", type=float, default=1.0,
+                        help="Blender scene gamma (default: 1)")
+    parser.add_argument(
         "--linear-output",
         help="also write final scene-linear Combined and Z passes to a multilayer OpenEXR",
     )
@@ -316,10 +336,12 @@ def main():
     shading.cavity_ridge_factor = 1.0
     shading.cavity_valley_factor = 1.0
     shading.show_object_outline = args.effect == "OUTLINE"
-    shading.background_type = "WORLD"
-    scene.world.color = (0.0232, 0.0232, 0.0232)
-
-    scene.view_settings.view_transform = "AgX"
+    shading.background_type = args.background_source
+    scene.world.color = args.world_color
+    shading.background_color = args.viewport_background_color
+    scene.view_settings.view_transform = args.view_transform
+    scene.view_settings.exposure = args.exposure
+    scene.view_settings.gamma = args.gamma
     if args.jitter_metadata:
         if not args.linear_output:
             raise ValueError("--jitter-metadata requires --linear-output")

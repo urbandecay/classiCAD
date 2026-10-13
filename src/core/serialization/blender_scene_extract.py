@@ -76,7 +76,7 @@ def bake_color_lut(scene, lut_records, lut_bytes_by_id, unsupported):
             else:
                 raise ValueError("no OCIO sRGB view matches Blender view transform " + wanted_transform)
         transform = ocio.DisplayViewTransform()
-        scene_linear = config.getColorSpaceNameByRole(ocio.ROLE_SCENE_LINEAR)
+        scene_linear = config.getRoleColorSpace(ocio.ROLE_SCENE_LINEAR)
         transform.setSrc(scene_linear)
         transform.setDisplay(display)
         transform.setView(view)

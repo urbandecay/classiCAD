@@ -606,6 +606,8 @@ int main(int argc, char *argv[])
         QVector3D(0.0f, 0.0f, 1.0f));
     const QVector3D defaultCubeFaceAgx =
         workbenchSceneLinearToAgxSrgb(defaultCubeFace);
+    const QVector3D agxExposureHdr = workbenchSceneLinearToDisplaySrgb(
+        QVector3D(0.18f, 0.18f, 0.18f), 0, 4.0, 1.0);
     const QVector3D blenderDefaultCubeFaceSrgb(
         154.0f / 255.0f, 155.0f / 255.0f, 156.0f / 255.0f);
     passed &= check(workbenchLighting.useSpecular &&
@@ -627,8 +629,20 @@ int main(int argc, char *argv[])
                                 workbenchAgxDisplayLutSize *
                                 workbenchAgxDisplayLutSize * 3 &&
                         (defaultCubeFaceAgx - blenderDefaultCubeFaceSrgb)
-                                .length() < 0.01f,
-                    "default solid cube face must use Blender's Workbench lighting and AgX display transform");
+                                .length() < 0.01f &&
+                        std::abs(agxExposureHdr.x() - 0.8863138f) < 0.001f &&
+                        std::abs(agxExposureHdr.y() - 0.8863138f) < 0.001f &&
+                        std::abs(agxExposureHdr.z() - 0.8863138f) < 0.001f,
+                    "default solid cube shading and exposure-driven HDR AgX must match Blender's Workbench transform");
+
+    const QVector3D gammaZero = workbenchSceneLinearToDisplaySrgb(
+        QVector3D(0.18f, 1.0f, 4.0f), 1, 0.0, 0.0);
+    passed &= check(gammaZero.x() == 0.0f && gammaZero.y() == 1.0f &&
+                        gammaZero.z() == 1.0f &&
+                        std::isfinite(gammaZero.x()) &&
+                        std::isfinite(gammaZero.y()) &&
+                        std::isfinite(gammaZero.z()),
+                    "Blender gamma zero must use the FLT_EPSILON exponent without overflowing HDR display values");
 
     // Imported scene cameras use Blender's render viewplane, independently
     // of the interactive viewport's navigation projection.
@@ -2018,7 +2032,8 @@ int main(int argc, char *argv[])
                         const ViewportCameraPreferences *dofOptics = nullptr,
                         const QString &cavityDiagnosticPrefix = QString{},
                         QVector<float> *sceneLinearCapture = nullptr,
-                        const QVector3D *backgroundSceneLinear = nullptr) {
+                        const QVector3D *backgroundSceneLinear = nullptr,
+                        const QColor *viewportBackground = nullptr) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -2056,15 +2071,32 @@ int main(int argc, char *argv[])
                             if (displayGray < targetDisplayGray) low = middle;
                             else high = middle;
                         }
-                        const QVector3D background = backgroundSceneLinear != nullptr
-                            ? *backgroundSceneLinear
-                            : QVector3D((low + high) * 0.5f,
-                                        (low + high) * 0.5f,
-                                        (low + high) * 0.5f);
-                        const GLfloat linearBackground[4] = {
-                            background.x(), background.y(), background.z(), 1.0f};
-                        functions.glClearBufferfv(GL_COLOR, 0,
-                                                  linearBackground);
+                        bool backgroundRendered = true;
+                        if (backgroundSceneLinear != nullptr) {
+                            BlenderGridRenderer backgroundRenderer;
+                            backgroundRendered = backgroundRenderer
+                                .renderBackgroundToCurrentFramebuffer(
+                                    glSize, 1.0, *backgroundSceneLinear);
+                        } else if (viewportBackground != nullptr) {
+                            BlenderGridRenderer backgroundRenderer;
+                            backgroundRendered = backgroundRenderer
+                                .renderBackgroundToCurrentFramebuffer(
+                                    glSize, 1.0, *viewportBackground, true);
+                        } else {
+                            const QVector3D background(
+                                (low + high) * 0.5f,
+                                (low + high) * 0.5f,
+                                (low + high) * 0.5f);
+                            const GLfloat linearBackground[4] = {
+                                background.x(), background.y(),
+                                background.z(), 1.0f};
+                            functions.glClearBufferfv(GL_COLOR, 0,
+                                                      linearBackground);
+                        }
+                        if (!backgroundRendered) {
+                            sceneAaRenderer.finishSceneSample();
+                            return false;
+                        }
                         ViewportWorkbenchSceneColorPassRequest request;
                         request.sharedTargets = &sceneAaRenderer.targets();
                         request.sceneLinearOutput = true;
@@ -2407,9 +2439,107 @@ int main(int argc, char *argv[])
                             lightingCapturesSucceeded &= linearSaved &&
                                                          displaySaved;
                         }
+                        const QVector3D matchedWorldColor(0.12f, 0.07f,
+                                                          0.035f);
+                        const QVector3D matchedViewportColorSceneLinear(
+                            0.25f, 0.45f, 0.65f);
+                        const QVector3D matchedViewportColorSrgb =
+                            workbenchSceneLinearToSrgb(
+                                matchedViewportColorSceneLinear);
+                        const QColor matchedViewportColor =
+                            QColor::fromRgbF(matchedViewportColorSrgb.x(),
+                                             matchedViewportColorSrgb.y(),
+                                             matchedViewportColorSrgb.z());
+                        struct BackgroundCaptureCase {
+                            const char *name;
+                            ViewportBackgroundMode mode;
+                        };
+                        const BackgroundCaptureCase backgroundCases[] = {
+                            {"world", ViewportBackgroundMode::World},
+                            {"viewport", ViewportBackgroundMode::Custom}};
+                        struct TransformCaptureCase {
+                            const char *name;
+                            int colorTransform;
+                            qreal exposure;
+                            qreal gamma;
+                        };
+                        const TransformCaptureCase transformCases[] = {
+                            {"agx", 0, 0.0, 1.0},
+                            {"standard", 1, 0.0, 1.0},
+                            {"standard_exposure_gamma", 1, 1.0, 2.0}};
+                        for (const TransformCaptureCase &transformCase :
+                             transformCases) {
+                            for (const BackgroundCaptureCase &captureCase :
+                                 backgroundCases) {
+                                if (transformCase.exposure != 0.0 &&
+                                    captureCase.mode !=
+                                        ViewportBackgroundMode::World) {
+                                    continue;
+                                }
+                                ViewportShadingSettings backgroundShading =
+                                    rawFaceShading;
+                                backgroundShading.lightingMode =
+                                    ViewportLightingMode::Flat;
+                                backgroundShading.backgroundMode =
+                                    captureCase.mode;
+                                backgroundShading.colorTransform =
+                                    transformCase.colorTransform;
+                                backgroundShading.colorExposure =
+                                    transformCase.exposure;
+                                backgroundShading.colorGamma =
+                                    transformCase.gamma;
+                                const QString stem = QStringLiteral(
+                                    "background_%1_%2")
+                                    .arg(QString::fromLatin1(transformCase.name),
+                                         QString::fromLatin1(captureCase.name));
+                                QImage display;
+                                QVector<float> sceneLinear;
+                                const QVector3D *world =
+                                    captureCase.mode ==
+                                            ViewportBackgroundMode::World
+                                        ? &matchedWorldColor : nullptr;
+                                const QColor *viewport =
+                                    captureCase.mode ==
+                                            ViewportBackgroundMode::Custom
+                                        ? &matchedViewportColor : nullptr;
+                                const bool rendered = renderCoordinatedScene(
+                                    backgroundShading,
+                                    QByteArrayLiteral("background-match-") +
+                                        stem.toUtf8(),
+                                    &display, &polygonCubeObject, nullptr,
+                                    nullptr, QString{}, &sceneLinear, world,
+                                    viewport);
+                                const QString displayPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".png"));
+                                const QString linearPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".pfm"));
+                                QFile linearFile(linearPath);
+                                const QByteArray pfmHeader =
+                                    QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                                const qsizetype expectedValues = 640 * 480 * 3;
+                                const bool linearSaved = rendered &&
+                                    sceneLinear.size() == expectedValues &&
+                                    linearFile.open(QIODevice::WriteOnly) &&
+                                    linearFile.write(pfmHeader) ==
+                                        pfmHeader.size() &&
+                                    linearFile.write(reinterpret_cast<const char *>(
+                                        sceneLinear.constData()),
+                                        sceneLinear.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        sceneLinear.size() *
+                                            qsizetype(sizeof(float));
+                                const bool displaySaved = rendered &&
+                                    display.size() == QSize(640, 480) &&
+                                    display.save(displayPath);
+                                lightingCapturesSucceeded &= linearSaved &&
+                                                             displaySaved;
+                            }
+                        }
                         passed &= check(
                             lightingCapturesSucceeded,
-                            "matched cube lighting and color-source captures must write scene-linear PFM and display PNG outputs");
+                            "matched cube lighting, color-source, and background captures must write scene-linear PFM and display PNG outputs");
                     }
                     const QString cavityDiagnosticPrefix = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX");

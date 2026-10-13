@@ -385,7 +385,7 @@ bool ViewportAaRenderer::ensureDisplayTransformTexture()
         return displayTransformTextureAvailable_;
     }
     const int edge = displaySettings_.colorTransform == 4
-        ? metadata.size : workbenchAgxDisplayLutSize;
+        ? metadata.size : workbenchDisplayLutSize(displaySettings_.colorTransform);
     const qsizetype expectedBytes = qsizetype(edge) * edge * edge * 12;
     const QVector<float> *builtin = nullptr;
     if (displaySettings_.colorTransform == 2) {
@@ -601,7 +601,8 @@ bool ViewportAaRenderer::initialize()
             color = max(color, vec3(0.0));
             vec3 low = color * 12.92;
             vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-            return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            vec3 encoded = mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            return mix(encoded, vec3(1.0), greaterThanEqual(color, vec3(1.0)));
         }
         vec3 transformColor(vec3 color)
         {
@@ -629,8 +630,13 @@ bool ViewportAaRenderer::initialize()
                     float(uDisplayLutSize);
                 color = texture(uDisplayLut, coordinate).rgb;
             }
-            return pow(max(color, vec3(0.0)),
-                       vec3(1.0 / max(uGamma, 0.000001)));
+            color = max(color, vec3(0.0));
+            if (uGamma <= 1.1920928955078125e-7) {
+                return pow(min(color, vec3(1.0)),
+                           vec3(1.0 / 1.1920928955078125e-7));
+            }
+            return pow(color,
+                       vec3(1.0 / max(uGamma, 1.1920928955078125e-7)));
         }
         void main()
         {
@@ -2113,11 +2119,14 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
         displaySettings_.colorLutMetadata;
     presentProgram_.setUniformValue(
         "uDisplayLutSize", customDisplayLut
-            ? lutMetadata.size : workbenchAgxDisplayLutSize);
+            ? lutMetadata.size
+            : workbenchDisplayLutSize(displaySettings_.colorTransform));
     presentProgram_.setUniformValue(
         "uDisplayLutDomain",
         QVector2D(customDisplayLut ? lutMetadata.domainMin : 0.0,
-                  customDisplayLut ? lutMetadata.domainMax : 2.0));
+                  customDisplayLut ? lutMetadata.domainMax
+                      : workbenchDisplayLutDomainMaximum(
+                            displaySettings_.colorTransform)));
     presentProgram_.setUniformValue(
         "uDisplayLutShaper",
         displaySettings_.colorTransform == 0 ||

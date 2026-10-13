@@ -1,6 +1,6 @@
 <RCC>
     <qresource prefix="/workbench-lighting">
-        <file alias="color/agx_srgb_default_65.bin">../../../resources/blender/colormanagement/agx_srgb_default_65.bin</file>
+        <file alias="color/agx_srgb_default_97.bin">../../../resources/blender/colormanagement/agx_srgb_default_97.bin</file>
         <file alias="color/khronos_pbr_neutral_srgb_65.bin">../../../resources/blender/colormanagement/khronos_pbr_neutral_srgb_65.bin</file>
         <file alias="color/filmic_srgb_65.bin">../../../resources/blender/colormanagement/filmic_srgb_65.bin</file>
         <file alias="studio/basic.sl">../../../resources/blender/studiolights/studio/basic.sl</file>

@@ -8,9 +8,9 @@ import struct
 import PyOpenColorIO as ocio
 
 
-LUT_SIZE = 65
-SCENE_LINEAR_MAX = 2.0
-SHAPER_SCALE = 16.0
+LUT_SIZE = 97
+SCENE_LINEAR_MAX = 16.0
+SHAPER_SCALE = 64.0
 
 
 def main() -> None:

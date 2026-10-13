@@ -1047,7 +1047,7 @@ bool applyImportedRenderColorManagement(
         const qreal gamma = colorManagement.value(
             QStringLiteral("gamma")).toDouble(1.0);
         if (displayDevice != QLatin1String("sRGB") ||
-            !std::isfinite(exposure) || !std::isfinite(gamma) || gamma <= 0.0) {
+            !std::isfinite(exposure) || !std::isfinite(gamma) || gamma < 0.0) {
             return false;
         }
         if (!lutId.isEmpty()) {
@@ -1057,7 +1057,7 @@ bool applyImportedRenderColorManagement(
             settings->colorLutId = lutId;
             settings->colorLutData.clear();
             settings->colorExposure = std::clamp(exposure, -32.0, 32.0);
-            settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
+            settings->colorGamma = std::clamp(gamma, 0.0, 5.0);
             const QByteArray lut = document.settings().importedBlenderColorLuts
                 .value(lutId);
             const ImportedBlenderColorLutMetadata metadata =
@@ -1087,7 +1087,7 @@ bool applyImportedRenderColorManagement(
             transform == QLatin1String("Khronos PBR Neutral") ? 2 :
             transform == QLatin1String("Filmic") ? 3 : 0;
         settings->colorExposure = std::clamp(exposure, -32.0, 32.0);
-        settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
+        settings->colorGamma = std::clamp(gamma, 0.0, 5.0);
         return true;
     }
     return false;
@@ -6716,7 +6716,7 @@ public:
             const qreal gamma = colorManagement.value(
                 QStringLiteral("gamma")).toDouble(1.0);
             if (std::isfinite(exposure)) result.colorExposure = exposure;
-            if (std::isfinite(gamma) && gamma > 0.0)
+            if (std::isfinite(gamma) && gamma >= 0.0)
                 result.colorGamma = gamma;
             const qreal pixelAspectX = renderOutput.value(
                 QStringLiteral("pixel_aspect_x")).toDouble(1.0);

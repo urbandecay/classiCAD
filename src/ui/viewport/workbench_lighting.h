@@ -59,6 +59,7 @@ inline float workbenchSrgbToSceneLinear(float value)
 inline float workbenchSceneLinearToSrgb(float value)
 {
     const float channel = std::max(value, 0.0f);
+    if (channel >= 1.0f) return 1.0f;
     return channel <= 0.0031308f
                ? channel * 12.92f
                : 1.055f * std::pow(channel, 1.0f / 2.4f) - 0.055f;
@@ -87,18 +88,31 @@ inline QVector3D workbenchSceneLinearToSrgb(const QVector3D &color)
             workbenchSceneLinearToSrgb(color.z())};
 }
 
-inline constexpr int workbenchAgxDisplayLutSize = 65;
-inline constexpr float workbenchAgxDisplayLutMaximum = 2.0f;
-// The AgX display transform changes quickly near black. A log2(1 + 16x)
-// shaper keeps the 65-cube LUT accurate there while retaining its full HDR
-// range up to workbenchAgxDisplayLutMaximum.
-inline constexpr float workbenchAgxDisplayLutShaperScale = 16.0f;
+inline constexpr int workbenchAgxDisplayLutSize = 97;
+inline constexpr int workbenchOtherDisplayLutSize = 65;
+inline constexpr float workbenchAgxDisplayLutMaximum = 16.0f;
+inline constexpr float workbenchGammaEpsilon = 1.1920928955078125e-7f;
+// The AgX display transform changes quickly near black. A log2(1 + 64x)
+// shaper gives the 97-cube LUT useful dark-range resolution while covering
+// exposure-driven HDR values up to workbenchAgxDisplayLutMaximum.
+inline constexpr float workbenchAgxDisplayLutShaperScale = 64.0f;
+
+inline constexpr int workbenchDisplayLutSize(int colorTransform)
+{
+    return colorTransform == 2 || colorTransform == 3
+        ? workbenchOtherDisplayLutSize : workbenchAgxDisplayLutSize;
+}
+
+inline constexpr float workbenchDisplayLutDomainMaximum(int colorTransform)
+{
+    return colorTransform == 0 ? workbenchAgxDisplayLutMaximum : 2.0f;
+}
 
 inline const QVector<float> &workbenchAgxDisplayLutData()
 {
     static const QVector<float> values = [] {
         QFile file(QStringLiteral(
-            ":/workbench-lighting/color/agx_srgb_default_65.bin"));
+            ":/workbench-lighting/color/agx_srgb_default_97.bin"));
         if (!file.open(QIODevice::ReadOnly)) {
             return QVector<float>{};
         }
@@ -131,8 +145,8 @@ inline const QVector<float> &workbenchPbrNeutralDisplayLutData()
         if (!file.open(QIODevice::ReadOnly)) return QVector<float>{};
         const QByteArray bytes = file.readAll();
         constexpr qsizetype valueCount =
-            workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize *
-            workbenchAgxDisplayLutSize * 3;
+            workbenchOtherDisplayLutSize * workbenchOtherDisplayLutSize *
+            workbenchOtherDisplayLutSize * 3;
         if (bytes.size() != valueCount * static_cast<qsizetype>(sizeof(quint32)))
             return QVector<float>{};
         QVector<float> result(valueCount);
@@ -155,8 +169,8 @@ inline const QVector<float> &workbenchFilmicDisplayLutData()
         if (!file.open(QIODevice::ReadOnly)) return QVector<float>{};
         const QByteArray bytes = file.readAll();
         constexpr qsizetype valueCount =
-            workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize *
-            workbenchAgxDisplayLutSize * 3;
+            workbenchOtherDisplayLutSize * workbenchOtherDisplayLutSize *
+            workbenchOtherDisplayLutSize * 3;
         if (bytes.size() != valueCount * static_cast<qsizetype>(sizeof(quint32)))
             return QVector<float>{};
         QVector<float> result(valueCount);
@@ -192,7 +206,7 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             : colorTransform == 3 ? workbenchFilmicDisplayLutData()
                                   : workbenchAgxDisplayLutData();
         const int lutSize = colorTransform == 4
-            ? customLutMetadata.size : workbenchAgxDisplayLutSize;
+            ? customLutMetadata.size : workbenchDisplayLutSize(colorTransform);
         const bool customLutValid = colorTransform != 4 ||
             (lutSize >= 2 && lutSize <= 140 &&
              std::isfinite(customLutMetadata.domainMin) &&
@@ -215,14 +229,15 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
                                      &customLutMetadata](float value) {
                 if (colorTransform != 4) {
                     const float bounded = std::clamp(
-                        value, 0.0f, workbenchAgxDisplayLutMaximum);
+                        value, 0.0f,
+                        workbenchDisplayLutDomainMaximum(colorTransform));
                     const float normalized = colorTransform == 0
                         ? std::log2(1.0f + workbenchAgxDisplayLutShaperScale *
                                              bounded) /
                               std::log2(1.0f +
                                         workbenchAgxDisplayLutShaperScale *
-                                            workbenchAgxDisplayLutMaximum)
-                        : bounded / workbenchAgxDisplayLutMaximum;
+                                            workbenchDisplayLutDomainMaximum(colorTransform))
+                        : bounded / workbenchDisplayLutDomainMaximum(colorTransform);
                     return normalized * maximumIndex;
                 }
                 const double minimum = customLutMetadata.domainMin;
@@ -283,11 +298,19 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             displayColor = interpolate(lowerBlue, upperBlue, tz);
         }
     }
-    const float exponent = 1.0f / static_cast<float>(
-        std::max<qreal>(gamma, 1.0e-6));
-    return {std::pow(std::max(0.0f, displayColor.x()), exponent),
-            std::pow(std::max(0.0f, displayColor.y()), exponent),
-            std::pow(std::max(0.0f, displayColor.z()), exponent)};
+    const auto applyGamma = [gamma](float channel) {
+        const float nonnegative = std::max(0.0f, channel);
+        if (gamma <= workbenchGammaEpsilon) {
+            // Blender uses exponent 1 / FLT_EPSILON when gamma is zero.
+            // The display result is bounded to [0, 1] before this very large
+            // exponent, which preserves near-white values and avoids overflow.
+            return std::pow(std::min(nonnegative, 1.0f),
+                            1.0f / workbenchGammaEpsilon);
+        }
+        return std::pow(nonnegative, 1.0f / static_cast<float>(gamma));
+    };
+    return {applyGamma(displayColor.x()), applyGamma(displayColor.y()),
+            applyGamma(displayColor.z())};
 }
 
 inline QVector3D workbenchSceneLinearToAgxSrgb(

@@ -988,7 +988,8 @@ bool ViewportSurfaceRenderer::initialize()
             color = max(color, vec3(0.0));
             vec3 low = color * 12.92;
             vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-            return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            vec3 encoded = mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            return mix(encoded, vec3(1.0), greaterThanEqual(color, vec3(1.0)));
         }
 
         vec3 srgbToDisplayLinear(vec3 color)
@@ -1032,8 +1033,13 @@ bool ViewportSurfaceRenderer::initialize()
                 vec3 coordinate = workbenchDisplayLutCoordinate(color);
                 displayColor = texture(uAgxDisplayTexture, coordinate).rgb;
             }
-            return pow(max(displayColor, vec3(0.0)),
-                       vec3(1.0 / max(uColorGamma, 0.000001)));
+            displayColor = max(displayColor, vec3(0.0));
+            if (uColorGamma <= 1.1920928955078125e-7) {
+                return pow(min(displayColor, vec3(1.0)),
+                           vec3(1.0 / 1.1920928955078125e-7));
+            }
+            return pow(displayColor,
+                       vec3(1.0 / max(uColorGamma, 1.1920928955078125e-7)));
         }
 
         vec3 cavityNoise(vec2 screenCoordinate, ivec2 pixelSize)
@@ -1428,7 +1434,8 @@ bool ViewportSurfaceRenderer::initialize()
             color = max(color, vec3(0.0));
             vec3 low = color * 12.92;
             vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-            return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            vec3 encoded = mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            return mix(encoded, vec3(1.0), greaterThanEqual(color, vec3(1.0)));
         }
         vec3 workbenchDisplayLutCoordinate(vec3 color)
         {
@@ -1475,8 +1482,14 @@ bool ViewportSurfaceRenderer::initialize()
                 vec3 coordinate = workbenchDisplayLutCoordinate(color);
                 displayColor = texture(uAgxDisplayTexture, coordinate).rgb;
             }
-            displayColor = pow(max(displayColor, vec3(0.0)),
-                              vec3(1.0 / max(uColorGamma, 0.000001)));
+            displayColor = max(displayColor, vec3(0.0));
+            if (uColorGamma <= 1.1920928955078125e-7) {
+                displayColor = pow(min(displayColor, vec3(1.0)),
+                                   vec3(1.0 / 1.1920928955078125e-7));
+            } else {
+                displayColor = pow(displayColor,
+                    vec3(1.0 / max(uColorGamma, 1.1920928955078125e-7)));
+            }
             fragmentColor = vec4(displayColor, 1.0 - accumulation.a);
         }
     )glsl";
@@ -1537,7 +1550,9 @@ bool ViewportSurfaceRenderer::initialize()
                 color = max(color, vec3(0.0));
                 vec3 low = color * 12.92;
                 vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
-                displayColor = mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+                vec3 encoded = mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+                displayColor = mix(encoded, vec3(1.0),
+                                   greaterThanEqual(color, vec3(1.0)));
             } else {
                 vec3 bounded = clamp(color, vec3(uAgxDisplayLutDomain.x),
                                      vec3(uAgxDisplayLutDomain.y)) -
@@ -1556,8 +1571,13 @@ bool ViewportSurfaceRenderer::initialize()
                     float(uAgxDisplayLutSize);
                 displayColor = texture(uAgxDisplayTexture, coordinate).rgb;
             }
-            return pow(max(displayColor, vec3(0.0)),
-                       vec3(1.0 / max(uColorGamma, 0.000001)));
+            displayColor = max(displayColor, vec3(0.0));
+            if (uColorGamma <= 1.1920928955078125e-7) {
+                return pow(min(displayColor, vec3(1.0)),
+                           vec3(1.0 / 1.1920928955078125e-7));
+            }
+            return pow(displayColor,
+                       vec3(1.0 / max(uColorGamma, 1.1920928955078125e-7)));
         }
         vec4 resolveVolumeColor(vec3 premultiplied, float alpha)
         {
@@ -4384,7 +4404,7 @@ bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(
     }
     QVector<float> customValues;
     const int edge = colorTransform == 4
-        ? customLutMetadata.size : workbenchAgxDisplayLutSize;
+        ? customLutMetadata.size : workbenchDisplayLutSize(colorTransform);
     if (colorTransform == 4) {
         const qsizetype count = qsizetype(edge) * edge * edge * 3;
         if (customLutId.size() != 64 || edge < 2 || edge > 140 ||
@@ -4581,10 +4601,10 @@ bool ViewportSurfaceRenderer::renderScalarVolumes(
     scalarVolumeProgram_.setUniformValue("uColorTransform", settings.colorTransform);
     scalarVolumeProgram_.setUniformValue("uAgxDisplayLutSize",
         settings.colorTransform == 4 ? settings.colorLutMetadata.size
-                                    : workbenchAgxDisplayLutSize);
+            : workbenchDisplayLutSize(settings.colorTransform));
     scalarVolumeProgram_.setUniformValue("uAgxDisplayLutDomain",
         QVector2D(float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMin : 0.0),
-                  float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMax : workbenchAgxDisplayLutMaximum)));
+                  float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMax : workbenchDisplayLutDomainMaximum(settings.colorTransform))));
     scalarVolumeProgram_.setUniformValue("uAgxDisplayLutShaper",
         settings.colorTransform == 0 ||
                 (settings.colorTransform == 4 &&
@@ -5432,14 +5452,14 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uAgxDisplayLutSize",
                                  settings.colorTransform == 4
                                      ? settings.colorLutMetadata.size
-                                     : workbenchAgxDisplayLutSize);
+                                     : workbenchDisplayLutSize(settings.colorTransform));
         program_.setUniformValue(
             "uAgxDisplayLutDomain",
             QVector2D(static_cast<float>(settings.colorTransform == 4
                               ? settings.colorLutMetadata.domainMin : 0.0),
                       static_cast<float>(settings.colorTransform == 4
                               ? settings.colorLutMetadata.domainMax
-                              : workbenchAgxDisplayLutMaximum)));
+                              : workbenchDisplayLutDomainMaximum(settings.colorTransform))));
         program_.setUniformValue(
             "uAgxDisplayLutShaper",
             settings.colorTransform == 0 ||
@@ -6025,14 +6045,15 @@ bool ViewportSurfaceRenderer::draw(
             transparencyResolveProgram_.setUniformValue(
                 "uAgxDisplayLutSize",
                 settings.colorTransform == 4
-                    ? settings.colorLutMetadata.size : workbenchAgxDisplayLutSize);
+                    ? settings.colorLutMetadata.size
+                    : workbenchDisplayLutSize(settings.colorTransform));
             transparencyResolveProgram_.setUniformValue(
                 "uAgxDisplayLutDomain",
                 QVector2D(static_cast<float>(settings.colorTransform == 4
                                   ? settings.colorLutMetadata.domainMin : 0.0),
                           static_cast<float>(settings.colorTransform == 4
                                   ? settings.colorLutMetadata.domainMax
-                                  : workbenchAgxDisplayLutMaximum)));
+                                  : workbenchDisplayLutDomainMaximum(settings.colorTransform))));
             transparencyResolveProgram_.setUniformValue(
                 "uAgxDisplayLutShaper",
                 settings.colorTransform == 0 ||
@@ -6126,14 +6147,14 @@ bool ViewportSurfaceRenderer::draw(
                     "uAgxDisplayLutSize",
                     settings.colorTransform == 4
                         ? settings.colorLutMetadata.size
-                        : workbenchAgxDisplayLutSize);
+                        : workbenchDisplayLutSize(settings.colorTransform));
                 transparencyResolveProgram_.setUniformValue(
                     "uAgxDisplayLutDomain",
                     QVector2D(static_cast<float>(settings.colorTransform == 4
                                       ? settings.colorLutMetadata.domainMin : 0.0),
                               static_cast<float>(settings.colorTransform == 4
                                       ? settings.colorLutMetadata.domainMax
-                                      : workbenchAgxDisplayLutMaximum)));
+                                      : workbenchDisplayLutDomainMaximum(settings.colorTransform))));
                 transparencyResolveProgram_.setUniformValue(
                     "uAgxDisplayLutShaper",
                     settings.colorTransform == 0 ||

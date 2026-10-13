@@ -1756,6 +1756,23 @@ int main(int argc, char *argv[])
     const bool worldBackgroundInvalidatesAa =
         aaKey(aaHistoryFrame, aaHistoryShading, QVector3D(0.1f, 0.2f, 0.3f)) !=
         aaBaselineKey;
+    const ViewportThemeBackground defaultThemeBackground;
+    ViewportThemeBackground changedThemeBackground = defaultThemeBackground;
+    changedThemeBackground.style = ViewportThemeBackgroundStyle::Linear;
+    changedThemeBackground.highColor = QColor(90, 110, 130);
+    changedThemeBackground.lowColor = QColor(24, 32, 40);
+    const bool themeBackgroundInvalidatesAa =
+        viewportAaHistoryKey(aaHistoryFrame, aaHistoryShading, 8, 1.0, {},
+                             std::nullopt, defaultThemeBackground) !=
+        viewportAaHistoryKey(aaHistoryFrame, aaHistoryShading, 8, 1.0, {},
+                             std::nullopt, changedThemeBackground);
+    ViewportShadingSettings worldBackgroundShading = aaHistoryShading;
+    worldBackgroundShading.backgroundMode = ViewportBackgroundMode::World;
+    const bool unusedThemeBackgroundDoesNotInvalidateAa =
+        viewportAaHistoryKey(aaHistoryFrame, worldBackgroundShading, 8, 1.0,
+                             {}, std::nullopt, defaultThemeBackground) ==
+        viewportAaHistoryKey(aaHistoryFrame, worldBackgroundShading, 8, 1.0,
+                             {}, std::nullopt, changedThemeBackground);
     passed &= check(meshGeometryInvalidatesAa &&
                         meshSelectionInvalidatesAa &&
                         meshDepthModeInvalidatesAa &&
@@ -1764,8 +1781,10 @@ int main(int argc, char *argv[])
                         meshTextureInvalidatesAa &&
                         meshAddRemoveInvalidatesAa &&
                         nurbsTextureInvalidatesAa &&
-                        worldBackgroundInvalidatesAa,
-                    "temporal AA history keys must change for mesh edits, selection, visibility mode, materials, textures, scene membership, and world color");
+                        worldBackgroundInvalidatesAa &&
+                        themeBackgroundInvalidatesAa &&
+                        unusedThemeBackgroundDoesNotInvalidateAa,
+                    "temporal AA history keys must change for mesh edits, selection, visibility mode, materials, textures, scene membership, and active background colors");
 
     NurbsSurface3D fillSurface;
     fillSurface.degreeU = 1;

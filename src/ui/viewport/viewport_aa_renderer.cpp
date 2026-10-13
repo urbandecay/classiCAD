@@ -2673,7 +2673,8 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                                 int aaMode,
                                 qreal devicePixelRatio,
                                 const QByteArray &sceneContentStateKey,
-                                std::optional<QVector3D> worldColorSceneLinear)
+                                std::optional<QVector3D> worldColorSceneLinear,
+                                const ViewportThemeBackground &themeBackground)
 {
     QByteArray key;
     QDataStream stream(&key, QIODevice::WriteOnly);
@@ -2713,6 +2714,13 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
            << shading.curvatureValleyFactor
            << shading.xrayAlpha << shading.shadowIntensity
            << shading.shadowOffset << shading.shadowFocus;
+    const bool usesThemeBackground =
+        shading.backgroundMode == ViewportBackgroundMode::Theme;
+    stream << usesThemeBackground;
+    if (usesThemeBackground) {
+        stream << quint8(themeBackground.style)
+               << themeBackground.highColor << themeBackground.lowColor;
+    }
     stream << shading.colorTransform << shading.colorLutId
            << shading.colorExposure << shading.colorGamma;
     // Only filled Workbench surfaces and polygon meshes reach this pre-resolve

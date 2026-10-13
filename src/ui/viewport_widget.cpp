@@ -11189,7 +11189,7 @@ protected:
                 const QByteArray historyKey = viewportAaHistoryKey(
                     renderFrame, renderShadingSettings, viewportAaMode_,
                     devicePixelRatioF(), sceneContentStateKey,
-                    viewportWorldColorSceneLinear);
+                    viewportWorldColorSceneLinear, themeBackground_);
                 const QSize dofPixelSize(
                     qRound(renderFrame.viewportSize.width() *
                            devicePixelRatioF()),

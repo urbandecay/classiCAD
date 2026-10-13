@@ -2224,6 +2224,15 @@ Status: in progress; the implementation and source reviews found the blockers li
   accumulation instead of presenting stale history. An offscreen contract
   checks key changes and verifies a completed sample sequence restarts at
   sample zero after a mesh input changes.
+- **Theme-background history invalidation (2026-10-13):** the AA key now
+  includes the active theme background style and both colors. Changing the
+  theme therefore restarts accumulation instead of presenting a cached frame
+  with stale background pixels; unused theme values do not reset World or
+  Custom backgrounds. Both key assertions passed in the offscreen viewport
+  contract before that test reached its later OpenGL-only NURBS-solid check.
+  Blender resets Workbench TAA when shading state changes and clears each
+  sample with the current background ([`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L25-L89),
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L145-L149)).
 - Blender Workbench uses the configured object-outline color for all object
   IDs. The GPU outline pass now uses that color for both selected and
   unselected objects; CAD selection feedback remains in its separate overlay

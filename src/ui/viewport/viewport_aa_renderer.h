@@ -6,6 +6,7 @@
 #include "viewport_render_targets.h"
 #include "viewport_render_frame.h"
 #include "viewport_shading.h"
+#include "viewport_theme_background.h"
 #include "services/viewport/viewport_transform.h"
 
 #include <QByteArray>
@@ -159,6 +160,7 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                                 qreal devicePixelRatio,
                                 const QByteArray &sceneContentStateKey = {},
                                 std::optional<QVector3D> worldColorSceneLinear =
-                                    std::nullopt);
+                                    std::nullopt,
+                                const ViewportThemeBackground &themeBackground = {});
 
 } // namespace classiCAD

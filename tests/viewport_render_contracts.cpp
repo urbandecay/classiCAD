@@ -23,6 +23,7 @@
 
 #include <QDebug>
 #include <QBuffer>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -718,6 +719,14 @@ int main(int argc, char *argv[])
             return !workbenchMatcapDiffuseImage(preset).isNull() &&
                    !workbenchMatcapSpecularImage(preset).isNull();
         });
+    int bronzeLayerWidth = 0;
+    int bronzeLayerHeight = 0;
+    const QByteArray bronzeLinearLayers = workbenchMatcapLinearHalfData(
+        QStringLiteral("metal_bronze"), &bronzeLayerWidth, &bronzeLayerHeight);
+    const float exactBronzeCenterResponse = workbenchMatcapShade(
+        QStringLiteral("metal_bronze"), QVector3D(0.8f, 0.8f, 0.8f),
+        QVector3D(0.0f, 0.0f, 1.0f),
+        QVector3D(0.0f, 0.0f, 1.0f)).x();
     const WorkbenchStudioLighting cameraFollowingRotatedLighting =
         workbenchStudioLightingForView(
             workbenchLighting, 90, false,
@@ -738,11 +747,10 @@ int main(int argc, char *argv[])
                         basicGreyDiffuse.pixelColor(256, 256).red() > 100 &&
                         bronzeDiffuse.pixelColor(256, 256).red() == 0 &&
                         bronzeSpecular.pixelColor(256, 256).red() > 100 &&
-                        workbenchMatcapShade(
-                            QStringLiteral("metal_bronze"),
-                            QVector3D(0.8f, 0.8f, 0.8f),
-                            QVector3D(0.0f, 0.0f, 1.0f),
-                            QVector3D(0.0f, 0.0f, 1.0f)).x() > 0.2f &&
+                        bronzeLayerWidth == 512 && bronzeLayerHeight == 512 &&
+                        bronzeLinearLayers.size() == 512 * 512 * 3 * 2 * 2 &&
+                        std::abs(exactBronzeCenterResponse - 0.25338745f) <
+                            1.0e-5f &&
                         std::abs(cameraFollowingRotatedLighting.lights[1].direction.x() -
                                  workbenchLighting.lights[1].direction.x()) < 1.0e-6f &&
                         std::abs(worldRotatedLighting.lights[1].direction.x() -
@@ -2251,6 +2259,80 @@ int main(int argc, char *argv[])
                             rendered && linearSaved && displaySaved &&
                                 displayNonblank && linearNonblank,
                             "matched polygon cube capture must produce nonblank scene-linear and final display output");
+                    }
+                    const QString lightingCaptureDirectory = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR");
+                    if (!lightingCaptureDirectory.isEmpty()) {
+                        const bool directoryReady =
+                            QDir().mkpath(lightingCaptureDirectory);
+                        bool lightingCapturesSucceeded = directoryReady;
+                        struct LightingCaptureCase {
+                            const char *name;
+                            ViewportLightingMode mode;
+                            const char *preset;
+                            bool worldSpaceLighting;
+                            int rotationDegrees;
+                        };
+                        const LightingCaptureCase lightingCases[] = {
+                            {"studio_default", ViewportLightingMode::Studio,
+                             "Default", false, 0},
+                            {"studio_paint_world_90",
+                             ViewportLightingMode::Studio, "Paint", true, 90},
+                            {"matcap_metal_bronze", ViewportLightingMode::MatCap,
+                             "metal_bronze", false, 0},
+                            {"flat", ViewportLightingMode::Flat, "Default",
+                             false, 0}};
+                        for (const LightingCaptureCase &captureCase :
+                             lightingCases) {
+                            ViewportShadingSettings lightingShading =
+                                rawFaceShading;
+                            lightingShading.lightingMode = captureCase.mode;
+                            lightingShading.studioLightPreset =
+                                QString::fromLatin1(captureCase.preset);
+                            lightingShading.matcapPreset =
+                                QString::fromLatin1(captureCase.preset);
+                            lightingShading.worldSpaceLighting =
+                                captureCase.worldSpaceLighting;
+                            lightingShading.studioLightRotationDegrees =
+                                captureCase.rotationDegrees;
+                            const QString stem = QString::fromLatin1(
+                                captureCase.name);
+                            QImage display;
+                            QVector<float> sceneLinear;
+                            const bool rendered = renderCoordinatedScene(
+                                lightingShading,
+                                QByteArrayLiteral("lighting-match-") +
+                                    stem.toUtf8(),
+                                &display, &polygonCubeObject, nullptr, nullptr,
+                                QString{}, &sceneLinear);
+                            const QString displayPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    stem + QStringLiteral(".png"));
+                            const QString linearPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    stem + QStringLiteral(".pfm"));
+                            QFile linearFile(linearPath);
+                            const QByteArray pfmHeader =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            const qsizetype expectedValues = 640 * 480 * 3;
+                            const bool linearSaved = rendered &&
+                                sceneLinear.size() == expectedValues &&
+                                linearFile.open(QIODevice::WriteOnly) &&
+                                linearFile.write(pfmHeader) == pfmHeader.size() &&
+                                linearFile.write(reinterpret_cast<const char *>(
+                                    sceneLinear.constData()),
+                                    sceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    sceneLinear.size() * qsizetype(sizeof(float));
+                            const bool displaySaved = rendered &&
+                                display.size() == QSize(640, 480) &&
+                                display.save(displayPath);
+                            lightingCapturesSucceeded &= linearSaved &&
+                                                         displaySaved;
+                        }
+                        passed &= check(
+                            lightingCapturesSucceeded,
+                            "matched cube Studio, MatCap, and Flat captures must write scene-linear PFM and display PNG outputs");
                     }
                     const QString cavityDiagnosticPrefix = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX");

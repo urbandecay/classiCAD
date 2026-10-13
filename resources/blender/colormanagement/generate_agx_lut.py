@@ -10,6 +10,7 @@ import PyOpenColorIO as ocio
 
 LUT_SIZE = 65
 SCENE_LINEAR_MAX = 2.0
+SHAPER_SCALE = 16.0
 
 
 def main() -> None:
@@ -26,12 +27,15 @@ def main() -> None:
     ).getDefaultCPUProcessor()
 
     with open(args.output, "wb") as output:
-        for blue in range(LUT_SIZE):
-            b = SCENE_LINEAR_MAX * blue / (LUT_SIZE - 1)
-            for green in range(LUT_SIZE):
-                g = SCENE_LINEAR_MAX * green / (LUT_SIZE - 1)
-                for red in range(LUT_SIZE):
-                    r = SCENE_LINEAR_MAX * red / (LUT_SIZE - 1)
+        input_values = [
+            (2.0 ** (index / (LUT_SIZE - 1) *
+                     math.log2(1.0 + SHAPER_SCALE * SCENE_LINEAR_MAX)) - 1.0)
+            / SHAPER_SCALE
+            for index in range(LUT_SIZE)
+        ]
+        for b in input_values:
+            for g in input_values:
+                for r in input_values:
                     display_rgb = processor.applyRGB([r, g, b])
                     if not all(math.isfinite(channel) for channel in display_rgb):
                         raise RuntimeError("OCIO produced a non-finite LUT value")

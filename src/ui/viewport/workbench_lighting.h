@@ -20,6 +20,7 @@
 #include <QVector3D>
 #include <QVector>
 #include <QtEndian>
+#include <QtCore/qfloat16.h>
 
 #include <array>
 #include <algorithm>
@@ -88,6 +89,10 @@ inline QVector3D workbenchSceneLinearToSrgb(const QVector3D &color)
 
 inline constexpr int workbenchAgxDisplayLutSize = 65;
 inline constexpr float workbenchAgxDisplayLutMaximum = 2.0f;
+// The AgX display transform changes quickly near black. A log2(1 + 16x)
+// shaper keeps the 65-cube LUT accurate there while retaining its full HDR
+// range up to workbenchAgxDisplayLutMaximum.
+inline constexpr float workbenchAgxDisplayLutShaperScale = 16.0f;
 
 inline const QVector<float> &workbenchAgxDisplayLutData()
 {
@@ -209,9 +214,16 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             const auto coordinate = [maximumIndex, colorTransform,
                                      &customLutMetadata](float value) {
                 if (colorTransform != 4) {
-                    return std::clamp(value, 0.0f,
-                                      workbenchAgxDisplayLutMaximum) *
-                           maximumIndex / workbenchAgxDisplayLutMaximum;
+                    const float bounded = std::clamp(
+                        value, 0.0f, workbenchAgxDisplayLutMaximum);
+                    const float normalized = colorTransform == 0
+                        ? std::log2(1.0f + workbenchAgxDisplayLutShaperScale *
+                                             bounded) /
+                              std::log2(1.0f +
+                                        workbenchAgxDisplayLutShaperScale *
+                                            workbenchAgxDisplayLutMaximum)
+                        : bounded / workbenchAgxDisplayLutMaximum;
+                    return normalized * maximumIndex;
                 }
                 const double minimum = customLutMetadata.domainMin;
                 const double span = customLutMetadata.domainMax - minimum;
@@ -546,6 +558,78 @@ inline QImage workbenchMatcapSpecularImage(const QString &presetName)
     return workbenchMatcapLayerImage(presetName, QStringLiteral("specular"));
 }
 
+// Optional lossless, half-float source layers extracted from Blender's
+// multipart MatCap EXR. The older 8-bit sRGB PNG layers remain the fallback
+// for presets without this higher-precision payload.
+inline QByteArray workbenchMatcapLinearHalfData(const QString &presetName,
+                                               int *width = nullptr,
+                                               int *height = nullptr)
+{
+    static QHash<QString, QByteArray> cache;
+    static QHash<QString, QSize> dimensions;
+    const auto cached = cache.constFind(presetName);
+    if (cached != cache.cend()) {
+        if (width != nullptr) *width = dimensions.value(presetName).width();
+        if (height != nullptr) *height = dimensions.value(presetName).height();
+        return cached.value();
+    }
+
+    QFile file(QStringLiteral(":/workbench-lighting/matcap-data/%1.qmc")
+                   .arg(presetName));
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    const QByteArray encoded = file.readAll();
+    if (encoded.size() < 12 || encoded.left(8) != QByteArrayLiteral("CADMC01\0"))
+        return {};
+    const auto *header = reinterpret_cast<const uchar *>(encoded.constData());
+    const int imageWidth = qFromLittleEndian<quint16>(header + 8);
+    const int imageHeight = qFromLittleEndian<quint16>(header + 10);
+    const QByteArray raw = qUncompress(encoded.mid(12));
+    const qsizetype expected = qsizetype(imageWidth) * imageHeight * 3 * 2 *
+                               qsizetype(sizeof(quint16));
+    if (imageWidth <= 0 || imageHeight <= 0 || raw.size() != expected) return {};
+    cache.insert(presetName, raw);
+    dimensions.insert(presetName, QSize(imageWidth, imageHeight));
+    if (width != nullptr) *width = imageWidth;
+    if (height != nullptr) *height = imageHeight;
+    return raw;
+}
+
+inline QVector3D workbenchMatcapSampleLinearHalf(const QByteArray &data,
+                                                int width,
+                                                int height,
+                                                int layer,
+                                                float u,
+                                                float v)
+{
+    if (data.isEmpty() || width <= 0 || height <= 0 || layer < 0 || layer > 1)
+        return {};
+    const float x = std::clamp(u, 0.0f, 1.0f) * (width - 1);
+    const float y = std::clamp(v, 0.0f, 1.0f) * (height - 1);
+    const int x0 = static_cast<int>(x);
+    const int y0 = static_cast<int>(y);
+    const int x1 = std::min(x0 + 1, width - 1);
+    const int y1 = std::min(y0 + 1, height - 1);
+    const float tx = x - x0;
+    const float ty = y - y0;
+    const auto texel = [&](int ix, int iy) {
+        QVector3D color;
+        for (int channel = 0; channel < 3; ++channel) {
+            const qsizetype index =
+                ((qsizetype(layer) * height + iy) * width + ix) * 3 + channel;
+            const auto *bytes = reinterpret_cast<const uchar *>(data.constData());
+            const quint16 bits = qFromLittleEndian<quint16>(
+                bytes + index * qsizetype(sizeof(quint16)));
+            qfloat16 half;
+            std::memcpy(&half, &bits, sizeof(half));
+            color[channel] = static_cast<float>(half);
+        }
+        return color;
+    };
+    const QVector3D top = texel(x0, y0) * (1.0f - tx) + texel(x1, y0) * tx;
+    const QVector3D bottom = texel(x0, y1) * (1.0f - tx) + texel(x1, y1) * tx;
+    return top * (1.0f - ty) + bottom * ty;
+}
+
 inline QVector2D workbenchMatcapUv(const QVector3D &sourceIncident,
                                    const QVector3D &sourceNormal,
                                    bool flipHorizontal = false)
@@ -607,12 +691,20 @@ inline QVector3D workbenchMatcapShade(const QString &presetName,
         return baseColor;
     }
     const QVector2D uv = workbenchMatcapUv(incident, normal, flipHorizontal);
-    const QVector3D diffuse = workbenchMatcapSampleLinear(
-        diffuseImage, uv.x(), 1.0f - uv.y());
-    const QVector3D specular = useSpecular
-                                   ? workbenchMatcapSampleLinear(
-                                         specularImage, uv.x(), 1.0f - uv.y())
-                                   : QVector3D();
+    int width = 0;
+    int height = 0;
+    const QByteArray exactLayers = workbenchMatcapLinearHalfData(
+        presetName, &width, &height);
+    const QVector3D diffuse = exactLayers.isEmpty()
+        ? workbenchMatcapSampleLinear(diffuseImage, uv.x(), 1.0f - uv.y())
+        : workbenchMatcapSampleLinearHalf(exactLayers, width, height, 0,
+                                          uv.x(), 1.0f - uv.y());
+    const QVector3D specular = !useSpecular
+        ? QVector3D()
+        : exactLayers.isEmpty()
+              ? workbenchMatcapSampleLinear(specularImage, uv.x(), 1.0f - uv.y())
+              : workbenchMatcapSampleLinearHalf(exactLayers, width, height, 1,
+                                                uv.x(), 1.0f - uv.y());
     return {diffuse.x() * baseColor.x() + specular.x(),
             diffuse.y() * baseColor.y() + specular.y(),
             diffuse.z() * baseColor.z() + specular.z()};

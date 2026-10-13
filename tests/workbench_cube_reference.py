@@ -6,6 +6,7 @@ Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -43,9 +44,36 @@ def arguments():
     )
     parser.add_argument("--aa", choices=("OFF", "FXAA", "8"), default="FXAA")
     parser.add_argument(
+        "--zero-dither",
+        action="store_true",
+        help="disable render-output dither for direct display-pixel comparisons",
+    )
+    parser.add_argument(
         "--effect",
         choices=("BASELINE", "SHADOWS", "CAVITY", "OUTLINE"),
         default="BASELINE",
+    )
+    parser.add_argument(
+        "--lighting",
+        choices=("STUDIO", "MATCAP", "FLAT"),
+        default="STUDIO",
+        help="Workbench lighting mode (default: STUDIO)",
+    )
+    parser.add_argument(
+        "--light-preset",
+        default="Default",
+        help="bundled Blender Studio Light or MatCap preset (default: Default)",
+    )
+    parser.add_argument(
+        "--world-space-lighting",
+        action="store_true",
+        help="use world-space Studio Light orientation",
+    )
+    parser.add_argument(
+        "--rotation-degrees",
+        type=float,
+        default=0.0,
+        help="Studio Light Z rotation in degrees (default: 0)",
     )
     parser.add_argument(
         "--linear-output",
@@ -240,10 +268,19 @@ def main():
     scene.render.image_settings.file_format = "PNG"
     scene.render.filepath = args.output
     scene.render.film_transparent = False
+    if args.zero_dither:
+        scene.render.dither_intensity = 0.0
     scene.display.render_aa = args.aa
     shading = scene.display.shading
-    shading.light = "STUDIO"
-    shading.studio_light = "Default"
+    shading.light = args.lighting
+    light_preset = args.light_preset
+    if args.lighting == "MATCAP" and not light_preset.lower().endswith(".exr"):
+        light_preset += ".exr"
+    elif args.lighting == "STUDIO" and light_preset.lower() != "default" and not light_preset.lower().endswith(".sl"):
+        light_preset = light_preset.lower() + ".sl"
+    shading.studio_light = light_preset
+    shading.use_world_space_lighting = args.world_space_lighting
+    shading.studiolight_rotate_z = math.radians(args.rotation_degrees)
     shading.color_type = "MATERIAL"
     shading.show_shadows = args.effect == "SHADOWS"
     shading.shadow_intensity = 0.5

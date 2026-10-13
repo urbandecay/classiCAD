@@ -2120,11 +2120,15 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
                   customDisplayLut ? lutMetadata.domainMax : 2.0));
     presentProgram_.setUniformValue(
         "uDisplayLutShaper",
-        customDisplayLut && lutMetadata.shaper == QStringLiteral("log2_1p")
+        displaySettings_.colorTransform == 0 ||
+                (customDisplayLut &&
+                 lutMetadata.shaper == QStringLiteral("log2_1p"))
             ? 1 : 0);
     presentProgram_.setUniformValue(
         "uDisplayLutShaperScale",
-        static_cast<float>(customDisplayLut ? lutMetadata.shaperScale : 1.0));
+        static_cast<float>(displaySettings_.colorTransform == 0
+            ? workbenchAgxDisplayLutShaperScale
+            : customDisplayLut ? lutMetadata.shaperScale : 1.0));
     presentProgram_.setUniformValue("uExposure",
                                     static_cast<float>(displaySettings_.colorExposure));
     presentProgram_.setUniformValue("uGamma",

@@ -4021,6 +4021,44 @@ bool ViewportSurfaceRenderer::ensureMatcapTexture(const QString &presetName)
     if (matcapTexture_ != 0 && matcapTextureName_ == presetName) {
         return true;
     }
+    int exactWidth = 0;
+    int exactHeight = 0;
+    const QByteArray exactLayers = workbenchMatcapLinearHalfData(
+        presetName, &exactWidth, &exactHeight);
+    if (!exactLayers.isEmpty()) {
+        const qsizetype rowBytes = qsizetype(exactWidth) * 3 *
+                                   qsizetype(sizeof(quint16));
+        QByteArray texturePixels(exactLayers.size(), Qt::Uninitialized);
+        for (int layer = 0; layer < 2; ++layer) {
+            for (int row = 0; row < exactHeight; ++row) {
+                const qsizetype sourceOffset =
+                    (qsizetype(layer) * exactHeight +
+                     (exactHeight - row - 1)) * rowBytes;
+                const qsizetype destinationOffset =
+                    (qsizetype(layer) * exactHeight + row) * rowBytes;
+                std::memcpy(texturePixels.data() + destinationOffset,
+                            exactLayers.constData() + sourceOffset,
+                            static_cast<size_t>(rowBytes));
+            }
+        }
+        GLint previousBinding = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousBinding);
+        if (matcapTexture_ == 0) {
+            glGenTextures(1, &matcapTexture_);
+        }
+        glBindTexture(GL_TEXTURE_2D_ARRAY, matcapTexture_);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB16F, exactWidth,
+                     exactHeight, 2, 0, GL_RGB, GL_HALF_FLOAT,
+                     texturePixels.constData());
+        glBindTexture(GL_TEXTURE_2D_ARRAY,
+                      static_cast<GLuint>(previousBinding));
+        matcapTextureName_ = presetName;
+        return matcapTexture_ != 0;
+    }
     QImage diffuseImage = workbenchMatcapDiffuseImage(presetName);
     QImage specularImage = workbenchMatcapSpecularImage(presetName);
     if (diffuseImage.isNull() || specularImage.isNull() ||
@@ -4538,9 +4576,15 @@ bool ViewportSurfaceRenderer::renderScalarVolumes(
         QVector2D(float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMin : 0.0),
                   float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMax : workbenchAgxDisplayLutMaximum)));
     scalarVolumeProgram_.setUniformValue("uAgxDisplayLutShaper",
-        settings.colorTransform == 4 && settings.colorLutMetadata.shaper == QStringLiteral("log2_1p") ? 1 : 0);
+        settings.colorTransform == 0 ||
+                (settings.colorTransform == 4 &&
+                 settings.colorLutMetadata.shaper == QStringLiteral("log2_1p"))
+            ? 1 : 0);
     scalarVolumeProgram_.setUniformValue("uAgxDisplayLutShaperScale",
-        float(settings.colorTransform == 4 ? settings.colorLutMetadata.shaperScale : 1.0));
+        float(settings.colorTransform == 0
+                  ? workbenchAgxDisplayLutShaperScale
+                  : settings.colorTransform == 4
+                        ? settings.colorLutMetadata.shaperScale : 1.0));
     scalarVolumeProgram_.setUniformValue("uColorExposure", float(settings.colorExposure));
     scalarVolumeProgram_.setUniformValue("uColorGamma", float(settings.colorGamma));
     scalarVolumeProgram_.setUniformValue("uInverseViewProjection",
@@ -5388,13 +5432,17 @@ bool ViewportSurfaceRenderer::draw(
                               : workbenchAgxDisplayLutMaximum)));
         program_.setUniformValue(
             "uAgxDisplayLutShaper",
-            settings.colorTransform == 4 &&
+            settings.colorTransform == 0 ||
+                    (settings.colorTransform == 4 &&
                     settings.colorLutMetadata.shaper == QStringLiteral("log2_1p")
-                ? 1 : 0);
+                     ) ? 1 : 0);
         program_.setUniformValue(
             "uAgxDisplayLutShaperScale",
-            static_cast<float>(settings.colorTransform == 4
-                                   ? settings.colorLutMetadata.shaperScale : 1.0));
+            static_cast<float>(settings.colorTransform == 0
+                                   ? workbenchAgxDisplayLutShaperScale
+                                   : settings.colorTransform == 4
+                                         ? settings.colorLutMetadata.shaperScale
+                                         : 1.0));
         program_.setUniformValue("uColorExposure",
                                  static_cast<float>(settings.colorExposure));
         program_.setUniformValue("uColorGamma",
@@ -5977,13 +6025,16 @@ bool ViewportSurfaceRenderer::draw(
                                   : workbenchAgxDisplayLutMaximum)));
             transparencyResolveProgram_.setUniformValue(
                 "uAgxDisplayLutShaper",
-                settings.colorTransform == 4 &&
+                settings.colorTransform == 0 ||
+                        (settings.colorTransform == 4 &&
                         settings.colorLutMetadata.shaper == QStringLiteral("log2_1p")
-                    ? 1 : 0);
+                         ) ? 1 : 0);
             transparencyResolveProgram_.setUniformValue(
                 "uAgxDisplayLutShaperScale",
-                static_cast<float>(settings.colorTransform == 4
-                                       ? settings.colorLutMetadata.shaperScale : 1.0));
+                static_cast<float>(settings.colorTransform == 0
+                    ? workbenchAgxDisplayLutShaperScale
+                    : settings.colorTransform == 4
+                          ? settings.colorLutMetadata.shaperScale : 1.0));
             transparencyResolveProgram_.setUniformValue(
                 "uColorTransform", settings.colorTransform);
             transparencyResolveProgram_.setUniformValue(
@@ -6075,13 +6126,16 @@ bool ViewportSurfaceRenderer::draw(
                                       : workbenchAgxDisplayLutMaximum)));
                 transparencyResolveProgram_.setUniformValue(
                     "uAgxDisplayLutShaper",
-                    settings.colorTransform == 4 &&
+                    settings.colorTransform == 0 ||
+                            (settings.colorTransform == 4 &&
                             settings.colorLutMetadata.shaper == QStringLiteral("log2_1p")
-                        ? 1 : 0);
+                             ) ? 1 : 0);
                 transparencyResolveProgram_.setUniformValue(
                     "uAgxDisplayLutShaperScale",
-                    static_cast<float>(settings.colorTransform == 4
-                        ? settings.colorLutMetadata.shaperScale : 1.0));
+                    static_cast<float>(settings.colorTransform == 0
+                        ? workbenchAgxDisplayLutShaperScale
+                        : settings.colorTransform == 4
+                              ? settings.colorLutMetadata.shaperScale : 1.0));
                 transparencyResolveProgram_.setUniformValue(
                     "uColorTransform", settings.colorTransform);
                 transparencyResolveProgram_.setUniformValue(

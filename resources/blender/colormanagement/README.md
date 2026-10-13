@@ -2,9 +2,11 @@
 
 `agx_srgb_default_65.bin` is a 65×65×65 RGB float lookup table baked from
 Blender 5.2.2's `config.ocio` with the OpenColorIO processor
-`Linear Rec.709 → sRGB / AgX`. It covers scene-linear RGB values from 0 to 2
-and stores sRGB display values in little-endian RGB float order, with red
-varying fastest. The viewport samples it trilinearly on both CPU and GPU.
+`Linear Rec.709 → sRGB / AgX`. Its input grid uses a `log2(1 + 16x)` shaper
+over scene-linear RGB values from 0 to 2 so dark Workbench values retain
+display precision. It stores sRGB display values in little-endian RGB float
+order, with red varying fastest. The viewport applies the same shaper before
+sampling it trilinearly on both CPU and GPU.
 
 `khronos_pbr_neutral_srgb_65.bin` is baked from Blender 5.2.2's
 `Khronos PBR Neutral` view on the sRGB display using the same LUT layout.

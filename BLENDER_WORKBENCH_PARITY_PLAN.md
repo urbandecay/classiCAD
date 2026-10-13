@@ -1262,13 +1262,20 @@ depth domain. Visual depth comparison remains open.
   Blender. The earlier proposed background-offset sign change was therefore
   incorrect and was reverted; no cavity shader change is justified by that
   hypothesis. The sampling and edge-mask difference remains open.
-- A transparent overlap capture currently does not provide a valid matched
-  comparison: classiCAD's colored-region bounds are `(268,0)`–`(639,307)`,
-  while Blender's are `(134,86)`–`(479,393)`. The shared target dimensions and
-  final presentation path were checked; the discrepancy remains in the
-  fixture-to-render path. Do not treat this capture as evidence of an OIT
-  renderer mismatch. Correct the fixture projection and rerun the comparison
-  before changing the shared weighted-OIT implementation. The no-shared-depth
+- The first transparent overlap capture isolated a resolve-coordinate bug, not
+  a geometry or OIT accumulation bug. The weighted resolve used an oversized
+  fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so
+  it sampled only the lower-left quarter of the accumulation texture and
+  stretched that quarter over the viewport. The resolve now uses `vUv = p`.
+  The offscreen contract checks the known scene bounds to within two pixels.
+  At 640×480, both classiCAD and Blender cover `(134,86)`–`(479,393)`; at RGB
+  distance thresholds 8 and 20, the masks have 34 and 4 XOR pixels, with IoU
+  0.99968 and 0.99996. Shared foreground RGB MAE is 1.62/255, p95 is 4/255,
+  and maximum error is 13/255. Center overlap probes are `(117,90,124)` and
+  `(121,89,121)` respectively. This confirms silhouette and basic overlap
+  behavior; the test uses a free orthographic viewport whose synthetic eye
+  distance differs from Blender's 8-unit scene camera, so the OIT depth
+  weighting is not yet an exact color-parity comparison. The no-shared-depth
   sorted-transparency fallback remains less capable than Blender's per-pixel
   OIT for intersecting ranges.
 

@@ -1656,6 +1656,43 @@ int main(int argc, char *argv[])
                         }
                         functions.glFinish();
                         const QImage transparencyImage = framebuffer.toImage();
+                        const QColor transparencyBackground =
+                            transparencyImage.pixelColor(0, 0);
+                        int transparencyMinX = glSize.width();
+                        int transparencyMinY = glSize.height();
+                        int transparencyMaxX = -1;
+                        int transparencyMaxY = -1;
+                        for (int y = 0; y < transparencyImage.height(); ++y) {
+                            for (int x = 0; x < transparencyImage.width(); ++x) {
+                                const QColor pixel =
+                                    transparencyImage.pixelColor(x, y);
+                                const int channelDelta = std::max({
+                                    std::abs(pixel.red() -
+                                             transparencyBackground.red()),
+                                    std::abs(pixel.green() -
+                                             transparencyBackground.green()),
+                                    std::abs(pixel.blue() -
+                                             transparencyBackground.blue())});
+                                if (channelDelta <= 4) continue;
+                                transparencyMinX =
+                                    std::min(transparencyMinX, x);
+                                transparencyMinY =
+                                    std::min(transparencyMinY, y);
+                                transparencyMaxX =
+                                    std::max(transparencyMaxX, x);
+                                transparencyMaxY =
+                                    std::max(transparencyMaxY, y);
+                            }
+                        }
+                        const auto withinPixels = [](int actual,
+                                                     int expected) {
+                            return std::abs(actual - expected) <= 2;
+                        };
+                        const bool transparencyBoundsMatch =
+                            withinPixels(transparencyMinX, 134) &&
+                            withinPixels(transparencyMinY, 86) &&
+                            withinPixels(transparencyMaxX, 479) &&
+                            withinPixels(transparencyMaxY, 393);
                         functions.glScissor(previousScissorBox[0],
                                             previousScissorBox[1],
                                             previousScissorBox[2],
@@ -1670,9 +1707,10 @@ int main(int argc, char *argv[])
                                 transparencyAaReady &&
                                 transparencyResult.rendered &&
                                 transparencyImage.size() == glSize &&
+                                transparencyBoundsMatch &&
                                 transparencyImage.save(
                                     transparencyCapturePath),
-                            "shared Workbench scene pass must capture overlapping translucent quads");
+                            "shared Workbench transparency resolve must preserve the fixture bounds");
                     }
                     const QString unselectedCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_UNSELECTED_CAPTURE");

@@ -98,6 +98,23 @@ and before selected tint. The mask clears to neutral visibility 1. Transparent
 objects keep their existing direct shading path. The C++ build passes; GL
 execution and matched Blender output comparison remain open.
 
+**Deferred resolve shader scope correction (2026-10-13):** A source audit found
+that the embedded GLSL referenced `selected`, `normal`, and `incident` outside
+the blocks where they had been declared. These values now have function scope;
+the view normal is fetched only for Studio, MatCap, or cavity, and the
+perspective incident direction is reconstructed only for Studio or MatCap.
+The C++ build passes, but this environment has no GLSL validator or working GL
+context, so shader compilation and execution remain unverified.
+
+**Translucent tool-preview dispatch correction (2026-10-13):** Solid preview
+fills now enter the transparency dispatch even though their source geometry is
+excluded from the ordinary scene opaque/alpha classification. This preserves
+their fixed 0.5 preview alpha. The sorted fallback also keeps preview fills
+depth-disabled, matching the preview draw state, so source-surface depth does
+not hide the preview. The C++ build passes; a runtime preview comparison
+remains open. Tool previews are editor feedback and are not Blender Workbench
+scene passes.
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

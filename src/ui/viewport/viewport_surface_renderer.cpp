@@ -6017,6 +6017,15 @@ bool ViewportSurfaceRenderer::draw(
             ranges_.cbegin(), ranges_.cend(),
             [](const DrawRange &range) { return range.count > 0; });
     }
+    const bool solidPreview = settings.mode == ViewportShadingMode::Solid &&
+                              previewOverlay && !selectionOverlay;
+    if (solidPreview) {
+        // Tool-preview fills use a fixed half alpha and enter the same
+        // transparency dispatch as the preview shader path below.
+        hasPartialAlpha = std::any_of(
+            ranges_.cbegin(), ranges_.cend(),
+            [](const DrawRange &range) { return range.count > 0; });
+    }
     const bool primarySceneEffectsDraw =
         settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
@@ -6950,7 +6959,7 @@ bool ViewportSurfaceRenderer::draw(
             vertexArray_.bind();
             vertexBuffer_.bind();
             if (!weightedOitAvailable) {
-                if (settings.xrayEnabled()) {
+                if (settings.xrayEnabled() || previewOverlay) {
                     glDisable(GL_DEPTH_TEST);
                 } else {
                     glEnable(GL_DEPTH_TEST);

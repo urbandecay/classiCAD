@@ -524,7 +524,8 @@ bool compositeRasterWorkbenchSurfaces(
     const std::function<void(QPainter &, const ViewportRenderObject &,
                              RasterWorkbenchFragmentSink *)> &drawObject,
     RasterWorkbenchSurfaceLayers *surfaceLayers,
-    const std::vector<QVector3D> &sceneLinearBackgroundPixels)
+    const std::vector<QVector3D> &sceneLinearBackgroundPixels,
+    bool allowFragmentGeneratedDepth)
 {
     if (colorImage == nullptr || colorImage->isNull() || objects.isEmpty() ||
         !drawObject || !std::isfinite(devicePixelRatio) ||
@@ -538,9 +539,17 @@ bool compositeRasterWorkbenchSurfaces(
     // fallback if a large supersampled viewport exceeds this budget.
     if (width <= 0 || height <= 0 || pixelCount64 > 1000000) return false;
     for (const ViewportRenderObject &object : objects) {
-        if (!object.preparedDepthGeometry ||
-            object.preparedDepthGeometry->surfaceVertices.size() < 3 ||
-            object.preparedDepthGeometry->surfaceVertices.size() % 3 != 0) {
+        const ViewportDepthGeometry *preparedGeometry =
+            object.preparedDepthGeometry.data();
+        if (preparedGeometry == nullptr) {
+            if (!allowFragmentGeneratedDepth || surfaceLayers != nullptr ||
+                shadingSettings.cavity) {
+                return false;
+            }
+            continue;
+        }
+        if (preparedGeometry->surfaceVertices.size() < 3 ||
+            preparedGeometry->surfaceVertices.size() % 3 != 0) {
             return false;
         }
     }
@@ -594,6 +603,7 @@ bool compositeRasterWorkbenchSurfaces(
     const qreal dpr = devicePixelRatio;
     const Point3D cameraPosition = transform.cameraPosition(viewportSize);
     const Point3D viewDirection = transform.viewDirection();
+    bool fragmentGeneratedDepthUnavailable = false;
 
     const auto rasterDepth = [&](const ViewportRenderObject &object,
                                  QVector<float> *depthBuffer) {
@@ -700,6 +710,22 @@ bool compositeRasterWorkbenchSurfaces(
         drawObject(layerPainter, object, fragmentSink);
         layerPainter.end();
         rasterDepth(object, &objectDepth);
+        if (allowFragmentGeneratedDepth &&
+            !object.preparedDepthGeometry && fragmentSink != nullptr) {
+            if (fragmentSink->empty()) {
+                fragmentGeneratedDepthUnavailable = true;
+            } else {
+                objectDepth.fill(noDepth, pixelCount);
+                for (const RasterWorkbenchLinearFragment &fragment :
+                     *fragmentSink) {
+                    if (fragment.x < 0 || fragment.x >= width ||
+                        fragment.y < 0 || fragment.y >= height ||
+                        !std::isfinite(fragment.cameraDepth)) continue;
+                    float &stored = objectDepth[fragment.y * width + fragment.x];
+                    stored = std::max(stored, fragment.cameraDepth);
+                }
+            }
+        }
         consume(layer);
     };
 
@@ -807,6 +833,7 @@ bool compositeRasterWorkbenchSurfaces(
                 }
             }
         });
+        if (fragmentGeneratedDepthUnavailable) return false;
         if (objectFragments.size() >
                 static_cast<std::size_t>(kMaximumTransparentFragments)) {
             return false;

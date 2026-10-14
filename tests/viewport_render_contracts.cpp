@@ -1156,6 +1156,46 @@ int main(int argc, char *argv[])
         const bool rendered = compositeRasterWorkbenchSurfaces(
             &image, objects, transform, size, 1.0, false, true, shading,
             backgroundLinear, drawObject, &layers);
+        QVector<ViewportRenderObject> generatedDepthObjects = objects;
+        for (ViewportRenderObject &object : generatedDepthObjects) {
+            object.preparedDepthGeometry.clear();
+        }
+        QImage generatedDepthImage(size, QImage::Format_ARGB32_Premultiplied);
+        generatedDepthImage.fill(Qt::transparent);
+        const bool generatedDepthRendered = compositeRasterWorkbenchSurfaces(
+            &generatedDepthImage, generatedDepthObjects, transform, size, 1.0,
+            false, true, shading, backgroundLinear, drawObject, nullptr, {},
+            true);
+        QImage rejectedMissingDepthImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        rejectedMissingDepthImage.fill(Qt::transparent);
+        const bool rejectedMissingDepthRendered =
+            compositeRasterWorkbenchSurfaces(
+                &rejectedMissingDepthImage, generatedDepthObjects, transform,
+                size, 1.0, false, true, shading, backgroundLinear, drawObject);
+        passed &= check(rendered && generatedDepthRendered &&
+                            !rejectedMissingDepthRendered &&
+                            generatedDepthImage == image,
+                        "native-failure compositor may derive bounded depth from scene-linear fragments when prepared geometry is absent");
+
+        ViewportShadingSettings generatedDepthAgxSettings = shading;
+        generatedDepthAgxSettings.colorTransform = 0;
+        renderer.setShadingSettings(generatedDepthAgxSettings);
+        QImage preparedAgxImage(size, QImage::Format_ARGB32_Premultiplied);
+        preparedAgxImage.fill(Qt::transparent);
+        const bool preparedAgxRendered = compositeRasterWorkbenchSurfaces(
+            &preparedAgxImage, objects, transform, size, 1.0, false, true,
+            generatedDepthAgxSettings, backgroundLinear, drawObject);
+        QImage generatedAgxImage(size, QImage::Format_ARGB32_Premultiplied);
+        generatedAgxImage.fill(Qt::transparent);
+        const bool generatedAgxRendered = compositeRasterWorkbenchSurfaces(
+            &generatedAgxImage, generatedDepthObjects, transform, size, 1.0,
+            false, true, generatedDepthAgxSettings, backgroundLinear,
+            drawObject, nullptr, {}, true);
+        passed &= check(preparedAgxRendered && generatedAgxRendered &&
+                            generatedAgxImage == preparedAgxImage,
+                        "fragment-derived fallback depth must preserve scene-linear transparency under AgX");
+        renderer.setShadingSettings(shading);
         std::vector<QVector3D> failureThemeBackground;
         failureThemeBackground.reserve(
             static_cast<std::size_t>(size.width()) * size.height());

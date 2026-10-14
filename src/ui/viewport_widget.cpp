@@ -11099,8 +11099,9 @@ protected:
 
             // Keep the native-renderer failure fallback on the same bounded
             // per-pixel opaque/transparent compositor as the ordinary
-            // QPainter renderer. Missing prepared data or an oversized target
-            // retains the legacy average-depth painter path.
+            // QPainter renderer. Missing prepared depth can use the geometry
+            // emitted by drawShape; unsupported geometry and oversized targets
+            // retain the legacy average-depth painter path.
             bool fallbackSurfaceBatchRendered = false;
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 !fallbackSurfaceObjects.isEmpty()) {
@@ -11151,7 +11152,7 @@ protected:
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
-                    }, nullptr, fallbackThemeBackgroundPixels);
+                    }, nullptr, fallbackThemeBackgroundPixels, true);
                 if (fallbackSurfaceBatchRendered) {
                     painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
                 }

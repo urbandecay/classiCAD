@@ -4781,6 +4781,48 @@ int main(int argc, char *argv[])
                             textureDisplay.save(textureDisplayPath);
                         lightingCapturesSucceeded &= textureAssetSaved &&
                             textureLinearSaved && textureDisplaySaved;
+
+                        textureColorShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        QImage studioTextureDisplay;
+                        QVector<float> studioTextureSceneLinear;
+                        const bool studioTextureRendered =
+                            renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-texture-studio"),
+                                &studioTextureDisplay, &textureSourceObject,
+                                nullptr, nullptr, QString{},
+                                &studioTextureSceneLinear);
+                        const QString studioTextureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture_studio.png"));
+                        const QString studioTextureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture_studio.pfm"));
+                        QFile studioTextureLinearFile(
+                            studioTextureLinearPath);
+                        const bool studioTextureLinearSaved =
+                            studioTextureRendered &&
+                            studioTextureSceneLinear.size() ==
+                                textureExpectedValues &&
+                            studioTextureLinearFile.open(QIODevice::WriteOnly) &&
+                            studioTextureLinearFile.write(texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            studioTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    studioTextureSceneLinear.constData()),
+                                studioTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                studioTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool studioTextureDisplaySaved =
+                            studioTextureRendered &&
+                            studioTextureDisplay.size() == QSize(640, 480) &&
+                            studioTextureDisplay.save(
+                                studioTextureDisplayPath);
+                        lightingCapturesSucceeded &= studioTextureLinearSaved &&
+                            studioTextureDisplaySaved;
                         const QVector3D matchedWorldColor(0.12f, 0.07f,
                                                           0.035f);
                         const QVector3D matchedViewportColorSceneLinear(

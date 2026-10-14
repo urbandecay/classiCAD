@@ -4222,6 +4222,52 @@ int main(int argc, char *argv[])
                         defaultAttributePixel.blue() + 30,
                     "QPainter Attribute mode must use Blender's default color attribute when no active attribute is set");
 
+    Shape faceColorSourceMesh = colorSourceMesh;
+    faceColorSourceMesh.polygonMesh.vertices = {
+        {-1.0, -1.0, 0.0}, {1.0, -1.0, 0.0},
+        {1.0, 1.0, 0.0}, {-1.0, 1.0, 0.0}};
+    faceColorSourceMesh.polygonMesh.faces = {{0, 1, 2}, {0, 2, 3}};
+    faceColorSourceMesh.polygonMesh.faceMaterialIndices = {0, 0};
+    faceColorSourceMesh.polygonMesh.uvMaps.clear();
+    faceColorSourceMesh.polygonMesh.activeUvMapName.clear();
+    faceColorSourceMesh.polygonMesh.defaultUvMapName.clear();
+    faceColorSourceMesh.polygonMesh.colorAttributes.clear();
+    MeshColorAttribute faceColors;
+    faceColors.name = QStringLiteral("FaceColor");
+    faceColors.domain = MeshAttributeDomain::Face;
+    faceColors.colorSpace = QStringLiteral("scene_linear");
+    faceColors.componentCount = 4;
+    faceColors.values = {0.9f, 0.05f, 0.05f, 1.0f,
+                         0.05f, 0.9f, 0.05f, 1.0f};
+    faceColorSourceMesh.polygonMesh.colorAttributes = {faceColors};
+    faceColorSourceMesh.polygonMesh.activeColorAttributeName = faceColors.name;
+    faceColorSourceMesh.polygonMesh.defaultColorAttributeName.clear();
+    const Shape originalColorSourceMesh = colorSourceMesh;
+    colorSourceMesh = faceColorSourceMesh;
+    const QImage faceAttributeImage = renderColorMesh(attributeSettings, {});
+    colorSourceMesh = originalColorSourceMesh;
+    QPointF firstFaceProbe;
+    QPointF secondFaceProbe;
+    const bool projectedFaceSamples =
+        surfaceTransform.worldPointToScreen({0.5, -0.5, 0.0},
+                                            surfaceViewportSize,
+                                            &firstFaceProbe) &&
+        surfaceTransform.worldPointToScreen({-0.5, 0.5, 0.0},
+                                            surfaceViewportSize,
+                                            &secondFaceProbe);
+    const QColor firstFaceAttribute = faceAttributeImage.pixelColor(
+        qRound(firstFaceProbe.x()), qRound(firstFaceProbe.y()));
+    const QColor secondFaceAttribute = faceAttributeImage.pixelColor(
+        qRound(secondFaceProbe.x()), qRound(secondFaceProbe.y()));
+    passed &= check(projectedFaceSamples &&
+                        firstFaceAttribute.red() >
+                            firstFaceAttribute.green() + 30 &&
+                        secondFaceAttribute.green() >
+                            secondFaceAttribute.red() + 30 &&
+                        firstFaceAttribute.alpha() > 240 &&
+                        secondFaceAttribute.alpha() > 240,
+                    "QPainter Attribute mode must select the constant color stored on each mesh Face");
+
     QTemporaryDir colorTextureDirectory;
     QImage sourceTexture(1, 1, QImage::Format_RGBA8888);
     sourceTexture.fill(QColor(220, 30, 20, 255));

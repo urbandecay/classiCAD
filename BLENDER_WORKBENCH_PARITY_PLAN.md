@@ -3322,7 +3322,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   reaches `105/255`. Exact edge parity remains open. Other presets, AA modes,
   Studio rotations, camera orientations, and broader full-frame QPainter parity
   remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, and a two-tile mesh UDIM Closest- and Linear-filter image comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, and a Flat/Material three-slot cube comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
@@ -4263,13 +4263,12 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 ### QPainter textured NURBS fractional-edge resolve (2026-10-14)
 
 - The prepared QPainter NURBS coverage resolve now supports a single regular
-  image or scene-linear float texture when the surface is orthographic, all
-  triangles have UVs, and the existing same-geometric-normal and same-depth
-  checks pass. Textured premultiplied color and software shadow-fragment data
-  aggregate by device pixel, so adjacent translucent tessellation triangles
-  contribute once along their shared edge. Tiled images, perspective views,
-  mixed-depth or mixed-normal surfaces, targets above 1M pixels, and meshes
-  above 100K triangles use the existing direct per-triangle path.
+  image or scene-linear float texture when all triangles have UVs and the
+  existing same-geometric-normal and same-plane checks pass. Orthographic
+  views additionally require uniform depth. Perspective planar surfaces are
+  covered by the matched comparison above; tiled images, mixed-depth or
+  mixed-normal surfaces, targets above 1M pixels, and meshes above 100K
+  triangles use the existing direct per-triangle path.
 - Blender 5.2.2 accumulates transparent fragments and revealage in its pinned
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L474-L526)
   and resolves them in
@@ -4616,15 +4615,27 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   camera, Flat lighting, Material color source, AA Off, and zero dither. All
   27 face-interior probes across the three visible faces match exactly in both
   scene-linear RGB (MAE 0, max 0) and display RGB (MAE 0/255, max 0/255).
+- The same fixture now captures QPainter through `ViewportRenderer::drawShape`
+  using the same mesh face-slot indices and `WorkbenchMaterialData` payloads.
+  Its 27 probes match Blender 5.2.2 display RGB exactly (MAE 0/255, max 0),
+  with scene-linear MAE `0.0001237` and max `0.0002735`. Per-face scene-linear
+  MAE is `0.000186` top, `0.000130` front, and `0.000055` right. The QPainter
+  capture checks three distinct visible probes and saves scene-linear PFM and
+  display PNG alongside the existing GPU capture.
 - This verifies deferred GPU per-face slot selection and color resolve for
-  three visible faces in one opaque mesh. It does not establish Studio,
-  textured, transparent, QPainter, additional slot-count, or general mesh
-  parity; those comparisons remain open. No production renderer change was
-  justified by this fixture.
+  three visible faces in one opaque mesh, plus QPainter's face-local material
+  lookup for the same Flat fixture. It does not establish Studio, textured,
+  transparent, additional slot-count, or general mesh parity; those
+  comparisons remain open. No production renderer change was justified by
+  this fixture.
 - Validation: `cmake --build build -j4` passed with the dependency audit, the
-  offscreen `viewport_render_contracts` test passed with the opt-in capture,
-  and `workbench_display_probe_compare.py` passed against the Blender 5.2.2
-  reference.
+  offscreen `viewport_render_contracts` test passed with the opt-in GPU and
+  QPainter captures, and `workbench_display_probe_compare.py` passed against
+  the Blender 5.2.2 reference for both renderers. Blender's pinned Workbench
+  material selection uses the face slot in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067)
+  and emits per-material mesh batches at
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
 
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 

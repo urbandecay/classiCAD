@@ -53,8 +53,9 @@ constexpr int kGridLineHalfCount = 75;
 qreal workbenchTrianglePixelCoverage(
     const std::array<QPointF, 3> &points, qreal area, qreal px, qreal py,
     qreal stepX, qreal stepY, qreal *b0, qreal *b1, qreal *b2,
-    quint16 *sampleMask = nullptr)
+    quint16 *sampleMask = nullptr, int samplesPerAxis = 4)
 {
+    samplesPerAxis = samplesPerAxis == 1 ? 1 : 4;
     const auto weightsAt = [&](qreal x, qreal y,
                                qreal *w0, qreal *w1, qreal *w2) {
         *w1 = ((x - points[0].x()) * (points[2].y() - points[0].y()) -
@@ -102,17 +103,22 @@ qreal workbenchTrianglePixelCoverage(
                                         std::abs(*b2) * std::abs(area) / edge2});
     if (*b0 >= 0.0 && *b1 >= 0.0 && *b2 >= 0.0 &&
         nearestEdge >= 0.75 * std::max(stepX, stepY)) {
-        if (sampleMask != nullptr) *sampleMask = 0xffff;
+        if (sampleMask != nullptr) {
+            *sampleMask = samplesPerAxis == 1 ? quint16(1) : quint16(0xffff);
+        }
         return qreal(1.0);
     }
     qreal sum0 = 0.0, sum1 = 0.0, sum2 = 0.0;
     int covered = 0;
     quint16 mask = 0;
-    for (int sy = 0; sy < 4; ++sy) {
-        for (int sx = 0; sx < 4; ++sx) {
+    for (int sy = 0; sy < samplesPerAxis; ++sy) {
+        for (int sx = 0; sx < samplesPerAxis; ++sx) {
             qreal w0, w1, w2;
-            weightsAt(px + (sx - 1.5) * stepX / 4.0,
-                      py + (sy - 1.5) * stepY / 4.0, &w0, &w1, &w2);
+            const qreal sampleX = samplesPerAxis == 1
+                ? px : px + (sx - 1.5) * stepX / 4.0;
+            const qreal sampleY = samplesPerAxis == 1
+                ? py : py + (sy - 1.5) * stepY / 4.0;
+            weightsAt(sampleX, sampleY, &w0, &w1, &w2);
             if (!sampleInside(w0, w1, w2)) continue;
             sum0 += w0;
             sum1 += w1;
@@ -126,7 +132,7 @@ qreal workbenchTrianglePixelCoverage(
     *b0 = sum0 / covered;
     *b1 = sum1 / covered;
     *b2 = sum2 / covered;
-    return covered / 16.0;
+    return covered / qreal(samplesPerAxis * samplesPerAxis);
 }
 
 QVector3D transformWorkbenchMeshNormal(const std::array<double, 16> &matrix,
@@ -829,6 +835,11 @@ void ViewportRenderer::setShadingSettings(
     const ViewportShadingSettings &settings)
 {
     shadingSettings_ = settings;
+}
+
+void ViewportRenderer::setWorkbenchRasterAntialiasingEnabled(bool enabled)
+{
+    workbenchRasterAntialiasingEnabled_ = enabled;
 }
 
 void ViewportRenderer::setSmoothWirePreferences(bool overlay, bool editMode)
@@ -2113,7 +2124,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     qreal w0, w1, w2;
                     const qreal coverage = workbenchTrianglePixelCoverage(
                         points, area, x + 0.5, y + 0.5, 1.0, 1.0,
-                        &w0, &w1, &w2);
+                        &w0, &w1, &w2, nullptr,
+                        workbenchRasterAntialiasingEnabled_ ? 4 : 1);
                     if (coverage > 0.0 && coverage < 1.0) {
                         ++meshFractionalCoverageEntries;
                         if (meshFractionalCoverageEntries >
@@ -2235,7 +2247,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     quint16 sampleMask = 0;
                     const qreal coverage = workbenchTrianglePixelCoverage(
                         devicePoints, area, px, py, 1.0, 1.0,
-                        &b0, &b1, &b2, &sampleMask);
+                        &b0, &b1, &b2, &sampleMask,
+                        workbenchRasterAntialiasingEnabled_ ? 4 : 1);
                     if (coverage <= 0.0) continue;
                     const qreal p0 = b0 * triangle.reciprocalDepths[0];
                     const qreal p1 = b1 * triangle.reciprocalDepths[1];
@@ -3941,7 +3954,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         qreal w0, w1, w2;
                         const qreal coverage = workbenchTrianglePixelCoverage(
                             devicePoints, area, px, py, 1.0, 1.0,
-                            &w0, &w1, &w2);
+                            &w0, &w1, &w2, nullptr,
+                            workbenchRasterAntialiasingEnabled_ ? 4 : 1);
                         if (coverage <= 0.0) continue;
                         const qreal cw0 = w0 * reciprocal[0];
                         const qreal cw1 = w1 * reciprocal[1];
@@ -4131,7 +4145,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     qreal w0, w1, w2;
                     const qreal coverage = workbenchTrianglePixelCoverage(
                         devicePoints, area, px, py, 1.0, 1.0,
-                        &w0, &w1, &w2);
+                        &w0, &w1, &w2, nullptr,
+                        workbenchRasterAntialiasingEnabled_ ? 4 : 1);
                     if (coverage <= 0.0) continue;
                     const qreal cw0=w0*reciprocal[0], cw1=w1*reciprocal[1], cw2=w2*reciprocal[2];
                     const qreal denominator=cw0+cw1+cw2;

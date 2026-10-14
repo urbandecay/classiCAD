@@ -23488,6 +23488,8 @@ private:
                                bool preview)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
+        viewportRenderer_.setWorkbenchRasterAntialiasingEnabled(
+            viewportAaMode_ != 0);
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
         viewportOverlay_.drawSubdivisionPoints(painter,
                                                shape,

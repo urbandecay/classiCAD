@@ -34,6 +34,7 @@ public:
     void drawOrigin(QPainter &painter, const QSize &viewportSize) const;
     void setGridAppearance(const BlenderGridAppearance &appearance);
     void setShadingSettings(const ViewportShadingSettings &settings);
+    void setWorkbenchRasterAntialiasingEnabled(bool enabled);
     void setSmoothWirePreferences(bool overlay, bool editMode);
     void setGridBaseStep(qreal baseGridStep);
     void drawShape(QPainter &painter,
@@ -137,6 +138,7 @@ private:
     const CurveHitTester &curveHitTester_;
     const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;
     bool smoothCurveDisplay_ = true;
+    bool workbenchRasterAntialiasingEnabled_ = true;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
     bool architecturalDimensionFont_ = false;

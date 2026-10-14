@@ -4512,6 +4512,7 @@ int main(int argc, char *argv[])
             surfaceViewportSize, QImage::Format_ARGB32_Premultiplied);
         translucentMeshImage.fill(Qt::transparent);
         RasterWorkbenchFragmentSink translucentMeshFragments;
+        surfaceRenderer.setWorkbenchRasterAntialiasingEnabled(false);
         surfaceRenderer.setShadingSettings(textureSettings);
         QPainter translucentMeshPainter(&translucentMeshImage);
         surfaceRenderer.drawShape(
@@ -4548,6 +4549,7 @@ int main(int argc, char *argv[])
                 std::abs(meshDiagonalAlpha - 0.5f) < 0.02f &&
                 std::abs(meshDiagonalPixel.alphaF() - 0.5f) < 0.02f,
             "QPainter translucent mesh shared diagonal must have one half-alpha contribution");
+        surfaceRenderer.setWorkbenchRasterAntialiasingEnabled(true);
     }
     ViewportTransform perspectiveNurbsTransform = surfaceTransform;
     perspectiveNurbsTransform.zoom() = 17.28;
@@ -5923,6 +5925,9 @@ int main(int argc, char *argv[])
                             CurveHitTester qpainterAaHitTester;
                             ViewportRenderer qpainterAaRenderer(
                                 gpuTransform, qpainterAaHitTester);
+                            qpainterAaRenderer
+                                .setWorkbenchRasterAntialiasingEnabled(
+                                    captureCase.mode != 0);
                             qpainterAaRenderer.setShadingSettings(
                                 aaCaptureShading);
                             const QVector<ViewportRenderObject> aaObjects{

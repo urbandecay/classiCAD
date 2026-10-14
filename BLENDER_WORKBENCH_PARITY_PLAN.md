@@ -1755,6 +1755,30 @@ classiCAD's QPainter capture writes
 `--scene MESH_TEXTURE` and the same alpha-mode option. The fixture also writes
 equivalent straight and premultiplied image assets to the capture directory.
 
+**QPainter perspective mesh texture comparison (2026-10-14):** The same
+two-triangle texture fixture was rendered with matched perspective framing:
+classiCAD zoom `17.28`, view direction `(4, -6, 4)`, and Blender's 25 mm lens
+with 36 mm horizontal sensor, both at 640×480 with Flat lighting, AgX, Linear
+filtering, and AA off. The foreground mask IoU is `0.988615` (419 XOR pixels;
+36,384 Blender and 36,803 QPainter foreground pixels). On the shared foreground
+eroded by two pixels, the scene-linear channel MAE is `0.001543`, p95
+`0.003737`, and maximum `0.008007` over 34,206 pixels. Four interior probes
+agree within one display code value per channel; their scene-linear MAEs are
+`0.00120`, `0.00121`, `0.00152`, and `0.00169`. This supports the existing
+perspective-correct UV interpolation for this planar mesh. The remaining mask
+difference is raster coverage at the silhouette; other mesh shapes and
+perspective texture extension modes remain open. Blender 5.2.2 marks the
+prepass UV varying smooth in
+[`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
+and passes mesh UVs through at lines 141–150; the texture shader samples those
+coordinates in
+[`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433).
+Capture files are `color_texture_mesh_perspective_qpainter.png/.pfm` under
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; Blender uses
+`--scene MESH_TEXTURE --match-classicad-perspective --aa OFF --lighting FLAT
+--color-source TEXTURE --texture-interpolation Linear` and the same pattern
+image.
+
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
 Blender node interpolation labels Linear, Cubic, and Smart. A production mesh

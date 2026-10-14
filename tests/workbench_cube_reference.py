@@ -50,6 +50,14 @@ def arguments():
         ),
     )
     parser.add_argument(
+        "--match-classicad-perspective",
+        action="store_true",
+        help=(
+            "match the free perspective viewport at zoom 17.28, with a "
+            "25 mm lens, 36 mm sensor, and 0.01/1000 clip range"
+        ),
+    )
+    parser.add_argument(
         "--aa",
         choices=("OFF", "FXAA", "5", "8", "11", "16", "32"),
         default="FXAA",
@@ -245,18 +253,27 @@ def main():
         )
     )
     camera_data = bpy.data.cameras.new("ReferenceCamera")
-    camera_data.type = "ORTHO"
+    camera_data.type = "PERSP" if args.match_classicad_perspective else "ORTHO"
     camera_data.ortho_scale = args.ortho_scale
+    if args.match_classicad_perspective:
+        camera_data.lens = 25.0
+        camera_data.sensor_width = 36.0
+        camera_data.sensor_fit = "HORIZONTAL"
     camera = bpy.data.objects.new("ReferenceCamera", camera_data)
     bpy.context.collection.objects.link(camera)
     ortho_eye_distance = args.ortho_eye_distance
-    if args.match_classicad_ortho:
+    if args.match_classicad_perspective:
+        ortho_eye_distance = 60.0 / 17.28
+    elif args.match_classicad_ortho:
         ortho_eye_distance = 1000.0
     if ortho_eye_distance is None:
         ortho_eye_distance = (
             1000.0 if args.scene != "CUBE" else 8.0
         )
-    if args.match_classicad_ortho:
+    if args.match_classicad_perspective:
+        camera_data.clip_start = 0.01
+        camera_data.clip_end = 1000.0
+    elif args.match_classicad_ortho:
         camera_data.clip_start = 0.01
         camera_data.clip_end = 2000.0
     elif args.scene == "TRANSPARENT_OVERLAP":

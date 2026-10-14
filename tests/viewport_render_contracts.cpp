@@ -7251,6 +7251,123 @@ int main(int argc, char *argv[])
                                 alphaMeshCaptureSaved;
                         }
 
+                        ViewportTransform perspectiveTextureTransform;
+                        perspectiveTextureTransform.zoom() = 17.28;
+                        perspectiveTextureTransform.setViewDirection(
+                            {4.0, -6.0, 4.0});
+                        perspectiveTextureTransform.setPerspectiveEnabled(true);
+                        CurveHitTester perspectiveTextureHitTester;
+                        ViewportRenderer perspectiveTextureRenderer(
+                            perspectiveTextureTransform,
+                            perspectiveTextureHitTester);
+                        perspectiveTextureRenderer.setShadingSettings(
+                            textureColorShading);
+                        ViewportRenderObject perspectiveMeshTextureObject =
+                            qpainterMeshTextureObject;
+                        perspectiveMeshTextureObject.shape.polygonMesh
+                            .faceMaterialIndices = {0, 0};
+                        perspectiveMeshTextureObject.shape.polygonMesh
+                            .materialSlotIds = {
+                                QStringLiteral("TextureSlotA")};
+                        const QVector<WorkbenchMaterialData>
+                            perspectiveMeshTextureMaterials{
+                                qpainterMeshTextureMaterial};
+                        perspectiveMeshTextureObject.meshMaterials =
+                            perspectiveMeshTextureMaterials;
+                        perspectiveMeshTextureObject.objectId =
+                            ObjectId::fromValue(9120);
+                        perspectiveMeshTextureObject.displayName =
+                            QStringLiteral("PerspectiveMeshTexturePatch");
+                        QImage perspectiveMeshTextureDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        perspectiveMeshTextureDisplay.fill(
+                            nurbsTextureDisplay.pixelColor(0, 0));
+                        RasterWorkbenchFragmentSink
+                            perspectiveMeshTextureFragments;
+                        QPainter perspectiveMeshTexturePainter(
+                            &perspectiveMeshTextureDisplay);
+                        perspectiveTextureRenderer.drawShape(
+                            perspectiveMeshTexturePainter,
+                            perspectiveMeshTextureObject.shape, glSize, false,
+                            false, true, QColor(), QString(), 0.0,
+                            perspectiveMeshTextureObject.objectId,
+                            perspectiveMeshTextureObject.geometryRevision,
+                            nullptr, {}, std::nullopt, std::nullopt,
+                            perspectiveMeshTextureObject.displayName, QString(),
+                            identityMeshObjectTransform,
+                            perspectiveMeshTextureMaterials,
+                            &perspectiveMeshTextureFragments);
+                        perspectiveMeshTexturePainter.end();
+                        QVector<float> perspectiveMeshTextureSceneLinear(
+                            textureExpectedValues);
+                        for (qsizetype pixel = 0;
+                             pixel + 2 <
+                                 perspectiveMeshTextureSceneLinear.size();
+                             pixel += 3) {
+                            perspectiveMeshTextureSceneLinear[pixel] =
+                                textureBackground.x();
+                            perspectiveMeshTextureSceneLinear[pixel + 1] =
+                                textureBackground.y();
+                            perspectiveMeshTextureSceneLinear[pixel + 2] =
+                                textureBackground.z();
+                        }
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             perspectiveMeshTextureFragments) {
+                            if (fragment.x < 0 ||
+                                fragment.x >= glSize.width() ||
+                                fragment.y < 0 ||
+                                fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype pixel =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            perspectiveMeshTextureSceneLinear[pixel] =
+                                fragment.sceneLinearRgb[0];
+                            perspectiveMeshTextureSceneLinear[pixel + 1] =
+                                fragment.sceneLinearRgb[1];
+                            perspectiveMeshTextureSceneLinear[pixel + 2] =
+                                fragment.sceneLinearRgb[2];
+                        }
+                        const QString perspectiveMeshTextureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_perspective_qpainter.png"));
+                        const QString perspectiveMeshTextureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_perspective_qpainter.pfm"));
+                        QFile perspectiveMeshTextureLinearFile(
+                            perspectiveMeshTextureLinearPath);
+                        const bool perspectiveMeshTextureLinearSaved =
+                            perspectiveMeshTextureLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            perspectiveMeshTextureLinearFile.write(
+                                texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            perspectiveMeshTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    perspectiveMeshTextureSceneLinear.constData()),
+                                perspectiveMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                perspectiveMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool perspectiveMeshTextureSaved =
+                            patternedTextureSaved &&
+                            perspectiveTextureTransform
+                                .isPerspectiveEnabled() &&
+                            validatePolygonMesh(
+                                perspectiveMeshTextureObject.shape.polygonMesh) &&
+                            perspectiveMeshTextureFragments.size() > 5000 &&
+                            perspectiveMeshTextureLinearSaved &&
+                            perspectiveMeshTextureDisplay.save(
+                                perspectiveMeshTextureDisplayPath);
+                        passed &= check(
+                            perspectiveMeshTextureSaved,
+                            "QPainter perspective mesh texture capture must render the matched varying-UV patch");
+                        lightingCapturesSucceeded &=
+                            perspectiveMeshTextureSaved;
+
                         QImage alphaCutoutTexture(2, 2,
                                                   QImage::Format_RGBA8888);
                         alphaCutoutTexture.setPixelColor(

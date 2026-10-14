@@ -49,7 +49,11 @@ def arguments():
             "distance and 0.01/2000 clip range"
         ),
     )
-    parser.add_argument("--aa", choices=("OFF", "FXAA", "8"), default="FXAA")
+    parser.add_argument(
+        "--aa",
+        choices=("OFF", "FXAA", "5", "8", "11", "16", "32"),
+        default="FXAA",
+    )
     parser.add_argument(
         "--zero-dither",
         action="store_true",

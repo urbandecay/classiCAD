@@ -4635,11 +4635,35 @@ int main(int argc, char *argv[])
                         }
                         const QImage image = framebuffer.toImage();
                         bool linearCaptureSaved = true;
+                        const char *linearCaptureEnvironmentVariable = nullptr;
+                        switch (aaMode) {
+                        case static_cast<int>(ViewportAntiAliasingMode::Samples5):
+                            linearCaptureEnvironmentVariable =
+                                "CLASSICAD_VIEWPORT_AA_SAMPLES5_LINEAR_CAPTURE";
+                            break;
+                        case static_cast<int>(ViewportAntiAliasingMode::Samples8):
+                            linearCaptureEnvironmentVariable =
+                                "CLASSICAD_VIEWPORT_AA_SAMPLES8_LINEAR_CAPTURE";
+                            break;
+                        case static_cast<int>(ViewportAntiAliasingMode::Samples11):
+                            linearCaptureEnvironmentVariable =
+                                "CLASSICAD_VIEWPORT_AA_SAMPLES11_LINEAR_CAPTURE";
+                            break;
+                        case static_cast<int>(ViewportAntiAliasingMode::Samples16):
+                            linearCaptureEnvironmentVariable =
+                                "CLASSICAD_VIEWPORT_AA_SAMPLES16_LINEAR_CAPTURE";
+                            break;
+                        case static_cast<int>(ViewportAntiAliasingMode::Samples32):
+                            linearCaptureEnvironmentVariable =
+                                "CLASSICAD_VIEWPORT_AA_SAMPLES32_LINEAR_CAPTURE";
+                            break;
+                        default:
+                            break;
+                        }
                         const QString linearCapturePath =
-                            aaMode == static_cast<int>(
-                                          ViewportAntiAliasingMode::Samples8)
+                            linearCaptureEnvironmentVariable
                                 ? qEnvironmentVariable(
-                                      "CLASSICAD_VIEWPORT_AA_SAMPLES8_LINEAR_CAPTURE")
+                                      linearCaptureEnvironmentVariable)
                                 : QString();
                         if (!linearCapturePath.isEmpty() &&
                             completedSamples == expectedSamples) {
@@ -4775,6 +4799,18 @@ int main(int argc, char *argv[])
                     passed &= captureAaMode(
                         "CLASSICAD_VIEWPORT_AA_SAMPLES8_CAPTURE", 8, 8,
                         "8-sample baseline must resolve eight nonblank outline-free cube samples");
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_SAMPLES5_CAPTURE", 5, 5,
+                        "5-sample baseline must resolve five nonblank outline-free cube samples");
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_SAMPLES11_CAPTURE", 11, 11,
+                        "11-sample baseline must resolve eleven nonblank outline-free cube samples");
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_SAMPLES16_CAPTURE", 16, 16,
+                        "16-sample baseline must resolve sixteen nonblank outline-free cube samples");
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_SAMPLES32_CAPTURE", 32, 32,
+                        "32-sample baseline must resolve thirty-two nonblank outline-free cube samples");
                     surfaceObject.selected = true;
 
                     ViewportTransform bottomTransform;

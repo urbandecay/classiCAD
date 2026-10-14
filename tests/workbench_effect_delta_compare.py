@@ -47,6 +47,59 @@ def summarize(name, reference_base, reference_effect,
           f"union max={union_error.max()}")
 
 
+def cardinal_outline_mask(object_mask):
+    height, width = object_mask.shape
+    boundary = np.zeros_like(object_mask)
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        neighbor = np.zeros_like(object_mask)
+        y0 = max(0, dy)
+        y1 = height + min(0, dy)
+        x0 = max(0, dx)
+        x1 = width + min(0, dx)
+        neighbor[y0:y1, x0:x1] = object_mask[
+            y0 - dy:y1 - dy, x0 - dx:x1 - dx
+        ]
+        boundary |= object_mask != neighbor
+    return boundary
+
+
+def report_outline_mask_attribution(reference_base, reference_effect,
+                                    candidate_base, candidate_effect,
+                                    threshold):
+    def masks(base, effect):
+        background = base[0, 0]
+        object_mask = np.any(base != background, axis=2)
+        observed = np.max(np.abs(effect - base), axis=2) >= threshold
+        predicted = cardinal_outline_mask(object_mask)
+        return object_mask, observed, predicted
+
+    ref_object, ref_observed, ref_predicted = masks(
+        reference_base, reference_effect
+    )
+    cand_object, cand_observed, cand_predicted = masks(
+        candidate_base, candidate_effect
+    )
+    intersection = ref_object & cand_object
+    union = ref_object | cand_object
+    silhouette_iou = float(intersection.sum() / union.sum()) if union.any() else 1.0
+    print("outline mask attribution:")
+    print(f"  baseline object silhouettes: Blender={int(ref_object.sum())}, "
+          f"classiCAD={int(cand_object.sum())}, "
+          f"XOR={int(np.logical_xor(ref_object, cand_object).sum())}, "
+          f"IoU={silhouette_iou:.6f}")
+    for name, observed, predicted in (
+        ("Blender", ref_observed, ref_predicted),
+        ("classiCAD", cand_observed, cand_predicted),
+    ):
+        xor = int(np.logical_xor(observed, predicted).sum())
+        print(f"  {name} observed vs four-cardinal boundary: "
+              f"observed={int(observed.sum())}, "
+              f"predicted={int(predicted.sum())}, XOR={xor}")
+        if xor:
+            return False
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("blender_baseline")
@@ -55,6 +108,11 @@ def main():
     parser.add_argument("classicad_effect")
     parser.add_argument("--threshold", type=int, default=2,
                         help="changed-pixel channel threshold (default: 2/255)")
+    parser.add_argument(
+        "--outline-mask-attribution",
+        action="store_true",
+        help="compare effect masks with four-cardinal boundaries of baseline silhouettes",
+    )
     args = parser.parse_args()
     if args.threshold < 1 or args.threshold > 255:
         parser.error("--threshold must be in [1, 255]")
@@ -62,6 +120,10 @@ def main():
         args.blender_baseline, args.blender_effect,
         args.classicad_baseline, args.classicad_effect)]
     summarize("effect-delta comparison", *images, args.threshold)
+    if args.outline_mask_attribution and not report_outline_mask_attribution(
+        *images, args.threshold
+    ):
+        raise SystemExit("outline effect mask differs from its baseline cardinal boundary")
 
 
 if __name__ == "__main__":

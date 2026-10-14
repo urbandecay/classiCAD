@@ -8056,7 +8056,14 @@ int main(int argc, char *argv[])
                         // Use a deliberately large aperture so this compact
                         // cube produces measurable CoC at the matched view.
                         dofOptics.fStop = 0.1;
-                        dofOptics.apertureBlades = 6;
+                        bool apertureBladesOk = false;
+                        const int requestedApertureBlades =
+                            qgetenv("CLASSICAD_VIEWPORT_GPU_DOF_APERTURE_BLADES")
+                                .toInt(&apertureBladesOk);
+                        dofOptics.apertureBlades = apertureBladesOk &&
+                                requestedApertureBlades >= 0 &&
+                                requestedApertureBlades <= 16
+                            ? requestedApertureBlades : 6;
                         dofOptics.apertureRotationRadians = 0.2;
                         dofOptics.apertureRatio = 1.2;
                         QImage dofBaselineImage;

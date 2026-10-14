@@ -1,6 +1,6 @@
 """Render matched Blender 5.2.2 Workbench baseline and DOF captures.
 
-Usage: blender --background --python tests/workbench_dof_reference.py -- output-prefix
+Usage: blender --background --python tests/workbench_dof_reference.py -- output-prefix [--aperture-blades N]
 
 Writes ``<prefix>-baseline.png`` and ``<prefix>-dof.png`` at 640x480. The
 camera, cube, Workbench settings, and optics match the focused classiCAD GPU
@@ -19,7 +19,13 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_prefix")
+    parser.add_argument(
+        "--aperture-blades", type=int, default=6,
+        help="Workbench camera aperture blade count (default: 6)",
+    )
     args = parser.parse_args(argv)
+    if args.aperture_blades < 0:
+        parser.error("--aperture-blades must be nonnegative")
 
     scene = bpy.context.scene
     bpy.ops.object.select_all(action="SELECT")
@@ -77,7 +83,7 @@ def main():
     camera_data.clip_end = 34.7222222
     camera_data.dof.focus_distance = camera_location.length
     camera_data.dof.aperture_fstop = 0.1
-    camera_data.dof.aperture_blades = 6
+    camera_data.dof.aperture_blades = args.aperture_blades
     camera_data.dof.aperture_rotation = 0.2
     camera_data.dof.aperture_ratio = 1.2
     scene.camera = camera

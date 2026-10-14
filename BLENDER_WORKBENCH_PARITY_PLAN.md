@@ -2628,6 +2628,28 @@ above is from scene-linear captures and remains the preferred color metric.
   layout/jitter, gather, median, and resolve equations align with Blender;
   there is not yet evidence for a production renderer fix. Broader cameras,
   aperture settings, temporal sampling, and output-space parity remain open.
+- **Two-blade DOF comparison (2026-10-14):** The matched capture helpers now
+  accept an aperture-blade count, retaining six as the default, so the
+  Blender 5.2.2 and GPU classiCAD fixtures can measure the two-blade slit case.
+  Blender's pinned [`DofPass::setup_samples`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L839-L897)
+  applies the polygon aperture mapping for blade counts greater than one, and
+  the pinned [`DOF gather shader`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L21-L57)
+  consumes those aperture samples. In matched 640×480 renders at f/0.1,
+  rotation 0.2 radians, ratio 1.2, and two blades, the changed-effect masks
+  contain 9,963 Blender pixels and 11,383 classiCAD pixels at a 2/255
+  max-channel threshold (IoU 0.7942; XOR 2,448). At 3/255, they contain
+  8,492/9,996 pixels (IoU 0.7847; XOR 2,230). Mean effect magnitudes are
+  0.6450/0.7981 per pixel. The no-DOF baselines already differ by
+  1.4036/255 mean max-channel error (98,686 pixels exceed 2/255), and the
+  final DOF images differ by 1.5622/255. This two-blade output comparison is
+  weaker than the six-blade mask result and does not isolate aperture shaping
+  from display quantization or the existing half-resolution gather
+  approximation; it confirms that two-blade visual parity remains open and
+  does not justify a production DOF change by itself. Captures used
+  `CLASSICAD_VIEWPORT_GPU_DOF_APERTURE_BLADES=2` with the offscreen
+  `viewport_render_contracts` test and Blender's
+  `tests/workbench_dof_reference.py --aperture-blades 2`; metrics came from
+  `tests/workbench_dof_compare.py` at thresholds 2 and 3.
 - The expanded effect comparisons currently use final PNGs. A future capture
   should expose scene-linear per-pass inputs and outputs to separate outline
   opacity from differences in the underlying face color and display encoding.

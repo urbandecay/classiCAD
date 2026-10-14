@@ -5045,3 +5045,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   the offscreen `viewport_render_contracts` test passed while capturing both
   shadow setting pairs. `workbench_shadow_receiver_compare.py` completed on
   the default and alternate captures against Blender 5.2.2.
+
+### QPainter full-frame MatCap presets (2026-10-14)
+
+- Compared the existing QPainter polygon-cube captures for `check_normal+y`
+  and `ceramic_lightbulb` against fresh Blender 5.2.2 Workbench renders. Both
+  use 640×480 orthographic framing, Material color, MatCap lighting, AA Off,
+  and zero dither; `check_normal+y` uses the same enabled specular setting as
+  the QPainter capture. PNG and scene-linear PFM comparisons cover the full
+  frame.
+- For both presets, the thresholded silhouette masks contain 111,256 Blender
+  pixels and 111,878 QPainter pixels (622 XOR; IoU 0.994440), matching the
+  previously measured QPainter AA-Off silhouette difference. For
+  `check_normal+y`, common-foreground display channel MAE is 1.784/255 (p95
+  1/255); scene-linear channel MAE over the full frame is 0.00258 blue,
+  0.00467 green, and 0.00499 red. For `ceramic_lightbulb`, display channel
+  MAE is 1.414/255 (p95 1/255); scene-linear channel MAE is 0.00380 blue,
+  0.00304 green, and 0.00250 red. The larger maxima fall on the silhouette
+  band; these captures do not justify changing the interior MatCap resolve.
+- This measures two MatCap assets on the current opaque cube and one camera.
+  Additional presets, orientations, specular variations, geometry, AA modes,
+  and the residual AA-Off silhouette coverage remain open; this is not a
+  MatCap parity sign-off.
+- Validation: Blender reported 5.2.2 LTS; `workbench_image_compare.py` and
+  `workbench_pfm_compare.py` completed for both PNG/PFM pairs. The classiCAD
+  source captures came from the previously validated offscreen
+  `viewport_render_contracts` run; this comparison-only update made no C++
+  changes and required no rebuild.

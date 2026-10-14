@@ -1974,6 +1974,23 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             triangle.metallic =
                                 mesh.materialSlots[materialIndex].metallic;
                         }
+                        if (shadingSettings_.lightingMode ==
+                            ViewportLightingMode::Studio) {
+                            WorkbenchPackedMaterialData packedMaterial =
+                                workbenchPackMaterialData(
+                                    static_cast<float>(triangle.metallic),
+                                    static_cast<float>(triangle.roughness),
+                                    static_cast<float>(
+                                        triangle.sceneLinearAlpha));
+                            if (!shadingSettings_.xrayEnabled() &&
+                                sourceColor.w() >= 1.0f - 1.0e-6f) {
+                                packedMaterial =
+                                    workbenchQuantizeMaterialLighting(
+                                        packedMaterial);
+                            }
+                            triangle.roughness = packedMaterial.roughness;
+                            triangle.metallic = packedMaterial.metallic;
+                        }
 
                         const Point3D ab{vertices[1].x - vertices[0].x,
                                          vertices[1].y - vertices[0].y,

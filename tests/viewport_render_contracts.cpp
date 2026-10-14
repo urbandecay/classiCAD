@@ -9083,18 +9083,18 @@ int main(int argc, char *argv[])
                         materialSlotsObject.meshMaterials[0]
                             .baseColorSceneLinear =
                                 QVector3D(0.18f, 0.28f, 0.72f);
-                        materialSlotsObject.meshMaterials[0].roughness = 0.4f;
+                        materialSlotsObject.meshMaterials[0].roughness = 0.2f;
                         materialSlotsObject.meshMaterials[0].metallic = 0.0f;
                         materialSlotsObject.meshMaterials[1]
                             .baseColorSceneLinear =
                                 QVector3D(0.72f, 0.20f, 0.18f);
-                        materialSlotsObject.meshMaterials[1].roughness = 0.4f;
-                        materialSlotsObject.meshMaterials[1].metallic = 0.0f;
+                        materialSlotsObject.meshMaterials[1].roughness = 0.5f;
+                        materialSlotsObject.meshMaterials[1].metallic = 0.5f;
                         materialSlotsObject.meshMaterials[2]
                             .baseColorSceneLinear =
                                 QVector3D(0.18f, 0.65f, 0.25f);
-                        materialSlotsObject.meshMaterials[2].roughness = 0.4f;
-                        materialSlotsObject.meshMaterials[2].metallic = 0.0f;
+                        materialSlotsObject.meshMaterials[2].roughness = 0.8f;
+                        materialSlotsObject.meshMaterials[2].metallic = 1.0f;
                         ViewportShadingSettings materialSlotsShading =
                             rawFaceShading;
                         materialSlotsShading.lightingMode =

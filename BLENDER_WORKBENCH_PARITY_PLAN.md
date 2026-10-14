@@ -4687,21 +4687,31 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - Extended the same three-slot cube to opt-in GPU and QPainter captures under
   Studio Default lighting, Material color, specular enabled, AA Off, and
   effects/outlines disabled. All three Blender and classiCAD slot materials
-  explicitly use roughness 0.4 and metallic 0.0. The C++ fixture preserves the
-  existing mesh face-slot IDs and `WorkbenchMaterialData` adapter; no renderer
-  or geometry contract changed.
+  carry distinct roughness/metallic pairs: `(0.2, 0.0)`, `(0.5, 0.5)`, and
+  `(0.8, 1.0)`. The C++ fixture preserves the existing mesh face-slot IDs and
+  `WorkbenchMaterialData` adapter and exercises the Studio material payload
+  independently on each visible face.
 - Compared 27 face-interior probes against Blender 5.2.2 Workbench with the
   matched 640×480 orthographic camera and zero dither. GPU scene-linear RGB is
   exact (MAE 0, max 0); display RGB MAE is 0.1111/255 with max 1/255. QPainter
-  scene-linear MAE is 0.0015777 with max 0.0049253; display MAE is 0.8889/255
-  with max 3/255. QPainter per-face scene-linear MAE is 0.002964 top,
-  0.000168 front, and 0.001601 right. The offscreen contract confirms all
-  three slot probes remain present and distinct in both captures.
+  scene-linear MAE is `0.0000485` with max `0.0001308`; display MAE is
+  `0.1111/255` with max `1/255`. QPainter per-face scene-linear MAE is
+  `0.000044` top, `0.000075` front, and `0.000027` right. The offscreen
+  contract confirms all three slot probes remain present and distinct in both
+  captures.
+- This comparison found that QPainter's polygon-mesh Studio path passed raw
+  material roughness/metallic to its lighting function, while Blender's
+  opaque path first packs those values and then truncates the lighting payload
+  to 5 roughness bits and 3 metallic bits. The CPU mesh path now uses the same
+  material packing and opaque quantization helpers as the GPU path; X-Ray and
+  alpha-bearing draws retain the first packed payload without opaque-only
+  quantization. The per-slot comparison now exercises this behavior for three
+  distinct payloads.
 - This verifies one opaque mesh with three visible face slots for Studio
-  Default. Other Studio presets/rotations, varied per-slot roughness or
-  metallic, textured and transparent slots, additional slot counts, and broad
-  mesh parity remain open. No production renderer change was justified by
-  this comparison. Blender 5.2.2's deferred Workbench resolve and material
+  Default. Other Studio presets/rotations and roughness/metallic values,
+  textured and transparent slots, additional slot counts, and broad mesh
+  parity remain open. Blender 5.2.2's
+  deferred Workbench resolve and material
   payload are pinned in
   [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620)
   and
@@ -4715,8 +4725,8 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 
 - Captured the same three visible face slots with the Blender `check_normal+y`
   MatCap, specular disabled, Material color, AA Off, no effects/outlines, and
-  the same 640×480 orthographic framing. The fixture keeps the explicit
-  roughness 0.4/metallic 0.0 payload but MatCap shading does not use it.
+  the same 640×480 orthographic framing. The fixture keeps its distinct
+  per-slot roughness/metallic payloads, which MatCap shading does not use.
 - All 27 GPU face-interior probes match Blender 5.2.2 exactly in scene-linear
   and display RGB. QPainter scene-linear MAE is `0.0001822`, max `0.0004926`;
   display MAE is `0.1111/255`, max `1/255`. QPainter per-face scene-linear

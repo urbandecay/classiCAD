@@ -477,13 +477,15 @@ def main():
                 (0.72, 0.20, 0.18),
                 (0.18, 0.65, 0.25),
             )
+            material_roughness = (0.2, 0.5, 0.8)
+            material_metallic = (0.0, 0.5, 1.0)
             for index, color in enumerate(material_colors):
                 material = bpy.data.materials.new(
                     f"ReferenceCubeMaterial{index}"
                 )
                 material.diffuse_color = (*color, 1.0)
-                material.roughness = 0.4
-                material.metallic = 0.0
+                material.roughness = material_roughness[index]
+                material.metallic = material_metallic[index]
                 cube.data.materials.append(material)
             for polygon in cube.data.polygons:
                 normal = polygon.normal

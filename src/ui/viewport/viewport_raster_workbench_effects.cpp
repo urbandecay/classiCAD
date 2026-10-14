@@ -78,7 +78,6 @@ struct TextureAlphaTriangle {
 
 struct ShadowTriangle {
     QVector3D vertices[3];
-    TextureAlphaTriangle alpha;
 };
 
 TextureAlphaTriangle::FloatImage loadFloatAlphaPayload(const QString &encoded,
@@ -2599,13 +2598,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 ShadowTriangle caster;
                 for (int corner = 0; corner < 3; ++corner)
                     caster.vertices[corner] = world[corner];
-                // Blender submits transparent-material geometry through its
-                // forced-fail shadow-volume pass. The resulting mask is
-                // binary and does not sample material or image alpha. Keep
-                // the CPU fallback's cutout extension for opaque casters.
-                if (textureAlphaTriangle != nullptr &&
-                    isOpaqueWorkbenchAlpha(triangleSourceAlpha))
-                    caster.alpha = *textureAlphaTriangle;
+                // Blender's shadow-volume pass casts from geometry and does
+                // not sample the Image Texture alpha used by the color pass.
                 shadowTriangles.append(caster);
             }
             const QPointF p0 = screen[0] * dpr;
@@ -2806,13 +2800,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const qreal b = ((p[2].x()-px)*(p[0].y()-py)-(p[2].y()-py)*(p[0].x()-px))/area;
                 const qreal c = 1.0 - a - b;
                 if (a < -1e-6 || b < -1e-6 || c < -1e-6) continue;
-                if (triangle.alpha.cutout) {
-                    const QPointF uv = triangle.alpha.uvs[0] * a +
-                                       triangle.alpha.uvs[1] * b +
-                                       triangle.alpha.uvs[2] * c;
-                    if (sampleTextureAlpha(triangle.alpha, uv) < 0.1f)
-                        continue;
-                }
                 float &depth = lightDepth[y * width + x];
                 depth = std::min(depth, float(a*z[0] + b*z[1] + c*z[2]));
             }

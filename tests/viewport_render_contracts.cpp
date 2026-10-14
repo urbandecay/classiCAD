@@ -1342,44 +1342,17 @@ int main(int argc, char *argv[])
     applyRasterWorkbenchEffects(&receiverOnlyImage, receiverOnlyObjects,
         orthographicDofTransform, orthographicDofSize, 1.0,
         cutoutShadowSettings);
+    int transparentTextureCasterShadowPixels = 0;
+    for (int y = 0; y < cutoutShadowImage.height(); ++y) {
+        for (int x = 0; x < cutoutShadowImage.width(); ++x) {
+            transparentTextureCasterShadowPixels +=
+                cutoutShadowImage.pixelColor(x, y) !=
+                receiverOnlyImage.pixelColor(x, y);
+        }
+    }
     passed &= check(transparentShadowTextureSaved &&
-                        cutoutShadowImage == receiverOnlyImage,
-        "QPainter Workbench alpha-cutout texture pixels must not cast software shadows");
-    const auto alphaPayload = [](float alpha) {
-        const std::array<float, 4> texel{0.5f, 0.5f, 0.5f, alpha};
-        return QString::fromLatin1(QByteArray(
-            reinterpret_cast<const char *>(texel.data()),
-            static_cast<qsizetype>(sizeof(texel))).toBase64());
-    };
-    QVector<ViewportRenderObject> thresholdShadowObjects{
-        makeShadowQuad(23, 4, 4, 124, 124, 0.0),
-        makeShadowQuad(24, 48, 48, 80, 80, 2.0)};
-    thresholdShadowObjects[1].hasWorkbenchMaterial = true;
-    thresholdShadowObjects[1].workbenchMaterial.textureImageAlphaMode =
-        QStringLiteral("STRAIGHT");
-    thresholdShadowObjects[1].workbenchMaterial.textureImageInterpolation =
-        QStringLiteral("Closest");
-    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatWidth = 1;
-    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatHeight = 1;
-    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
-        alphaPayload(0.1f);
-    QImage thresholdShadowImage(orthographicDofSize,
-                                QImage::Format_ARGB32_Premultiplied);
-    thresholdShadowImage.fill(Qt::white);
-    applyRasterWorkbenchEffects(&thresholdShadowImage, thresholdShadowObjects,
-        orthographicDofTransform, orthographicDofSize, 1.0,
-        cutoutShadowSettings);
-    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
-        alphaPayload(std::nextafter(0.1f, 0.0f));
-    QImage belowThresholdShadowImage(orthographicDofSize,
-                                     QImage::Format_ARGB32_Premultiplied);
-    belowThresholdShadowImage.fill(Qt::white);
-    applyRasterWorkbenchEffects(&belowThresholdShadowImage,
-        thresholdShadowObjects, orthographicDofTransform,
-        orthographicDofSize, 1.0, cutoutShadowSettings);
-    passed &= check(thresholdShadowImage != receiverOnlyImage &&
-                        belowThresholdShadowImage == receiverOnlyImage,
-        "QPainter shadow alpha must retain a sample exactly at 0.1 and discard the next float below it");
+                        transparentTextureCasterShadowPixels > 0,
+        "QPainter software shadows must use opaque caster geometry despite transparent Image Texture alpha");
     ViewportTransform translatedOrthographicDofTransform =
         orthographicDofTransform;
     const Point3D translatedDofTarget{

@@ -2098,6 +2098,51 @@ int main(int argc, char *argv[])
                 cappedRaySamples.isEmpty() && cappedRayIntegrationCount == 1,
             "QPainter scalar-volume rays must honor near-depth and in-front coverage rejection and stop at the configured integration budget");
 
+        ViewportTransform nearPlaneRayCamera;
+        nearPlaneRayCamera.setViewPreset(ViewportViewPreset::Perspective);
+        nearPlaneRayCamera.zoom() = 120.0;
+        const Point3D rayEye = nearPlaneRayCamera.cameraPosition(size);
+        const Point3D rayForward = nearPlaneRayCamera.viewDirection();
+        const auto translatedRayVolume = [&](double forwardOffset) {
+            ViewportRenderObject result = boundedRayObject;
+            result.placementTranslation = {
+                rayEye.x - rayForward.x * forwardOffset + 0.5,
+                rayEye.y - rayForward.y * forwardOffset + 0.5,
+                rayEye.z - rayForward.z * forwardOffset + 0.5};
+            return result;
+        };
+        QVector<RasterWorkbenchVolumeRaySample> cameraCrossingRaySamples;
+        std::size_t cameraCrossingRayIntegrationCount = 0;
+        const bool cameraCrossingRayVisible =
+            rasterWorkbenchVolumeRaySamples(
+                translatedRayVolume(0.5), nearPlaneRayCamera, size, 1.0,
+                unclippedRayDepth, uncoveredRayPixels, 4'000'000,
+                &cameraCrossingRayIntegrationCount,
+                &cameraCrossingRaySamples);
+        QVector<RasterWorkbenchVolumeRaySample> behindCameraRaySamples;
+        std::size_t behindCameraRayIntegrationCount = 0;
+        const bool behindCameraRayVisible = rasterWorkbenchVolumeRaySamples(
+            translatedRayVolume(-4.0), nearPlaneRayCamera, size, 1.0,
+            unclippedRayDepth, uncoveredRayPixels, 4'000'000,
+            &behindCameraRayIntegrationCount, &behindCameraRaySamples);
+        const bool cameraCrossingSamplesInBounds = std::all_of(
+            cameraCrossingRaySamples.cbegin(), cameraCrossingRaySamples.cend(),
+            [&](const RasterWorkbenchVolumeRaySample &sample) {
+                return sample.x >= 0 && sample.x < size.width() &&
+                       sample.y >= 0 && sample.y < size.height();
+            });
+        passed &= check(
+            cameraCrossingRayVisible &&
+                !cameraCrossingRaySamples.isEmpty() &&
+                cameraCrossingRayIntegrationCount > 0 &&
+                cameraCrossingRayIntegrationCount <= 4'000'000 &&
+                cameraCrossingSamplesInBounds,
+            "QPainter scalar-volume ray marching must retain boxes crossing the perspective camera plane within the work caps");
+        passed &= check(
+            !behindCameraRayVisible && behindCameraRaySamples.isEmpty() &&
+                behindCameraRayIntegrationCount == 0,
+            "QPainter scalar-volume ray marching must reject boxes fully behind the camera");
+
         std::vector<QVector3D> failureThemeBackground;
         failureThemeBackground.reserve(
             static_cast<std::size_t>(size.width()) * size.height());

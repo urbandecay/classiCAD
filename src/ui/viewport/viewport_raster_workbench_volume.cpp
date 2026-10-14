@@ -350,6 +350,7 @@ bool rasterWorkbenchVolumeRaySamples(
     qreal maxScreenX = std::numeric_limits<qreal>::lowest();
     qreal minScreenY = std::numeric_limits<qreal>::max();
     qreal maxScreenY = std::numeric_limits<qreal>::lowest();
+    bool allCornersProjected = true;
     for (int corner = 0; corner < 8; ++corner) {
         const QVector3D gridPoint(
             float((corner & 1) ? gridMax[0] : gridMin[0]),
@@ -358,20 +359,32 @@ bool rasterWorkbenchVolumeRaySamples(
         const QVector3D worldPoint = gridToWorld.map(gridPoint);
         if (!camera.worldPointToScreenUnclipped(
                 {worldPoint.x(), worldPoint.y(), worldPoint.z()},
-                viewportSize, &projected[corner])) return false;
+                viewportSize, &projected[corner])) {
+            allCornersProjected = false;
+            break;
+        }
         minScreenX = std::min(minScreenX, projected[corner].x());
         maxScreenX = std::max(maxScreenX, projected[corner].x());
         minScreenY = std::min(minScreenY, projected[corner].y());
         maxScreenY = std::max(maxScreenY, projected[corner].y());
     }
-    const int minX = std::clamp(qFloor(minScreenX * devicePixelRatio),
-                                0, width - 1);
-    const int maxX = std::clamp(qCeil(maxScreenX * devicePixelRatio),
-                                0, width - 1);
-    const int minY = std::clamp(qFloor(minScreenY * devicePixelRatio),
-                                0, height - 1);
-    const int maxY = std::clamp(qCeil(maxScreenY * devicePixelRatio),
-                                0, height - 1);
+    // A perspective box crossing the camera or near plane can have corners
+    // behind the eye, where projection is undefined. Keep the search
+    // conservative in that case; the per-pixel ray/box test and near clip below
+    // determine actual visibility, while the existing pixel and integration
+    // caps bound the fallback cost.
+    const int minX = allCornersProjected
+        ? std::clamp(qFloor(minScreenX * devicePixelRatio), 0, width - 1)
+        : 0;
+    const int maxX = allCornersProjected
+        ? std::clamp(qCeil(maxScreenX * devicePixelRatio), 0, width - 1)
+        : width - 1;
+    const int minY = allCornersProjected
+        ? std::clamp(qFloor(minScreenY * devicePixelRatio), 0, height - 1)
+        : 0;
+    const int maxY = allCornersProjected
+        ? std::clamp(qCeil(maxScreenY * devicePixelRatio), 0, height - 1)
+        : height - 1;
     if (maxX < minX || maxY < minY) return false;
     const std::size_t candidatePixels = std::size_t(maxX - minX + 1) *
                                         std::size_t(maxY - minY + 1);

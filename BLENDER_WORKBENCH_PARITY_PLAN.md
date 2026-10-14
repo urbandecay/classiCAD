@@ -4337,6 +4337,24 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   offscreen `viewport_render_contracts` plus
   `workbench_raster_fragment_contracts` passed.
 
+### QPainter scalar-volume ray bounds across the perspective camera plane (2026-10-14)
+
+- Ray-marched volume bounds can cross the perspective camera or near plane.
+  Some box corners then cannot be projected. The QPainter fallback now uses
+  the capped full viewport as a conservative candidate region when any corner
+  projection fails, then relies on its per-pixel ray/box intersection and
+  camera near-plane clipping to decide visibility. The existing 1M pixel and
+  4M integration caps still bound this path.
+- Production contracts verify that a volume box straddling the camera plane
+  produces in-bounds samples within the integration budget, while a box fully
+  behind the camera produces none. This follows Blender 5.2.2's
+  [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh)
+  ray-box sampling model, which evaluates volume intersection per fragment
+  rather than requiring every box corner to project.
+- Validation: `cmake --build build -j4` passed with the dependency audit.
+  Offscreen `viewport_render_contracts` passed. Matched Blender output and
+  additional opaque/transparent volume-depth combinations remain open.
+
 ### Matched GPU object-outline comparison (2026-10-14)
 
 - Fresh 640×480 background captures from Blender 5.2.2 and classiCAD use the

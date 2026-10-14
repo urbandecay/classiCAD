@@ -13,8 +13,8 @@ from PIL import Image
 
 PROBE_GROUPS = {
     "top": [(x, y) for y in (80, 120, 160) for x in (260, 320, 380)],
-    "front": [(x, y) for y in (190, 260, 330) for x in (170, 230, 290)],
-    "right": [(x, y) for y in (220, 275, 330) for x in (380, 420, 460)],
+    "front": [(x, y) for y in (220, 260, 330) for x in (170, 230, 290)],
+    "right": [(x, y) for y in (240, 275, 330) for x in (400, 420, 460)],
 }
 PROBES = [point for group in PROBE_GROUPS.values() for point in group]
 

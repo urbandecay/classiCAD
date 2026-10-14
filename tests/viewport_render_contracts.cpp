@@ -7,6 +7,7 @@
 #include "ui/viewport/viewport_scene_renderer.h"
 #include "ui/viewport/viewport_surface_renderer.h"
 #include "ui/viewport/viewport_raster_workbench_effects.h"
+#include "ui/viewport/viewport_raster_workbench_volume.h"
 #include "ui/viewport/viewport_workbench_effect_scale.h"
 #include "ui/viewport/viewport_aa_renderer.h"
 #include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
@@ -1769,6 +1770,54 @@ int main(int argc, char *argv[])
                             lowRayPixels > 0 && highRayPixels > 0 &&
                             highRayRed > lowRayRed,
                         "QPainter scalar-volume ray marching integrates bounded scene-linear density and increases opacity with density");
+
+        ScalarVolume3D boundedRayVolume = sliceVolume;
+        boundedRayVolume.useSlice = false;
+        ViewportRenderObject boundedRayObject = sliceVolumeObject;
+        boundedRayObject.shape.scalarVolume = boundedRayVolume;
+        const qsizetype rayPixelCount =
+            qsizetype(size.width()) * size.height();
+        const QVector<float> unclippedRayDepth(
+            rayPixelCount, -std::numeric_limits<float>::infinity());
+        QVector<float> beforeNearClipDepth(
+            rayPixelCount,
+            float(transform.cameraPreferences().clipStart * 0.5));
+        const QVector<bool> uncoveredRayPixels(rayPixelCount, false);
+        const QVector<bool> fullyInFrontCoveredRayPixels(rayPixelCount, true);
+        QVector<RasterWorkbenchVolumeRaySample> boundedRaySamples;
+        std::size_t boundedRayIntegrationCount = 0;
+        const bool visibleRaySamples = rasterWorkbenchVolumeRaySamples(
+            boundedRayObject, transform, size, 1.0, unclippedRayDepth,
+            uncoveredRayPixels, 4'000'000, &boundedRayIntegrationCount,
+            &boundedRaySamples);
+        std::size_t frontRejectedIntegrationCount = 0;
+        QVector<RasterWorkbenchVolumeRaySample> frontRejectedRaySamples;
+        const bool frontRejectedRay = rasterWorkbenchVolumeRaySamples(
+            boundedRayObject, transform, size, 1.0, unclippedRayDepth,
+            fullyInFrontCoveredRayPixels, 4'000'000,
+            &frontRejectedIntegrationCount, &frontRejectedRaySamples);
+        std::size_t nearRejectedIntegrationCount = 0;
+        QVector<RasterWorkbenchVolumeRaySample> nearRejectedRaySamples;
+        const bool nearRejectedRay = rasterWorkbenchVolumeRaySamples(
+            boundedRayObject, transform, size, 1.0, beforeNearClipDepth,
+            uncoveredRayPixels, 4'000'000, &nearRejectedIntegrationCount,
+            &nearRejectedRaySamples);
+        std::size_t cappedRayIntegrationCount = 0;
+        QVector<RasterWorkbenchVolumeRaySample> cappedRaySamples;
+        const bool cappedRayRendered = rasterWorkbenchVolumeRaySamples(
+            boundedRayObject, transform, size, 1.0, unclippedRayDepth,
+            uncoveredRayPixels, 1, &cappedRayIntegrationCount,
+            &cappedRaySamples);
+        passed &= check(
+            visibleRaySamples && !boundedRaySamples.isEmpty() &&
+                boundedRayIntegrationCount > 0 &&
+                boundedRayIntegrationCount <= 4'000'000 &&
+                !frontRejectedRay && frontRejectedRaySamples.isEmpty() &&
+                frontRejectedIntegrationCount == 0 &&
+                !nearRejectedRay && nearRejectedRaySamples.isEmpty() &&
+                nearRejectedIntegrationCount == 0 && !cappedRayRendered &&
+                cappedRaySamples.isEmpty() && cappedRayIntegrationCount == 1,
+            "QPainter scalar-volume rays must honor near-depth and in-front coverage rejection and stop at the configured integration budget");
 
         std::vector<QVector3D> failureThemeBackground;
         failureThemeBackground.reserve(

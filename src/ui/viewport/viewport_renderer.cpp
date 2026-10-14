@@ -1708,11 +1708,13 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 }
             }
             if (useWorkbenchColor) {
+                const float packedSourceAlpha =
+                    workbenchPackUnitFloatToUnorm8(sourceColor.w());
                 faceColor = QColor::fromRgbF(
                     std::clamp(qreal(sourceColor.x()), 0.0, 1.0),
                     std::clamp(qreal(sourceColor.y()), 0.0, 1.0),
                     std::clamp(qreal(sourceColor.z()), 0.0, 1.0),
-                    std::clamp(qreal(sourceColor.w()), 0.0, 1.0));
+                    packedSourceAlpha);
             }
             QVector<Point3D> world;
             world.reserve(face.size());
@@ -1872,7 +1874,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             break;
                         }
                         triangle.sceneLinearColor = sceneLinearColor;
-                        triangle.sceneLinearAlpha = sourceColor.w();
+                        triangle.sceneLinearAlpha =
+                            workbenchPackUnitFloatToUnorm8(sourceColor.w());
 
                         const int materialIndex =
                             mesh.faceMaterialIndices.value(faceIndex, 0);

@@ -2673,11 +2673,20 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   in the transparent path, so a rear opaque surface contributes through a
   front material whose Blender-packed alpha is `254/255`. A focused production
   compositor contract covers this overlap.
+- Polygon meshes now UNorm8-pack the Workbench material/source alpha before
+  X-Ray modulation and the 4x4 software edge-coverage multiplier, matching the
+  QPainter NURBS and GPU material paths. The fragment contract checks a
+  non-byte-aligned alpha, values on both sides of a half-byte boundary, and
+  that X-Ray and fractional edge coverage remain applied after packing.
+  Texture image alpha keeps Blender's sampled-alpha cutoff behavior and is not
+  quantized as material alpha.
 - Blender 5.2.2 passes interpolated material alpha directly to transparent
   accumulation and revealage in
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L518-L526),
   then resolves the accumulated color/revealage in
   [`workbench_transparent_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl#L269-L286).
+  Blender's material datablock packs alpha using
+  [`workbench_private.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_private.hh#L1599-L1622).
   The classiCAD compositor remains a CPU approximation of that pass.
 
 ## Phase Two: imported scene materials and result contracts (2026-10-13)

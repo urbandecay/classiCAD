@@ -1436,9 +1436,13 @@ int main(int argc, char *argv[])
         const bool xrayRendered = compositeRasterWorkbenchSurfaces(
             &xrayImage, {xrayObject}, transform, size, 1.0, false, true,
             xraySettings, backgroundLinear, drawObject);
+        const QRgb halfAlphaPixel = halfAlphaImage.pixel(300, 220);
+        const QRgb xrayPixel = xrayImage.pixel(300, 220);
         passed &= check(halfAlphaRendered && xrayRendered &&
-                            halfAlphaImage.pixelColor(300, 220) ==
-                                xrayImage.pixelColor(300, 220),
+                            std::abs(qRed(halfAlphaPixel) - qRed(xrayPixel)) <= 1 &&
+                            std::abs(qGreen(halfAlphaPixel) - qGreen(xrayPixel)) <= 1 &&
+                            std::abs(qBlue(halfAlphaPixel) - qBlue(xrayPixel)) <= 1 &&
+                            std::abs(qAlpha(halfAlphaPixel) - qAlpha(xrayPixel)) <= 1,
                         "QPainter mesh X-Ray alpha must multiply source alpha before weighted transparency resolve");
 
         // Blender's transparent pass accumulates every depth-visible surface

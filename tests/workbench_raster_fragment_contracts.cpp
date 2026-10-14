@@ -159,13 +159,15 @@ QImage renderAtDpr(ViewportRenderer &renderer, const Shape &shape,
 bool coveredFragments(const RasterWorkbenchFragmentSink &fragments,
                       int width, int height, quint64 sourceId,
                       float expectedDepth, float expectedOitDepth,
-                      float expectedAlpha)
+                      float expectedAlpha,
+                      bool expectFractionalCoverage = false)
 {
     if (fragments.size() < 100) return false;
     bool sawHdr = false;
     bool sawDepth = false;
     bool sawOitDepth = false;
     bool sawAlpha = false;
+    bool sawFractionalCoverageAlpha = false;
     for (const auto &fragment : fragments) {
         if (fragment.x < 0 || fragment.x >= width ||
             fragment.y < 0 || fragment.y >= height ||
@@ -182,9 +184,17 @@ bool coveredFragments(const RasterWorkbenchFragmentSink &fragments,
             std::abs(fragment.cameraDepth - expectedDepth) < 1.0e-3f;
         sawOitDepth = sawOitDepth ||
             std::abs(fragment.oitLinearDepth - expectedOitDepth) < 1.0e-3f;
-        sawAlpha = sawAlpha || std::abs(fragment.alpha - expectedAlpha) < 0.002f;
+        const float alphaDifference = std::abs(fragment.alpha - expectedAlpha);
+        sawAlpha = sawAlpha || alphaDifference < 1.0e-5f;
+        const float coverage = fragment.alpha / expectedAlpha;
+        if (coverage > 0.0f && coverage < 1.0f) {
+            const float subpixelSteps = coverage * 16.0f;
+            sawFractionalCoverageAlpha |= std::abs(
+                subpixelSteps - std::round(subpixelSteps)) < 1.0e-4f;
+        }
     }
-    return sawHdr && sawDepth && sawOitDepth && sawAlpha;
+    return sawHdr && sawDepth && sawOitDepth && sawAlpha &&
+        (!expectFractionalCoverage || sawFractionalCoverageAlpha);
 }
 
 } // namespace
@@ -299,8 +309,56 @@ int main(int argc, char **argv)
                     "mesh fragment observation must preserve rendered pixels");
     passed &= check(coveredFragments(meshFragments, size.width(), size.height(),
                                      meshId, meshDepth,
-                                     oitDepthOffset + meshDepth, materialAlpha),
-                    "mesh fragments must retain coverage, linear HDR color, material alpha, source ID, camera depth, and Blender orthographic OIT depth");
+                                     oitDepthOffset + meshDepth,
+                                     workbenchPackUnitFloatToUnorm8(materialAlpha),
+                                     true),
+                    "mesh fragments must pack material alpha before multiplying 4x4 edge coverage while retaining color, source ID, camera depth, and Blender orthographic OIT depth");
+    const float alphaHalfByteBoundary = 115.5f / 255.0f;
+    const std::array<float, 3> alphaBoundarySamples{
+        std::nextafter(alphaHalfByteBoundary, 0.0f),
+        alphaHalfByteBoundary,
+        std::nextafter(alphaHalfByteBoundary, 1.0f)};
+    const std::array<float, 3> expectedPackedBoundary{
+        115.0f / 255.0f, 116.0f / 255.0f, 116.0f / 255.0f};
+    const auto meshAlphaCoverageMatches = [&](float inputAlpha,
+                                               bool xrayEnabled) {
+        QVector<WorkbenchMaterialData> alphaMaterials = meshMaterials;
+        alphaMaterials[0].alpha = inputAlpha;
+        ViewportShadingSettings alphaSettings = shading;
+        alphaSettings.xray = xrayEnabled;
+        alphaSettings.xrayAlpha = 0.37;
+        renderer.setShadingSettings(alphaSettings);
+        RasterWorkbenchFragmentSink alphaFragments;
+        (void)render(renderer, mesh, size, ObjectId::fromValue(meshId),
+                     &alphaFragments, std::nullopt, alphaMaterials);
+        const float packedAlpha = workbenchPackUnitFloatToUnorm8(inputAlpha);
+        const float baseAlpha = packedAlpha *
+            (xrayEnabled ? static_cast<float>(alphaSettings.xrayAlpha) : 1.0f);
+        bool sawInteriorAlpha = false;
+        bool sawCoverageScaledAlpha = false;
+        for (const RasterWorkbenchLinearFragment &fragment : alphaFragments) {
+            sawInteriorAlpha |= std::abs(fragment.alpha - baseAlpha) < 1.0e-5f;
+            const float coverage = fragment.alpha / baseAlpha;
+            if (coverage > 0.0f && coverage < 1.0f) {
+                const float subpixelSteps = coverage * 16.0f;
+                sawCoverageScaledAlpha |= std::abs(
+                    subpixelSteps - std::round(subpixelSteps)) < 1.0e-4f;
+            }
+        }
+        return sawInteriorAlpha && sawCoverageScaledAlpha;
+    };
+    bool alphaBoundaryAndCoverageMatch = true;
+    for (std::size_t index = 0; index < alphaBoundarySamples.size(); ++index) {
+        alphaBoundaryAndCoverageMatch &=
+            std::abs(workbenchPackUnitFloatToUnorm8(
+                         alphaBoundarySamples[index]) -
+                     expectedPackedBoundary[index]) < 1.0e-7f &&
+            meshAlphaCoverageMatches(alphaBoundarySamples[index], false) &&
+            meshAlphaCoverageMatches(alphaBoundarySamples[index], true);
+    }
+    passed &= check(alphaBoundaryAndCoverageMatch,
+        "QPainter mesh fragments must round material alpha around a UNorm8 half-byte boundary before X-Ray alpha and 4x4 coverage");
+    renderer.setShadingSettings(shading);
     Shape surface;
     surface.geometryType = GeometryType::NurbsSurface;
     surface.nurbsSurface.degreeU = surface.nurbsSurface.degreeV = 1;
@@ -340,8 +398,8 @@ int main(int argc, char **argv)
     passed &= check(coveredFragments(surfaceFragments, size.width(), size.height(),
                                      surfaceId, surfaceDepth,
                                      oitDepthOffset + surfaceDepth,
-                                     materialAlpha),
-                    "NURBS fragments must retain coverage, linear HDR color, material alpha, source ID, camera depth, and Blender orthographic OIT depth");
+                                     workbenchPackUnitFloatToUnorm8(materialAlpha)),
+                    "NURBS fragments must retain Blender-packed material alpha, coverage, linear HDR color, source ID, camera depth, and orthographic OIT depth");
     Shape alternateDiagonalSurface = surface;
     std::swap(alternateDiagonalSurface.nurbsSurface.controlPoints[0],
               alternateDiagonalSurface.nurbsSurface.controlPoints[2]);

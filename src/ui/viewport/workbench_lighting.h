@@ -905,8 +905,8 @@ inline QVector3D workbenchStudioShade(
 
     if (lighting.useSpecular) {
         const float specularEnergy =
-            (specularColor.x() + specularColor.y() + specularColor.z()) /
-            3.0f;
+            QVector3D::dotProduct(specularColor,
+                                  QVector3D(0.33333f, 0.33333f, 0.33333f));
         diffuseLight *= diffuseColor * (1.0f - specularEnergy);
     } else {
         diffuseLight *= diffuseColor;

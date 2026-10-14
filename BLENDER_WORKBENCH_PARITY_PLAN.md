@@ -760,6 +760,17 @@ in ordinary free views or orthographic views is superseded by this correction.
   [`workbench_world_light_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light_lib.glsl#L580-L713).
   Matched QPainter output comparison remains pending.
 
+### QPainter Studio monochromatic specular energy (2026-10-14)
+
+- The CPU Studio helper now multiplies the mean specular color by Blender's
+  pinned `0.33333` coefficient, matching the GPU shader. A focused contract
+  uses full Fresnel reflectance to distinguish Blender's truncated coefficient
+  from an exact `1/3` average.
+- Blender 5.2.2's
+  [`workbench_world_light_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light_lib.glsl#L122-L126)
+  uses `dot(specular_color, float3(0.33333f))` for its energy-conservation
+  term. Broader QPainter/Blender image comparisons remain open.
+
 ### Workbench no-material fallback (2026-10-12)
 
 - Blender 5.2.2 `get_material()` selects `BKE_material_default_empty()` for

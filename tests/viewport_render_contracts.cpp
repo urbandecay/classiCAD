@@ -3326,6 +3326,22 @@ int main(int argc, char *argv[])
         QVector3D(0.5f, 0.5f, 0.5f),
         QVector3D(0.0f, 0.0f, 1.0f),
         QVector3D(0.0f, 0.0f, 1.0f));
+    WorkbenchStudioLighting monochromaticSpecularLighting;
+    monochromaticSpecularLighting.ambientColor = QVector3D(1.0f, 1.0f, 1.0f);
+    const QVector3D monochromaticSpecularResult = workbenchStudioShade(
+        QVector3D(0.25f, 0.5f, 0.75f), QVector3D(0.0f, 0.0f, 1.0f),
+        QVector3D(1.0f, 0.0f, 0.0f), 0.0f, 0.5f,
+        monochromaticSpecularLighting);
+    const float truncatedSpecularEnergy =
+        QVector3D::dotProduct(QVector3D(1.0f, 1.0f, 1.0f),
+                              QVector3D(0.33333f, 0.33333f, 0.33333f));
+    const float expectedMonochromaticSpecularRed =
+        1.0f + 0.125f * (1.0f - truncatedSpecularEnergy);
+    passed &= check(
+        std::abs(monochromaticSpecularResult.x() -
+                 expectedMonochromaticSpecularRed) < 2.0e-7f &&
+            monochromaticSpecularResult.x() > 1.0f,
+        "QPainter Workbench Studio energy conservation must use Blender's 0.33333 monochromatic specular coefficient");
     const QVector3D roundTripColor = workbenchSceneLinearToSrgb(
         workbenchSrgbToSceneLinear(QVector3D(0.2f, 0.5f, 0.8f)));
     const ViewportThemeBackground pixelThemeBackground{

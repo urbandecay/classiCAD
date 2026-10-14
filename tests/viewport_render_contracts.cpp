@@ -6533,6 +6533,102 @@ int main(int argc, char *argv[])
                                 display.save(displayPath);
                             lightingCapturesSucceeded &= linearSaved &&
                                                          displaySaved;
+                            if (captureCase.mode ==
+                                ViewportLightingMode::MatCap) {
+                                CurveHitTester qpainterMatcapHitTester;
+                                ViewportRenderer qpainterMatcapRenderer(
+                                    gpuTransform, qpainterMatcapHitTester);
+                                qpainterMatcapRenderer.setShadingSettings(
+                                    lightingShading);
+                                QImage qpainterDisplay(
+                                    glSize,
+                                    QImage::Format_ARGB32_Premultiplied);
+                                qpainterDisplay.fill(QColor(34, 34, 34));
+                                RasterWorkbenchFragmentSink qpainterFragments;
+                                QPainter qpainter(&qpainterDisplay);
+                                qpainterMatcapRenderer.drawShape(
+                                    qpainter, polygonCubeObject.shape, glSize,
+                                    false, false, true, QColor(), QString(),
+                                    0.0, polygonCubeObject.objectId,
+                                    polygonCubeObject.geometryRevision,
+                                    polygonCubeObject.preparedDepthGeometry.data(),
+                                    {}, polygonCubeObject.displayColorSceneLinear,
+                                    std::nullopt,
+                                    polygonCubeObject.displayName, QString(),
+                                    identityMeshObjectTransform,
+                                    polygonCubeObject.meshMaterials,
+                                    &qpainterFragments);
+                                qpainter.end();
+                                QVector<float> qpainterSceneLinear(
+                                    expectedValues);
+                                constexpr float qpainterBackgroundSceneLinear =
+                                    0.0219421387f;
+                                for (qsizetype pixel = 0;
+                                     pixel + 2 < qpainterSceneLinear.size();
+                                     pixel += 3) {
+                                    qpainterSceneLinear[pixel] =
+                                        qpainterBackgroundSceneLinear;
+                                    qpainterSceneLinear[pixel + 1] =
+                                        qpainterBackgroundSceneLinear;
+                                    qpainterSceneLinear[pixel + 2] =
+                                        qpainterBackgroundSceneLinear;
+                                }
+                                for (const RasterWorkbenchLinearFragment &fragment :
+                                     qpainterFragments) {
+                                    if (fragment.x < 0 ||
+                                        fragment.x >= glSize.width() ||
+                                        fragment.y < 0 ||
+                                        fragment.y >= glSize.height()) {
+                                        continue;
+                                    }
+                                    const qsizetype pixel =
+                                        (qsizetype(fragment.y) * glSize.width() +
+                                         fragment.x) * 3;
+                                    qpainterSceneLinear[pixel] =
+                                        fragment.sceneLinearRgb[0];
+                                    qpainterSceneLinear[pixel + 1] =
+                                        fragment.sceneLinearRgb[1];
+                                    qpainterSceneLinear[pixel + 2] =
+                                        fragment.sceneLinearRgb[2];
+                                }
+                                const QString qpainterStem = stem +
+                                    QStringLiteral("_qpainter");
+                                const QString qpainterDisplayPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        qpainterStem + QStringLiteral(".png"));
+                                const QString qpainterLinearPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        qpainterStem + QStringLiteral(".pfm"));
+                                QVector<float> qpainterSceneLinearPfm(
+                                    expectedValues);
+                                const qsizetype rowValues =
+                                    qsizetype(glSize.width()) * 3;
+                                for (int y = 0; y < glSize.height(); ++y) {
+                                    std::copy_n(
+                                        qpainterSceneLinear.constData() +
+                                            qsizetype(y) * rowValues,
+                                        rowValues,
+                                        qpainterSceneLinearPfm.data() +
+                                            qsizetype(glSize.height() - 1 - y) *
+                                                rowValues);
+                                }
+                                QFile qpainterLinearFile(qpainterLinearPath);
+                                const bool qpainterLinearSaved =
+                                    qpainterSceneLinearPfm.size() == expectedValues &&
+                                    qpainterLinearFile.open(QIODevice::WriteOnly) &&
+                                    qpainterLinearFile.write(pfmHeader) ==
+                                        pfmHeader.size() &&
+                                    qpainterLinearFile.write(
+                                        reinterpret_cast<const char *>(
+                                            qpainterSceneLinearPfm.constData()),
+                                        qpainterSceneLinearPfm.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        qpainterSceneLinearPfm.size() *
+                                            qsizetype(sizeof(float));
+                                lightingCapturesSucceeded &=
+                                    qpainterLinearSaved &&
+                                    qpainterDisplay.save(qpainterDisplayPath);
+                            }
                         }
                         struct ColorSourceCaptureCase {
                             const char *name;

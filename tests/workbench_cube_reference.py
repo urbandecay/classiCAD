@@ -482,6 +482,8 @@ def main():
                     f"ReferenceCubeMaterial{index}"
                 )
                 material.diffuse_color = (*color, 1.0)
+                material.roughness = 0.4
+                material.metallic = 0.0
                 cube.data.materials.append(material)
             for polygon in cube.data.polygons:
                 normal = polygon.normal

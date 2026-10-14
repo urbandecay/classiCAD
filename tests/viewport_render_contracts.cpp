@@ -9083,12 +9083,18 @@ int main(int argc, char *argv[])
                         materialSlotsObject.meshMaterials[0]
                             .baseColorSceneLinear =
                                 QVector3D(0.18f, 0.28f, 0.72f);
+                        materialSlotsObject.meshMaterials[0].roughness = 0.4f;
+                        materialSlotsObject.meshMaterials[0].metallic = 0.0f;
                         materialSlotsObject.meshMaterials[1]
                             .baseColorSceneLinear =
                                 QVector3D(0.72f, 0.20f, 0.18f);
+                        materialSlotsObject.meshMaterials[1].roughness = 0.4f;
+                        materialSlotsObject.meshMaterials[1].metallic = 0.0f;
                         materialSlotsObject.meshMaterials[2]
                             .baseColorSceneLinear =
                                 QVector3D(0.18f, 0.65f, 0.25f);
+                        materialSlotsObject.meshMaterials[2].roughness = 0.4f;
+                        materialSlotsObject.meshMaterials[2].metallic = 0.0f;
                         ViewportShadingSettings materialSlotsShading =
                             rawFaceShading;
                         materialSlotsShading.lightingMode =
@@ -9282,6 +9288,179 @@ int main(int argc, char *argv[])
                                 qpainterVisibleDistinctSlots &&
                                 qpainterSlotMappingMatches,
                             "GPU and QPainter per-face material-slot fixtures must capture three distinct visible slot colors in display and scene-linear output");
+
+                        ViewportShadingSettings studioSlotsShading =
+                            materialSlotsShading;
+                        studioSlotsShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        studioSlotsShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        studioSlotsShading.specularLighting = true;
+                        QImage studioSlotsDisplay;
+                        QVector<float> studioSlotsSceneLinear;
+                        const bool studioSlotsRendered =
+                            renderCoordinatedScene(
+                                studioSlotsShading,
+                                QByteArrayLiteral("material-slots-studio"),
+                                &studioSlotsDisplay, &materialSlotsObject,
+                                nullptr, nullptr, QString{},
+                                &studioSlotsSceneLinear);
+                        const QString studioSlotsDisplayPath = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                QStringLiteral("material_slots_studio.png"));
+                        QFile studioSlotsLinearFile(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                QStringLiteral("material_slots_studio.pfm")));
+                        const bool studioSlotsLinearSaved =
+                            studioSlotsRendered &&
+                            studioSlotsSceneLinear.size() == expectedValues &&
+                            studioSlotsLinearFile.open(QIODevice::WriteOnly) &&
+                            studioSlotsLinearFile.write(pfmHeader) ==
+                                pfmHeader.size() &&
+                            studioSlotsLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    studioSlotsSceneLinear.constData()),
+                                studioSlotsSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                studioSlotsSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool studioSlotsDisplaySaved =
+                            studioSlotsRendered &&
+                            studioSlotsDisplay.size() == QSize(640, 480) &&
+                            studioSlotsDisplay.save(studioSlotsDisplayPath);
+                        const QColor studioSlotsGpuTop =
+                            studioSlotsDisplay.pixelColor(320, 120);
+                        const QColor studioSlotsGpuFront =
+                            studioSlotsDisplay.pixelColor(230, 260);
+                        const QColor studioSlotsGpuRight =
+                            studioSlotsDisplay.pixelColor(420, 275);
+                        const bool studioSlotsGpuProbesVisible =
+                            studioSlotsRendered &&
+                            studioSlotsGpuTop != captureBackground &&
+                            studioSlotsGpuFront != captureBackground &&
+                            studioSlotsGpuRight != captureBackground &&
+                            studioSlotsGpuTop != studioSlotsGpuFront &&
+                            studioSlotsGpuTop != studioSlotsGpuRight &&
+                            studioSlotsGpuFront != studioSlotsGpuRight;
+
+                        CurveHitTester studioSlotsQPainterHitTester;
+                        ViewportRenderer studioSlotsQPainterRenderer(
+                            gpuTransform, studioSlotsQPainterHitTester);
+                        studioSlotsQPainterRenderer.setShadingSettings(
+                            studioSlotsShading);
+                        QImage studioSlotsQPainterDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        studioSlotsQPainterDisplay.fill(captureBackground);
+                        RasterWorkbenchFragmentSink
+                            studioSlotsQPainterFragments;
+                        QPainter studioSlotsQPainter(
+                            &studioSlotsQPainterDisplay);
+                        studioSlotsQPainter.setRenderHint(
+                            QPainter::Antialiasing, false);
+                        studioSlotsQPainterRenderer.drawShape(
+                            studioSlotsQPainter, materialSlotsObject.shape,
+                            glSize, false, false, true, QColor(), QString(),
+                            0.0, materialSlotsObject.objectId,
+                            materialSlotsObject.geometryRevision,
+                            materialSlotsObject.preparedDepthGeometry.data(),
+                            {}, materialSlotsObject.displayColorSceneLinear,
+                            materialSlotsObject.workbenchMaterial,
+                            materialSlotsObject.displayName,
+                            materialSlotsObject.libraryPath,
+                            identityMeshObjectTransform,
+                            materialSlotsObject.meshMaterials,
+                            &studioSlotsQPainterFragments);
+                        studioSlotsQPainter.end();
+                        QVector<float> studioSlotsQPainterSceneLinear(
+                            expectedValues);
+                        for (qsizetype pixel = 0;
+                             pixel + 2 <
+                                 studioSlotsQPainterSceneLinear.size();
+                             pixel += 3) {
+                            studioSlotsQPainterSceneLinear[pixel] =
+                                materialSlotsBackgroundSceneLinear;
+                            studioSlotsQPainterSceneLinear[pixel + 1] =
+                                materialSlotsBackgroundSceneLinear;
+                            studioSlotsQPainterSceneLinear[pixel + 2] =
+                                materialSlotsBackgroundSceneLinear;
+                        }
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             studioSlotsQPainterFragments) {
+                            if (fragment.x < 0 ||
+                                fragment.x >= glSize.width() ||
+                                fragment.y < 0 ||
+                                fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype pixel =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            studioSlotsQPainterSceneLinear[pixel] =
+                                fragment.sceneLinearRgb[0];
+                            studioSlotsQPainterSceneLinear[pixel + 1] =
+                                fragment.sceneLinearRgb[1];
+                            studioSlotsQPainterSceneLinear[pixel + 2] =
+                                fragment.sceneLinearRgb[2];
+                        }
+                        QVector<float> studioSlotsQPainterBottomUp(
+                            expectedValues);
+                        for (int y = 0; y < glSize.height(); ++y) {
+                            std::copy_n(
+                                studioSlotsQPainterSceneLinear.constData() +
+                                    qsizetype(y) * materialSlotsRowValues,
+                                materialSlotsRowValues,
+                                studioSlotsQPainterBottomUp.data() +
+                                    qsizetype(glSize.height() - 1 - y) *
+                                        materialSlotsRowValues);
+                        }
+                        QFile studioSlotsQPainterLinearFile(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "material_slots_studio_qpainter.pfm")));
+                        const bool studioSlotsQPainterLinearSaved =
+                            studioSlotsQPainterFragments.size() > 5000 &&
+                            studioSlotsQPainterLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            studioSlotsQPainterLinearFile.write(pfmHeader) ==
+                                pfmHeader.size() &&
+                            studioSlotsQPainterLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    studioSlotsQPainterBottomUp.constData()),
+                                studioSlotsQPainterBottomUp.size() *
+                                    qsizetype(sizeof(float))) ==
+                                studioSlotsQPainterBottomUp.size() *
+                                    qsizetype(sizeof(float));
+                        const QString studioSlotsQPainterDisplayPath = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "material_slots_studio_qpainter.png"));
+                        const bool studioSlotsQPainterDisplaySaved =
+                            studioSlotsQPainterDisplay.save(
+                                studioSlotsQPainterDisplayPath);
+                        const QColor studioSlotsQPainterTop =
+                            studioSlotsQPainterDisplay.pixelColor(320, 120);
+                        const QColor studioSlotsQPainterFront =
+                            studioSlotsQPainterDisplay.pixelColor(230, 260);
+                        const QColor studioSlotsQPainterRight =
+                            studioSlotsQPainterDisplay.pixelColor(420, 275);
+                        const bool studioSlotsQPainterProbesVisible =
+                            studioSlotsQPainterTop != captureBackground &&
+                            studioSlotsQPainterFront != captureBackground &&
+                            studioSlotsQPainterRight != captureBackground &&
+                            studioSlotsQPainterTop !=
+                                studioSlotsQPainterFront &&
+                            studioSlotsQPainterTop !=
+                                studioSlotsQPainterRight &&
+                            studioSlotsQPainterFront !=
+                                studioSlotsQPainterRight;
+                        passed &= check(
+                            studioSlotsLinearSaved &&
+                                studioSlotsDisplaySaved &&
+                                studioSlotsGpuProbesVisible &&
+                                studioSlotsQPainterLinearSaved &&
+                                studioSlotsQPainterDisplaySaved &&
+                                studioSlotsQPainterProbesVisible,
+                            "GPU and QPainter Studio per-face material-slot fixtures must capture all visible faces in display and scene-linear output");
                     }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(

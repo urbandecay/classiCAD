@@ -4682,6 +4682,35 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   and emits per-material mesh batches at
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
 
+#### Studio Default per-face material slots
+
+- Extended the same three-slot cube to opt-in GPU and QPainter captures under
+  Studio Default lighting, Material color, specular enabled, AA Off, and
+  effects/outlines disabled. All three Blender and classiCAD slot materials
+  explicitly use roughness 0.4 and metallic 0.0. The C++ fixture preserves the
+  existing mesh face-slot IDs and `WorkbenchMaterialData` adapter; no renderer
+  or geometry contract changed.
+- Compared 27 face-interior probes against Blender 5.2.2 Workbench with the
+  matched 640×480 orthographic camera and zero dither. GPU scene-linear RGB is
+  exact (MAE 0, max 0); display RGB MAE is 0.1111/255 with max 1/255. QPainter
+  scene-linear MAE is 0.0015777 with max 0.0049253; display MAE is 0.8889/255
+  with max 3/255. QPainter per-face scene-linear MAE is 0.002964 top,
+  0.000168 front, and 0.001601 right. The offscreen contract confirms all
+  three slot probes remain present and distinct in both captures.
+- This verifies one opaque mesh with three visible face slots for Studio
+  Default. Other Studio presets/rotations, varied per-slot roughness or
+  metallic, textured and transparent slots, additional slot counts, and broad
+  mesh parity remain open. No production renderer change was justified by
+  this comparison. Blender 5.2.2's deferred Workbench resolve and material
+  payload are pinned in
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620)
+  and
+  [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L409-L456).
+- Validation: `cmake --build build -j4` passed with the dependency audit; the
+  offscreen `viewport_render_contracts` capture passed; Blender reported
+  version 5.2.2; and `workbench_display_probe_compare.py` passed for both GPU
+  and QPainter PNG/PFM pairs.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

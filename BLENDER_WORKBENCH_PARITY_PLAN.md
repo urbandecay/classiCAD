@@ -4711,6 +4711,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   version 5.2.2; and `workbench_display_probe_compare.py` passed for both GPU
   and QPainter PNG/PFM pairs.
 
+#### `check_normal+y` MatCap per-face material slots
+
+- Captured the same three visible face slots with the Blender `check_normal+y`
+  MatCap, specular disabled, Material color, AA Off, no effects/outlines, and
+  the same 640×480 orthographic framing. The fixture keeps the explicit
+  roughness 0.4/metallic 0.0 payload but MatCap shading does not use it.
+- All 27 GPU face-interior probes match Blender 5.2.2 exactly in scene-linear
+  and display RGB. QPainter scene-linear MAE is `0.0001822`, max `0.0004926`;
+  display MAE is `0.1111/255`, max `1/255`. QPainter per-face scene-linear
+  MAE is `0.000284` top and `0.000131` on both front and right. Both
+  offscreen captures verify three distinct visible slot probes.
+- This verifies one MatCap preset on one opaque, three-slot mesh. Other
+  presets, specular combinations, orientations, textured/transparent slots,
+  additional slot counts, and broad mesh parity remain open. No production
+  change was justified. Blender 5.2.2's resolve multiplies the sampled MatCap
+  lighting by per-face base color in
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L580-L600),
+  and computes its orientation UVs in
+  [`workbench_matcap.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh#L331-L355).
+- Validation: `cmake --build build -j4` passed with the dependency audit; the
+  offscreen `viewport_render_contracts` capture passed; Blender reported
+  version 5.2.2; and `workbench_display_probe_compare.py` passed for both GPU
+  and QPainter PNG/PFM pairs.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

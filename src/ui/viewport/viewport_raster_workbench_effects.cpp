@@ -1978,12 +1978,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             if (!valid) continue;
             const float triangleSourceAlpha = triangleIndex < triangleAlphas.size()
                 ? triangleAlphas[triangleIndex] : objectAlpha;
-            if (shadowEnabled &&
-                isOpaqueWorkbenchAlpha(triangleSourceAlpha)) {
+            if (shadowEnabled) {
                 ShadowTriangle caster;
                 for (int corner = 0; corner < 3; ++corner)
                     caster.vertices[corner] = world[corner];
-                if (textureAlphaTriangle != nullptr)
+                // Blender submits transparent-material geometry through its
+                // forced-fail shadow-volume pass. The resulting mask is
+                // binary and does not sample material or image alpha. Keep
+                // the CPU fallback's cutout extension for opaque casters.
+                if (textureAlphaTriangle != nullptr &&
+                    isOpaqueWorkbenchAlpha(triangleSourceAlpha))
                     caster.alpha = *textureAlphaTriangle;
                 shadowTriangles.append(caster);
             }
@@ -2099,9 +2103,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
     }
 
-    // The software fallback uses a single orthographic light-depth buffer for
-    // opaque triangulated surfaces. Transparent geometry remains absent from
-    // both caster and receiver buffers, matching the opaque Workbench pass.
+    // The software fallback uses a single orthographic light-depth buffer.
+    // Transparent geometry can cast a binary shadow, while the receiver pass
+    // retains separate opaque and nearest-visible transparent samples.
     QVector<float> lightDepth;
     QVector<QVector2D> receiverLightCoordinates;
     QVector<float> receiverLightDepth;

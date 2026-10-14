@@ -719,55 +719,63 @@ int main(int argc, char *argv[])
         transparentReceiverWasShadowed,
         "QPainter software shadows must darken a frontmost translucent receiver contribution while preserving its alpha");
 
-    const auto renderMaterialAlphaShadow = [&](float alpha) {
-        QVector<ViewportRenderObject> objects = shadowObjects;
-        objects[1].hasWorkbenchMaterial = true;
-        objects[1].workbenchMaterial.alpha = alpha;
+    const auto renderTransparentCasterShadow = [&](float casterAlpha,
+                                                    bool includeCaster) {
+        ViewportRenderObject receiver = makeShadowQuad(25, 4, 4, 124, 124, 0.0);
+        receiver.hasWorkbenchMaterial = true;
+        receiver.workbenchMaterial.alpha = 0.5f;
+        receiver.meshMaterials = {receiver.workbenchMaterial};
+        QVector<ViewportRenderObject> objects{receiver};
+        if (includeCaster) {
+            ViewportRenderObject caster =
+                makeShadowQuad(26, 48, 48, 80, 80, 2.0);
+            caster.hasWorkbenchMaterial = true;
+            caster.workbenchMaterial.alpha = casterAlpha;
+            caster.meshMaterials = {caster.workbenchMaterial};
+            objects.append(caster);
+        }
         ViewportShadingSettings settings = shadowSettings;
         settings.colorMode = ViewportColorMode::Material;
         QImage image(orthographicDofSize,
                      QImage::Format_ARGB32_Premultiplied);
-        image.fill(Qt::white);
+        image.fill(QColor(127, 127, 255));
+        RasterWorkbenchSurfaceLayers layers;
+        layers.opaqueColor = QImage(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        layers.opaqueColor.fill(Qt::white);
+        layers.transparentColor = QImage(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        layers.transparentColor.fill(QColor(0, 0, 255, 128));
         applyRasterWorkbenchEffects(
             &image, objects, orthographicDofTransform,
-            orthographicDofSize, 1.0, settings);
+            orthographicDofSize, 1.0, settings, &layers);
         return image;
     };
-    const QImage alpha254ShadowImage =
-        renderMaterialAlphaShadow(254.0f / 255.0f);
-    const QImage alphaZeroShadowImage = renderMaterialAlphaShadow(0.0f);
-    const QImage alphaRoundedOpaqueShadowImage =
-        renderMaterialAlphaShadow(0.9985f);
-    const QImage fullyOpaqueMaterialShadowImage =
-        renderMaterialAlphaShadow(1.0f);
-    const float alphaHalfByteBoundary = 254.5f / 255.0f;
-    const float alphaJustBelowHalfByte =
-        std::nextafter(alphaHalfByteBoundary, 0.0f);
-    const float alphaJustAboveHalfByte =
-        std::nextafter(alphaHalfByteBoundary, 1.0f);
-    const QImage alphaBelowHalfByteShadowImage =
-        renderMaterialAlphaShadow(alphaJustBelowHalfByte);
-    const QImage alphaAtHalfByteShadowImage =
-        renderMaterialAlphaShadow(alphaHalfByteBoundary);
-    const QImage alphaAboveHalfByteShadowImage =
-        renderMaterialAlphaShadow(alphaJustAboveHalfByte);
+    const QImage noTransparentCasterImage =
+        renderTransparentCasterShadow(1.0f, false);
+    const QImage transparentCasterImage =
+        renderTransparentCasterShadow(0.5f, true);
+    const QImage lowAlphaCasterImage =
+        renderTransparentCasterShadow(0.25f, true);
+    bool transparentCasterCastsBeyondItsVisibleFootprint = false;
+    bool transparentCasterAlphaDoesNotScaleShadow = true;
+    for (int y = 4; y < transparentCasterImage.height(); ++y) {
+        for (int x = 4; x < transparentCasterImage.width(); ++x) {
+            if (x >= 40 && x < 88 && y >= 40 && y < 88) continue;
+            const QRgb withoutCaster = noTransparentCasterImage.pixel(x, y);
+            const QRgb transparent = transparentCasterImage.pixel(x, y);
+            if (transparent != withoutCaster)
+                transparentCasterCastsBeyondItsVisibleFootprint = true;
+            if (transparent != lowAlphaCasterImage.pixel(x, y))
+                transparentCasterAlphaDoesNotScaleShadow = false;
+        }
+    }
     passed &= check(
-        workbenchPackUnitFloatToUnorm8(254.0f / 255.0f) < 1.0f &&
-            workbenchPackUnitFloatToUnorm8(alphaJustBelowHalfByte) < 1.0f &&
-            workbenchPackUnitFloatToUnorm8(alphaHalfByteBoundary) == 1.0f &&
-            workbenchPackUnitFloatToUnorm8(alphaJustAboveHalfByte) == 1.0f &&
-            workbenchPackUnitFloatToUnorm8(0.9985f) == 1.0f,
-        "Workbench material alpha packing must round around Blender's 8-bit UNorm boundary");
-    passed &= check(alpha254ShadowImage == alphaZeroShadowImage,
-        "QPainter Workbench must exclude a material alpha that packs to 254/255 from software shadow casting");
+        transparentCasterCastsBeyondItsVisibleFootprint,
+        "QPainter transparent-material geometry must cast a binary shadow onto a retained translucent receiver");
     passed &= check(
-        alphaRoundedOpaqueShadowImage == fullyOpaqueMaterialShadowImage,
-        "QPainter Workbench must cast the same software shadow for an alpha that rounds to 255/255 as for fully opaque material");
-    passed &= check(
-        alphaBelowHalfByteShadowImage == alpha254ShadowImage &&
-            alphaAtHalfByteShadowImage == fullyOpaqueMaterialShadowImage &&
-            alphaAboveHalfByteShadowImage == fullyOpaqueMaterialShadowImage,
-        "QPainter software shadows must classify material alpha on both sides of Blender's UNorm8 half-byte boundary");
+        transparentCasterAlphaDoesNotScaleShadow,
+        "QPainter transparent caster material alpha must not scale Blender's binary shadow-volume mask");
     ViewportShadingSettings zeroShadowSettings = shadowSettings;
     zeroShadowSettings.shadowIntensity = 0.0;
     passed &= check(renderCpuShadow(zeroShadowSettings) == noShadowImage,

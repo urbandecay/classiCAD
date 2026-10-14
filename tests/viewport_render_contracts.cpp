@@ -4470,6 +4470,64 @@ int main(int argc, char *argv[])
                 translucentNurbsImage.save(translucentNurbsCapturePath),
             "opt-in QPainter translucent NURBS shared-edge capture must save");
     }
+    ViewportTransform perspectiveNurbsTransform = surfaceTransform;
+    perspectiveNurbsTransform.zoom() = 17.28;
+    perspectiveNurbsTransform.setViewDirection({4.0, -6.0, 4.0});
+    perspectiveNurbsTransform.setPerspectiveEnabled(true);
+    CurveHitTester perspectiveNurbsHitTester;
+    ViewportRenderer perspectiveNurbsRenderer(perspectiveNurbsTransform,
+                                               perspectiveNurbsHitTester);
+    QImage perspectiveTranslucentNurbsImage(
+        surfaceViewportSize, QImage::Format_ARGB32_Premultiplied);
+    perspectiveTranslucentNurbsImage.fill(Qt::transparent);
+    RasterWorkbenchFragmentSink perspectiveTranslucentNurbsFragments;
+    perspectiveNurbsRenderer.setShadingSettings(textureSettings);
+    QPainter perspectiveTranslucentNurbsPainter(
+        &perspectiveTranslucentNurbsImage);
+    perspectiveNurbsRenderer.drawShape(
+        perspectiveTranslucentNurbsPainter, texturedNurbsShape,
+        surfaceViewportSize, false, false, true, QColor(), QString(), 0.0,
+        ObjectId::fromValue(1), 0, nullptr, {}, std::nullopt,
+        translucentNurbsMaterial, QString(), QString(), {}, {},
+        &perspectiveTranslucentNurbsFragments);
+    perspectiveTranslucentNurbsPainter.end();
+    QSet<quint64> perspectiveTranslucentNurbsFragmentPixels;
+    bool perspectiveTranslucentNurbsFragmentsUnique = true;
+    for (const RasterWorkbenchLinearFragment &fragment :
+         perspectiveTranslucentNurbsFragments) {
+        const quint64 key = static_cast<quint64>(fragment.y) *
+                                static_cast<quint64>(surfaceViewportSize.width()) +
+                            static_cast<quint64>(fragment.x);
+        perspectiveTranslucentNurbsFragmentsUnique &=
+            !perspectiveTranslucentNurbsFragmentPixels.contains(key);
+        perspectiveTranslucentNurbsFragmentPixels.insert(key);
+    }
+    const QString perspectiveTranslucentNurbsCapturePath = qEnvironmentVariable(
+        "CLASSICAD_VIEWPORT_QPAINTER_NURBS_PERSPECTIVE_CAPTURE");
+    if (!perspectiveTranslucentNurbsCapturePath.isEmpty()) {
+        passed &= check(
+            perspectiveTranslucentNurbsImage.size() == surfaceViewportSize &&
+                perspectiveTranslucentNurbsImage.save(
+                    perspectiveTranslucentNurbsCapturePath),
+            "opt-in QPainter perspective NURBS edge capture must save");
+    }
+    QPointF perspectiveNurbsOriginScreen;
+    const bool perspectiveNurbsOriginProjected =
+        perspectiveNurbsTransform.worldPointToScreen(
+            {0.0, 0.0, 0.0}, surfaceViewportSize,
+            &perspectiveNurbsOriginScreen);
+    passed &= check(
+        perspectiveNurbsOriginProjected &&
+        !perspectiveTranslucentNurbsFragments.empty() &&
+            perspectiveTranslucentNurbsFragmentsUnique &&
+            perspectiveTranslucentNurbsFragmentPixels.size() ==
+                static_cast<qsizetype>(
+                    perspectiveTranslucentNurbsFragments.size()) &&
+            std::abs(perspectiveTranslucentNurbsImage.pixelColor(
+                         qRound(perspectiveNurbsOriginScreen.x()),
+                         qRound(perspectiveNurbsOriginScreen.y())).alphaF() -
+                     0.5f) < 0.02f,
+        "QPainter perspective planar NURBS must aggregate fractional coverage across its shared diagonal");
 
     QImage interpolationTexture(2, 2, QImage::Format_RGBA8888);
     interpolationTexture.setPixelColor(0, 0, QColor(240, 20, 30, 255));

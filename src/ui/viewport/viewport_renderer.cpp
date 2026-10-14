@@ -4416,8 +4416,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const bool hasSingleFloatTexture =
             !nurbsTiledTexture && nurbsTexture.isNull() &&
             nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty();
-        if (!transform_.isPerspectiveEnabled() &&
-            ((!nurbsTiledTexture && nurbsTexture.isNull() &&
+        if (((!nurbsTiledTexture && nurbsTexture.isNull() &&
               !nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty()) ||
              hasSingleImageTexture || hasSingleFloatTexture) &&
             !fillTriangles.isEmpty() &&
@@ -4425,8 +4424,30 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             qint64(fillTriangles.size()) <= 100000) {
             const QVector3D referenceNormal =
                 workbenchNormalize(fillTriangles.first().normal);
+            const Point3D referencePoint = fillTriangles.first().a;
             qreal minimumDepth = fillTriangles.first().depth;
             qreal maximumDepth = minimumDepth;
+            qreal planeScale = 1.0;
+            bool trianglesSharePlane = true;
+            for (const SurfaceFillTriangle &triangle : fillTriangles) {
+                const Point3D *points[] = {&triangle.a, &triangle.b,
+                                           &triangle.c};
+                for (const Point3D *point : points) {
+                    const QVector3D offset(
+                        static_cast<float>(point->x - referencePoint.x),
+                        static_cast<float>(point->y - referencePoint.y),
+                        static_cast<float>(point->z - referencePoint.z));
+                    planeScale = std::max<qreal>(
+                        planeScale, offset.length());
+                    if (std::abs(QVector3D::dotProduct(
+                            referenceNormal, offset)) >
+                        1.0e-6 * planeScale) {
+                        trianglesSharePlane = false;
+                        break;
+                    }
+                }
+                if (!trianglesSharePlane) break;
+            }
             coverageResolveActive = true;
             for (const SurfaceFillTriangle &triangle : fillTriangles) {
                 if ((hasSingleImageTexture || hasSingleFloatTexture) &&
@@ -4444,7 +4465,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 maximumDepth = std::max(maximumDepth, triangle.depth);
             }
             coverageResolveActive = coverageResolveActive &&
-                                    maximumDepth - minimumDepth < 1.0e-5;
+                (transform_.isPerspectiveEnabled()
+                     ? trianglesSharePlane
+                     : maximumDepth - minimumDepth < 1.0e-5);
             if (coverageResolveActive) {
                 const size_t pixelCount =
                     static_cast<size_t>(coverageTargetWidth) *

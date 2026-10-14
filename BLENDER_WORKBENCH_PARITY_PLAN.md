@@ -3431,15 +3431,41 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   perspective shading, and fractional coverage reaches both the color alpha
   and the software fragment sink. Planar untextured coverage resolve also
   accumulates at physical-pixel resolution under the existing one-million
-  pixel bound. Image alpha cutoff behavior is unchanged.
+  pixel bound. The resolver also covers perspective views after verifying
+  that all tessellation vertices remain on the shared plane; it keeps the
+  orthographic depth-uniformity guard. Image alpha cutoff behavior is
+  unchanged.
 - This makes the NURBS software edges use the same approximation as mesh
   edges; it does not reproduce Blender's TAA/SMAA temporal and filter stages.
   Blender 5.2.2 AA remains a later pass in
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc).
   The production-path edge-profile contract passes at DPR 1, 1.25, 1.5, and 2;
   the full C++ build passes. It excludes exact corners and the mesh's internal
-  triangulation seam, whose shared-edge fill rules differ. No controlled
-  Blender image comparison was run; that remains open.
+  triangulation seam, whose shared-edge fill rules differ. A controlled
+  perspective Blender comparison is recorded below; orthographic coverage
+  comparison remains open.
+- **Perspective planar NURBS shared-edge comparison (2026-10-14):** Enabled
+  the bounded QPainter coverage resolver for perspective views after checking
+  that all tessellation vertices are coplanar with the shared triangle
+  normal. The 160×160 matched Blender 5.2.2 and classiCAD images use a
+  perspective camera, Flat lighting, AA Off, a constant 2×2 Non-Color image,
+  and material alpha 0.5. Coverage IoU is `0.952081` (114 XOR pixels; the
+  classiCAD silhouette is two pixels wider overall). On shared covered pixels,
+  RGBA MAE is `[0.989, 0.709, 0.706, 1.194]`; the 3×3 projected origin
+  neighborhood matches Blender's alpha 128 exactly, with RGB at most one code
+  value apart. The remaining alpha maximum of 64 is confined to silhouette
+  edges. The focused `viewport_render_contracts` test and full C++ build pass.
+  Reproduce the classiCAD capture with
+  `CLASSICAD_VIEWPORT_QPAINTER_NURBS_PERSPECTIVE_CAPTURE=/tmp/classicad-nurbs-perspective-alpha.png`
+  on the offscreen test, render Blender using
+  `--scene NURBS_TEXTURE --resolution 160 160 --aa OFF --lighting FLAT
+  --color-source TEXTURE --texture-image /tmp/nurbs-perspective-alpha.png
+  --texture-color-space Non-Color --texture-interpolation Linear
+  --match-classicad-perspective --view-direction 4 -6 4 --transparent-film
+  --zero-dither --material-alpha 0.5`, then compare with
+  `tests/workbench_shared_alpha_edge_compare.py`. This validates the
+  planar perspective aggregation case only; other camera scales, curved or
+  folded NURBS, and orthographic edge parity remain open.
 
 ## QPainter shadow material opacity classification (2026-10-14)
 

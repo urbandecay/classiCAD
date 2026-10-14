@@ -5441,3 +5441,44 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   and `--texture-image-secondary` set to the chosen opaque or cutout secondary.
   Match the World background with
   `--world-color 0.0219421387 0.0219421387 0.0219421387`.
+
+### Per-face mesh Image Texture alpha cutoff boundary (2026-10-14)
+
+- Extended the matched two-slot mesh fixture with uniform secondary images at
+  alpha `25/255` and `26/255`, plus a `CHANNEL_PACKED` case at `25/255`.
+  The offscreen contract captures GPU and QPainter output, verifies the
+  straight-alpha sample below the cutoff reveals the World background, the
+  sample just above it remains visible, `CHANNEL_PACKED` bypasses the cutoff,
+  and the opaque primary face remains unchanged.
+- Blender 5.2.2's pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433)
+  unpremultiplies PREMUL RGB, discards STRAIGHT/PREMUL samples only when alpha
+  is strictly below the cutoff, then returns RGB without forwarding sampled
+  alpha to transparent accumulation. Its
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L536-L553)
+  disables that cutoff for NONE/Ignore and CHANNEL_PACKED. Therefore fractional
+  Image Texture alpha above the cutoff is opaque Workbench color, not an OIT
+  opacity value; this category validates the cutoff boundary and bypass rather
+  than claiming partial-alpha blending parity.
+- At a 5/255 display foreground threshold, the GPU masks compare to Blender
+  with IoU `0.999937` and 1 XOR pixel below the cutoff, and IoU `0.999937` and
+  2 XOR pixels above it or with CHANNEL_PACKED. QPainter masks match exactly
+  (IoU `1.0`, 0 XOR) for all three cases. On the displayed foreground interior,
+  GPU channel MAE is `0.0398/255` below and `0.0201/255` above; QPainter is
+  `0.2841/255` below and `0.1452/255` above. Full-frame scene-linear RGB MAE
+  for the retained STRAIGHT and CHANNEL_PACKED captures is `(blue, green,
+  red) = (3.14e-6, 5.77e-6, 5.13e-6)` GPU and `(7.86e-5, 9.99e-5,
+  1.05e-4)` QPainter. The remaining differences are raster-edge coverage and
+  QPainter's small scene-linear color error; no renderer adjustment is indicated
+  by this fixture.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  40.04 seconds); Blender references reported 5.2.2 LTS; and the paired PNG/PFM
+  comparisons completed for both backends. Reproduce the classiCAD captures
+  with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>` and Blender with
+  `--scene MESH_TEXTURE --match-classicad-ortho --aa OFF --lighting FLAT
+  --color-source TEXTURE --texture-interpolation Linear
+  --texture-image` set to the opaque primary, `--texture-image-secondary` set
+  to a generated boundary image, and `--texture-alpha-mode STRAIGHT` or
+  `CHANNEL_PACKED`. Match the World with
+  `--world-color 0.0219421387 0.0219421387 0.0219421387`.

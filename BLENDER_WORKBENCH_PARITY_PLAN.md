@@ -1514,6 +1514,20 @@ the same background. Compare scene-linear PFM with
 `tests/workbench_pfm_compare.py`. Other presets, camera orientations, Studio
 rotation, and QPainter MatCap output remain open.
 
+**Full-frame world-space Studio rotation comparison (2026-10-14):** Compared
+Studio `Paint` at 90° world-space rotation on the same 640×480 cube with AA
+Off, AgX, zero dither, and neutral scene-linear background. Blender 5.2.2 and
+classiCAD have identical full-frame foreground masks (IoU 1.0, zero XOR),
+per-channel scene-linear MAE below `0.000035`, and exact scene-linear RGB at
+all 27 face-interior probes. Display output has `0.04304/255` whole-frame
+MAE, max `46/255`, with `32,030` differing pixels; the PFM edge profile has
+`0.001426` coverage MAE over its 6,012-pixel band. These residuals are
+concentrated at cube edges; face lighting is matched. This confirms the
+single-variable Paint rotation case, while other Studio presets/rotations,
+cameras, and QPainter output remain open. The classiCAD offscreen
+`viewport_render_contracts` capture passed (1/1), and the Blender 5.2.2
+background render and PFM conversion completed.
+
 **GPU MatCap upload readback update (2026-10-13, corrected 2026-10-14):** The exact QMC half-float upload is shared by the production renderer and an offscreen OpenGL contract. With Mesa software GL, the contract samples two asymmetric texel centers and a four-texel midpoint in each layer for both `metal_bronze` and `check_normal+y`, comparing against the CPU sampler with the same top-down source-to-GL row mapping. Blender 5.2.2's [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L18-L42) passes the MatCap ImBuf float data to texture creation; however, the earlier contract's raw coordinate checks did not prove that the production renderer matched Blender's effective image-row orientation at its MatCap UVs. All 27 bundled `.qmc` files regenerate byte-for-byte from Blender 5.2.2's bundled MatCap EXRs, and a sampled Blender image pixel matches its QMC half-float RGB exactly. Controlled rendered comparisons now verify the full texture orientation for two presets; other presets, camera orientations, and image edges remain open.
 
 **CPU MatCap texture filtering update (2026-10-13, orientation corrected 2026-10-14):** Blender 5.2.2 evaluates MatCaps with `textureLod` on normalized textures (`source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh`). The CPU/QPainter samplers use normalized texel-center coordinates (`uv * dimension - 0.5`) with edge clamping, matching the OpenGL linear-filter footprint. QMC half-float rows are stored top-down, so the CPU sampler now converts normalized V to the corresponding source row; the sRGB image path keeps its equivalent image-to-GL orientation conversion. Focused contracts cover the center of a 2x2 texture, texel-center lookup, clamped edge lookups, both vertical endpoint mappings, and GPU sampling in both array layers. Matched rendered probes verify the corrected orientation for `check_normal+y` and `metal_bronze`; broader QPainter rendered parity remains open.
@@ -2825,7 +2839,8 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 
 - Studio, MatCap, and Flat modes, including light/MatCap choice and rotation.
   Studio Default, Flat, and selected Studio Paint rotations have 27-probe
-  checks; full-frame GPU MatCap comparison now covers `metal_bronze` with
+  checks; full-frame GPU Paint comparison covers world-space 90° rotation.
+  Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. Other presets, Studio
   rotations, camera orientations, and QPainter output remain open.
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; point/face domains, other texture filters/alpha/UDIM, other geometries, and QPainter parity remain open.

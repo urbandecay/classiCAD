@@ -4733,7 +4733,7 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   distinct payloads.
 - This verifies one opaque mesh with three visible face slots for Studio
   Default. Other Studio presets/rotations and roughness/metallic values,
-  textured slots, additional slot counts, and broad mesh parity remain open.
+  textured slots, slot counts beyond four, and broad mesh parity remain open.
   An offscreen QPainter fragment contract also verifies the three transparent
   Studio slots preserve alpha `0.5` and shade from the initial 8-bit packed
   material payload, without the opaque-only 5-bit roughness/3-bit metallic
@@ -4776,6 +4776,29 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   offscreen `viewport_render_contracts` capture passed; Blender reported
   version 5.2.2; and `workbench_display_probe_compare.py` passed for both GPU
   and QPainter PNG/PFM pairs.
+
+#### Flat Material color with four visible material slots
+
+- Added a camera-facing 2×2 quad grid to the Blender 5.2.2 reference helper
+  and the classiCAD GPU/QPainter contract captures. Each face selects its own
+  opaque material slot, with scene-linear colors `(0.18, 0.28, 0.72)`,
+  `(0.72, 0.20, 0.18)`, `(0.18, 0.65, 0.25)`, and `(0.78, 0.68, 0.12)` for
+  slot IDs 0 through 3. The fixtures use Material color, Flat lighting, AA
+  Off, no effects/outlines, and the matched 640×480 orthographic camera.
+- The offscreen C++ contract verifies each GPU and QPainter face-center probe
+  resolves to its expected scene-linear color and captures a nonblank PNG/PFM.
+  Blender 5.2.2 PFM probes match the GPU's half-float values at all four
+  centers; QPainter's unquantized values have scene-linear mean absolute
+  channel error `0.000137` and max `0.000312`. Display probes differ by at most
+  `1/255` in one channel. This confirms slot ID 3 selection for this Flat
+  Material-color mesh; missing/invalid indices, slots beyond ID 3, Studio or
+  MatCap four-slot shading, textures/alpha, and broad geometry parity remain
+  open. Blender's per-face slot selection and per-material batching remain
+  pinned in [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067)
+  and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
+- Validation: Blender reported 5.2.2 LTS and rendered nonblank 640×480 PNG,
+  EXR, and PFM output; `cmake --build build -j4` passed with the dependency
+  audit; and offscreen `viewport_render_contracts` passed (1/1).
 
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 

@@ -4078,3 +4078,33 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   multiple or overlapping objects, smoothing, UI scaling, camera variation,
   and QPainter comparisons remain open. No implementation change was made;
   this is a measured attribution, not a parity sign-off.
+
+### Matched QPainter shadow comparison (2026-10-14)
+
+- Added opt-in baseline and shadowed PNG captures to the existing 640×480
+  QPainter polygon-cube fixture using its prepared depth geometry and camera.
+  The captures can be requested with
+  `CLASSICAD_VIEWPORT_QPAINTER_SHADOW_CAPTURE` and
+  `CLASSICAD_VIEWPORT_QPAINTER_SHADOW_BASELINE_CAPTURE`.
+- Compared with fresh Blender 5.2.2 CUBE renders using the same view direction,
+  orthographic framing, AA Off, and zero dither. At RGB threshold 2/255, the
+  shadow-effect masks contain 111,256 Blender pixels and 111,480 classiCAD
+  pixels (224 XOR; IoU 0.997991). Mean maximum-channel effect is 12.2859/255
+  for Blender and 32.5692/255 for QPainter; signed RGB-delta error is
+  7.28147/255 whole-image MAE and 20.06520/255 over the union (p95 30/255,
+  max 30/255). Coverage is close, but QPainter's measured effect is much
+  stronger in this fixture.
+- The comparison does not isolate shadow-map sampling, light matching, or
+  receiver shading well enough to justify changing the software shadow
+  factor. QPainter still uses a target-sized orthographic light-depth map and
+  one nearest-texel test in
+  `src/ui/viewport/viewport_raster_workbench_effects.cpp`; Blender 5.2.2 uses
+  stencil shadow volumes and a nonzero-stencil resolve in pinned
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1759-L1790)
+  and [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L55-L68).
+  Treat this as a measured approximation gap, not shadow parity sign-off.
+- Validation: `cmake --build build -j4` and the offscreen
+  `viewport_render_contracts` test passed. Blender capture and
+  `workbench_effect_delta_compare.py` ran against Blender 5.2.2. This covers
+  one unselected default cube only; other casters, receivers, directions,
+  focus/shift settings, and QPainter shadow configurations remain open.

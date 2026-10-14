@@ -4227,17 +4227,14 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                                   textureColor,
                                                   frontFacing,
                                                   &texturedLinear);
-                    if (fragmentSink != nullptr) {
-                        const Point3D fragmentPosition{
-                            (points[0].x * cw0 + points[1].x * cw1 +
-                             points[2].x * cw2) / denominator +
-                                preparedOffset.x,
-                            (points[0].y * cw0 + points[1].y * cw1 +
-                             points[2].y * cw2) / denominator +
-                                preparedOffset.y,
-                            (points[0].z * cw0 + points[1].z * cw1 +
-                             points[2].z * cw2) / denominator +
-                                preparedOffset.z};
+                    const Point3D fragmentPosition{
+                        (points[0].x * cw0 + points[1].x * cw1 +
+                         points[2].x * cw2) / denominator + preparedOffset.x,
+                        (points[0].y * cw0 + points[1].y * cw1 +
+                         points[2].y * cw2) / denominator + preparedOffset.y,
+                        (points[0].z * cw0 + points[1].z * cw1 +
+                         points[2].z * cw2) / denominator + preparedOffset.z};
+                    if (fragmentSink != nullptr && !coverageResolveActive) {
                         observeWorkbenchFragment(
                             fragmentSink, painter,
                             logicalFromCoverageDevice.map(QPointF(px, py)),
@@ -4250,8 +4247,48 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     const int red = textured.red();
                     const int green = textured.green();
                     const int blue = textured.blue();
-                    row[x]=qPremultiply(qRgba(red,green,blue,
-                                              qRound(alpha * coverage * 255)));
+                    if (coverageResolveActive) {
+                        const int pixelX = qFloor(px);
+                        const int pixelY = qFloor(py);
+                        if (pixelX < 0 || pixelX >= coverageTargetWidth ||
+                            pixelY < 0 || pixelY >= coverageTargetHeight)
+                            continue;
+                        const size_t pixelIndex =
+                            static_cast<size_t>(pixelY) *
+                                static_cast<size_t>(coverageTargetWidth) +
+                            static_cast<size_t>(pixelX);
+                        CoverageResolvePixel &resolved =
+                            coverageResolvePixels[pixelIndex];
+                        resolved.premultipliedRgba[0] +=
+                            textured.redF() * alpha * coverage;
+                        resolved.premultipliedRgba[1] +=
+                            textured.greenF() * alpha * coverage;
+                        resolved.premultipliedRgba[2] +=
+                            textured.blueF() * alpha * coverage;
+                        resolved.premultipliedRgba[3] += alpha * coverage;
+                        resolved.coverage += coverage;
+                        if (fragmentSink != nullptr) {
+                            CoverageResolveFragment &fragment =
+                                coverageResolveFragments[pixelIndex];
+                            fragment.values[0] += texturedLinear.x() * coverage;
+                            fragment.values[1] += texturedLinear.y() * coverage;
+                            fragment.values[2] += texturedLinear.z() * coverage;
+                            fragment.values[3] += fragmentPosition.x * coverage;
+                            fragment.values[4] += fragmentPosition.y * coverage;
+                            fragment.values[5] += fragmentPosition.z * coverage;
+                            fragment.values[6] += alpha * coverage;
+                            const QVector3D receiverNormal =
+                                shadowReceiverNormal(sampleNormal, frontFacing,
+                                                     textured.alphaF());
+                            fragment.values[7] += receiverNormal.x() * coverage;
+                            fragment.values[8] += receiverNormal.y() * coverage;
+                            fragment.values[9] += receiverNormal.z() * coverage;
+                        }
+                    } else {
+                        row[x] = qPremultiply(qRgba(
+                            red, green, blue,
+                            qRound(alpha * coverage * 255)));
+                    }
                 }
             }
             painter.save();
@@ -4369,21 +4406,34 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             const SurfaceFillTriangle &b) {
                              return a.depth < b.depth;
                          });
-        // A planar untextured NURBS surface's tessellation triangles are one
-        // surface, so resolve their subpixel coverage together before
-        // source-over blending. This prevents a transparent internal
-        // diagonal from being composited as two partially covered layers.
-        if (!transform_.isPerspectiveEnabled() &&
+        // A planar NURBS surface's tessellation triangles are one surface, so
+        // resolve their subpixel coverage together before source-over
+        // blending. This prevents a transparent internal diagonal from being
+        // composited as two partially covered layers.
+        const bool hasSingleImageTexture =
+            !nurbsTiledTexture && !nurbsTexture.isNull() &&
+            nurbsFloatTextureTiles.isEmpty();
+        const bool hasSingleFloatTexture =
             !nurbsTiledTexture && nurbsTexture.isNull() &&
-            !nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty() &&
+            nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty();
+        if (!transform_.isPerspectiveEnabled() &&
+            ((!nurbsTiledTexture && nurbsTexture.isNull() &&
+              !nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty()) ||
+             hasSingleImageTexture || hasSingleFloatTexture) &&
             !fillTriangles.isEmpty() &&
-            qint64(coverageTargetWidth) * coverageTargetHeight <= 1000000) {
+            qint64(coverageTargetWidth) * coverageTargetHeight <= 1000000 &&
+            qint64(fillTriangles.size()) <= 100000) {
             const QVector3D referenceNormal =
                 workbenchNormalize(fillTriangles.first().normal);
             qreal minimumDepth = fillTriangles.first().depth;
             qreal maximumDepth = minimumDepth;
             coverageResolveActive = true;
             for (const SurfaceFillTriangle &triangle : fillTriangles) {
+                if ((hasSingleImageTexture || hasSingleFloatTexture) &&
+                    !triangle.hasUvs) {
+                    coverageResolveActive = false;
+                    break;
+                }
                 const QVector3D normal = workbenchNormalize(triangle.normal);
                 if (QVector3D::dotProduct(referenceNormal, normal) <
                         1.0f - 1.0e-6f) {

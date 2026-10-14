@@ -3306,6 +3306,29 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `classicad_viewport_render_contracts_test` passed. The existing `qfloat16`
   memcpy warning remains; no matched Blender frame comparison was run.
 
+### QPainter textured NURBS fractional-edge resolve (2026-10-14)
+
+- The prepared QPainter NURBS coverage resolve now supports a single regular
+  image or scene-linear float texture when the surface is orthographic, all
+  triangles have UVs, and the existing same-geometric-normal and same-depth
+  checks pass. Textured premultiplied color and software shadow-fragment data
+  aggregate by device pixel, so adjacent translucent tessellation triangles
+  contribute once along their shared edge. Tiled images, perspective views,
+  mixed-depth or mixed-normal surfaces, targets above 1M pixels, and meshes
+  above 100K triangles use the existing direct per-triangle path.
+- Blender 5.2.2 accumulates transparent fragments and revealage in its pinned
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L474-L526)
+  and resolves them in
+  [`workbench_transparent_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl#L265-L286).
+  This CPU path aggregates estimated coverage for one planar surface and does
+  not claim to reproduce Blender's GPU rasterization or weighted OIT.
+- The production contract renders a half-alpha textured NURBS surface split
+  into tessellation triangles and verifies one half-alpha fragment at the
+  shared diagonal pixel. Validation: `cmake --build build -j4` passed with the
+  dependency audit, and offscreen `viewport_render_contracts` and
+  `workbench_raster_fragment_contracts` passed. Matched Blender output remains
+  open.
+
 ### QPainter scalar-volume slice fallback (2026-10-14)
 
 - The QPainter Solid compositor now accepts scalar-volume objects alongside

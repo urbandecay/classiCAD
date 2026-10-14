@@ -40,6 +40,7 @@
 #include <QPen>
 #include <QPixmap>
 #include <QSurfaceFormat>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QVector>
 #include <QVector4D>
@@ -4034,6 +4035,63 @@ int main(int argc, char *argv[])
             nurbsTextureUpperRight.green() > nurbsTextureUpperRight.red() + 35 &&
             nurbsTextureUpperRight.green() > nurbsTextureUpperRight.blue() + 35,
         "QPainter NURBS Texture mode must map asymmetric image texels to U/V quadrants across non-unit knot domains");
+
+    // A translucent, constant texture over a planar NURBS quad exercises the
+    // production prepared-surface edge resolve. Shared tessellation edges must
+    // contribute one shadow/compositor fragment per pixel, not one per face.
+    QImage translucentNurbsTexture(2, 2, QImage::Format_RGBA8888);
+    translucentNurbsTexture.fill(QColor(180, 90, 40, 128));
+    const QString translucentNurbsTexturePath = colorTextureDirectory.filePath(
+        QStringLiteral("nurbs-translucent.png"));
+    const bool savedTranslucentNurbsTexture =
+        translucentNurbsTexture.save(translucentNurbsTexturePath);
+    WorkbenchMaterialData translucentNurbsMaterial = nurbsTextureMaterial;
+    translucentNurbsMaterial.textureImagePath = translucentNurbsTexturePath;
+    translucentNurbsMaterial.alpha = 0.5f;
+    QImage translucentNurbsImage(surfaceViewportSize,
+                                 QImage::Format_ARGB32_Premultiplied);
+    translucentNurbsImage.fill(Qt::transparent);
+    RasterWorkbenchFragmentSink translucentNurbsFragments;
+    surfaceRenderer.setShadingSettings(textureSettings);
+    QPainter translucentNurbsPainter(&translucentNurbsImage);
+    surfaceRenderer.drawShape(
+        translucentNurbsPainter, texturedNurbsShape, surfaceViewportSize,
+        false, false, true, QColor(), QString(), 0.0,
+        ObjectId::fromValue(1), 0,
+        nullptr, {}, std::nullopt, translucentNurbsMaterial,
+        QString(), QString(), {}, {}, &translucentNurbsFragments);
+    translucentNurbsPainter.end();
+    QSet<quint64> translucentNurbsFragmentPixels;
+    bool translucentNurbsFragmentsUnique = true;
+    float translucentNurbsDiagonalAlpha = 0.0f;
+    int translucentNurbsDiagonalFragments = 0;
+    for (const RasterWorkbenchLinearFragment &fragment :
+         translucentNurbsFragments) {
+        const quint64 key = static_cast<quint64>(fragment.y) *
+                                static_cast<quint64>(surfaceViewportSize.width()) +
+                            static_cast<quint64>(fragment.x);
+        translucentNurbsFragmentsUnique &=
+            !translucentNurbsFragmentPixels.contains(key);
+        translucentNurbsFragmentPixels.insert(key);
+        if (fragment.x == surfaceViewportSize.width() / 2 &&
+            fragment.y == surfaceViewportSize.height() / 2) {
+            translucentNurbsDiagonalAlpha = fragment.alpha;
+            ++translucentNurbsDiagonalFragments;
+        }
+    }
+    passed &= check(savedTranslucentNurbsTexture &&
+                        !translucentNurbsFragments.empty() &&
+                        translucentNurbsFragmentsUnique &&
+                        static_cast<std::size_t>(
+                            translucentNurbsFragmentPixels.size()) ==
+                            translucentNurbsFragments.size() &&
+                        translucentNurbsDiagonalFragments == 1 &&
+                        std::abs(translucentNurbsDiagonalAlpha - 0.5f) < 0.02f &&
+                        std::abs(translucentNurbsImage.pixelColor(
+                                     surfaceViewportSize.width() / 2,
+                                     surfaceViewportSize.height() / 2).alphaF() -
+                                 0.5f) < 0.02f,
+                    "QPainter textured planar NURBS tessellation must aggregate its shared fractional edge into one half-alpha fragment over a pixel");
 
     QImage interpolationTexture(2, 2, QImage::Format_RGBA8888);
     interpolationTexture.setPixelColor(0, 0, QColor(240, 20, 30, 255));

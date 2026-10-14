@@ -8197,6 +8197,223 @@ int main(int argc, char *argv[])
                             "GPU polygon-mesh Image Texture capture must render both per-face texture slots on the matched two-triangle patch");
                         lightingCapturesSucceeded &= gpuMeshTextureSaved;
 
+                        const QString meshAlphaCutoutTexturePath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-texture-mesh-alpha-cutout.png"));
+                        QImage meshAlphaCutoutTexture(
+                            4, 4, QImage::Format_RGBA8888);
+                        for (int y = 0; y < meshAlphaCutoutTexture.height(); ++y) {
+                            for (int x = 0; x < meshAlphaCutoutTexture.width();
+                                 ++x) {
+                                meshAlphaCutoutTexture.setPixelColor(
+                                    x, y, QColor(24, 220, 48,
+                                                 x < 2 ? 0 : 255));
+                            }
+                        }
+                        const bool meshAlphaCutoutTextureSaved =
+                            meshAlphaCutoutTexture.save(
+                                meshAlphaCutoutTexturePath);
+                        const QString meshAlphaBaselineGpuStem =
+                            QStringLiteral("color_texture_mesh_alpha_baseline_gpu");
+                        const QString meshAlphaBaselineQPainterStem =
+                            QStringLiteral("color_texture_mesh_alpha_baseline");
+                        const bool meshAlphaBaselineCaptured =
+                            captureGpuColorSource(
+                                meshAlphaBaselineGpuStem,
+                                qpainterMeshTextureObject,
+                                textureColorShading) &&
+                            captureQPainterColorSource(
+                                meshAlphaBaselineQPainterStem,
+                                qpainterMeshTextureObject,
+                                textureColorShading);
+                        ViewportRenderObject meshAlphaCutoutObject =
+                            qpainterMeshTextureObject;
+                        if (meshAlphaCutoutObject.meshMaterials.size() == 2) {
+                            WorkbenchMaterialData &secondaryMaterial =
+                                meshAlphaCutoutObject.meshMaterials[1];
+                            secondaryMaterial.textureImagePath =
+                                meshAlphaCutoutTexturePath;
+                            secondaryMaterial.textureImageSrgb = true;
+                            secondaryMaterial.textureImageAlphaMode =
+                                QStringLiteral("STRAIGHT");
+                            secondaryMaterial.textureImageInterpolation =
+                                QStringLiteral("Linear");
+                            secondaryMaterial.textureImageExtension =
+                                QStringLiteral("REPEAT");
+                        }
+                        const QString meshAlphaCutoutGpuStem =
+                            QStringLiteral("color_texture_mesh_alpha_cutout_gpu");
+                        const QString meshAlphaCutoutQPainterStem =
+                            QStringLiteral("color_texture_mesh_alpha_cutout");
+                        const bool meshAlphaCutoutCaptured =
+                            captureGpuColorSource(
+                                meshAlphaCutoutGpuStem,
+                                meshAlphaCutoutObject,
+                                textureColorShading) &&
+                            captureQPainterColorSource(
+                                meshAlphaCutoutQPainterStem,
+                                meshAlphaCutoutObject,
+                                textureColorShading);
+                        const auto foregroundPixels = [&] (
+                            const QString &path) {
+                            const QImage image(path);
+                            if (image.isNull()) return -1;
+                            const QColor background = image.pixelColor(0, 0);
+                            int count = 0;
+                            for (int y = 0; y < image.height(); ++y) {
+                                for (int x = 0; x < image.width(); ++x) {
+                                    const QColor pixel =
+                                        image.pixelColor(x, y);
+                                    if (std::max({
+                                            std::abs(pixel.red() -
+                                                     background.red()),
+                                            std::abs(pixel.green() -
+                                                     background.green()),
+                                            std::abs(pixel.blue() -
+                                                     background.blue())}) > 8) {
+                                        ++count;
+                                    }
+                                }
+                            }
+                            return count;
+                        };
+                        const int meshAlphaGpuBaselinePixels =
+                            foregroundPixels(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    meshAlphaBaselineGpuStem +
+                                    QStringLiteral(".png")));
+                        const int meshAlphaGpuCutoutPixels =
+                            foregroundPixels(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    meshAlphaCutoutGpuStem +
+                                    QStringLiteral(".png")));
+                        const int meshAlphaQPainterBaselinePixels =
+                            foregroundPixels(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    meshAlphaBaselineQPainterStem +
+                                    QStringLiteral("_qpainter.png")));
+                        const int meshAlphaQPainterCutoutPixels =
+                            foregroundPixels(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    meshAlphaCutoutQPainterStem +
+                                    QStringLiteral("_qpainter.png")));
+                        QPoint primaryMeshTextureProbe;
+                        QPoint meshTextureCutoutProbe;
+                        QPoint retainedMeshTextureProbe;
+                        const auto screenProbeForUv = [&] (
+                            double u, double v, QPoint *screen) {
+                            QPointF screenPosition;
+                            if (screen == nullptr ||
+                                !gpuTransform.worldPointToScreen(
+                                    {-1.0 + 2.0 * u, -1.0 + 2.0 * v, 0.0},
+                                    glSize, &screenPosition)) {
+                                return false;
+                            }
+                            *screen = QPoint(qRound(screenPosition.x()),
+                                             qRound(screenPosition.y()));
+                            return screen->x() >= 0 &&
+                                screen->x() < glSize.width() &&
+                                screen->y() >= 0 &&
+                                screen->y() < glSize.height();
+                        };
+                        const bool meshTextureProbesProjected =
+                            screenProbeForUv(0.75, 0.25,
+                                             &primaryMeshTextureProbe) &&
+                            screenProbeForUv(0.25, 0.75,
+                                             &meshTextureCutoutProbe) &&
+                            screenProbeForUv(0.75, 0.875,
+                                             &retainedMeshTextureProbe);
+                        const auto pngPixel = [&] (
+                            const QString &path, const QPoint &point) {
+                            const QImage image(path);
+                            return image.isNull() || point.x() < 0 ||
+                                    point.x() >= image.width() || point.y() < 0 ||
+                                    point.y() >= image.height()
+                                ? QColor()
+                                : image.pixelColor(point);
+                        };
+                        const auto colorDistance = [](
+                            const QColor &left, const QColor &right) {
+                            if (!left.isValid() || !right.isValid())
+                                return 1000;
+                            return std::max({
+                                std::abs(left.red() - right.red()),
+                                std::abs(left.green() - right.green()),
+                                std::abs(left.blue() - right.blue())});
+                        };
+                        const QString meshAlphaGpuBaselinePath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                meshAlphaBaselineGpuStem +
+                                QStringLiteral(".png"));
+                        const QString meshAlphaGpuCutoutPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                meshAlphaCutoutGpuStem +
+                                QStringLiteral(".png"));
+                        const QString meshAlphaQPainterBaselinePath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                meshAlphaBaselineQPainterStem +
+                                QStringLiteral("_qpainter.png"));
+                        const QString meshAlphaQPainterCutoutPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                meshAlphaCutoutQPainterStem +
+                                QStringLiteral("_qpainter.png"));
+                        const QColor gpuMeshAlphaBackground =
+                            pngPixel(meshAlphaGpuCutoutPath, QPoint(0, 0));
+                        const QColor qpainterMeshAlphaBackground =
+                            pngPixel(meshAlphaQPainterCutoutPath,
+                                     QPoint(0, 0));
+                        const bool meshAlphaCutoutProbesMatch =
+                            meshTextureProbesProjected &&
+                            colorDistance(
+                                pngPixel(meshAlphaGpuBaselinePath,
+                                         primaryMeshTextureProbe),
+                                pngPixel(meshAlphaGpuCutoutPath,
+                                         primaryMeshTextureProbe)) <= 2 &&
+                            colorDistance(
+                                pngPixel(meshAlphaGpuCutoutPath,
+                                         meshTextureCutoutProbe),
+                                gpuMeshAlphaBackground) <= 2 &&
+                            colorDistance(
+                                pngPixel(meshAlphaGpuCutoutPath,
+                                         retainedMeshTextureProbe),
+                                gpuMeshAlphaBackground) > 20 &&
+                            colorDistance(
+                                pngPixel(meshAlphaQPainterBaselinePath,
+                                         primaryMeshTextureProbe),
+                                pngPixel(meshAlphaQPainterCutoutPath,
+                                         primaryMeshTextureProbe)) <= 2 &&
+                            colorDistance(
+                                pngPixel(meshAlphaQPainterCutoutPath,
+                                         meshTextureCutoutProbe),
+                                qpainterMeshAlphaBackground) <= 2 &&
+                            colorDistance(
+                                pngPixel(meshAlphaQPainterCutoutPath,
+                                         retainedMeshTextureProbe),
+                                qpainterMeshAlphaBackground) > 20;
+                        const bool meshAlphaCutoutReducedCoverage =
+                            meshAlphaGpuBaselinePixels > 10000 &&
+                            meshAlphaGpuCutoutPixels > 5000 &&
+                            meshAlphaGpuCutoutPixels <
+                                meshAlphaGpuBaselinePixels - 1000 &&
+                            meshAlphaQPainterBaselinePixels > 10000 &&
+                            meshAlphaQPainterCutoutPixels > 5000 &&
+                            meshAlphaQPainterCutoutPixels <
+                                meshAlphaQPainterBaselinePixels - 1000;
+                        passed &= check(
+                            meshAlphaCutoutTextureSaved &&
+                                meshAlphaBaselineCaptured &&
+                                meshAlphaCutoutCaptured &&
+                                meshAlphaCutoutProbesMatch &&
+                                meshAlphaCutoutReducedCoverage,
+                            "per-face Image Texture alpha cutoff must preserve the opaque primary slot and remove transparent secondary-slot coverage in GPU and QPainter captures");
+                        lightingCapturesSucceeded &=
+                            meshAlphaCutoutTextureSaved &&
+                            meshAlphaBaselineCaptured &&
+                            meshAlphaCutoutCaptured &&
+                            meshAlphaCutoutProbesMatch &&
+                            meshAlphaCutoutReducedCoverage;
+
                         const QString meshAlphaStraightPath = QDir(
                             lightingCaptureDirectory).filePath(
                                 QStringLiteral(

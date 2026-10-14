@@ -5397,3 +5397,47 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `--world-color 0.0219421387 0.0219421387 0.0219421387` to match the captured
   background. This does not cover alpha-mixed slots, perspective, or other
   mesh geometries.
+
+### Per-face mesh Image Texture alpha cutout (2026-10-14)
+
+- Extended the same two-triangle mesh so slot 0 retains its opaque patterned
+  image while slot 1 uses a separate 4×4 sRGB image with alpha 0 in the left
+  half and alpha 1 in the right half. Flat lighting, Linear filtering, Repeat,
+  AA Off, AgX, and the matched neutral World background are shared by Blender
+  5.2.2, GPU, and QPainter. The offscreen contract compares the cutout against
+  the opaque two-slot baseline, projects three interior UV probes, verifies
+  that the primary slot is unchanged, the transparent secondary probe reveals
+  the background, the retained secondary probe remains visible, and total
+  foreground coverage decreases in both classiCAD backends.
+- At a 5/255 PNG foreground threshold, the GPU baseline/cutout masks compare
+  to Blender with IoU `0.999937` / `0.999757` (2 / 6 XOR pixels); QPainter
+  compares with IoU `1.0` / `0.999594` (0 / 10 XOR). On common foreground
+  pixels, display channel MAE is `0.0399/255` GPU and `0.2170/255` QPainter
+  for the opaque baseline, and `0.0260/255` GPU and `0.1873/255` QPainter for
+  the alpha cutout. Scene-linear full-frame channel MAE for the cutout is
+  `(blue, green, red) = (3.23e-6, 1.48e-5, 5.30e-6)` GPU and
+  `(7.85e-5, 1.03e-4, 1.05e-4)` QPainter. The remaining mask differences are
+  localized to raster edges and the texture-alpha boundary; the result does
+  not justify a renderer change for this fixture.
+- Blender 5.2.2 selects the active Image Texture independently for each
+  material batch in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L542).
+  Its pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L433)
+  unpremultiplies PREMUL inputs and discards STRAIGHT/PREMUL samples below
+  `image_transparency_cutoff`; NONE and CHANNEL_PACKED disable this cutoff.
+  This fixture uses only 0/1 alpha so the strict `< 0.1` boundary is not
+  ambiguous. It does not cover partial alpha, alternative filter/extension
+  modes, topology changes, perspective, or broader mesh geometries.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 38.69 seconds); Blender reported 5.2.2 LTS; and
+  `workbench_image_compare.py` plus `workbench_pfm_compare.py` completed for
+  the opaque baseline and cutout through GPU and QPainter. Reproduce the
+  classiCAD captures with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>` and
+  Blender with `--scene MESH_TEXTURE --match-classicad-ortho --aa OFF
+  --lighting FLAT --color-source TEXTURE --texture-interpolation Linear
+  --texture-alpha-mode STRAIGHT`, `--texture-image` set to the opaque primary,
+  and `--texture-image-secondary` set to the chosen opaque or cutout secondary.
+  Match the World background with
+  `--world-color 0.0219421387 0.0219421387 0.0219421387`.

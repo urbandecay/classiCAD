@@ -329,13 +329,14 @@ bool sampleWorkbenchFloatUdimImage(
 {
     if (!std::isfinite(uv.x()) || !std::isfinite(uv.y())) return false;
     const int tileU = qFloor(uv.x());
-    const qreal sourceV = 1.0 - uv.y();
-    const int tileV = qFloor(sourceV);
+    // UDIM rows are selected in Blender's bottom-up UV space. Flip V only
+    // after selecting the tile, when mapping that tile into image rows.
+    const int tileV = qFloor(uv.y());
     const int number = 1001 + tileU + 10 * tileV;
     const auto found = tiles.constFind(number);
     if (tileU < 0 || tileU >= 10 || tileV < 0 || tileV > 99 ||
         found == tiles.cend() || !found->isValid()) return false;
-    const QPointF local(uv.x() - tileU, 1.0 - (sourceV - tileV));
+    const QPointF local(uv.x() - tileU, uv.y() - tileV);
     sampleWorkbenchFloatImage(found.value(), local, interpolation, extension, rgba);
     return true;
 }
@@ -356,11 +357,9 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
         return false;
     }
     const qreal tileU = std::floor(uv.x());
-    // QPainter color UVs are globally V-flipped for top-down QImage rows.
-    // UDIM selection must use Blender's original UV tile before flipping the
-    // local coordinate inside that tile.
-    const qreal sourceV = 1.0 - uv.y();
-    const qreal tileV = std::floor(sourceV);
+    // Select the UDIM row in Blender's UV space. The image sampler performs
+    // the V flip after the tile-local coordinate has been calculated.
+    const qreal tileV = std::floor(uv.y());
     const qreal tileNumber = 1001.0 + tileU + 10.0 * tileV;
     const bool validTile = tileU >= 0.0 && tileU < 10.0 &&
         tileV >= 0.0 && tileV <= 99.0 &&
@@ -376,8 +375,7 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
         return false;
     }
     sampleWorkbenchImage(tile.value(),
-                         QPointF(uv.x() - tileU,
-                                 1.0 - (sourceV - tileV)),
+                         QPointF(uv.x() - tileU, uv.y() - tileV),
                          interpolation, extension, rgba, linearRgb, srgb);
     return true;
 }

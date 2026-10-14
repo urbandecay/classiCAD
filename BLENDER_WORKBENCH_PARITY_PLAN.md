@@ -5067,8 +5067,19 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   Additional presets, orientations, specular variations, geometry, AA modes,
   and the residual AA-Off silhouette coverage remain open; this is not a
   MatCap parity sign-off.
+- A second matched sweep disables specular for `metal_bronze`,
+  `check_normal+y`, and `ceramic_lightbulb`. For `check_normal+y` and
+  `ceramic_lightbulb`, the same 622-pixel mask XOR and 0.994440 IoU remain;
+  common-foreground display MAE/p95 are 1.784/255 and 1/255, and 1.208/255
+  and 1/255, respectively. Their full-frame scene-linear channel MAEs (blue,
+  green, red) are `(0.002578, 0.004672, 0.004991)` and
+  `(0.003328, 0.002610, 0.002121)`. With specular disabled,
+  `metal_bronze` produces a black object in both applications; its display
+  comparison has 536 mask XOR pixels and IoU 0.995205, but its scene-linear
+  comparison has no foreground above the comparator's 0.1 threshold and does
+  not provide a useful MatCap color measurement.
 - Validation: Blender reported 5.2.2 LTS; `workbench_image_compare.py` and
-  `workbench_pfm_compare.py` completed for both PNG/PFM pairs. The classiCAD
-  source captures came from the previously validated offscreen
-  `viewport_render_contracts` run; this comparison-only update made no C++
-  changes and required no rebuild.
+  `workbench_pfm_compare.py` completed for the initial specular-on and second
+  specular-off PNG/PFM pairs. The classiCAD captures came from offscreen
+  `viewport_render_contracts` runs; the specular-off run passed (1/1). This
+  comparison-only update made no C++ changes and required no rebuild.

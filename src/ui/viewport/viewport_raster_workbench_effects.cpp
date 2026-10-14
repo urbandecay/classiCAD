@@ -1442,15 +1442,12 @@ bool compositeRasterWorkbenchSurfaces(
     }
     const bool sortedSceneLinearDofPending =
         surfaceLayers != nullptr && shadingSettings.depthOfField &&
-        !shadingSettings.shadows &&
         !shadingSettings.xrayEnabled() &&
         transform.cameraPreferences().sceneCameraEnabled;
     const bool sortedXraySuppressesDof = shadingSettings.xrayEnabled();
     const bool retainSortedSceneLinear = surfaceLayers != nullptr &&
         (!shadingSettings.depthOfField || sortedSceneLinearDofPending ||
          sortedXraySuppressesDof) &&
-        !(shadingSettings.shadows && shadingSettings.depthOfField &&
-          !shadingSettings.xrayEnabled()) &&
         sceneLinearDestinationValid;
     const bool canResolveSortedOutlineInSceneLinear =
         retainSortedSceneLinear && shadingSettings.outline;
@@ -2798,7 +2795,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     : 1.0f;
                 if (opaqueFactor >= 1.0f && transparentFactor >= 1.0f) continue;
                 if (surfaceLayers != nullptr &&
-                    surfaceLayers->sceneLinearOutlinePending &&
+                    (surfaceLayers->sceneLinearOutlinePending ||
+                     surfaceLayers->sceneLinearDofPending) &&
                     surfaceLayers->sceneLinearSize == QSize(width, height) &&
                     surfaceLayers->sceneLinearColor.size() ==
                         static_cast<std::size_t>(width) * height &&

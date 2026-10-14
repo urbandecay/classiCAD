@@ -88,6 +88,7 @@
 #include <QButtonGroup>
 #include <QBuffer>
 #include <QCheckBox>
+#include <QColorSpace>
 #include <QColorDialog>
 #include <QCursor>
 #include <QDateTime>
@@ -6971,26 +6972,49 @@ public:
             QImage annotationLayer(outputSize,
                                    QImage::Format_RGBA64_Premultiplied);
             annotationLayer.fill(Qt::transparent);
+            QImage sceneLinearAnnotationLayer;
+            if (!result.sceneLinearRgba.isEmpty()) {
+                sceneLinearAnnotationLayer = QImage(
+                    outputSize, QImage::Format_RGBA64_Premultiplied);
+                sceneLinearAnnotationLayer.setColorSpace(
+                    QColorSpace(QColorSpace::SRgbLinear));
+                sceneLinearAnnotationLayer.fill(Qt::transparent);
+            }
             ViewportRenderer annotationRenderer(renderCamera, curveHitTester_);
             annotationRenderer.setArchitecturalDimensionFont(
                 architecturalDimensionFont_);
-            QPainter annotationPainter(&annotationLayer);
-            annotationPainter.setRenderHint(QPainter::Antialiasing, true);
-            annotationPainter.setRenderHint(QPainter::TextAntialiasing, true);
-            for (const ViewportRenderObject &object : renderFrame.objects) {
-                if (!isDimensionGeometryType(object.shape.geometryType)) continue;
-                annotationRenderer.drawShape(
-                    annotationPainter, object.shape, outputSize, false, false,
-                    false, object.layerColor, object.layerLineType,
-                    object.layerLineWeightMm, object.objectId,
-                    object.geometryRevision);
-            }
-            annotationPainter.end();
-            if (!compositeWorkbenchRenderAnnotations(
-                    &result.combined, annotationLayer,
-                    result.sceneLinearRgba.isEmpty()
-                        ? nullptr : &result.sceneLinearRgba,
-                    result.sceneLinearSize)) {
+            const auto drawDimensionAnnotations = [&](QImage *layer) {
+                if (layer == nullptr || layer->isNull()) return false;
+                QPainter annotationPainter(layer);
+                if (!annotationPainter.isActive()) return false;
+                annotationPainter.setRenderHint(QPainter::Antialiasing, true);
+                annotationPainter.setRenderHint(QPainter::TextAntialiasing, true);
+                for (const ViewportRenderObject &object : renderFrame.objects) {
+                    if (!isDimensionGeometryType(object.shape.geometryType))
+                        continue;
+                    annotationRenderer.drawShape(
+                        annotationPainter, object.shape, outputSize, false,
+                        false, false, object.layerColor, object.layerLineType,
+                        object.layerLineWeightMm, object.objectId,
+                        object.geometryRevision);
+                }
+                annotationPainter.end();
+                return true;
+            };
+            const bool displayAnnotationsDrawn =
+                drawDimensionAnnotations(&annotationLayer);
+            const bool sceneLinearAnnotationsDrawn =
+                sceneLinearAnnotationLayer.isNull() ||
+                drawDimensionAnnotations(&sceneLinearAnnotationLayer);
+            if (!displayAnnotationsDrawn || !sceneLinearAnnotationsDrawn) {
+                qWarning() << "Could not rasterize CAD dimensions for the render result";
+            } else if (!compositeWorkbenchRenderAnnotations(
+                           &result.combined, annotationLayer,
+                           result.sceneLinearRgba.isEmpty()
+                               ? nullptr : &result.sceneLinearRgba,
+                           result.sceneLinearSize,
+                           sceneLinearAnnotationLayer.isNull()
+                               ? nullptr : &sceneLinearAnnotationLayer)) {
                 qWarning() << "Could not composite CAD dimensions into the render result";
             }
             applyWorkbenchRenderDither(&result.combined,

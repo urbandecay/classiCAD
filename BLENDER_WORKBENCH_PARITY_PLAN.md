@@ -3051,3 +3051,29 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   temporary tile sources. These are storage and adapter contracts; rendered
   pixel parity remains open.
 - Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2.
+
+### Scene-linear CAD annotation overlap in HDR/EXR output (2026-10-14)
+
+- The HDR/EXR render-result path now draws committed CAD dimensions into a
+  second RGBA64 premultiplied layer tagged as linear sRGB. Dimension stroke,
+  text, and label-background colors are converted from sRGB before rasterizing
+  to that target, so antialias coverage and overlapping annotations blend in
+  scene-linear RGB. The existing sRGB annotation layer still produces the
+  display result; PNG/TIFF and other display-referred output behavior is
+  unchanged. The material adapter and geometry contracts are unaffected.
+- Blender 5.2.2 registers a four-channel Combined render pass and reads the
+  Workbench render framebuffer into its float pass buffer in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2888-L2919)
+  and
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L3097-L3109).
+  The separate CAD annotation layer remains classiCAD-specific; this change
+  preserves the Workbench scene-linear Combined buffer while compositing those
+  extra annotations into it.
+- The offscreen contract checks two crossing antialiased strokes with distinct
+  colors against explicit premultiplied linear source-over results, preserves
+  above-one scene-linear values and output alpha, and verifies that display
+  output remains the existing sRGB composition. Validation: the full
+  `cmake --build build -j4` passed (including the dependency audit), and
+  `QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`
+  passed. Matched rendered comparisons of CAD annotation output against
+  Blender remain outside the Blender Workbench scene pass.

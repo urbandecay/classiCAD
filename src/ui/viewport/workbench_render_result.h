@@ -69,7 +69,8 @@ bool compositeWorkbenchRenderAnnotations(
     QImage *displayCombined,
     const QImage &annotationLayer,
     QVector<float> *sceneLinearRgba,
-    const QSize &sceneLinearSize);
+    const QSize &sceneLinearSize,
+    const QImage *sceneLinearAnnotationLayer = nullptr);
 
 // Blender's render dither is applied while producing an 8-bit byte buffer.
 // Higher-depth PNG/TIFF and linear-float outputs keep their source precision.

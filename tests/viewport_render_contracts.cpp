@@ -23,6 +23,7 @@
 
 #include <QDebug>
 #include <QBuffer>
+#include <QColorSpace>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -3105,6 +3106,20 @@ int main(int argc, char *argv[])
     annotationLayer.fill(Qt::transparent);
     {
         QPainter painter(&annotationLayer);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        annotationRenderer.drawShape(
+            painter, renderDimension, annotationSize, false, false, false,
+            QColor(220, 40, 25), QString(), 0.0);
+    }
+    QImage linearDimensionLayer(annotationSize,
+                                QImage::Format_RGBA64_Premultiplied);
+    linearDimensionLayer.setColorSpace(QColorSpace(QColorSpace::SRgbLinear));
+    linearDimensionLayer.fill(Qt::transparent);
+    {
+        QPainter painter(&linearDimensionLayer);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
         annotationRenderer.drawShape(
             painter, renderDimension, annotationSize, false, false, false,
             QColor(220, 40, 25), QString(), 0.0);
@@ -3121,15 +3136,32 @@ int main(int argc, char *argv[])
         annotationSceneLinear[index + 3] = 1.0f;
     }
     QPoint annotationSample(-1, -1);
+    bool dimensionRendererLinearizedStroke = false;
     for (int y = 0; y < annotationSize.height() &&
-                    annotationSample.x() < 0; ++y) {
+                    !dimensionRendererLinearizedStroke; ++y) {
         const auto *row = reinterpret_cast<const QRgba64 *>(
             annotationLayer.constScanLine(y));
+        const auto *linearRow = reinterpret_cast<const QRgba64 *>(
+            linearDimensionLayer.constScanLine(y));
         for (int x = 0; x < annotationSize.width(); ++x) {
             if (row[x].alpha() > 0 && row[x].red() > row[x].green() * 2 &&
                 row[x].red() > row[x].blue() * 2) {
-                annotationSample = QPoint(x, y);
-                break;
+                if (annotationSample.x() < 0) annotationSample = QPoint(x, y);
+                const float alpha = row[x].alpha() / 65535.0f;
+                if (alpha > 0.1f && linearRow[x].alpha() > 0) {
+                    const float srgbRed = std::min(
+                        1.0f, row[x].red() / 65535.0f / alpha);
+                    const float expectedLinearRed = srgbRed <= 0.04045f
+                        ? srgbRed / 12.92f
+                        : std::pow((srgbRed + 0.055f) / 1.055f, 2.4f);
+                    const float actualLinearRed =
+                        linearRow[x].red() / 65535.0f /
+                        std::max(1.0e-6f,
+                                 linearRow[x].alpha() / 65535.0f);
+                    dimensionRendererLinearizedStroke =
+                        std::abs(actualLinearRed - expectedLinearRed) < 0.02f;
+                }
+                if (dimensionRendererLinearizedStroke) break;
             }
         }
     }
@@ -3160,9 +3192,152 @@ int main(int argc, char *argv[])
     passed &= check(annotationCompositeSucceeded &&
                         annotationSample.x() >= 0 &&
                         annotationSceneLinearMatches &&
+                        dimensionRendererLinearizedStroke &&
                         annotationDisplay.pixelColor(annotationSample).red() >
                             annotationDisplay.pixelColor(annotationSample).green(),
-                    "committed dimension annotations must composite into both display and scene-linear Combined with sRGB-to-linear conversion");
+                    "committed dimension annotations must use linearized stroke colors for scene-linear Combined while preserving display colors");
+
+    const QSize annotationOverlapSize(9, 9);
+    const auto makeLinearAnnotationLayer = [&]() {
+        QImage layer(annotationOverlapSize,
+                     QImage::Format_RGBA64_Premultiplied);
+        layer.setColorSpace(QColorSpace(QColorSpace::SRgbLinear));
+        layer.fill(Qt::transparent);
+        return layer;
+    };
+    QImage firstLinearStroke = makeLinearAnnotationLayer();
+    QImage secondLinearStroke = makeLinearAnnotationLayer();
+    QImage overlappingLinearStrokes = makeLinearAnnotationLayer();
+    const auto drawCrossingStroke = [](QImage *layer, const QColor &color,
+                                       const QLineF &line) {
+        QPainter painter(layer);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        QColor paintColor = color;
+        if (layer->colorSpace() == QColorSpace(QColorSpace::SRgbLinear)) {
+            const auto srgbToLinear = [](qreal value) {
+                return value <= 0.04045
+                    ? value / 12.92
+                    : std::pow((value + 0.055) / 1.055, 2.4);
+            };
+            paintColor = QColor::fromRgbF(
+                srgbToLinear(color.redF()), srgbToLinear(color.greenF()),
+                srgbToLinear(color.blueF()), color.alphaF());
+        }
+        painter.setPen(QPen(paintColor, 3.0, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(line);
+    };
+    const QLineF firstAnnotationLine(QPointF(0.5, 0.5), QPointF(8.5, 8.5));
+    const QLineF secondAnnotationLine(QPointF(0.5, 8.5), QPointF(8.5, 0.5));
+    const QColor firstAnnotationColor(200, 50, 30, 180);
+    const QColor secondAnnotationColor(25, 90, 220, 210);
+    drawCrossingStroke(&firstLinearStroke, firstAnnotationColor,
+                       firstAnnotationLine);
+    drawCrossingStroke(&secondLinearStroke, secondAnnotationColor,
+                       secondAnnotationLine);
+    drawCrossingStroke(&overlappingLinearStrokes, firstAnnotationColor,
+                       firstAnnotationLine);
+    drawCrossingStroke(&overlappingLinearStrokes, secondAnnotationColor,
+                       secondAnnotationLine);
+    // The display image uses the existing sRGB annotation layer. Render its
+    // expected result independently from the linear HDR layer.
+    QImage srgbOverlapLayer(annotationOverlapSize,
+                            QImage::Format_RGBA64_Premultiplied);
+    srgbOverlapLayer.fill(Qt::transparent);
+    drawCrossingStroke(&srgbOverlapLayer, firstAnnotationColor,
+                       firstAnnotationLine);
+    drawCrossingStroke(&srgbOverlapLayer, secondAnnotationColor,
+                       secondAnnotationLine);
+    QImage expectedSrgbOverlapDisplay(annotationOverlapSize,
+                                      QImage::Format_RGBA64);
+    expectedSrgbOverlapDisplay.fill(QColor(40, 45, 50, 255));
+    {
+        QPainter painter(&expectedSrgbOverlapDisplay);
+        painter.drawImage(0, 0, srgbOverlapLayer);
+    }
+    QVector<float> overlapSceneLinear(annotationOverlapSize.width() *
+                                      annotationOverlapSize.height() * 4);
+    for (qsizetype index = 0; index < overlapSceneLinear.size(); index += 4) {
+        overlapSceneLinear[index] = 5.0f;
+        overlapSceneLinear[index + 1] = 1.0f;
+        overlapSceneLinear[index + 2] = 0.5f;
+        overlapSceneLinear[index + 3] = 0.4f;
+    }
+    QImage overlapDisplay(annotationOverlapSize, QImage::Format_RGBA64);
+    overlapDisplay.fill(QColor(40, 45, 50, 255));
+    const bool overlapCompositeSucceeded =
+        compositeWorkbenchRenderAnnotations(
+            &overlapDisplay, srgbOverlapLayer,
+            &overlapSceneLinear, annotationOverlapSize,
+            &overlappingLinearStrokes);
+    qreal maxOverlapLinearError = 0.0;
+    int overlapPixelsChecked = 0;
+    bool linearTargetColorCorrect = false;
+    for (int y = 0; y < annotationOverlapSize.height(); ++y) {
+        const auto *firstRow = reinterpret_cast<const QRgba64 *>(
+            firstLinearStroke.constScanLine(y));
+        const auto *secondRow = reinterpret_cast<const QRgba64 *>(
+            secondLinearStroke.constScanLine(y));
+        const auto *combinedRow = reinterpret_cast<const QRgba64 *>(
+            overlappingLinearStrokes.constScanLine(y));
+        const auto *srgbSecondRow = reinterpret_cast<const QRgba64 *>(
+            secondLinearStroke.constScanLine(y));
+        for (int x = 0; x < annotationOverlapSize.width(); ++x) {
+            const QRgba64 first = firstRow[x];
+            const QRgba64 second = secondRow[x];
+            const float firstAlpha = first.alpha() / 65535.0f;
+            const float secondAlpha = second.alpha() / 65535.0f;
+            if (firstAlpha > 0.0f && secondAlpha > 0.0f) ++overlapPixelsChecked;
+            if (!linearTargetColorCorrect && firstAlpha > 0.25f &&
+                srgbSecondRow[x].alpha() == 0) {
+                const float red = first.red() / 65535.0f / firstAlpha;
+                const float sourceRed = firstAnnotationColor.redF();
+                const float expected = sourceRed <= 0.04045f
+                    ? sourceRed / 12.92f
+                    : std::pow((sourceRed + 0.055f) / 1.055f, 2.4f);
+                linearTargetColorCorrect = std::abs(red - expected) < 0.02f;
+            }
+            const float expectedRed = second.red() / 65535.0f +
+                first.red() / 65535.0f * (1.0f - secondAlpha);
+            const float expectedGreen = second.green() / 65535.0f +
+                first.green() / 65535.0f * (1.0f - secondAlpha);
+            const float expectedBlue = second.blue() / 65535.0f +
+                first.blue() / 65535.0f * (1.0f - secondAlpha);
+            const float expectedAlpha = secondAlpha +
+                firstAlpha * (1.0f - secondAlpha);
+            const QRgba64 actual = combinedRow[x];
+            maxOverlapLinearError = std::max({
+                maxOverlapLinearError,
+                std::abs(qreal(actual.red() / 65535.0f - expectedRed)),
+                std::abs(qreal(actual.green() / 65535.0f - expectedGreen)),
+                std::abs(qreal(actual.blue() / 65535.0f - expectedBlue)),
+                std::abs(qreal(actual.alpha() / 65535.0f - expectedAlpha))});
+        }
+    }
+    const qsizetype overlapCenterBase =
+        (qsizetype(4) * annotationOverlapSize.width() + 4) * 4;
+    const qsizetype untouchedHdrBase =
+        qsizetype(4) * annotationOverlapSize.width() * 4;
+    const auto *overlapCenter = reinterpret_cast<const QRgba64 *>(
+        overlappingLinearStrokes.constScanLine(4));
+    const float centerAlpha = overlapCenter[4].alpha() / 65535.0f;
+    const float expectedHdrRed = overlapCenter[4].red() / 65535.0f +
+        5.0f * (1.0f - centerAlpha);
+    const float expectedHdrAlpha = centerAlpha + 0.4f * (1.0f - centerAlpha);
+    passed &= check(overlapCompositeSucceeded,
+                    "overlap annotation compositor must accept matching linear RGBA64 layer");
+    passed &= check(overlapPixelsChecked > 0 && maxOverlapLinearError < 2.0e-4,
+                    "overlapping linear annotation strokes must source-over within QPainter antialias tolerance");
+    passed &= check(linearTargetColorCorrect,
+                    "QPainter must convert CAD annotation QColor values into the linear target color space");
+    passed &= check(overlapDisplay == expectedSrgbOverlapDisplay,
+                    "HDR annotation composition must preserve existing display-space sRGB output");
+    passed &= check(std::abs(overlapSceneLinear[overlapCenterBase] -
+                             expectedHdrRed) < 1.0e-4f &&
+                        std::abs(overlapSceneLinear[overlapCenterBase + 3] -
+                                 expectedHdrAlpha) < 1.0e-4f &&
+                        overlapSceneLinear[untouchedHdrBase] == 5.0f,
+                    "HDR annotation composite must preserve scene-linear range and alpha");
+
     WorkbenchRenderResult annotationHdrResult;
     annotationHdrResult.combined = annotationDisplay;
     annotationHdrResult.sceneLinearRgba = annotationSceneLinear;

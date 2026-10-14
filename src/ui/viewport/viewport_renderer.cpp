@@ -20,6 +20,7 @@
 #include "services/dimensions/dimension_layout.h"
 
 #include <QFont>
+#include <QColorSpace>
 #include <QByteArray>
 #include <QLineF>
 #include <QPainterPath>
@@ -1352,6 +1353,24 @@ void ViewportRenderer::drawShape(QPainter &painter,
     if (shadingSettings_.xrayEnabled() && !preview) {
         curveColor.setAlphaF(curveColor.alphaF() * shadingSettings_.xrayAlpha);
     }
+    const auto *imageTarget = isDimensionGeometryType(shape.geometryType)
+        ? dynamic_cast<const QImage *>(painter.device()) : nullptr;
+    const QColorSpace linearSrgb(QColorSpace::SRgbLinear);
+    const bool linearAnnotationTarget =
+        imageTarget != nullptr && imageTarget->colorSpace() == linearSrgb;
+    const auto colorForLinearAnnotation = [](QColor color) {
+        const auto srgbToLinear = [](qreal value) {
+            return value <= 0.04045
+                ? value / 12.92
+                : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return QColor::fromRgbF(srgbToLinear(color.redF()),
+                                srgbToLinear(color.greenF()),
+                                srgbToLinear(color.blueF()), color.alphaF());
+    };
+    if (linearAnnotationTarget) {
+        curveColor = colorForLinearAnnotation(curveColor);
+    }
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
     const qreal storedWidth = viewportLineWeightPixels(layerLineWeightMm);
     const qreal curveWidth = preview ? 1.5 : storedWidth;
@@ -2325,7 +2344,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.setFont(dimensionAnnotationFont(
                 architecturalDimensionFont_ ? DimensionFontStyle::Architectural
                                             : DimensionFontStyle::Standard));
-            painter.fillRect(layout.labelBounds, QColor(QStringLiteral("#282828")));
+            QColor labelBackground(QStringLiteral("#282828"));
+            if (linearAnnotationTarget) {
+                labelBackground = colorForLinearAnnotation(labelBackground);
+            }
+            painter.fillRect(layout.labelBounds, labelBackground);
             painter.setPen(curveColor);
             painter.drawText(layout.labelBounds, Qt::AlignCenter, layout.label);
             painter.restore();

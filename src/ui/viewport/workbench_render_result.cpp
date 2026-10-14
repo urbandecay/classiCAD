@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QFileInfo>
+#include <QColorSpace>
 #include <QImageWriter>
 #include <QPainter>
 #include <QSysInfo>
@@ -596,7 +597,8 @@ bool compositeWorkbenchRenderAnnotations(
     QImage *displayCombined,
     const QImage &annotationLayer,
     QVector<float> *sceneLinearRgba,
-    const QSize &sceneLinearSize)
+    const QSize &sceneLinearSize,
+    const QImage *sceneLinearAnnotationLayer)
 {
     if (displayCombined == nullptr || displayCombined->isNull() ||
         annotationLayer.isNull() ||
@@ -610,6 +612,15 @@ bool compositeWorkbenchRenderAnnotations(
              qsizetype(sceneLinearSize.width()) * sceneLinearSize.height() * 4)) {
         return false;
     }
+    if (sceneLinearAnnotationLayer != nullptr &&
+        (!hasSceneLinear || sceneLinearAnnotationLayer->isNull() ||
+         sceneLinearAnnotationLayer->size() != annotationLayer.size() ||
+         sceneLinearAnnotationLayer->format() !=
+             QImage::Format_RGBA64_Premultiplied ||
+         sceneLinearAnnotationLayer->colorSpace() !=
+             QColorSpace(QColorSpace::SRgbLinear))) {
+        return false;
+    }
     QPainter combinedPainter(displayCombined);
     if (!combinedPainter.isActive()) return false;
     combinedPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -617,12 +628,17 @@ bool compositeWorkbenchRenderAnnotations(
     combinedPainter.end();
 
     if (!hasSceneLinear) return true;
-    QImage premultipliedAnnotations = annotationLayer;
-    if (premultipliedAnnotations.format() !=
-        QImage::Format_RGBA64_Premultiplied) {
-        premultipliedAnnotations = premultipliedAnnotations.convertToFormat(
-            QImage::Format_RGBA64_Premultiplied);
-        if (premultipliedAnnotations.isNull()) return false;
+    QImage premultipliedAnnotations;
+    if (sceneLinearAnnotationLayer == nullptr) {
+        premultipliedAnnotations = annotationLayer;
+        if (premultipliedAnnotations.format() !=
+            QImage::Format_RGBA64_Premultiplied) {
+            premultipliedAnnotations = premultipliedAnnotations.convertToFormat(
+                QImage::Format_RGBA64_Premultiplied);
+            if (premultipliedAnnotations.isNull()) return false;
+        }
+    } else {
+        premultipliedAnnotations = *sceneLinearAnnotationLayer;
     }
     const auto srgbToLinear = [](float value) {
         return value <= 0.04045f
@@ -639,17 +655,20 @@ bool compositeWorkbenchRenderAnnotations(
             const qsizetype base =
                 (qsizetype(y) * sceneLinearSize.width() + x) * 4;
             const float inverseAlpha = 1.0f - alpha;
-            const float redSrgb =
-                std::min(1.0f, pixel.red() / 65535.0f / alpha);
-            const float greenSrgb =
-                std::min(1.0f, pixel.green() / 65535.0f / alpha);
-            const float blueSrgb =
-                std::min(1.0f, pixel.blue() / 65535.0f / alpha);
-            (*sceneLinearRgba)[base] = srgbToLinear(redSrgb) * alpha +
+            const float red = pixel.red() / 65535.0f;
+            const float green = pixel.green() / 65535.0f;
+            const float blue = pixel.blue() / 65535.0f;
+            const float sourceRed = sceneLinearAnnotationLayer != nullptr
+                ? red : srgbToLinear(std::min(1.0f, red / alpha)) * alpha;
+            const float sourceGreen = sceneLinearAnnotationLayer != nullptr
+                ? green : srgbToLinear(std::min(1.0f, green / alpha)) * alpha;
+            const float sourceBlue = sceneLinearAnnotationLayer != nullptr
+                ? blue : srgbToLinear(std::min(1.0f, blue / alpha)) * alpha;
+            (*sceneLinearRgba)[base] = sourceRed +
                 (*sceneLinearRgba)[base] * inverseAlpha;
-            (*sceneLinearRgba)[base + 1] = srgbToLinear(greenSrgb) * alpha +
+            (*sceneLinearRgba)[base + 1] = sourceGreen +
                 (*sceneLinearRgba)[base + 1] * inverseAlpha;
-            (*sceneLinearRgba)[base + 2] = srgbToLinear(blueSrgb) * alpha +
+            (*sceneLinearRgba)[base + 2] = sourceBlue +
                 (*sceneLinearRgba)[base + 2] * inverseAlpha;
             (*sceneLinearRgba)[base + 3] = alpha +
                 (*sceneLinearRgba)[base + 3] * inverseAlpha;

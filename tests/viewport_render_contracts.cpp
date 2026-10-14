@@ -514,6 +514,60 @@ int main(int argc, char *argv[])
         highShadowFocusImage != shadowImage,
         "QPainter Workbench shadow focus must change lit receiver shading");
 
+    ViewportRenderObject translucentShadowOverlay =
+        makeShadowQuad(13, 4, 4, 124, 124, -0.5);
+    translucentShadowOverlay.hasWorkbenchMaterial = true;
+    translucentShadowOverlay.workbenchMaterial.alpha = 0.5f;
+    translucentShadowOverlay.meshMaterials = {
+        translucentShadowOverlay.workbenchMaterial};
+    const auto renderShadowThroughTransparency = [&] (
+        ViewportShadingSettings settings) {
+        QImage image(orthographicDofSize,
+                     QImage::Format_ARGB32_Premultiplied);
+        image.fill(QColor(127, 127, 255));
+        RasterWorkbenchSurfaceLayers layers;
+        layers.opaqueColor = QImage(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        layers.opaqueColor.fill(Qt::white);
+        layers.transparentColor = QImage(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        layers.transparentColor.fill(QColor(0, 0, 255, 128));
+        settings.colorMode = ViewportColorMode::Material;
+        applyRasterWorkbenchEffects(
+            &image,
+            {translucentShadowOverlay, shadowObjects[0], shadowObjects[1]},
+            orthographicDofTransform, orthographicDofSize, 1.0,
+            settings, &layers);
+        return image;
+    };
+    ViewportShadingSettings transparentShadowSettings = shadowSettings;
+    const QImage transparentShadowImage = renderShadowThroughTransparency(
+        transparentShadowSettings);
+    transparentShadowSettings.shadows = false;
+    const QImage transparentNoShadowImage = renderShadowThroughTransparency(
+        transparentShadowSettings);
+    bool shadowVisibleThroughTransparency = false;
+    for (int y = 0; y < shadowImage.height() &&
+                    !shadowVisibleThroughTransparency; ++y) {
+        for (int x = 0; x < shadowImage.width(); ++x) {
+            const QColor before = transparentNoShadowImage.pixelColor(x, y);
+            const QColor after = transparentShadowImage.pixelColor(x, y);
+            const int redDelta = before.red() - after.red();
+            const int greenDelta = before.green() - after.green();
+            const int blueDelta = before.blue() - after.blue();
+            if (shadowImage.pixel(x, y) != noShadowImage.pixel(x, y) &&
+                redDelta > 0 && std::abs(redDelta - greenDelta) <= 1 &&
+                std::abs(redDelta - blueDelta) <= 1 &&
+                before.alpha() == after.alpha()) {
+                shadowVisibleThroughTransparency = true;
+                break;
+            }
+        }
+    }
+    passed &= check(
+        shadowVisibleThroughTransparency,
+        "QPainter shadows must shade the opaque receiver beneath a retained translucent layer without changing that layer's contribution or alpha");
+
     const auto renderMaterialAlphaShadow = [&](float alpha) {
         QVector<ViewportRenderObject> objects = shadowObjects;
         objects[1].hasWorkbenchMaterial = true;

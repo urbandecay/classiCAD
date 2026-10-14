@@ -2338,10 +2338,18 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int index = depthY * width + depthX;
                 const RasterSample &receiver = opaqueSamples[index];
                 const RasterSample &visible = samples[index];
-                if (receiver.objectId == 0 || visible.objectId == 0 ||
+                if (receiver.objectId == 0 || visible.objectId == 0) continue;
+                const bool hasTransparentTop =
+                    receiver.objectId != visible.objectId ||
                     std::abs(receiver.depth - visible.depth) >
-                        std::max(1.0e-5f, std::abs(receiver.depth) * 1.0e-6f))
-                    continue;
+                        std::max(1.0e-5f,
+                                 std::abs(receiver.depth) * 1.0e-6f);
+                const bool hasRetainedLayers = surfaceLayers != nullptr &&
+                    !surfaceLayers->opaqueColor.isNull() &&
+                    !surfaceLayers->transparentColor.isNull() &&
+                    surfaceLayers->opaqueColor.size() == colorImage->size() &&
+                    surfaceLayers->transparentColor.size() == colorImage->size();
+                if (hasTransparentTop && !hasRetainedLayers) continue;
                 // Depth is compared in the same light-space direction used
                 // when constructing the software caster map.
                 const float receiverDepth = receiverLightDepth[index];
@@ -2359,9 +2367,29 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<float>(settings.shadowFocus), shadowed);
                 if (factor >= 1.0f) continue;
                 const QRgb pixel = source.pixel(x, y);
-                out[x] = qRgba(qRound(qRed(pixel) * factor),
-                               qRound(qGreen(pixel) * factor),
-                               qRound(qBlue(pixel) * factor), qAlpha(pixel));
+                if (hasTransparentTop) {
+                    const QRgb opaque = surfaceLayers->opaqueColor.pixel(x, y);
+                    const QRgb transparent =
+                        surfaceLayers->transparentColor.pixel(x, y);
+                    const float remain =
+                        1.0f - qAlpha(transparent) / 255.0f;
+                    const auto shadeOpaqueContribution = [&](int channel,
+                                                             int opaqueChannel) {
+                        return std::clamp(
+                            channel + qRound(opaqueChannel * (factor - 1.0f) *
+                                             remain),
+                            0, 255);
+                    };
+                    out[x] = qRgba(
+                        shadeOpaqueContribution(qRed(pixel), qRed(opaque)),
+                        shadeOpaqueContribution(qGreen(pixel), qGreen(opaque)),
+                        shadeOpaqueContribution(qBlue(pixel), qBlue(opaque)),
+                        qAlpha(pixel));
+                } else {
+                    out[x] = qRgba(qRound(qRed(pixel) * factor),
+                                   qRound(qGreen(pixel) * factor),
+                                   qRound(qBlue(pixel) * factor), qAlpha(pixel));
+                }
             }
         }
         *colorImage = result.convertToFormat(colorImage->format());

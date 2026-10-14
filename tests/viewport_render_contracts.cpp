@@ -9298,6 +9298,57 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &=
                             perspectiveMeshTextureSaved;
 
+                        QImage gpuPerspectiveMeshTextureDisplay;
+                        QVector<float> gpuPerspectiveMeshTextureSceneLinear;
+                        const bool gpuPerspectiveMeshTextureRendered =
+                            renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-mesh-texture-perspective-gpu"),
+                                &gpuPerspectiveMeshTextureDisplay,
+                                &perspectiveMeshTextureObject,
+                                &perspectiveTextureTransform, nullptr,
+                                QString{},
+                                &gpuPerspectiveMeshTextureSceneLinear,
+                                &textureBackground);
+                        const QString gpuPerspectiveMeshTextureStem =
+                            QStringLiteral("color_texture_mesh_perspective_gpu");
+                        const QString gpuPerspectiveMeshTextureDisplayPath =
+                            QDir(lightingCaptureDirectory).filePath(
+                                gpuPerspectiveMeshTextureStem +
+                                    QStringLiteral(".png"));
+                        QFile gpuPerspectiveMeshTextureLinearFile(QDir(
+                            lightingCaptureDirectory).filePath(
+                                gpuPerspectiveMeshTextureStem +
+                                    QStringLiteral(".pfm")));
+                        const bool gpuPerspectiveMeshTextureLinearSaved =
+                            gpuPerspectiveMeshTextureRendered &&
+                            gpuPerspectiveMeshTextureSceneLinear.size() ==
+                                textureExpectedValues &&
+                            gpuPerspectiveMeshTextureLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            gpuPerspectiveMeshTextureLinearFile.write(
+                                texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            gpuPerspectiveMeshTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    gpuPerspectiveMeshTextureSceneLinear.constData()),
+                                gpuPerspectiveMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                gpuPerspectiveMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool gpuPerspectiveMeshTextureSaved =
+                            gpuPerspectiveMeshTextureRendered &&
+                            gpuPerspectiveMeshTextureDisplay.size() == glSize &&
+                            gpuPerspectiveMeshTextureLinearSaved &&
+                            gpuPerspectiveMeshTextureDisplay.save(
+                                gpuPerspectiveMeshTextureDisplayPath);
+                        passed &= check(
+                            gpuPerspectiveMeshTextureSaved,
+                            "GPU perspective mesh texture capture must render the same varying-UV patch with perspective-correct sampling");
+                        lightingCapturesSucceeded &=
+                            gpuPerspectiveMeshTextureSaved;
+
                         QImage alphaCutoutTexture(2, 2,
                                                   QImage::Format_RGBA8888);
                         alphaCutoutTexture.setPixelColor(

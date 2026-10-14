@@ -5523,3 +5523,35 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   premultiplied capture asset, pass that same file as
   `--texture-image-secondary`, and select each `--texture-alpha-mode`. Match
   World color with `--world-color 0.0219421387 0.0219421387 0.0219421387`.
+
+### Matched GPU perspective mesh texture comparison (2026-10-14)
+
+- Extended the varying-UV two-triangle perspective fixture with a GPU capture,
+  using the same mesh, texture, camera transform, 640×480 target, Flat lighting,
+  AA Off, and World color as its QPainter capture and Blender 5.2.2 reference.
+  The GPU capture's PFM scene-linear RGB matches Blender exactly across the
+  frame (zero error in all channels), and its display foreground mask has IoU
+  `1.0` with zero XOR pixels. Display-channel MAE is `0.03395/255` across the
+  shared foreground. The QPainter capture remains at IoU `0.988615` with 419
+  XOR pixels and scene-linear per-channel MAE `(blue, green, red) =
+  (0.000462, 0.000615, 0.000807)`; this reiterates its known perspective
+  raster-edge and interpolation differences without isolating a production
+  correction.
+- Blender 5.2.2's pinned
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
+  declares the mesh UV varying smooth, and
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433)
+  samples the interpolated coordinates. The GPU result validates classiCAD's
+  perspective-correct mesh texture path for this planar two-triangle fixture;
+  it does not cover curved or non-coplanar meshes, alternate filters/extensions,
+  or broader perspective camera ranges.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  39.06 seconds); the Blender reference reported 5.2.2 LTS; and paired PNG/PFM
+  comparisons completed for GPU and QPainter. Reproduce the classiCAD captures
+  with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>` and Blender with
+  `--scene MESH_TEXTURE --match-classicad-perspective --view-direction 4 -6 4
+  --aa OFF --lighting FLAT --color-source TEXTURE --texture-interpolation
+  Linear --texture-image <fixture> --world-color 0.0219421387 0.0219421387
+  0.0219421387 --zero-dither`; the scene-linear capture uses
+  `--linear-output` and `--linear-pfm-output`.

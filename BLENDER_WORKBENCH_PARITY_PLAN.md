@@ -5195,10 +5195,21 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - Validation: `cmake --build build -j4` passed with the dependency audit.
   Offscreen CTest `viewport_render_contracts` passed (1/1, 27.37 seconds); its
   vertical UDIM fixture uses different colors and asymmetric alpha in tiles
-  1001 and 1011 and checks that both rows are sampled. This validates the byte
-  QPainter color path; the float path shares the corrected row-selection
-  rule but does not yet have its own rendered vertical-tile fixture. No
-  matched Blender render comparison was made for this category.
+  1001 and 1011 and checks that both rows are sampled. No matched Blender
+  render comparison was made for this category.
+
+### QPainter scene-linear float UDIM row contract (2026-10-14)
+
+- Extended the offscreen vertical UDIM mesh fixture with distinct 1×1
+  scene-linear float payloads for tiles 1001 and 1011. It counts scene-linear
+  QPainter fragments by their dominant red/green tile color and requires
+  samples from both rows. This directly covers the float color sampler's
+  tile selection while preserving the existing image-byte and asymmetric
+  alpha checks.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen CTest `viewport_render_contracts` passed (1/1, 26.08 seconds).
+  This is a renderer contract, not a matched Blender float-UDIM render
+  comparison; an equivalent float-image Blender fixture remains open.
 
 ### Matched GPU cavity effect comparison (2026-10-14)
 

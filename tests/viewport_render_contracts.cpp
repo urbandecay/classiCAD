@@ -8607,6 +8607,72 @@ int main(int argc, char *argv[])
                             "QPainter mesh UDIM capture must select both vertical tiles, preserve asymmetric alpha, and save scene-linear output");
                         lightingCapturesSucceeded &= verticalUdimSaved;
 
+                        const std::array<float, 4> floatTile1001{
+                            0.7f, 0.02f, 0.01f, 1.0f};
+                        const std::array<float, 4> floatTile1011{
+                            0.01f, 0.7f, 0.02f, 1.0f};
+                        const auto floatTilePayload = [](const auto &pixel) {
+                            return QString::fromLatin1(QByteArray(
+                                reinterpret_cast<const char *>(pixel.data()),
+                                qsizetype(sizeof(pixel))).toBase64());
+                        };
+                        WorkbenchMaterialData floatVerticalMaterial =
+                            verticalUdimMaterial;
+                        floatVerticalMaterial.textureImageSrgb = false;
+                        floatVerticalMaterial.textureImageTiles[0]
+                            .sceneLinearFloatDataBase64 =
+                            floatTilePayload(floatTile1001);
+                        floatVerticalMaterial.textureImageTiles[0]
+                            .sceneLinearFloatWidth = 1;
+                        floatVerticalMaterial.textureImageTiles[0]
+                            .sceneLinearFloatHeight = 1;
+                        floatVerticalMaterial.textureImageTiles[1]
+                            .sceneLinearFloatDataBase64 =
+                            floatTilePayload(floatTile1011);
+                        floatVerticalMaterial.textureImageTiles[1]
+                            .sceneLinearFloatWidth = 1;
+                        floatVerticalMaterial.textureImageTiles[1]
+                            .sceneLinearFloatHeight = 1;
+                        ViewportRenderObject floatVerticalUdimObject =
+                            verticalUdimObject;
+                        floatVerticalUdimObject.meshMaterials = {
+                            floatVerticalMaterial};
+                        QImage floatVerticalDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        floatVerticalDisplay.fill(
+                            nurbsTextureDisplay.pixelColor(0, 0));
+                        RasterWorkbenchFragmentSink floatVerticalFragments;
+                        QPainter floatVerticalPainter(&floatVerticalDisplay);
+                        qpainterTextureRenderer.drawShape(
+                            floatVerticalPainter,
+                            floatVerticalUdimObject.shape, glSize, false,
+                            false, true, QColor(), QString(), 0.0,
+                            floatVerticalUdimObject.objectId,
+                            floatVerticalUdimObject.geometryRevision, nullptr,
+                            {}, std::nullopt, std::nullopt,
+                            floatVerticalUdimObject.displayName, QString(),
+                            identityMeshObjectTransform,
+                            floatVerticalUdimObject.meshMaterials,
+                            &floatVerticalFragments);
+                        floatVerticalPainter.end();
+                        int floatTile1001Samples = 0;
+                        int floatTile1011Samples = 0;
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             floatVerticalFragments) {
+                            if (fragment.sceneLinearRgb[0] >
+                                fragment.sceneLinearRgb[1] * 2.0f) {
+                                ++floatTile1001Samples;
+                            }
+                            if (fragment.sceneLinearRgb[1] >
+                                fragment.sceneLinearRgb[0] * 2.0f) {
+                                ++floatTile1011Samples;
+                            }
+                        }
+                        passed &= check(
+                            floatTile1001Samples > 1000 &&
+                                floatTile1011Samples > 1000,
+                            "QPainter float UDIM color sampling must select both lower and upper V tiles");
+
                         ViewportTransform perspectiveTextureTransform;
                         perspectiveTextureTransform.zoom() = 17.28;
                         perspectiveTextureTransform.setViewDirection(

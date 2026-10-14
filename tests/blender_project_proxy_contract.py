@@ -163,6 +163,25 @@ material_a_record["imageTextures"] = [{
     "sourceFileExists": True,
     "tiles": [],
 }]
+material_c_record = next(
+    record for record in document["materials"] if record["id"] == "material-c"
+)
+material_c_record["imageTextures"] = [{
+    "nodeName": "ProxyContract.EnvironmentTexture",
+    "nodeType": "TEX_ENVIRONMENT",
+    "imageName": "ProxyContract.EnvironmentImage",
+    "filepath": "ProxyContractEnvironment.png",
+    "colorSpace": "sRGB",
+    "alphaMode": "STRAIGHT",
+    "interpolation": "Closest",
+    "extension": "EXTEND",
+    "sourceTransformId": "identity",
+    "sceneLinearFloatDataBase64": "",
+    "packedDataBase64": base64.b64encode(png_data).decode("ascii"),
+    "packed": True,
+    "sourceFileExists": True,
+    "tiles": [],
+}]
 adapter.classiCAD_materials(document)
 material_a = next(
     material for material in bpy.data.materials
@@ -181,6 +200,25 @@ assert active_texture_node.image.alpha_mode == "STRAIGHT"
 assert active_texture_node.image.colorspace_settings.name == "sRGB"
 assert active_texture_node.image.packed_file is not None
 assert bytes(active_texture_node.image.packed_file.data) == png_data
+material_c = next(
+    material for material in bpy.data.materials
+    if material.get("classiCAD_material_id") == "material-c"
+)
+environment_texture_node = next(
+    node for node in material_c.node_tree.nodes
+    if node.get("classiCAD_proxy_image_node")
+)
+assert environment_texture_node.type == "TEX_ENVIRONMENT"
+assert environment_texture_node.show_texture
+assert material_c.node_tree.nodes.active == environment_texture_node
+assert environment_texture_node.interpolation == "Closest"
+assert not hasattr(environment_texture_node, "extension")
+assert environment_texture_node.image.packed_file is not None
+assert bytes(environment_texture_node.image.packed_file.data) == png_data
+packed_proxy_image_count = sum(
+    1 for image in bpy.data.images if image.get("classiCAD_proxy_image")
+)
+assert packed_proxy_image_count == 2
 
 with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as directory:
     external_path = pathlib.Path(directory) / "external.png"
@@ -204,6 +242,13 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
         "tiles": [],
     }]
     adapter.classiCAD_materials(document)
+    image_count_after_external_sync = sum(
+        1 for image in bpy.data.images if image.get("classiCAD_proxy_image")
+    )
+    assert image_count_after_external_sync == packed_proxy_image_count + 1
+    adapter.classiCAD_materials(document)
+    assert sum(1 for image in bpy.data.images
+               if image.get("classiCAD_proxy_image")) == image_count_after_external_sync
     material_b = next(
         material for material in bpy.data.materials
         if material.get("classiCAD_material_id") == "material-b"
@@ -231,6 +276,19 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     assert active_texture_node.extension == "MIRROR"
     assert active_texture_node.image.packed_file is not None
     assert bytes(active_texture_node.image.packed_file.data) == png_data
+    material_c = next(
+        material for material in bpy.data.materials
+        if material.get("classiCAD_material_id") == "material-c"
+    )
+    environment_texture_node = next(
+        node for node in material_c.node_tree.nodes
+        if node.get("classiCAD_proxy_image_node")
+    )
+    assert environment_texture_node.type == "TEX_ENVIRONMENT"
+    assert environment_texture_node.show_texture
+    assert environment_texture_node.interpolation == "Closest"
+    assert environment_texture_node.image.packed_file is not None
+    assert bytes(environment_texture_node.image.packed_file.data) == png_data
     material_b = next(
         material for material in bpy.data.materials
         if material.get("classiCAD_material_id") == "material-b"

@@ -3,6 +3,7 @@
 import json
 import atexit
 import base64
+import hashlib
 import math
 import os
 import sys
@@ -559,18 +560,31 @@ def classiCAD_materials(document):
 def _sync_classicad_image_texture(material, record):
     """Mirror one supported active Image Texture without evaluating its graph."""
     reference = next(iter(record.get("imageTextures", [])), None)
-    for node in list(material.node_tree.nodes) if material.use_nodes else []:
-        if node.get("classiCAD_proxy_image_node"):
-            node.show_texture = False
-            material.node_tree.nodes.remove(node)
+    managed_nodes = ([node for node in material.node_tree.nodes
+                      if node.get("classiCAD_proxy_image_node")]
+                     if material.use_nodes else [])
     if not isinstance(reference, dict):
+        _remove_classicad_image_nodes(material, managed_nodes)
         return
-    if reference.get("nodeType", "TEX_IMAGE") != "TEX_IMAGE":
+    node_type = reference.get("nodeType", "TEX_IMAGE")
+    if node_type not in {"TEX_IMAGE", "TEX_ENVIRONMENT"}:
+        _remove_classicad_image_nodes(material, managed_nodes)
         return
     if reference.get("sourceTransformId", "identity") != "identity":
+        _remove_classicad_image_nodes(material, managed_nodes)
         return
     if reference.get("tiles") or reference.get("sceneLinearFloatDataBase64"):
+        _remove_classicad_image_nodes(material, managed_nodes)
         return
+
+    reference_key = hashlib.sha256(json.dumps(
+        reference, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    if (len(managed_nodes) == 1 and
+            managed_nodes[0].get("classiCAD_proxy_image_key") == reference_key):
+        _activate_classicad_image_node(material, managed_nodes[0])
+        return
+    _remove_classicad_image_nodes(material, managed_nodes)
 
     image = None
     packed_data = reference.get("packedDataBase64", "")
@@ -611,11 +625,12 @@ def _sync_classicad_image_texture(material, record):
         try:
             if os.path.getsize(filepath) > 32 * 1024 * 1024:
                 return
-            image = bpy.data.images.load(filepath, check_existing=True)
+            image = bpy.data.images.load(filepath, check_existing=False)
         except (RuntimeError, OSError, ValueError):
             return
 
     try:
+        image["classiCAD_proxy_image"] = True
         image.name = reference.get("imageName") or image.name
         if packed_data:
             image.filepath = ""
@@ -628,21 +643,42 @@ def _sync_classicad_image_texture(material, record):
         if color_space:
             image.colorspace_settings.name = color_space
     except (TypeError, ValueError):
-        if packed_data:
+        if image is not None and image.get("classiCAD_proxy_image") and image.users == 0:
             bpy.data.images.remove(image)
         return
 
     material.use_nodes = True
-    node = material.node_tree.nodes.new("ShaderNodeTexImage")
+    node_bl_idname = ("ShaderNodeTexImage" if node_type == "TEX_IMAGE"
+                      else "ShaderNodeTexEnvironment")
+    node = material.node_tree.nodes.new(node_bl_idname)
     node.name = reference.get("nodeName") or "classiCAD Image Texture"
     node.image = image
     node.interpolation = reference.get("interpolation", "Linear")
-    node.extension = reference.get("extension", "REPEAT")
+    if node_type == "TEX_IMAGE":
+        node.extension = reference.get("extension", "REPEAT")
     node.show_texture = True
     node["classiCAD_proxy_image_node"] = True
+    node["classiCAD_proxy_image_key"] = reference_key
+    _activate_classicad_image_node(material, node)
+
+
+def _activate_classicad_image_node(material, node):
+    node.show_texture = True
     for candidate in material.node_tree.nodes:
         candidate.select = candidate == node
     material.node_tree.nodes.active = node
+
+
+def _remove_classicad_image_nodes(material, nodes):
+    if not material.use_nodes:
+        return
+    for node in nodes:
+        image = getattr(node, "image", None)
+        node.show_texture = False
+        material.node_tree.nodes.remove(node)
+        if (image is not None and image.get("classiCAD_proxy_image") and
+                image.users == 0):
+            bpy.data.images.remove(image)
 
 
 def attach_solid_face_metadata(mesh, polygon_face_refs, document):

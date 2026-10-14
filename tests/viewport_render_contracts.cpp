@@ -4590,6 +4590,106 @@ int main(int argc, char *argv[])
                 translucentNurbsImage.save(translucentNurbsCapturePath),
             "opt-in QPainter translucent NURBS shared-edge capture must save");
     }
+    QImage udimNurbsTexture1001(2, 2, QImage::Format_RGBA8888);
+    udimNurbsTexture1001.fill(QColor(180, 90, 40, 255));
+    QImage udimNurbsTexture1002(2, 2, QImage::Format_RGBA8888);
+    udimNurbsTexture1002.fill(QColor(40, 200, 80, 255));
+    const QString udimNurbsTexture1001Path = colorTextureDirectory.filePath(
+        QStringLiteral("nurbs-translucent-udim.1001.png"));
+    const QString udimNurbsTexture1002Path = colorTextureDirectory.filePath(
+        QStringLiteral("nurbs-translucent-udim.1002.png"));
+    const bool savedUdimNurbsTextures =
+        udimNurbsTexture1001.save(udimNurbsTexture1001Path) &&
+        udimNurbsTexture1002.save(udimNurbsTexture1002Path);
+    DocumentImageTextureTile udimNurbsTile1001;
+    udimNurbsTile1001.number = 1001;
+    udimNurbsTile1001.filepath = udimNurbsTexture1001Path;
+    udimNurbsTile1001.sourceFileExists = true;
+    DocumentImageTextureTile udimNurbsTile1002;
+    udimNurbsTile1002.number = 1002;
+    udimNurbsTile1002.filepath = udimNurbsTexture1002Path;
+    udimNurbsTile1002.sourceFileExists = true;
+    WorkbenchMaterialData udimTranslucentNurbsMaterial =
+        translucentNurbsMaterial;
+    udimTranslucentNurbsMaterial.textureImagePath.clear();
+    udimTranslucentNurbsMaterial.textureImageTiles = {
+        udimNurbsTile1001, udimNurbsTile1002};
+    QImage udimTranslucentNurbsImage(
+        surfaceViewportSize, QImage::Format_ARGB32_Premultiplied);
+    udimTranslucentNurbsImage.fill(Qt::transparent);
+    RasterWorkbenchFragmentSink udimTranslucentNurbsFragments;
+    QPainter udimTranslucentNurbsPainter(&udimTranslucentNurbsImage);
+    surfaceRenderer.drawShape(
+        udimTranslucentNurbsPainter, texturedNurbsShape, surfaceViewportSize,
+        false, false, true, QColor(), QString(), 0.0,
+        ObjectId::fromValue(2), 0, nullptr, {}, std::nullopt,
+        udimTranslucentNurbsMaterial, QString(), QString(), {}, {},
+        &udimTranslucentNurbsFragments);
+    udimTranslucentNurbsPainter.end();
+    QSet<quint64> udimTranslucentNurbsFragmentPixels;
+    bool udimTranslucentNurbsFragmentsUnique = true;
+    const RasterWorkbenchLinearFragment *regularNurbsDiagonal = nullptr;
+    const RasterWorkbenchLinearFragment *udimNurbsDiagonal = nullptr;
+    for (const RasterWorkbenchLinearFragment &fragment :
+         translucentNurbsFragments) {
+        if (fragment.x == surfaceViewportSize.width() / 2 &&
+            fragment.y == surfaceViewportSize.height() / 2) {
+            regularNurbsDiagonal = &fragment;
+            break;
+        }
+    }
+    for (const RasterWorkbenchLinearFragment &fragment :
+         udimTranslucentNurbsFragments) {
+        const quint64 key = static_cast<quint64>(fragment.y) *
+                                static_cast<quint64>(surfaceViewportSize.width()) +
+                            static_cast<quint64>(fragment.x);
+        udimTranslucentNurbsFragmentsUnique &=
+            !udimTranslucentNurbsFragmentPixels.contains(key);
+        udimTranslucentNurbsFragmentPixels.insert(key);
+        if (fragment.x == surfaceViewportSize.width() / 2 &&
+            fragment.y == surfaceViewportSize.height() / 2) {
+            udimNurbsDiagonal = &fragment;
+        }
+    }
+    const bool udimNurbsSharedDiagonalMatches =
+        regularNurbsDiagonal != nullptr && udimNurbsDiagonal != nullptr &&
+        std::abs(udimNurbsDiagonal->alpha - 0.5f) < 0.02f &&
+        std::abs(udimNurbsDiagonal->sceneLinearRgb[0] -
+                 regularNurbsDiagonal->sceneLinearRgb[0]) < 1.0e-5f &&
+        std::abs(udimNurbsDiagonal->sceneLinearRgb[1] -
+                 regularNurbsDiagonal->sceneLinearRgb[1]) < 1.0e-5f &&
+        std::abs(udimNurbsDiagonal->sceneLinearRgb[2] -
+                 regularNurbsDiagonal->sceneLinearRgb[2]) < 1.0e-5f;
+    passed &= check(
+        savedUdimNurbsTextures &&
+            udimTranslucentNurbsFragmentsUnique &&
+            udimTranslucentNurbsFragmentPixels.size() ==
+                static_cast<qsizetype>(
+                    udimTranslucentNurbsFragments.size()) &&
+            udimNurbsSharedDiagonalMatches &&
+            std::abs(udimTranslucentNurbsImage.pixelColor(
+                         surfaceViewportSize.width() / 2,
+                         surfaceViewportSize.height() / 2).alphaF() -
+                     0.5f) < 0.02f,
+        "QPainter tiled-texture NURBS must sample its first UDIM tile and aggregate one half-alpha shared-edge fragment");
+    const QString udimNurbsCapturePath = qEnvironmentVariable(
+        "CLASSICAD_VIEWPORT_QPAINTER_NURBS_UDIM_SHARED_EDGE_CAPTURE");
+    if (!udimNurbsCapturePath.isEmpty()) {
+        const QFileInfo captureInfo(udimNurbsCapturePath);
+        const QString captureDirectory = captureInfo.absolutePath();
+        const QString captureTile1001Path = QDir(captureDirectory).filePath(
+            QStringLiteral("nurbs-translucent-udim.1001.png"));
+        const QString captureTile1002Path = QDir(captureDirectory).filePath(
+            QStringLiteral("nurbs-translucent-udim.1002.png"));
+        const bool captureReady = QDir().mkpath(captureDirectory) &&
+            udimNurbsTexture1001.save(captureTile1001Path) &&
+            udimNurbsTexture1002.save(captureTile1002Path) &&
+            udimTranslucentNurbsImage.size() == surfaceViewportSize &&
+            udimTranslucentNurbsImage.save(udimNurbsCapturePath);
+        passed &= check(
+            captureReady,
+            "opt-in QPainter tiled NURBS shared-edge capture and UDIM tiles must save");
+    }
     const QString translucentMeshCapturePath = qEnvironmentVariable(
         "CLASSICAD_VIEWPORT_QPAINTER_MESH_SHARED_EDGE_CAPTURE");
     if (!translucentMeshCapturePath.isEmpty()) {

@@ -4263,12 +4263,13 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 ### QPainter textured NURBS fractional-edge resolve (2026-10-14)
 
 - The prepared QPainter NURBS coverage resolve now supports a single regular
-  image or scene-linear float texture when all triangles have UVs and the
-  existing same-geometric-normal and same-plane checks pass. Orthographic
-  views additionally require uniform depth. Perspective planar surfaces are
-  covered by the matched comparison above; tiled images, mixed-depth or
-  mixed-normal surfaces, targets above 1M pixels, and meshes above 100K
-  triangles use the existing direct per-triangle path.
+  image, scene-linear float texture, or decoded tiled image/float texture when
+  all triangles have UVs and the existing same-geometric-normal and same-plane
+  checks pass. Orthographic views additionally require uniform depth.
+  Perspective planar surfaces are covered by the matched comparison above;
+  mixed-depth or mixed-normal surfaces, targets above 1M pixels, surfaces
+  above 100K triangles, and tiled sets with no decoded tile use the existing
+  direct per-triangle path.
 - Blender 5.2.2 accumulates transparent fragments and revealage in its pinned
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L474-L526)
   and resolves them in
@@ -4294,6 +4295,50 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   completed. The one planar patch/diagonal and its outer fractional edges are
   covered; other tessellations, view angles, overlap stacks, and broader
   QPainter transparency remain open.
+
+### QPainter tiled NURBS fractional-edge resolve (2026-10-14)
+
+- Decoded UDIM image and scene-linear float tile sets can now use the same
+  bounded NURBS fractional-edge resolve as regular textures. UV completeness,
+  same-normal/same-plane checks, the orthographic depth condition, the 1M
+  pixel target cap, and the 100K triangle cap still apply. Tile selection and
+  alpha cutoff happen per shaded sample before samples from adjacent
+  tessellation triangles aggregate. The existing NURBS parameter-to-UV
+  contract remains normalized over its knot domains; this comparison samples
+  tile 1001 and does not claim cross-tile NURBS UV mapping.
+- The production contract renders a half-alpha planar NURBS with a decoded
+  1001/1002 image set. The normalized 0..1 parameter UVs select the opaque
+  red 1001 image while the second tile has a distinct green payload. At the
+  tessellation diagonal there is exactly one fragment with alpha 0.5, and its
+  scene-linear RGB equals the regular-image control. The opt-in
+  `CLASSICAD_VIEWPORT_QPAINTER_NURBS_UDIM_SHARED_EDGE_CAPTURE` writes the
+  160×160 transparent PNG and both external tile files for the reference run.
+- Blender 5.2.2 rendered the matching `NURBS_TEXTURE` display proxy with
+  `--texture-udim-parameter-uvs`, preserving the same normalized UV range and
+  selecting tile 1001. Both images contain 14,400 covered pixels (IoU 1.0).
+  In the center 3×3 diagonal neighborhood both outputs have alpha 128/255;
+  RGB differs by one red code value. Across shared pixels, RGBA MAE is
+  `[1.066, 0.002, 0.002, 3.18]`, with maximum `[3, 8, 7, 120]`; the alpha
+  maximum remains confined to partially covered outer pixels. This verifies
+  tiled-source aggregation on the existing NURBS UV contract, not sampling
+  another UDIM tile from the surface. Blender's pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60)
+  resolves tiled images from UVs and applies the image-alpha cutoff in the same
+  shader file at
+  [`workbench_image_lib.glsl#L416-L429`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429).
+- Validation: `cmake --build build -j4` passed with the dependency audit,
+  offscreen `viewport_render_contracts` passed with regular and UDIM captures,
+  and `workbench_shared_alpha_edge_compare.py` completed against the
+  Blender 5.2.2 PNG. Reproduce with
+  `QT_QPA_PLATFORM=offscreen CLASSICAD_VIEWPORT_QPAINTER_NURBS_SHARED_EDGE_CAPTURE=/tmp/classicad-nurbs-udim/regular.png CLASSICAD_VIEWPORT_QPAINTER_NURBS_UDIM_SHARED_EDGE_CAPTURE=/tmp/classicad-nurbs-udim/udim.png ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`, then render
+  Blender with `--scene NURBS_TEXTURE --resolution 160 160 --aa OFF
+  --lighting FLAT --color-source TEXTURE --texture-image
+  /tmp/classicad-nurbs-udim/nurbs-translucent-udim.1001.png
+  --texture-udim-parameter-uvs --texture-color-space Non-Color
+  --texture-alpha-mode STRAIGHT --texture-interpolation Closest
+  --view-direction 0 0 1 --ortho-scale 2.6666666667 --transparent-film
+  --zero-dither --material-alpha 0.5`, and compare the two PNGs with
+  `workbench_shared_alpha_edge_compare.py --center 80 80 --radius 1`.
 
 ### QPainter scalar-volume slice fallback (2026-10-14)
 

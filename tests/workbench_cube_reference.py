@@ -1,6 +1,6 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
-Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho] [--texture-udim-vertical] [--no-specular]
+Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho] [--texture-udim-vertical] [--texture-udim-parameter-uvs] [--no-specular]
 AA accepts OFF, FXAA (Workbench's one-sample TAA+SMAA enum), or 5/8/11/16/32.
 Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
@@ -189,6 +189,14 @@ def arguments():
         help="load a 1001/1011 UDIM set and span both V tiles in a texture fixture",
     )
     parser.add_argument(
+        "--texture-udim-parameter-uvs",
+        action="store_true",
+        help=(
+            "use a tiled image for NURBS_TEXTURE while keeping its normalized "
+            "0..1 parameter UVs"
+        ),
+    )
+    parser.add_argument(
         "--texture-color-space",
         help="set the loaded Image Texture image color space before Workbench sampling",
     )
@@ -281,8 +289,11 @@ def arguments():
         help="render one AA-off Blender reference for every offset in a classiCAD capture metadata file",
     )
     args = parser.parse_args(argv)
-    if args.texture_udim and args.texture_udim_vertical:
-        parser.error("choose only one UDIM axis")
+    if sum((args.texture_udim, args.texture_udim_vertical,
+            args.texture_udim_parameter_uvs)) > 1:
+        parser.error("choose only one UDIM mode")
+    if args.texture_udim_parameter_uvs and args.scene != "NURBS_TEXTURE":
+        parser.error("--texture-udim-parameter-uvs requires NURBS_TEXTURE")
     return args
 
 
@@ -552,7 +563,8 @@ def main():
         image_node.image = bpy.data.images.load(
             os.path.abspath(args.texture_image), check_existing=True
         )
-        if args.texture_udim or args.texture_udim_vertical:
+        if (args.texture_udim or args.texture_udim_vertical or
+                args.texture_udim_parameter_uvs):
             image_node.image.source = "TILED"
             udim_tile = 1011 if args.texture_udim_vertical else 1002
             if image_node.image.tiles.get(udim_tile) is None:

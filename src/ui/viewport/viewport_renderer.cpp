@@ -4431,9 +4431,13 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const bool hasSingleFloatTexture =
             !nurbsTiledTexture && nurbsTexture.isNull() &&
             nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty();
+        const bool hasTiledTextureForCoverage = nurbsTiledTexture &&
+            (!nurbsTextureTiles.isEmpty() ||
+             !nurbsFloatTextureTiles.isEmpty());
         if (((!nurbsTiledTexture && nurbsTexture.isNull() &&
               !nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty()) ||
-             hasSingleImageTexture || hasSingleFloatTexture) &&
+             hasSingleImageTexture || hasSingleFloatTexture ||
+             hasTiledTextureForCoverage) &&
             !fillTriangles.isEmpty() &&
             qint64(coverageTargetWidth) * coverageTargetHeight <= 1000000 &&
             qint64(fillTriangles.size()) <= 100000) {
@@ -4465,8 +4469,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             }
             coverageResolveActive = true;
             for (const SurfaceFillTriangle &triangle : fillTriangles) {
-                if ((hasSingleImageTexture || hasSingleFloatTexture) &&
-                    !triangle.hasUvs) {
+                if ((hasSingleImageTexture || hasSingleFloatTexture ||
+                     hasTiledTextureForCoverage) && !triangle.hasUvs) {
                     coverageResolveActive = false;
                     break;
                 }

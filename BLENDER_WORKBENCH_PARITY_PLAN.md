@@ -3941,10 +3941,23 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   not claim to reproduce Blender's GPU rasterization or weighted OIT.
 - The production contract renders a half-alpha textured NURBS surface split
   into tessellation triangles and verifies one half-alpha fragment at the
-  shared diagonal pixel. Validation: `cmake --build build -j4` passed with the
-  dependency audit, and offscreen `viewport_render_contracts` and
-  `workbench_raster_fragment_contracts` passed. Matched Blender output remains
-  open.
+  shared diagonal pixel. An opt-in 160×160 PNG capture now records this exact
+  fixture with `CLASSICAD_VIEWPORT_QPAINTER_NURBS_SHARED_EDGE_CAPTURE`. The
+  Blender 5.2.2 reference helper accepts explicit resolution, material alpha,
+  and transparent-film options; a matched transparent NURBS display proxy
+  produced the same 14,400 covered pixels (IoU 1.0). At the central shared
+  diagonal and its 3×3 neighborhood, Blender and QPainter both output alpha
+  128/255 and differ by one red display code value. Across all shared pixels,
+  alpha MAE is 3.18/255 (max 120/255), with zero covered/uncovered XOR pixels;
+  this residual is concentrated in partially covered outer pixels and does
+  not establish general CPU/GPU weighted-OIT parity. The reproducible report
+  is produced by `workbench_shared_alpha_edge_compare.py`.
+- Validation: `cmake --build build -j4` passed with the dependency audit and
+  offscreen `viewport_render_contracts` passed. Blender 5.2.2 generated the
+  matched 160×160 capture, and `workbench_shared_alpha_edge_compare.py`
+  completed. The one planar patch/diagonal and its outer fractional edges are
+  covered; other tessellations, view angles, overlap stacks, and broader
+  QPainter transparency remain open.
 
 ### QPainter scalar-volume slice fallback (2026-10-14)
 

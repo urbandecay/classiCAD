@@ -35,6 +35,14 @@ def arguments():
     )
     parser.add_argument("--ortho-scale", type=float, default=5.0)
     parser.add_argument(
+        "--resolution",
+        nargs=2,
+        type=int,
+        metavar=("WIDTH", "HEIGHT"),
+        default=(640, 480),
+        help="render dimensions (default: 640 480)",
+    )
+    parser.add_argument(
         "--view-direction",
         nargs=3,
         type=float,
@@ -66,6 +74,11 @@ def arguments():
         "--zero-dither",
         action="store_true",
         help="disable render-output dither for direct display-pixel comparisons",
+    )
+    parser.add_argument(
+        "--transparent-film",
+        action="store_true",
+        help="render a transparent film background",
     )
     parser.add_argument(
         "--effect",
@@ -152,6 +165,12 @@ def arguments():
         type=float,
         metavar=("R", "G", "B"),
         help="set the cube material display RGB in Blender scene-linear values",
+    )
+    parser.add_argument(
+        "--material-alpha",
+        type=float,
+        default=1.0,
+        help="set Workbench material display alpha (default: 1)",
     )
     parser.add_argument(
         "--object-color",
@@ -244,6 +263,11 @@ def make_linear_output(scene, output_path):
 
 def main():
     args = arguments()
+    if any(dimension <= 0 for dimension in args.resolution):
+        raise ValueError("render dimensions must be positive")
+    if (not math.isfinite(args.material_alpha) or
+            not 0.0 <= args.material_alpha <= 1.0):
+        raise ValueError("material alpha must be finite and in [0, 1]")
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
 
@@ -373,7 +397,7 @@ def main():
             for loop in uv_layer.data:
                 loop.uv.x *= 2.0
         material = bpy.data.materials.new("NurbsTextureMaterial")
-        material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
+        material.diffuse_color = (0.8, 0.8, 0.8, args.material_alpha)
         material.use_nodes = True
         image_node = material.node_tree.nodes.new("ShaderNodeTexImage")
         image_node.image = bpy.data.images.load(
@@ -416,7 +440,7 @@ def main():
             for loop in uv_layer.data:
                 loop.uv.x *= 2.0
         material = bpy.data.materials.new("MeshTextureMaterial")
-        material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
+        material.diffuse_color = (0.8, 0.8, 0.8, args.material_alpha)
         material.use_nodes = True
         image_node = material.node_tree.nodes.new("ShaderNodeTexImage")
         image_node.image = bpy.data.images.load(
@@ -543,12 +567,11 @@ def main():
 
     scene = bpy.context.scene
     scene.render.engine = "BLENDER_WORKBENCH"
-    scene.render.resolution_x = 640
-    scene.render.resolution_y = 480
+    scene.render.resolution_x, scene.render.resolution_y = args.resolution
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.filepath = args.output
-    scene.render.film_transparent = False
+    scene.render.film_transparent = args.transparent_film
     if args.zero_dither:
         scene.render.dither_intensity = 0.0
     scene.display.render_aa = args.aa

@@ -4462,6 +4462,14 @@ int main(int argc, char *argv[])
                                      surfaceViewportSize.height() / 2).alphaF() -
                                  0.5f) < 0.02f,
                     "QPainter textured planar NURBS tessellation must aggregate its shared fractional edge into one half-alpha fragment over a pixel");
+    const QString translucentNurbsCapturePath = qEnvironmentVariable(
+        "CLASSICAD_VIEWPORT_QPAINTER_NURBS_SHARED_EDGE_CAPTURE");
+    if (!translucentNurbsCapturePath.isEmpty()) {
+        passed &= check(
+            translucentNurbsImage.size() == surfaceViewportSize &&
+                translucentNurbsImage.save(translucentNurbsCapturePath),
+            "opt-in QPainter translucent NURBS shared-edge capture must save");
+    }
 
     QImage interpolationTexture(2, 2, QImage::Format_RGBA8888);
     interpolationTexture.setPixelColor(0, 0, QColor(240, 20, 30, 255));

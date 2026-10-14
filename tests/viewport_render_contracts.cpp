@@ -3314,19 +3314,24 @@ int main(int argc, char *argv[])
     struct RenderedSurface {
         int coveredPixels = 0;
         QColor centerColor;
+        QColor leftSample;
+        QColor rightSample;
         QVector3D meanColor;
         qreal meanAlpha = 0.0;
     };
     const auto renderedSurface = [&](const Shape &shape,
                                      const ViewportShadingSettings &settings,
-                                     bool selected = false) {
+                                     bool selected = false,
+                                     const ViewportDepthGeometry *preparedGeometry =
+                                         nullptr) {
         QImage image(surfaceViewportSize,
                      QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         surfaceRenderer.setShadingSettings(settings);
         QPainter painter(&image);
         surfaceRenderer.drawShape(painter, shape, surfaceViewportSize,
-                                 false, selected);
+                                 false, selected, true, QColor(), QString(),
+                                 0.0, ObjectId::invalid(), 0, preparedGeometry);
         painter.end();
         int coveredPixels = 0;
         QVector3D summedColor;
@@ -3343,7 +3348,8 @@ int main(int argc, char *argv[])
             }
         }
         return RenderedSurface{
-            coveredPixels, image.pixelColor(80, 80),
+            coveredPixels, image.pixelColor(80, 80), image.pixelColor(54, 100),
+            image.pixelColor(106, 100),
             coveredPixels > 0 ? summedColor / float(coveredPixels)
                               : QVector3D{},
             coveredPixels > 0 ? summedAlpha / coveredPixels : 0.0};
@@ -3492,6 +3498,53 @@ int main(int argc, char *argv[])
         std::abs(transparentMeshFront.meanAlpha -
                  transparentMeshBack.meanAlpha) < 0.01,
         "QPainter mesh backface normal handling must preserve transparent opacity");
+
+    ViewportDepthGeometry smoothNurbsGeometry;
+    const auto smoothNurbsPointAt = [&](const QPointF &screenPoint) {
+        QPointF worldPoint;
+        surfaceTransform.screenToWorkPlaneUnclipped(
+            screenPoint, surfaceViewportSize, WorkPlane::XY, 0.0,
+            &worldPoint);
+        return QVector3D(float(worldPoint.x()), float(worldPoint.y()), 0.0f);
+    };
+    smoothNurbsGeometry.surfaceVertices = {
+        smoothNurbsPointAt(QPointF(32.0, 128.0)),
+        smoothNurbsPointAt(QPointF(128.0, 128.0)),
+        smoothNurbsPointAt(QPointF(80.0, 32.0))};
+    const QVector3D leftSmoothNormal(-0.8f, 0.0f, 0.6f);
+    const QVector3D rightSmoothNormal(0.8f, 0.0f, 0.6f);
+    const QVector3D topSmoothNormal(0.0f, 0.0f, 1.0f);
+    smoothNurbsGeometry.surfaceNormals = {
+        leftSmoothNormal, rightSmoothNormal, topSmoothNormal};
+    ViewportDepthGeometry flatNurbsGeometry = smoothNurbsGeometry;
+    flatNurbsGeometry.surfaceNormals =
+        QVector<QVector3D>(3, QVector3D(0.0f, 0.0f, 1.0f));
+    ViewportShadingSettings smoothNurbsSettings = solidShading;
+    smoothNurbsSettings.lightingMode = ViewportLightingMode::Studio;
+    const RenderedSurface smoothNurbsRender = renderedSurface(
+        surfaceShape, smoothNurbsSettings, false, &smoothNurbsGeometry);
+    const RenderedSurface flatNurbsRender = renderedSurface(
+        surfaceShape, smoothNurbsSettings, false, &flatNurbsGeometry);
+    const QVector3D smoothNurbsLeftRgb(
+        smoothNurbsRender.leftSample.redF(),
+        smoothNurbsRender.leftSample.greenF(),
+        smoothNurbsRender.leftSample.blueF());
+    const QVector3D smoothNurbsRightRgb(
+        smoothNurbsRender.rightSample.redF(),
+        smoothNurbsRender.rightSample.greenF(),
+        smoothNurbsRender.rightSample.blueF());
+    const QVector3D flatNurbsLeftRgb(
+        flatNurbsRender.leftSample.redF(), flatNurbsRender.leftSample.greenF(),
+        flatNurbsRender.leftSample.blueF());
+    const QVector3D flatNurbsRightRgb(
+        flatNurbsRender.rightSample.redF(),
+        flatNurbsRender.rightSample.greenF(),
+        flatNurbsRender.rightSample.blueF());
+    passed &= check(
+        smoothNurbsRender.coveredPixels > 0 &&
+            (smoothNurbsLeftRgb - smoothNurbsRightRgb).length() > 0.02f &&
+            (flatNurbsLeftRgb - flatNurbsRightRgb).length() < 0.01f,
+        "QPainter prepared untextured NURBS triangles must interpolate smooth corner normals per sample");
 
     // Color-mode source contracts for the software renderer. The attribute
     // triangle has three deliberately distinct corner colors; the texture

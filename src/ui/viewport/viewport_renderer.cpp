@@ -3420,6 +3420,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             Point3D b;
             Point3D c;
             QVector3D normal;
+            std::array<QVector3D, 3> vertexNormals{};
+            bool hasSmoothNormals = false;
             qreal depth = 0.0;
             std::array<QPointF, 3> uvs{};
             bool hasUvs = false;
@@ -3459,14 +3461,18 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         const Point3D &c,
                                         const QVector3D &normal,
                                         const std::array<QPointF, 3> &uvs = std::array<QPointF, 3>{},
-                                        bool hasUvs = false) {
+                                        bool hasUvs = false,
+                                        const std::array<QVector3D, 3> &vertexNormals =
+                                            std::array<QVector3D, 3>{},
+                                        bool hasSmoothNormals = false) {
             const Point3D center{(a.x + b.x + c.x) / 3.0,
                                  (a.y + b.y + c.y) / 3.0,
                                  (a.z + b.z + c.z) / 3.0};
             const Point3D worldCenter{center.x + preparedOffset.x,
                                       center.y + preparedOffset.y,
                                       center.z + preparedOffset.z};
-            fillTriangles.append({a, b, c, normal,
+            fillTriangles.append({a, b, c, normal, vertexNormals,
+                hasSmoothNormals,
                 transform_.worldDirectionToView(worldCenter).towardCamera,
                 uvs, hasUvs});
         };
@@ -3506,8 +3512,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                  !nurbsFloatTexture.isValid()) ||
                 !triangle.hasUvs) {
                 // Shade untextured triangles per sample as Workbench's resolve
-                // pass does. Keep the triangle's flat normal, while varying
-                // the incident direction across perspective views.
+                // pass does. Prepared geometry carries smooth vertex normals;
+                // generated fallback triangles retain their flat normal.
                 const int left = qFloor(std::clamp(
                     std::min({devicePoints[0].x(), devicePoints[1].x(),
                               devicePoints[2].x()}),
@@ -3576,8 +3582,27 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                 (points[0].y * cw0 + points[1].y * cw1 + points[2].y * cw2) / denominator,
                                 (points[0].z * cw0 + points[1].z * cw1 + points[2].z * cw2) / denominator};
                         }
+                        QVector3D sampleNormal = triangle.normal;
+                        if (triangle.hasSmoothNormals) {
+                            sampleNormal =
+                                (triangle.vertexNormals[0] *
+                                     static_cast<float>(cw0) +
+                                 triangle.vertexNormals[1] *
+                                     static_cast<float>(cw1) +
+                                 triangle.vertexNormals[2] *
+                                     static_cast<float>(cw2)) /
+                                static_cast<float>(denominator);
+                            const float normalLengthSquared =
+                                sampleNormal.lengthSquared();
+                            if (std::isfinite(normalLengthSquared) &&
+                                normalLengthSquared > 1.0e-12f) {
+                                sampleNormal.normalize();
+                            } else {
+                                sampleNormal = triangle.normal;
+                            }
+                        }
                         QVector3D sampleLinear;
-                        const QColor sample = shade(triangle.normal,
+                        const QColor sample = shade(sampleNormal,
                                                     shadingPosition,
                                                     baseColorVector,
                                                     frontFacing,
@@ -3850,6 +3875,21 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         ? normals[index] + normals[index + 1] + normals[index + 2]
                         : QVector3D::crossProduct(vertices[index + 1] - vertices[index],
                                                   vertices[index + 2] - vertices[index]);
+                std::array<QVector3D, 3> vertexNormals{};
+                bool hasSmoothNormals = normals.size() > index + 2;
+                if (hasSmoothNormals) {
+                    for (int corner = 0; corner < 3; ++corner) {
+                        vertexNormals[corner] = normals[index + corner];
+                        const float lengthSquared =
+                            vertexNormals[corner].lengthSquared();
+                        if (!std::isfinite(lengthSquared) ||
+                            lengthSquared <= 1.0e-12f) {
+                            hasSmoothNormals = false;
+                            break;
+                        }
+                        vertexNormals[corner].normalize();
+                    }
+                }
                 const auto point = [&preparedOffset](const QVector3D &value) {
                     return Point3D{value.x(), value.y(), value.z()};
                 };
@@ -3860,7 +3900,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     uvs[corner] = QPointF(uv.x(), 1.0 - uv.y());
                 }
                 appendTriangle(point(vertices[index]), point(vertices[index + 1]),
-                               point(vertices[index + 2]), normal, uvs, hasUvs);
+                               point(vertices[index + 2]), normal, uvs, hasUvs,
+                               vertexNormals, hasSmoothNormals);
             }
         } else {
             PreparedNurbsSurfaceTessellation localTessellation;

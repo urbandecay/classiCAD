@@ -10,6 +10,8 @@
 #include "ui/viewport/blender_grid_renderer.h"
 #include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "ui/viewport/workbench_render_result.h"
+#include "ui/viewport/workbench_lighting.h"
+#include "ui/viewport/workbench_matcap_texture.h"
 
 #include <QDir>
 #include <QDebug>
@@ -51,6 +53,158 @@ bool writePfm(const QString &path, const char *magic, const QSize &size,
                       byteCount) == byteCount;
 }
 
+bool verifyMatcapTextureSampling(QOpenGLFunctions_3_3_Core &gl,
+                                 const QString &presetName)
+{
+    int width = 0;
+    int height = 0;
+    const QByteArray layers = workbenchMatcapLinearHalfData(
+        presetName, &width, &height);
+    if (layers.isEmpty() || width < 2 || height < 2) return false;
+
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousArrayBinding = 0;
+    GLint previous2dBinding = 0;
+    GLint previousFramebuffer = 0;
+    GLint previousProgram = 0;
+    GLint previousVertexArray = 0;
+    GLint previousViewport[4] = {};
+    gl.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    gl.glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    gl.glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+    gl.glGetIntegerv(GL_VIEWPORT, previousViewport);
+    gl.glActiveTexture(GL_TEXTURE0);
+    gl.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous2dBinding);
+    gl.glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousArrayBinding);
+    const bool previousBlendEnabled = gl.glIsEnabled(GL_BLEND);
+    const bool previousDepthTestEnabled = gl.glIsEnabled(GL_DEPTH_TEST);
+
+    GLuint texture = 0;
+    if (!uploadWorkbenchMatcapTextureArray(gl, &texture, layers,
+                                            width, height)) {
+        gl.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        return false;
+    }
+    const bool uploadClean = gl.glGetError() == GL_NO_ERROR;
+
+    static const char *vertexShader = R"GLSL(#version 330 core
+void main()
+{
+    vec2 position = vec2(gl_VertexID == 1 ? 3.0 : -1.0,
+                         gl_VertexID == 2 ? 3.0 : -1.0);
+    gl_Position = vec4(position, 0.0, 1.0);
+}
+)GLSL";
+    static const char *fragmentShader = R"GLSL(#version 330 core
+uniform sampler2DArray uMatcap;
+uniform vec3 uCoordinate;
+out vec4 outColor;
+void main()
+{
+    outColor = vec4(texture(uMatcap, uCoordinate).rgb, 1.0);
+}
+)GLSL";
+    QOpenGLShaderProgram program;
+    const bool shaderReady =
+        program.addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShader) &&
+        program.addShaderFromSourceCode(QOpenGLShader::Fragment,
+                                        fragmentShader) &&
+        program.link();
+
+    GLuint outputTexture = 0;
+    GLuint framebuffer = 0;
+    GLuint vertexArray = 0;
+    gl.glGenTextures(1, &outputTexture);
+    gl.glBindTexture(GL_TEXTURE_2D, outputTexture);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 1, 1, 0, GL_RGBA,
+                    GL_FLOAT, nullptr);
+    gl.glGenFramebuffers(1, &framebuffer);
+    gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                              GL_TEXTURE_2D, outputTexture, 0);
+    const bool framebufferReady =
+        gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    gl.glGenVertexArrays(1, &vertexArray);
+
+    bool samplesMatch = uploadClean && shaderReady && framebufferReady &&
+                        texture != 0 && outputTexture != 0 &&
+                        framebuffer != 0 && vertexArray != 0;
+    if (samplesMatch) {
+        gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        gl.glViewport(0, 0, 1, 1);
+        gl.glDisable(GL_BLEND);
+        gl.glDisable(GL_DEPTH_TEST);
+        gl.glActiveTexture(GL_TEXTURE0);
+        gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+        gl.glBindVertexArray(vertexArray);
+        program.bind();
+        program.setUniformValue("uMatcap", 0);
+
+        const int columns[] = {73, width - 83};
+        const int rows[] = {41, height - 57};
+        for (int layer = 0; layer < 2 && samplesMatch; ++layer) {
+            for (int probe = 0; probe < 2 && samplesMatch; ++probe) {
+                const float sourceU =
+                    (float(columns[probe]) + 0.5f) / float(width);
+                const float sourceV =
+                    (float(rows[probe]) + 0.5f) / float(height);
+                const QVector3D centerCoordinate(
+                    sourceU, 1.0f - sourceV, float(layer));
+                const QVector3D centerExpected =
+                    workbenchMatcapSampleLinearHalf(
+                        layers, width, height, layer, sourceU, sourceV);
+                program.setUniformValue("uCoordinate", centerCoordinate);
+                gl.glDrawArrays(GL_TRIANGLES, 0, 3);
+                float sampled[4] = {};
+                gl.glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, sampled);
+                samplesMatch =
+                    (QVector3D(sampled[0], sampled[1], sampled[2]) -
+                     centerExpected).length() < 0.002f;
+
+                const float midpointU =
+                    (float(columns[probe]) + 1.0f) / float(width);
+                const float midpointV =
+                    (float(rows[probe]) + 1.0f) / float(height);
+                program.setUniformValue(
+                    "uCoordinate",
+                    QVector3D(midpointU, 1.0f - midpointV, float(layer)));
+                const QVector3D midpointExpected =
+                    workbenchMatcapSampleLinearHalf(
+                        layers, width, height, layer, midpointU, midpointV);
+                gl.glDrawArrays(GL_TRIANGLES, 0, 3);
+                gl.glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, sampled);
+                samplesMatch = samplesMatch &&
+                    (QVector3D(sampled[0], sampled[1], sampled[2]) -
+                     midpointExpected).length() < 0.002f;
+            }
+        }
+        samplesMatch = samplesMatch && gl.glGetError() == GL_NO_ERROR;
+        program.release();
+    }
+
+    gl.glBindFramebuffer(GL_FRAMEBUFFER,
+                          static_cast<GLuint>(previousFramebuffer));
+    gl.glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+    gl.glUseProgram(static_cast<GLuint>(previousProgram));
+    gl.glViewport(previousViewport[0], previousViewport[1],
+                  previousViewport[2], previousViewport[3]);
+    if (previousBlendEnabled) gl.glEnable(GL_BLEND);
+    else gl.glDisable(GL_BLEND);
+    if (previousDepthTestEnabled) gl.glEnable(GL_DEPTH_TEST);
+    else gl.glDisable(GL_DEPTH_TEST);
+    gl.glBindTexture(GL_TEXTURE_2D_ARRAY,
+                     static_cast<GLuint>(previousArrayBinding));
+    gl.glBindTexture(GL_TEXTURE_2D,
+                     static_cast<GLuint>(previous2dBinding));
+    gl.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    gl.glDeleteVertexArrays(1, &vertexArray);
+    gl.glDeleteFramebuffers(1, &framebuffer);
+    gl.glDeleteTextures(1, &outputTexture);
+    gl.glDeleteTextures(1, &texture);
+    return samplesMatch;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -81,6 +235,11 @@ int main(int argc, char **argv)
     QOpenGLFunctions_3_3_Core gl;
     passed &= check(gl.initializeOpenGLFunctions(),
                     "render-pass capture must initialize OpenGL 3.3 functions");
+    passed &= check(verifyMatcapTextureSampling(
+                        gl, QStringLiteral("metal_bronze")) &&
+                        verifyMatcapTextureSampling(
+                            gl, QStringLiteral("check_normal+y")),
+                    "GPU MatCap array layers, row orientation, and bilinear samples must match Blender-derived half-float payloads");
     const QSize size(640, 480);
     {
     QOpenGLFramebufferObjectFormat framebufferFormat;

@@ -8,6 +8,7 @@
 #include "viewport_line_weight.h"
 #include "viewport_workbench_effect_scale.h"
 #include "workbench_lighting.h"
+#include "workbench_matcap_texture.h"
 #include "core/geometry/polygon_mesh.h"
 
 #include <QDataStream>
@@ -4932,36 +4933,11 @@ bool ViewportSurfaceRenderer::ensureMatcapTexture(const QString &presetName)
     const QByteArray exactLayers = workbenchMatcapLinearHalfData(
         presetName, &exactWidth, &exactHeight);
     if (!exactLayers.isEmpty()) {
-        const qsizetype rowBytes = qsizetype(exactWidth) * 3 *
-                                   qsizetype(sizeof(quint16));
-        QByteArray texturePixels(exactLayers.size(), Qt::Uninitialized);
-        for (int layer = 0; layer < 2; ++layer) {
-            for (int row = 0; row < exactHeight; ++row) {
-                const qsizetype sourceOffset =
-                    (qsizetype(layer) * exactHeight +
-                     (exactHeight - row - 1)) * rowBytes;
-                const qsizetype destinationOffset =
-                    (qsizetype(layer) * exactHeight + row) * rowBytes;
-                std::memcpy(texturePixels.data() + destinationOffset,
-                            exactLayers.constData() + sourceOffset,
-                            static_cast<size_t>(rowBytes));
-            }
+        auto &gl = static_cast<QOpenGLFunctions_3_3_Core &>(*this);
+        if (!uploadWorkbenchMatcapTextureArray(
+                gl, &matcapTexture_, exactLayers, exactWidth, exactHeight)) {
+            return false;
         }
-        GLint previousBinding = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousBinding);
-        if (matcapTexture_ == 0) {
-            glGenTextures(1, &matcapTexture_);
-        }
-        glBindTexture(GL_TEXTURE_2D_ARRAY, matcapTexture_);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB16F, exactWidth,
-                     exactHeight, 2, 0, GL_RGB, GL_HALF_FLOAT,
-                     texturePixels.constData());
-        glBindTexture(GL_TEXTURE_2D_ARRAY,
-                      static_cast<GLuint>(previousBinding));
         matcapTextureName_ = presetName;
         return matcapTexture_ != 0;
     }

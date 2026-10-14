@@ -3196,10 +3196,10 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. QPainter MatCap face-interior
   probes cover those same two preset/specular combinations; full-frame QPainter
-  edge coverage still differs from Blender's AA-Off output. Other presets,
+  MatCap edge coverage still differs from Blender's AA-Off output. Other presets,
   Studio rotations, camera orientations, and full-frame QPainter parity remain
   open.
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation) plus a two-tile mesh UDIM Closest-filter image comparison; the production capture contract also exercises Linear filtering, while its matched Blender image comparison remains open. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, and a two-tile mesh UDIM Closest- and Linear-filter image comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling, both idle and during navigation.
@@ -3432,8 +3432,32 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   A production-path CPU contract compares the exterior edge profile with a
   matching NURBS quad at DPR 1, 1.25, 1.5, and 2. The C++ build and focused
   `workbench_raster_fragment_contracts` test pass. Exact vertex fill rules are
-  outside the current assertions. No matched Blender image comparison was
-  run; that remains part of the acceptance checklist.
+  outside the current assertions.
+- **Matched Blender 5.2.2 mesh edge capture (2026-10-14):** An opt-in
+  production `ViewportRenderer` capture now renders the same two-triangle
+  planar quad as the Blender `MESH_TEXTURE` fixture, with a constant 2x2
+  `(180, 90, 40, 255)` Non-Color image, Linear filtering, material alpha 0.5, Flat lighting,
+  transparent film, and AA Off at 160x160. With the matched top orthographic
+  view (`ortho_scale=2.6666666667`), both images cover 14,400 pixels (IoU
+  `1.0`, XOR `0`). The projected shared diagonal and its 3x3 neighborhood
+  have alpha `128/255` in both; RGB differs by at most two display codes in
+  that neighborhood. Across shared pixels, alpha MAE is `3.18/255` and max
+  error is `120/255`, localized to QPainter's fractional outer-edge estimate
+  versus Blender's AA-Off coverage. QPainter's partial-edge RGB also differs,
+  so the alpha silhouette and stable diagonal probe are the meaningful
+  metrics for this capture. Reproduce classiCAD with
+  `CLASSICAD_VIEWPORT_QPAINTER_MESH_SHARED_EDGE_CAPTURE=/tmp/classicad-mesh-shared-edge.png
+  QT_QPA_PLATFORM=offscreen ctest --test-dir build -R
+  '^viewport_render_contracts$' --output-on-failure`; render Blender 5.2.2
+  using `tests/workbench_cube_reference.py --scene MESH_TEXTURE --resolution
+  160 160 --ortho-scale 2.6666666667 --view-direction 0 0 1 --aa OFF
+  --lighting FLAT --color-source TEXTURE --texture-image
+  /tmp/mesh-edge-half-alpha.png --texture-color-space Non-Color
+  --texture-interpolation Linear --transparent-film --zero-dither
+  --material-alpha 0.5`, then compare with
+  `tests/workbench_shared_alpha_edge_compare.py --center 80 80 --radius 1`.
+  The fixture checks the half-alpha shared-diagonal contribution; outer-edge
+  coverage remains an approximation.
 
 ## QPainter NURBS triangle edge coverage (2026-10-13)
 

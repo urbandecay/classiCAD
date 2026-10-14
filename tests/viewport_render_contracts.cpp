@@ -4470,6 +4470,85 @@ int main(int argc, char *argv[])
                 translucentNurbsImage.save(translucentNurbsCapturePath),
             "opt-in QPainter translucent NURBS shared-edge capture must save");
     }
+    const QString translucentMeshCapturePath = qEnvironmentVariable(
+        "CLASSICAD_VIEWPORT_QPAINTER_MESH_SHARED_EDGE_CAPTURE");
+    if (!translucentMeshCapturePath.isEmpty()) {
+        QImage translucentMeshTexture(2, 2, QImage::Format_RGBA8888);
+        translucentMeshTexture.fill(QColor(180, 90, 40, 255));
+        const QString translucentMeshTexturePath =
+            colorTextureDirectory.filePath(
+                QStringLiteral("mesh-translucent-edge.png"));
+        const bool savedTranslucentMeshTexture =
+            translucentMeshTexture.save(translucentMeshTexturePath);
+        Shape translucentMeshShape;
+        translucentMeshShape.geometryType = GeometryType::PolygonMesh;
+        translucentMeshShape.polygonMesh.vertices = {
+            {-1.0, -1.0, 0.0}, {1.0, -1.0, 0.0},
+            {1.0, 1.0, 0.0}, {-1.0, 1.0, 0.0}};
+        translucentMeshShape.polygonMesh.faces = {{0, 1, 2}, {0, 2, 3}};
+        translucentMeshShape.polygonMesh.faceMaterialIndices = {0, 0};
+        translucentMeshShape.polygonMesh.materialSlotIds = {
+            QStringLiteral("MeshTexture")};
+        translucentMeshShape.polygonMesh.uvMaps = {
+            {QStringLiteral("UVMap"),
+             {QPointF(0.0, 0.0), QPointF(1.0, 0.0),
+              QPointF(1.0, 1.0), QPointF(0.0, 0.0),
+              QPointF(1.0, 1.0), QPointF(0.0, 1.0)}}};
+        translucentMeshShape.polygonMesh.activeUvMapName =
+            QStringLiteral("UVMap");
+        translucentMeshShape.polygonMesh.defaultUvMapName =
+            QStringLiteral("UVMap");
+        WorkbenchMaterialData translucentMeshMaterial =
+            translucentNurbsMaterial;
+        translucentMeshMaterial.textureImagePath = translucentMeshTexturePath;
+        translucentMeshMaterial.textureImageSrgb = false;
+        translucentMeshMaterial.textureImageAlphaMode =
+            QStringLiteral("STRAIGHT");
+        translucentMeshMaterial.textureImageInterpolation =
+            QStringLiteral("Linear");
+        translucentMeshMaterial.textureImageExtension =
+            QStringLiteral("CLIP");
+        QImage translucentMeshImage(
+            surfaceViewportSize, QImage::Format_ARGB32_Premultiplied);
+        translucentMeshImage.fill(Qt::transparent);
+        RasterWorkbenchFragmentSink translucentMeshFragments;
+        surfaceRenderer.setShadingSettings(textureSettings);
+        QPainter translucentMeshPainter(&translucentMeshImage);
+        surfaceRenderer.drawShape(
+            translucentMeshPainter, translucentMeshShape,
+            surfaceViewportSize, false, false, true, QColor(), QString(), 0.0,
+            ObjectId::fromValue(2), 0, nullptr, {}, std::nullopt,
+            std::nullopt, QString(), QString(),
+            identityMeshObjectTransform,
+            {translucentMeshMaterial},
+            &translucentMeshFragments);
+        translucentMeshPainter.end();
+        int meshDiagonalFragments = 0;
+        float meshDiagonalAlpha = 0.0f;
+        for (const RasterWorkbenchLinearFragment &fragment :
+             translucentMeshFragments) {
+            if (fragment.x == surfaceViewportSize.width() / 2 &&
+                fragment.y == surfaceViewportSize.height() / 2) {
+                ++meshDiagonalFragments;
+                meshDiagonalAlpha = fragment.alpha;
+            }
+        }
+        const QColor meshDiagonalPixel = translucentMeshImage.pixelColor(
+            surfaceViewportSize.width() / 2,
+            surfaceViewportSize.height() / 2);
+        const bool savedTranslucentMeshCapture =
+            savedTranslucentMeshTexture &&
+            validatePolygonMesh(translucentMeshShape.polygonMesh) &&
+            translucentMeshImage.save(translucentMeshCapturePath);
+        passed &= check(
+            savedTranslucentMeshCapture,
+            "opt-in QPainter translucent mesh shared-edge capture must save");
+        passed &= check(
+            meshDiagonalFragments == 1 &&
+                std::abs(meshDiagonalAlpha - 0.5f) < 0.02f &&
+                std::abs(meshDiagonalPixel.alphaF() - 0.5f) < 0.02f,
+            "QPainter translucent mesh shared diagonal must have one half-alpha contribution");
+    }
     ViewportTransform perspectiveNurbsTransform = surfaceTransform;
     perspectiveNurbsTransform.zoom() = 17.28;
     perspectiveNurbsTransform.setViewDirection({4.0, -6.0, 4.0});

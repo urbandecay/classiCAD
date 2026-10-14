@@ -715,7 +715,7 @@ bool compositeRasterWorkbenchSurfaces(
                 for (int x = 0; x < width; ++x) {
                     const int index = y * width + x;
                     const QRgb pixel = row[x];
-                    if (qAlpha(pixel) < 254 || objectDepth[index] == noDepth)
+                    if (qAlpha(pixel) < 255 || objectDepth[index] == noDepth)
                         continue;
                     if (objectDepth[index] > domainOpaqueDepth[index]) {
                         domainOpaqueDepth[index] = objectDepth[index];
@@ -1110,7 +1110,7 @@ bool compositeRasterWorkbenchSurfaces(
                     const int index = y * width + x;
                     const QRgb pixel = row[x];
                     const int alphaByte = qAlpha(pixel);
-                    if (alphaByte == 0 || alphaByte >= 254 ||
+                    if (alphaByte == 0 || alphaByte == 255 ||
                         objectDepth[index] == noDepth ||
                         objectDepth[index] <= (object.showInFront
                             ? frontOpaqueDepth[index] : opaqueDepth[index])) {

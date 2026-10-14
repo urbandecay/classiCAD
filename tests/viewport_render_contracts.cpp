@@ -1164,6 +1164,42 @@ int main(int argc, char *argv[])
             &halfAlphaImage, {halfAlphaObject}, transform, size, 1.0,
             false, true, shading, backgroundLinear, drawObject);
 
+        ViewportRenderObject roundedTransparentFront = objects[1];
+        roundedTransparentFront.preparedGeometryOffset.z = 2.0;
+        roundedTransparentFront.workbenchMaterial.alpha = 254.0f / 255.0f;
+        roundedTransparentFront.workbenchMaterial.baseColorSceneLinear =
+            QVector3D(0.0f, 0.0f, 0.0f);
+        roundedTransparentFront.meshMaterials = {
+            roundedTransparentFront.workbenchMaterial};
+        ViewportRenderObject opaqueRear = objects[0];
+        opaqueRear.workbenchMaterial.alpha = 1.0f;
+        opaqueRear.workbenchMaterial.baseColorSceneLinear =
+            QVector3D(1.0f, 1.0f, 1.0f);
+        opaqueRear.meshMaterials = {opaqueRear.workbenchMaterial};
+        QImage packedAlphaTransparencyImage(size,
+                                             QImage::Format_ARGB32_Premultiplied);
+        packedAlphaTransparencyImage.fill(Qt::transparent);
+        QImage packedAlphaFrontOnlyImage(size,
+                                          QImage::Format_ARGB32_Premultiplied);
+        packedAlphaFrontOnlyImage.fill(Qt::transparent);
+        const QVector3D blackBackground(0.0f, 0.0f, 0.0f);
+        const bool packedAlphaTransparencyRendered =
+            compositeRasterWorkbenchSurfaces(
+                &packedAlphaTransparencyImage,
+                {roundedTransparentFront, opaqueRear}, transform, size,
+                1.0, false, true, shading, blackBackground, drawObject);
+        const bool packedAlphaFrontOnlyRendered =
+            compositeRasterWorkbenchSurfaces(
+                &packedAlphaFrontOnlyImage, {roundedTransparentFront},
+                transform, size, 1.0, false, true, shading,
+                blackBackground, drawObject);
+        passed &= check(
+            packedAlphaTransparencyRendered && packedAlphaFrontOnlyRendered &&
+                workbenchPackUnitFloatToUnorm8(254.0f / 255.0f) < 1.0f &&
+                packedAlphaTransparencyImage.pixelColor(320, 240).red() >
+                    packedAlphaFrontOnlyImage.pixelColor(320, 240).red(),
+            "QPainter must keep alpha packed to 254/255 transparent so a rear opaque surface contributes through it");
+
         ViewportShadingSettings xraySettings = shading;
         xraySettings.xray = true;
         xraySettings.xrayAlpha = 0.5;

@@ -2536,6 +2536,20 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   geometry, texture cutout sampler, and receiver visibility remain software
   approximations.
 
+## QPainter transparent alpha classification (2026-10-14)
+
+- The QPainter weighted-transparency compositor now puts only fully opaque
+  byte-alpha pixels into its opaque depth/color layer. Byte alpha 254 remains
+  in the transparent path, so a rear opaque surface contributes through a
+  front material whose Blender-packed alpha is `254/255`. A focused production
+  compositor contract covers this overlap.
+- Blender 5.2.2 passes interpolated material alpha directly to transparent
+  accumulation and revealage in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L518-L526),
+  then resolves the accumulated color/revealage in
+  [`workbench_transparent_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl#L269-L286).
+  The classiCAD compositor remains a CPU approximation of that pass.
+
 ## Phase Two: imported scene materials and result contracts (2026-10-13)
 
 - **Render-result shading source:** an imported Blender scene's saved

@@ -575,10 +575,30 @@ int main(int argc, char **argv)
                 linearBottomUp[frontOverlapPixel * 4 + 2]);
             passed &= check(frontOverlapColor.x() > 0.35f &&
                                 frontOverlapColor.y() > 0.15f &&
-                                frontOverlapColor.z() < 0.1f &&
-                                std::abs(viewZBottomUp[frontOverlapPixel] -
-                                         clip.nearPlane) < 0.001,
-                            "in-front overlap color and near-plane view-Z must match Blender at the projected probe");
+                                frontOverlapColor.z() < 0.1f,
+                            "in-front overlap color must match Blender at the projected probe");
+            passed &= check(
+                std::abs(viewZBottomUp[frontOverlapPixel] - clip.nearPlane) <
+                    0.001,
+                "opaque in-front coverage must receive Blender's near-plane view-Z override");
+
+            const qsizetype transparentOnlyPixel =
+                qsizetype(size.height() - 1 - 240) * size.width() + 450;
+            const float physicalFrontViewZ = workbenchDepthToViewZ(
+                frontDepthBottomUp[transparentOnlyPixel],
+                camera.isPerspectiveEnabled(),
+                static_cast<float>(clip.nearPlane),
+                static_cast<float>(clip.farPlane));
+            passed &= check(
+                frontDepthBottomUp[transparentOnlyPixel] > 0.0f &&
+                    frontDepthBottomUp[transparentOnlyPixel] < 1.0f &&
+                    std::isfinite(physicalFrontViewZ) &&
+                    std::abs(physicalFrontViewZ - 1000.0f) < 2.0f,
+                "transparent-only in-front coverage must have physical view-Z near 1000");
+            passed &= check(
+                std::abs(viewZBottomUp[transparentOnlyPixel] -
+                         physicalFrontViewZ) < 0.001,
+                "transparent-only in-front coverage must retain Blender's physical view-Z");
         }
 
         const QString captureDirectory = qEnvironmentVariable(

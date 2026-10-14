@@ -111,6 +111,7 @@ private:
     GLuint objectIdTexture_ = 0;
     GLuint frontColorTexture_ = 0;
     GLuint frontDepthTexture_ = 0;
+    GLuint frontOpaqueOverlayMaskTexture_ = 0;
     GLuint frontMaterialDataTexture_ = 0;
     GLuint frontShadowMaskTexture_ = 0;
     GLuint frontViewSpaceNormalTexture_ = 0;

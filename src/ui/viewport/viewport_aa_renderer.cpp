@@ -496,14 +496,16 @@ bool ViewportAaRenderer::initialize()
     // Blender applies this overlay-only depth override after Workbench's
     // opaque, transparent, volume, outline, and DOF passes. Keep the physical
     // in-front depth through those scene passes, then place front-owned pixels
-    // at the near plane so later editor overlays stay behind them.
+    // at the near plane so later editor overlays stay behind them. Blender's
+    // stencil domain includes opaque in-front coverage, not transparent-only
+    // depth.
     static constexpr const char *overlayDepthFragmentShader = R"glsl(
         #version 330 core
-        uniform sampler2D uFrontDepth;
+        uniform sampler2D uOpaqueFrontMask;
         void main()
         {
             ivec2 pixel = ivec2(gl_FragCoord.xy);
-            if (texelFetch(uFrontDepth, pixel, 0).r >= 1.0) discard;
+            if (texelFetch(uOpaqueFrontMask, pixel, 0).r < 0.5) discard;
             gl_FragDepth = 0.0;
         }
     )glsl";
@@ -1103,9 +1105,11 @@ void ViewportAaRenderer::destroyTargets()
                                     frontMaterialDataTexture_,
                                     frontViewSpaceNormalTexture_, frontObjectIdTexture_,
                                     frontOutlineIdTexture_,
-                                    frontShadowMaskTexture_};
-    glDeleteTextures(7, frontTextures);
+                                    frontShadowMaskTexture_,
+                                    frontOpaqueOverlayMaskTexture_};
+    glDeleteTextures(8, frontTextures);
     frontColorTexture_ = frontDepthTexture_ = 0;
+    frontOpaqueOverlayMaskTexture_ = 0;
     frontMaterialDataTexture_ = 0;
     frontShadowMaskTexture_ = 0;
     frontViewSpaceNormalTexture_ = frontObjectIdTexture_ = 0;
@@ -1199,6 +1203,14 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenTextures(1, &frontOpaqueOverlayMaskTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontOpaqueOverlayMaskTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenTextures(1, &frontDepthTexture_);
     glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
@@ -1233,6 +1245,8 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
                            GL_TEXTURE_2D, frontOutlineIdTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT5,
                            GL_TEXTURE_2D, frontShadowMaskTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT6,
+                           GL_TEXTURE_2D, frontOpaqueOverlayMaskTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, frontDepthTexture_, 0);
     const GLenum frontDrawBuffers[] = {GL_COLOR_ATTACHMENT0,
@@ -1782,6 +1796,7 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     targets_.objectIdTexture = objectIdTexture_;
     targets_.frontColorTexture = frontColorTexture_;
     targets_.frontDepthTexture = frontDepthTexture_;
+    targets_.frontOpaqueOverlayMaskTexture = frontOpaqueOverlayMaskTexture_;
     targets_.frontMaterialDataTexture = frontMaterialDataTexture_;
     targets_.frontViewSpaceNormalTexture = frontViewSpaceNormalTexture_;
     targets_.frontObjectIdTexture = frontObjectIdTexture_;
@@ -1799,8 +1814,9 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
                                             GL_COLOR_ATTACHMENT2,
                                             GL_COLOR_ATTACHMENT3,
                                             GL_COLOR_ATTACHMENT4,
-                                            GL_COLOR_ATTACHMENT5};
-    glDrawBuffers(6, frontClearDrawBuffers);
+                                            GL_COLOR_ATTACHMENT5,
+                                            GL_COLOR_ATTACHMENT6};
+    glDrawBuffers(7, frontClearDrawBuffers);
     const GLfloat frontClearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLfloat frontClearMaterial[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLfloat frontClearNormal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -1813,6 +1829,8 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     glClearBufferuiv(GL_COLOR, 4, frontClearId);
     const GLfloat frontClearShadowMask[1] = {1.0f};
     glClearBufferfv(GL_COLOR, 5, frontClearShadowMask);
+    const GLfloat frontClearOverlayMask[1] = {0.0f};
+    glClearBufferfv(GL_COLOR, 6, frontClearOverlayMask);
     glClearBufferfv(GL_DEPTH, 0, frontClearDepth);
     const GLint frontClearStencil = 0;
     glClearBufferiv(GL_STENCIL, 0, &frontClearStencil);
@@ -2048,7 +2066,7 @@ bool ViewportAaRenderer::sceneSampleActive() const noexcept
 
 void ViewportAaRenderer::applyInFrontOverlayDepth()
 {
-    if (frontDepthTexture_ == 0 || depthTexture_ == 0 ||
+    if (frontOpaqueOverlayMaskTexture_ == 0 || depthTexture_ == 0 ||
         overlayDepthFramebuffer_ == 0 ||
         !overlayDepthProgram_.isLinked()) {
         return;
@@ -2090,9 +2108,9 @@ void ViewportAaRenderer::applyInFrontOverlayDepth()
     glDepthMask(GL_TRUE);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontOpaqueOverlayMaskTexture_);
     overlayDepthProgram_.bind();
-    overlayDepthProgram_.setUniformValue("uFrontDepth", 0);
+    overlayDepthProgram_.setUniformValue("uOpaqueFrontMask", 0);
     {
         QOpenGLVertexArrayObject::Binder binder(&vertexArray_);
         glDrawArrays(GL_TRIANGLES, 0, 3);

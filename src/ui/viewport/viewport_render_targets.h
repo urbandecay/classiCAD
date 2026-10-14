@@ -87,6 +87,9 @@ struct ViewportRenderTargets {
     // into the ordinary per-sample attachments before effects and AA resolve.
     GLuint frontColorTexture = 0;
     GLuint frontDepthTexture = 0;
+    // Opaque-only in-front coverage captured before transparent front depth
+    // is merged. Blender uses this domain for its late overlay-depth override.
+    GLuint frontOpaqueOverlayMaskTexture = 0;
     GLuint frontMaterialDataTexture = 0;
     GLuint frontViewSpaceNormalTexture = 0;
     GLuint frontObjectIdTexture = 0;

@@ -2217,15 +2217,21 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uMergeColor;
         uniform bool uMergeMaterial;
         uniform bool uMergeShadowMask;
+        uniform bool uCaptureOpaqueCoverage;
         layout(location = 0) out vec4 mergedColor;
         layout(location = 1) out vec4 mergedNormal;
         layout(location = 2) out uint mergedObjectId;
         layout(location = 3) out uint mergedOutlineId;
         layout(location = 4) out vec4 mergedMaterialData;
         layout(location = 5) out float mergedShadowMask;
+        layout(location = 6) out float opaqueFrontMask;
         void main()
         {
             float depth = texture(uFrontDepth, vUv).r;
+            if (uCaptureOpaqueCoverage) {
+                opaqueFrontMask = depth < 1.0 ? 1.0 : 0.0;
+                return;
+            }
             if (depth >= 1.0) discard;
             // Workbench first merges the actual front-domain depth so later
             // transparent, volume, outline, and DOF passes see scene depth.
@@ -3369,13 +3375,15 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
 
 bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
     const ViewportRenderTargets &targets, bool mergeColor, bool mergeNormal,
-    bool mergeMaterial, bool mergeShadowMask)
+    bool mergeMaterial, bool mergeShadowMask, bool captureOpaqueCoverage)
 {
     if (targets.frontDepthTexture == 0 ||
         targets.frontMaterialDataTexture == 0 ||
         targets.frontViewSpaceNormalTexture == 0 ||
         targets.frontObjectIdTexture == 0 ||
         targets.frontOutlineIdTexture == 0 || targets.depthTexture == 0 ||
+        (captureOpaqueCoverage &&
+         targets.frontOpaqueOverlayMaskTexture == 0) ||
         targets.viewSpaceNormalTexture == 0 || targets.objectIdTexture == 0 ||
         (mergeShadowMask &&
          (targets.frontShadowMaskTexture == 0 ||
@@ -3422,6 +3430,12 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
                            GL_TEXTURE_2D, targets.materialDataTexture, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT5,
                            GL_TEXTURE_2D, targets.shadowMaskTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT6,
+                           GL_TEXTURE_2D,
+                           captureOpaqueCoverage
+                               ? targets.frontOpaqueOverlayMaskTexture
+                               : 0,
+                           0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, targets.depthTexture, 0);
     const GLenum drawBuffers[] = {mergeColor
@@ -3439,7 +3453,7 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
                                       ? static_cast<GLenum>(GL_COLOR_ATTACHMENT5)
                                       : static_cast<GLenum>(GL_NONE)};
     glDrawBuffers(6, drawBuffers);
-    const bool complete =
+    bool complete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     if (complete) {
         glViewport(0, 0, targets.pixelSize.width(), targets.pixelSize.height());
@@ -3477,8 +3491,35 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
         frontMergeProgram_.setUniformValue("uMergeMaterial", mergeMaterial);
         frontMergeProgram_.setUniformValue("uMergeShadowMask",
                                            mergeShadowMask);
+        frontMergeProgram_.setUniformValue("uCaptureOpaqueCoverage", false);
         outlineVertexArray_.bind();
         glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (captureOpaqueCoverage) {
+            // Capture the opaque-only domain in a color-only pass so the
+            // fullscreen copy cannot overwrite main scene depth or G-buffer
+            // values at front-domain background pixels.
+            for (int attachment = 0; attachment < 6; ++attachment) {
+                glFramebufferTexture2D(
+                    GL_FRAMEBUFFER,
+                    GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(attachment),
+                    GL_TEXTURE_2D, 0, 0);
+            }
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                                   GL_TEXTURE_2D, 0, 0);
+            const GLenum coverageDrawBuffers[] = {
+                GL_NONE, GL_NONE, GL_NONE, GL_NONE,
+                GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT6};
+            glDrawBuffers(7, coverageDrawBuffers);
+            const bool coverageComplete =
+                glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+                GL_FRAMEBUFFER_COMPLETE;
+            if (coverageComplete) {
+                frontMergeProgram_.setUniformValue(
+                    "uCaptureOpaqueCoverage", true);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            }
+            complete = complete && coverageComplete;
+        }
         outlineVertexArray_.release();
         frontMergeProgram_.release();
     }
@@ -6248,7 +6289,7 @@ bool ViewportSurfaceRenderer::draw(
                 &frontPrepassDrewGeometry);
             if (frontPrepassReady) {
                 frontPrepassReady = mergeWorkbenchFrontAttachments(
-                    *sharedTargets, false);
+                    *sharedTargets, false, true, false, false, true);
                 if (ssaoEnabled) {
                     const QSize frontPixelSize = sharedTargets->pixelSize;
                     GLint previousRead = 0;

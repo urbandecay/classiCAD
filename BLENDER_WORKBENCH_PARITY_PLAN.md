@@ -4881,6 +4881,29 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   5.2.2 LTS; and `workbench_image_compare.py` plus
   `workbench_pfm_compare.py` passed for GPU and QPainter captures.
 
+#### Fifth-slot Studio and MatCap shading
+
+- Extended the five-face fixture to Studio Default with specular and the
+  `metal_bronze` MatCap. Slot 4 keeps its own `(roughness, metallic)` values
+  `(0.35, 0.15)`; all five faces retain distinct material colors. Blender
+  5.2.2 references and classiCAD GPU/QPainter captures use the same camera,
+  background, and AA-Off setup.
+- All four backend/reference comparisons have exact full-frame masks.
+  Studio GPU scene-linear max error is `0.0002442`, QPainter max is
+  `0.0005449`; Studio display is exact for QPainter and differs by at most
+  `1/255` for GPU. MatCap scene-linear max error is `0.001953125` for GPU and
+  `0.0019226` for QPainter; both display captures differ by at most `1/255`.
+- This confirms index-4 material roughness/metallic shading in Studio and
+  material-color use in MatCap. Other presets, rotations, AA modes, higher slot
+  counts, and textured/transparent combinations remain open. Blender's
+  per-face slot selection and material batching remain pinned in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067)
+  and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed; Blender reported version
+  5.2.2 LTS for both references; and the full-frame PNG/PFM comparisons
+  passed for GPU and QPainter captures.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

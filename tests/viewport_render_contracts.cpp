@@ -10503,11 +10503,19 @@ int main(int argc, char *argv[])
                             QVector3D(0.18f, 0.65f, 0.25f),
                             QVector3D(0.78f, 0.68f, 0.12f),
                             QVector3D(0.18f, 0.62f, 0.72f)};
+                        const std::array<float, 5> fiveSlotRoughness{
+                            0.2f, 0.4f, 0.65f, 0.8f, 0.35f};
+                        const std::array<float, 5> fiveSlotMetallic{
+                            0.0f, 0.25f, 0.5f, 1.0f, 0.15f};
                         fiveSlotObject.meshMaterials =
                             QVector<WorkbenchMaterialData>(5);
                         for (int slot = 0; slot < 5; ++slot) {
                             fiveSlotObject.meshMaterials[slot]
                                 .baseColorSceneLinear = fiveSlotColors[slot];
+                            fiveSlotObject.meshMaterials[slot].roughness =
+                                fiveSlotRoughness[slot];
+                            fiveSlotObject.meshMaterials[slot].metallic =
+                                fiveSlotMetallic[slot];
                         }
                         fiveSlotObject.preparedDepthGeometry =
                             QSharedPointer<ViewportDepthGeometry>::create(
@@ -10684,6 +10692,152 @@ int main(int argc, char *argv[])
                             fiveSlotQPainterSaved &&
                                 fiveSlotQPainterMappingMatches,
                             "QPainter fifth material-slot fixture must capture and shade slot index four");
+
+                        const auto captureFiveSlotLighting =
+                            [&](const ViewportShadingSettings &shading,
+                                const QString &suffix) {
+                                QImage gpuDisplay;
+                                QVector<float> gpuLinear;
+                                const bool gpuRendered =
+                                    renderCoordinatedScene(
+                                        shading,
+                                        QByteArrayLiteral("material-slots-five-") +
+                                            suffix.toLatin1(),
+                                        &gpuDisplay, &fiveSlotObject, nullptr,
+                                        nullptr, QString{}, &gpuLinear);
+                                const QString gpuStem = fiveSlotStem +
+                                    QStringLiteral("_") + suffix;
+                                QFile gpuPfm(QDir(
+                                    materialSlotsCaptureDirectory).filePath(
+                                        gpuStem + QStringLiteral(".pfm")));
+                                const QString gpuPng = QDir(
+                                    materialSlotsCaptureDirectory).filePath(
+                                        gpuStem + QStringLiteral(".png"));
+                                const bool gpuSaved = gpuRendered &&
+                                    gpuDisplay.size() == QSize(640, 480) &&
+                                    gpuDisplay.save(gpuPng) &&
+                                    gpuLinear.size() == fiveSlotValueCount &&
+                                    gpuPfm.open(QIODevice::WriteOnly) &&
+                                    gpuPfm.write(fiveSlotPfmHeader) ==
+                                        fiveSlotPfmHeader.size() &&
+                                    gpuPfm.write(
+                                        reinterpret_cast<const char *>(
+                                            gpuLinear.constData()),
+                                        gpuLinear.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        gpuLinear.size() *
+                                            qsizetype(sizeof(float));
+
+                                CurveHitTester hitTester;
+                                ViewportRenderer renderer(gpuTransform,
+                                                          hitTester);
+                                renderer.setShadingSettings(shading);
+                                QImage qpDisplay(
+                                    glSize,
+                                    QImage::Format_ARGB32_Premultiplied);
+                                qpDisplay.fill(captureBackground);
+                                RasterWorkbenchFragmentSink fragments;
+                                QPainter painter(&qpDisplay);
+                                painter.setRenderHint(
+                                    QPainter::Antialiasing, false);
+                                renderer.drawShape(
+                                    painter, fiveSlotObject.shape, glSize,
+                                    false, false, true, QColor(), QString(),
+                                    0.0, fiveSlotObject.objectId,
+                                    fiveSlotObject.geometryRevision,
+                                    fiveSlotObject.preparedDepthGeometry.data(),
+                                    {}, fiveSlotObject.displayColorSceneLinear,
+                                    fiveSlotObject.workbenchMaterial,
+                                    fiveSlotObject.displayName,
+                                    fiveSlotObject.libraryPath,
+                                    identityMeshObjectTransform,
+                                    fiveSlotObject.meshMaterials, &fragments);
+                                painter.end();
+                                QVector<float> qpLinear(fiveSlotValueCount);
+                                for (qsizetype offset = 0;
+                                     offset + 2 < qpLinear.size(); offset += 3) {
+                                    qpLinear[offset] = fiveSlotBackground;
+                                    qpLinear[offset + 1] = fiveSlotBackground;
+                                    qpLinear[offset + 2] = fiveSlotBackground;
+                                }
+                                for (const RasterWorkbenchLinearFragment &fragment :
+                                     fragments) {
+                                    if (fragment.x < 0 ||
+                                        fragment.x >= glSize.width() ||
+                                        fragment.y < 0 ||
+                                        fragment.y >= glSize.height()) {
+                                        continue;
+                                    }
+                                    const qsizetype offset =
+                                        (qsizetype(fragment.y) *
+                                             glSize.width() +
+                                         fragment.x) * 3;
+                                    qpLinear[offset] =
+                                        fragment.sceneLinearRgb[0];
+                                    qpLinear[offset + 1] =
+                                        fragment.sceneLinearRgb[1];
+                                    qpLinear[offset + 2] =
+                                        fragment.sceneLinearRgb[2];
+                                }
+                                QVector<float> qpBottomUp(fiveSlotValueCount);
+                                for (int y = 0; y < glSize.height(); ++y) {
+                                    std::copy_n(
+                                        qpLinear.constData() +
+                                            qsizetype(y) * fiveSlotRowValues,
+                                        fiveSlotRowValues,
+                                        qpBottomUp.data() +
+                                            qsizetype(glSize.height() - 1 - y) *
+                                                fiveSlotRowValues);
+                                }
+                                QFile qpPfm(QDir(
+                                    materialSlotsCaptureDirectory).filePath(
+                                        gpuStem +
+                                        QStringLiteral("_qpainter.pfm")));
+                                const QString qpPng = QDir(
+                                    materialSlotsCaptureDirectory).filePath(
+                                        gpuStem +
+                                        QStringLiteral("_qpainter.png"));
+                                const bool qpSaved = fragments.size() > 5000 &&
+                                    qpDisplay.save(qpPng) &&
+                                    qpPfm.open(QIODevice::WriteOnly) &&
+                                    qpPfm.write(fiveSlotPfmHeader) ==
+                                        fiveSlotPfmHeader.size() &&
+                                    qpPfm.write(
+                                        reinterpret_cast<const char *>(
+                                            qpBottomUp.constData()),
+                                        qpBottomUp.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        qpBottomUp.size() *
+                                            qsizetype(sizeof(float));
+                                const QPoint fifthProbe = fiveSlotProbes[4];
+                                const bool fifthSlotVisible =
+                                    qpDisplay.pixelColor(fifthProbe) !=
+                                    captureBackground;
+                                return gpuSaved && qpSaved &&
+                                    fifthSlotVisible;
+                            };
+                        ViewportShadingSettings fiveSlotStudioShading =
+                            materialSlotsShading;
+                        fiveSlotStudioShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        fiveSlotStudioShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        fiveSlotStudioShading.specularLighting = true;
+                        passed &= check(
+                            captureFiveSlotLighting(fiveSlotStudioShading,
+                                                    QStringLiteral("studio")),
+                            "fifth Workbench material slot must retain its Studio shading payload in GPU and QPainter captures");
+                        ViewportShadingSettings fiveSlotMatcapShading =
+                            materialSlotsShading;
+                        fiveSlotMatcapShading.lightingMode =
+                            ViewportLightingMode::MatCap;
+                        fiveSlotMatcapShading.matcapPreset =
+                            QStringLiteral("metal_bronze");
+                        fiveSlotMatcapShading.specularLighting = true;
+                        passed &= check(
+                            captureFiveSlotLighting(fiveSlotMatcapShading,
+                                                    QStringLiteral("matcap")),
+                            "fifth Workbench material slot must remain visible through MatCap shading in GPU and QPainter captures");
                     }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(

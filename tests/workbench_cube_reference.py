@@ -21,7 +21,7 @@ def arguments():
     parser.add_argument("output", help="PNG output path")
     parser.add_argument(
         "--scene",
-        choices=("CUBE", "TWO_SIDED_MATCAP", "NURBS_TEXTURE", "MESH_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
+        choices=("CUBE", "MATERIAL_SLOTS", "TWO_SIDED_MATCAP", "NURBS_TEXTURE", "MESH_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
     )
@@ -358,7 +358,7 @@ def main():
     camera.rotation_euler = (
         (target - camera.location).to_track_quat("-Z", "Y").to_euler()
     )
-    if args.scene == "CUBE":
+    if args.scene in ("CUBE", "MATERIAL_SLOTS"):
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object
         cube.name = "ReferenceCube"
@@ -433,6 +433,29 @@ def main():
             cube.data.color_attributes.render_color_index = color_index
         if args.object_color is not None:
             cube.color = (*args.object_color, 1.0)
+        if args.scene == "MATERIAL_SLOTS":
+            cube.data.materials.clear()
+            material_colors = (
+                (0.18, 0.28, 0.72),
+                (0.72, 0.20, 0.18),
+                (0.18, 0.65, 0.25),
+            )
+            for index, color in enumerate(material_colors):
+                material = bpy.data.materials.new(
+                    f"ReferenceCubeMaterial{index}"
+                )
+                material.diffuse_color = (*color, 1.0)
+                cube.data.materials.append(material)
+            for polygon in cube.data.polygons:
+                normal = polygon.normal
+                if normal.z > 0.5:
+                    polygon.material_index = 0
+                elif normal.y < -0.5:
+                    polygon.material_index = 1
+                elif normal.x > 0.5:
+                    polygon.material_index = 2
+                else:
+                    polygon.material_index = 0
     elif args.scene == "TWO_SIDED_MATCAP":
         camera_rotation = camera.rotation_euler.to_quaternion()
         camera_right = camera_rotation @ Vector((1.0, 0.0, 0.0))

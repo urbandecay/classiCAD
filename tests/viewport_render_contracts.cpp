@@ -8948,6 +8948,95 @@ int main(int argc, char *argv[])
                             capturesSucceeded,
                             "Studio material-payload cases must capture GPU display and scene-linear output");
                     }
+                    const QString materialSlotsCaptureDirectory =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_MATERIAL_SLOTS_CAPTURE_DIR");
+                    if (!materialSlotsCaptureDirectory.isEmpty()) {
+                        const bool directoryReady = QDir().mkpath(
+                            materialSlotsCaptureDirectory);
+                        ViewportRenderObject materialSlotsObject =
+                            polygonCubeObject;
+                        materialSlotsObject.objectId =
+                            ObjectId::fromValue(1901);
+                        materialSlotsObject.geometryRevision = 1901;
+                        materialSlotsObject.displayName =
+                            QStringLiteral("PerFaceMaterialSlots");
+                        materialSlotsObject.shape.polygonMesh
+                            .faceMaterialIndices = {0, 0, 1, 2, 0, 0};
+                        materialSlotsObject.shape.polygonMesh.materialSlotIds = {
+                            QStringLiteral("slot-blue"),
+                            QStringLiteral("slot-red"),
+                            QStringLiteral("slot-green")};
+                        materialSlotsObject.meshMaterials = {
+                            WorkbenchMaterialData{},
+                            WorkbenchMaterialData{},
+                            WorkbenchMaterialData{}};
+                        materialSlotsObject.meshMaterials[0]
+                            .baseColorSceneLinear =
+                                QVector3D(0.18f, 0.28f, 0.72f);
+                        materialSlotsObject.meshMaterials[1]
+                            .baseColorSceneLinear =
+                                QVector3D(0.72f, 0.20f, 0.18f);
+                        materialSlotsObject.meshMaterials[2]
+                            .baseColorSceneLinear =
+                                QVector3D(0.18f, 0.65f, 0.25f);
+                        ViewportShadingSettings materialSlotsShading =
+                            rawFaceShading;
+                        materialSlotsShading.lightingMode =
+                            ViewportLightingMode::Flat;
+                        materialSlotsShading.colorMode =
+                            ViewportColorMode::Material;
+                        materialSlotsShading.outline = false;
+                        materialSlotsShading.shadows = false;
+                        materialSlotsShading.cavity = false;
+                        QImage display;
+                        QVector<float> sceneLinear;
+                        const bool rendered = renderCoordinatedScene(
+                            materialSlotsShading,
+                            QByteArrayLiteral("material-slots"),
+                            &display, &materialSlotsObject, nullptr, nullptr,
+                            QString{}, &sceneLinear);
+                        const QString displayPath = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                QStringLiteral("material_slots.png"));
+                        QFile linearFile(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                QStringLiteral("material_slots.pfm")));
+                        const QByteArray pfmHeader =
+                            QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                        constexpr qsizetype expectedValues = 640 * 480 * 3;
+                        const bool linearSaved = rendered &&
+                            sceneLinear.size() == expectedValues &&
+                            linearFile.open(QIODevice::WriteOnly) &&
+                            linearFile.write(pfmHeader) ==
+                                pfmHeader.size() &&
+                            linearFile.write(
+                                reinterpret_cast<const char *>(
+                                    sceneLinear.constData()),
+                                sceneLinear.size() * qsizetype(sizeof(float))) ==
+                                sceneLinear.size() * qsizetype(sizeof(float));
+                        const bool displaySaved = rendered &&
+                            display.size() == QSize(640, 480) &&
+                            display.save(displayPath);
+                        const QColor topSlotPixel =
+                            display.pixelColor(320, 120);
+                        const QColor frontSlotPixel =
+                            display.pixelColor(230, 260);
+                        const QColor rightSlotPixel =
+                            display.pixelColor(420, 275);
+                        const QColor captureBackground(34, 34, 34);
+                        const bool visibleDistinctSlots = rendered &&
+                            topSlotPixel != captureBackground &&
+                            frontSlotPixel != captureBackground &&
+                            rightSlotPixel != captureBackground &&
+                            topSlotPixel != frontSlotPixel &&
+                            topSlotPixel != rightSlotPixel &&
+                            frontSlotPixel != rightSlotPixel;
+                        passed &= check(
+                            directoryReady && linearSaved && displaySaved &&
+                                visibleDistinctSlots,
+                            "GPU per-face material-slot fixture must capture three distinct visible slot colors in display and scene-linear output");
+                    }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_MATCAP_BACKFACE_CAPTURE_DIR");

@@ -4599,3 +4599,26 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   Blender reported version 5.2.2, and
   `workbench_pfm_compare.py --candidate-top-down` completed on the matched
   scene-linear captures.
+
+### Matched GPU per-face material slots (2026-10-14)
+
+- Added an opt-in classiCAD GPU capture for a Flat-lit polygon cube whose
+  visible top, front, and right faces select three distinct material slots.
+  The fixture declares the matching mesh slot IDs as well as the resolved
+  `WorkbenchMaterialData` values, preserving the geometry and material
+  adapter contract. Its offscreen contract checks that the three face probes
+  are present and visibly distinct, so a saved background-only frame cannot
+  satisfy the capture.
+- Compared with a Blender 5.2.2 Workbench `MATERIAL_SLOTS` cube using the same
+  camera, Flat lighting, Material color source, AA Off, and zero dither. All
+  27 face-interior probes across the three visible faces match exactly in both
+  scene-linear RGB (MAE 0, max 0) and display RGB (MAE 0/255, max 0/255).
+- This verifies deferred GPU per-face slot selection and color resolve for
+  three visible faces in one opaque mesh. It does not establish Studio,
+  textured, transparent, QPainter, additional slot-count, or general mesh
+  parity; those comparisons remain open. No production renderer change was
+  justified by this fixture.
+- Validation: `cmake --build build -j4` passed with the dependency audit, the
+  offscreen `viewport_render_contracts` test passed with the opt-in capture,
+  and `workbench_display_probe_compare.py` passed against the Blender 5.2.2
+  reference.

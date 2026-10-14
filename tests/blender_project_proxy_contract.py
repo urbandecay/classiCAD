@@ -6,6 +6,7 @@ tests/blender_project_proxy_contract.py
 
 import importlib.util
 import copy
+import math
 import pathlib
 import sys
 
@@ -21,12 +22,20 @@ spec.loader.exec_module(adapter)
 
 material_a = bpy.data.materials.new("ProxyContract.A")
 material_a["classiCAD_material_id"] = "material-a"
+material_a.roughness = 0.92
+material_a.metallic = 0.03
 material_b = bpy.data.materials.new("ProxyContract.B")
 material_b["classiCAD_material_id"] = "material-b"
+material_b.roughness = 0.08
+material_b.metallic = 0.97
 document = {
     "materials": [
-        {"id": "material-a", "name": "A", "baseColorSceneLinear": [1, 0, 0, 1]},
-        {"id": "material-b", "name": "B", "baseColorSceneLinear": [0, 0, 1, 1]},
+        {"id": "material-a", "name": "A", "baseColorSceneLinear": [1, 0, 0, 1],
+         "roughness": 0.17, "metallic": 0.76},
+        {"id": "material-b", "name": "B", "baseColorSceneLinear": [0, 0, 1, 1],
+         "roughness": 0.83, "metallic": 0.04},
+        {"id": "material-c", "name": "C", "baseColorSceneLinear": [0, 1, 0, 1],
+         "roughness": 0.39, "metallic": 0.61},
     ],
     "objects": [
         {
@@ -63,6 +72,15 @@ references = [
     ("41", "wall-41"), ("42", "base-42"),
 ]
 adapter.attach_solid_face_metadata(mesh, references, document)
+proxy_materials = adapter.classiCAD_materials(document)
+assert math.isclose(proxy_materials["material-a"].roughness, 0.17, abs_tol=1.0e-6)
+assert math.isclose(proxy_materials["material-a"].metallic, 0.76, abs_tol=1.0e-6)
+assert tuple(proxy_materials["material-a"].diffuse_color) == (1.0, 0.0, 0.0, 1.0)
+assert math.isclose(proxy_materials["material-b"].roughness, 0.83, abs_tol=1.0e-6)
+assert math.isclose(proxy_materials["material-b"].metallic, 0.04, abs_tol=1.0e-6)
+assert tuple(proxy_materials["material-b"].diffuse_color) == (0.0, 0.0, 1.0, 1.0)
+assert math.isclose(proxy_materials["material-c"].roughness, 0.39, abs_tol=1.0e-6)
+assert math.isclose(proxy_materials["material-c"].metallic, 0.61, abs_tol=1.0e-6)
 obj = bpy.data.objects.new("classiCAD.surface-proxy.contract", mesh)
 obj["classiCAD_proxy_geometry"] = "NurbsSurface and NurbsSolid"
 bpy.context.scene.collection.objects.link(obj)

@@ -537,8 +537,10 @@ def classiCAD_materials(document):
                 "classiCAD.Material." + str(record.get("name", material_id))
             )
             material["classiCAD_material_id"] = material_id
-            color = record.get("baseColorSceneLinear", [0.8, 0.8, 0.8, 1.0])
-            material.diffuse_color = tuple(float(value) for value in color[:4])
+        color = record.get("baseColorSceneLinear", [0.8, 0.8, 0.8, 1.0])
+        material.diffuse_color = tuple(float(value) for value in color[:4])
+        material.roughness = float(record.get("roughness", 0.5))
+        material.metallic = float(record.get("metallic", 0.0))
         result[material_id] = material
     return result
 

@@ -7124,8 +7124,12 @@ int main(int argc, char *argv[])
                                 display.save(displayPath);
                             lightingCapturesSucceeded &= linearSaved &&
                                                          displaySaved;
-                            if (captureCase.mode ==
-                                ViewportLightingMode::MatCap) {
+                            const bool captureQPainterLighting =
+                                captureCase.mode ==
+                                    ViewportLightingMode::MatCap ||
+                                stem == QStringLiteral(
+                                    "studio_paint_world_37");
+                            if (captureQPainterLighting) {
                                 CurveHitTester qpainterMatcapHitTester;
                                 ViewportRenderer qpainterMatcapRenderer(
                                     gpuTransform, qpainterMatcapHitTester);
@@ -7193,7 +7197,11 @@ int main(int argc, char *argv[])
                                         polygonCubeObject.preparedDepthGeometry.data(),
                                         {},
                                         polygonCubeObject.displayColorSceneLinear,
-                                        std::nullopt,
+                                        captureCase.mode ==
+                                                ViewportLightingMode::Studio
+                                            ? std::optional<WorkbenchMaterialData>(
+                                                  polygonCubeObject.workbenchMaterial)
+                                            : std::nullopt,
                                         polygonCubeObject.displayName, QString(),
                                         identityMeshObjectTransform,
                                         polygonCubeObject.meshMaterials,

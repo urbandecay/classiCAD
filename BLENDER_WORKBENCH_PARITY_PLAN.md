@@ -1590,6 +1590,30 @@ cameras, and QPainter output remain open. The classiCAD offscreen
 `viewport_render_contracts` capture passed (1/1), and the Blender 5.2.2
 background render and PFM conversion completed.
 
+**QPainter world-space Studio rotation comparison (2026-10-14):** Extended
+the same opt-in cube capture to the production QPainter renderer for Studio
+`Paint`, world-space lighting, 37° rotation, specular enabled, AA Off, AgX,
+zero dither, and the matched 640×480 orthographic camera. All 27 interior
+probes match Blender 5.2.2 display RGB exactly; scene-linear probe MAE is
+`0.0001313` with max `0.0004581` (top/front/right MAE `0.000034`, `0.000237`,
+`0.000123`). The GPU probes also match exactly; its foreground mask IoU is
+`0.997991` (224 XOR pixels). QPainter's full-frame mask IoU is `0.994440`
+(622 XOR pixels), with full-frame scene-linear channel MAE `0.004292` and
+display channel MAE `0.6246/255`; its interior probes remain close despite
+the larger full-frame/edge residuals. This verifies one non-cardinal CPU
+lighting rotation and does not establish other Studio presets, camera
+orientations, AA modes, or general QPainter edge parity. Blender 5.2.2's
+world-space light transform is pinned in
+[`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh).
+Reproduce with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<output>
+QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`,
+then render the Blender `Paint` 37° case using
+`tests/workbench_cube_reference.py --lighting STUDIO --light-preset Paint
+--world-space-lighting --rotation-degrees 37 --aa OFF --zero-dither
+--ortho-scale 5.0 --match-classicad-ortho` and compare the matching PNG/PFM
+files with `workbench_display_probe_compare.py`, `workbench_image_compare.py`,
+and `workbench_pfm_compare.py`.
+
 **GPU deferred lighting-resolve comparison (2026-10-14):** Fresh matched
 Blender 5.2.2 and classiCAD 640x480 captures exercised deferred-resolve-
 eligible scenes at AA Off with zero dither, the same orthographic camera,

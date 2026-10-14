@@ -397,6 +397,79 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
                for actual, expected in zip(float_texture_node.image.pixels[:], float_pixels))
     assert bytes(float_texture_node.image.packed_file.data) == float_exr_data
 
+    # Source-less float payloads become packed scene-linear EXRs. PREMUL data
+    # is already multiplied by alpha in the transport, so the proxy preserves
+    # its values and restores the original alpha mode without multiplying RGB
+    # a second time.
+    payload_modes = {
+        "STRAIGHT": [0.8, 0.2, -0.4, 0.25, 1.5, -2.0, 0.75, 0.5],
+        "PREMUL": [0.2, 0.05, -0.1, 0.25, 0.75, -1.0, 0.375, 0.5],
+        "NONE": [0.8, 0.2, -0.4, 0.25, 1.5, -2.0, 0.75, 0.5],
+        "CHANNEL_PACKED": [0.8, 0.2, -0.4, 0.25, 1.5, -2.0, 0.75, 0.5],
+    }
+    float_payload_materials = []
+    for alpha_mode, expected_pixels in payload_modes.items():
+        material_id = "material-float-payload-" + alpha_mode.lower()
+        source_color_space = "ACEScg" if alpha_mode == "PREMUL" else "sRGB"
+        transform_id = "a" * 64 if alpha_mode == "PREMUL" else "blender-float-buffer"
+        document["materials"].append({
+            "id": material_id, "name": "Float Payload " + alpha_mode,
+            "baseColorSceneLinear": [1, 1, 1, 1], "roughness": 0.5,
+            "metallic": 0.0,
+            "imageTextures": [{
+                "nodeName": "ProxyContract.Payload." + alpha_mode,
+                "nodeType": "TEX_IMAGE",
+                "imageName": "ProxyContract.PayloadImage." + alpha_mode,
+                "filepath": "", "colorSpace": source_color_space,
+                "alphaMode": alpha_mode, "interpolation": "Linear",
+                "extension": "REPEAT", "sourceTransformId": transform_id,
+                "sceneLinearFloatWidth": 2, "sceneLinearFloatHeight": 1,
+                "sceneLinearFloatDataBase64": base64.b64encode(
+                    b"".join(struct.pack("<f", value)
+                             for value in expected_pixels)
+                ).decode("ascii"),
+                "packedDataBase64": "", "packed": False,
+                "sourceFileExists": False, "tiles": [],
+            }],
+        })
+        float_payload_materials.append((material_id, alpha_mode, source_color_space,
+                                        expected_pixels))
+    assert adapter._create_classicad_float_payload_image({
+        "sceneLinearFloatWidth": 3, "sceneLinearFloatHeight": 1,
+        "sceneLinearFloatDataBase64": base64.b64encode(
+            struct.pack("<8f", *payload_modes["STRAIGHT"])
+        ).decode("ascii"),
+    }) is None
+    assert adapter._create_classicad_float_payload_image({
+        "sceneLinearFloatWidth": 1, "sceneLinearFloatHeight": 1,
+        "sceneLinearFloatDataBase64": base64.b64encode(
+            struct.pack("<4f", float("nan"), 0.0, 0.0, 1.0)
+        ).decode("ascii"),
+    }) is None
+    payload_material_map = adapter.classiCAD_materials(document)
+    for material_id, alpha_mode, source_color_space, expected_pixels in float_payload_materials:
+        payload_material = payload_material_map[material_id]
+        obj.data.materials.append(payload_material)
+        payload_node = next(
+            node for node in payload_material.node_tree.nodes
+            if node.get("classiCAD_proxy_image_node")
+        )
+        payload_image = payload_node.image
+        assert payload_node.show_texture and payload_node.interpolation == "Linear"
+        assert payload_image.is_float and payload_image.alpha_mode == alpha_mode
+        assert payload_image.colorspace_settings.name == "Non-Color"
+        assert payload_image.get("classiCAD_source_alpha_mode") == alpha_mode
+        assert payload_image.get("classiCAD_source_color_space") == source_color_space
+        assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
+                   for actual, expected in zip(payload_image.pixels[:], expected_pixels))
+        assert payload_image.packed_file is not None
+    image_count_after_float_sync = sum(
+        1 for image in bpy.data.images if image.get("classiCAD_proxy_image")
+    )
+    adapter.classiCAD_materials(document)
+    assert sum(1 for image in bpy.data.images
+               if image.get("classiCAD_proxy_image")) == image_count_after_float_sync
+
     # Rebuild packed and external UDIM sources as packed Blender tiled images.
     packed_udim_template = str(pathlib.Path(directory) / "packed.<UDIM>.png")
     external_udim_template = str(pathlib.Path(directory) / "external.<UDIM>.png")
@@ -521,6 +594,9 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             )).unlink(missing_ok=True)
         template_path.parent.rmdir()
     float_exr_path.unlink()
+    for temporary_float_path in adapter.TEMPORARY_PROXY_IMAGE_PATHS:
+        pathlib.Path(temporary_float_path).unlink(missing_ok=True)
+    adapter.TEMPORARY_PROXY_IMAGE_PATHS.clear()
     bpy.ops.wm.open_mainfile(filepath=str(blend_path))
     material_a = next(
         material for material in bpy.data.materials
@@ -573,6 +649,24 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
                for actual, expected in zip(float_texture_node.image.pixels[:], float_pixels))
     assert bytes(float_texture_node.image.packed_file.data) == float_exr_data
+    for material_id, alpha_mode, source_color_space, expected_pixels in float_payload_materials:
+        payload_material = next(
+            material for material in bpy.data.materials
+            if material.get("classiCAD_material_id") == material_id
+        )
+        payload_node = next(
+            node for node in payload_material.node_tree.nodes
+            if node.get("classiCAD_proxy_image_node")
+        )
+        payload_image = payload_node.image
+        assert payload_node.show_texture and payload_node.interpolation == "Linear"
+        assert payload_image.is_float and payload_image.alpha_mode == alpha_mode
+        assert payload_image.colorspace_settings.name == "Non-Color"
+        assert payload_image.get("classiCAD_source_alpha_mode") == alpha_mode
+        assert payload_image.get("classiCAD_source_color_space") == source_color_space
+        assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
+                   for actual, expected in zip(payload_image.pixels[:], expected_pixels))
+        assert payload_image.packed_file is not None
     for material_id, expected_node, expected_tiles in (
             ("material-udim-packed", "ProxyContract.PackedUDIM",
              {1001: png_data, 1002: png_data_udim}),

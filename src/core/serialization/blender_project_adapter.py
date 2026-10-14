@@ -2,11 +2,13 @@
 
 import json
 import atexit
+from array import array
 import base64
 import hashlib
 import math
 import os
 import shutil
+import struct
 import sys
 import tempfile
 import traceback
@@ -20,6 +22,9 @@ PROJECT_FORMAT = "classiCAD.vignola"
 PROJECT_FORMAT_VERSION = 1
 DOCUMENT_TEXT_NAME = "classiCAD.DocumentData"
 ROOT_COLLECTION_NAME = "classiCAD"
+MAX_PROXY_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_PROXY_IMAGE_PIXELS = MAX_PROXY_IMAGE_BYTES // 16
+TEMPORARY_PROXY_IMAGE_PATHS = []
 
 
 def _remove_temporary_image_file(path):
@@ -31,6 +36,89 @@ def _remove_temporary_image_file(path):
 
 def _remove_temporary_image_directory(path):
     shutil.rmtree(path, ignore_errors=True)
+
+
+def _create_classicad_float_payload_image(reference):
+    """Persist sampler-ready scene-linear float texels as a packed EXR."""
+    encoded = reference.get("sceneLinearFloatDataBase64", "")
+    width = reference.get("sceneLinearFloatWidth", 0)
+    height = reference.get("sceneLinearFloatHeight", 0)
+    if (not isinstance(encoded, str) or not encoded or
+            len(encoded) > ((MAX_PROXY_IMAGE_BYTES + 2) // 3) * 4 or
+            isinstance(width, bool) or not isinstance(width, int) or width <= 0 or
+            isinstance(height, bool) or not isinstance(height, int) or height <= 0 or
+            width * height > MAX_PROXY_IMAGE_PIXELS):
+        return None
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        return None
+    expected_bytes = width * height * 16
+    if len(payload) != expected_bytes or len(payload) > MAX_PROXY_IMAGE_BYTES:
+        return None
+    pixels = array("f")
+    pixels.frombytes(payload)
+    if sys.byteorder != "little":
+        pixels.byteswap()
+    if not all(math.isfinite(value) for value in pixels):
+        return None
+
+    generated = None
+    image = None
+    temporary_path = ""
+    try:
+        generated = bpy.data.images.new(
+            reference.get("imageName") or "classiCAD Float Texture",
+            width=width, height=height, float_buffer=True, alpha=True,
+        )
+        # The transport has already applied Blender's source color conversion
+        # and PREMUL RGB operation, so store its values without another one.
+        generated.colorspace_settings.name = "Non-Color"
+        generated.alpha_mode = "STRAIGHT"
+        generated.pixels.foreach_set(pixels)
+        generated.file_format = "OPEN_EXR"
+        with tempfile.NamedTemporaryFile(suffix=".exr", delete=False) as handle:
+            temporary_path = handle.name
+        render_settings = bpy.context.scene.render.image_settings
+        previous_color_mode = render_settings.color_mode
+        try:
+            render_settings.color_mode = "RGBA"
+            generated.filepath_raw = temporary_path
+            generated.save()
+        finally:
+            render_settings.color_mode = previous_color_mode
+        file_size = os.path.getsize(temporary_path)
+        if file_size <= 0 or file_size > MAX_PROXY_IMAGE_BYTES:
+            raise ValueError("packed float EXR exceeds the 32 MiB image limit")
+        with open(temporary_path, "rb") as handle:
+            exr_data = handle.read(MAX_PROXY_IMAGE_BYTES + 1)
+        if len(exr_data) != file_size:
+            raise ValueError("packed float EXR could not be read completely")
+        image = bpy.data.images.load(temporary_path, check_existing=False)
+        image.colorspace_settings.name = "Non-Color"
+        image.alpha_mode = reference.get("alphaMode", "STRAIGHT")
+        image.pack(data=exr_data, data_len=len(exr_data))
+        if image.packed_file is None or bytes(image.packed_file.data) != exr_data:
+            raise ValueError("Blender did not retain the packed float EXR bytes")
+        image["classiCAD_proxy_image"] = True
+        image["classiCAD_proxy_float_payload"] = True
+        image["classiCAD_source_color_space"] = reference.get("colorSpace", "")
+        image["classiCAD_source_alpha_mode"] = reference.get("alphaMode", "STRAIGHT")
+        image.filepath = ""
+        image.filepath_raw = ""
+        TEMPORARY_PROXY_IMAGE_PATHS.append(temporary_path)
+        atexit.register(_remove_temporary_image_file, temporary_path)
+        temporary_path = ""
+    except (RuntimeError, OSError, ValueError, TypeError, OverflowError):
+        if image is not None:
+            bpy.data.images.remove(image)
+        image = None
+    finally:
+        if generated is not None:
+            bpy.data.images.remove(generated)
+        if temporary_path:
+            _remove_temporary_image_file(temporary_path)
+    return image
 
 
 def require_pinned_blender():
@@ -620,65 +708,69 @@ def _sync_classicad_image_texture(material, record):
     _remove_classicad_image_nodes(material, managed_nodes)
 
     image = None
+    float_payload_image = False
     packed_data = reference.get("packedDataBase64", "")
     if tiles:
         image = _create_classicad_tiled_image(reference)
-        if image is None:
-            return
     elif packed_data:
         try:
             image_bytes = base64.b64decode(packed_data, validate=True)
         except (ValueError, TypeError):
-            return
-        if not image_bytes or len(image_bytes) > 32 * 1024 * 1024:
-            return
-        suffix = os.path.splitext(reference.get("filepath", ""))[1]
-        if not suffix:
-            if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-                suffix = ".png"
-            elif image_bytes.startswith(b"\xff\xd8"):
-                suffix = ".jpg"
-            elif image_bytes.startswith(b"\x76\x2f\x31\x01"):
-                suffix = ".exr"
-            else:
-                return
-        temporary_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
-                temporary_path = handle.name
-                handle.write(image_bytes)
-            image = bpy.data.images.load(temporary_path, check_existing=False)
-            image.pack(data=image_bytes, data_len=len(image_bytes))
-        except (RuntimeError, OSError, ValueError):
-            if image is not None:
-                bpy.data.images.remove(image)
-            if temporary_path and os.path.exists(temporary_path):
-                os.remove(temporary_path)
-            return
-        atexit.register(_remove_temporary_image_file, temporary_path)
-    else:
+            image_bytes = b""
+        if image_bytes and len(image_bytes) <= MAX_PROXY_IMAGE_BYTES:
+            suffix = os.path.splitext(reference.get("filepath", ""))[1]
+            if not suffix:
+                if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                    suffix = ".png"
+                elif image_bytes.startswith(b"\xff\xd8"):
+                    suffix = ".jpg"
+                elif image_bytes.startswith(b"\x76\x2f\x31\x01"):
+                    suffix = ".exr"
+            if suffix:
+                temporary_path = ""
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+                        temporary_path = handle.name
+                        handle.write(image_bytes)
+                    image = bpy.data.images.load(temporary_path, check_existing=False)
+                    image.pack(data=image_bytes, data_len=len(image_bytes))
+                    atexit.register(_remove_temporary_image_file, temporary_path)
+                    temporary_path = ""
+                except (RuntimeError, OSError, ValueError, TypeError):
+                    if image is not None:
+                        bpy.data.images.remove(image)
+                    image = None
+                finally:
+                    if temporary_path:
+                        _remove_temporary_image_file(temporary_path)
+    if image is None and not tiles:
         filepath = reference.get("filepath", "")
-        if (not reference.get("sourceFileExists") or not filepath or
-                not os.path.isfile(filepath)):
-            return
-        try:
-            if os.path.getsize(filepath) > 32 * 1024 * 1024:
-                return
-            image = bpy.data.images.load(filepath, check_existing=False)
-        except (RuntimeError, OSError, ValueError):
-            return
+        if (reference.get("sourceFileExists") and filepath and
+                os.path.isfile(filepath)):
+            try:
+                if os.path.getsize(filepath) <= MAX_PROXY_IMAGE_BYTES:
+                    image = bpy.data.images.load(filepath, check_existing=False)
+            except (RuntimeError, OSError, ValueError):
+                image = None
+    if image is None and not tiles:
+        image = _create_classicad_float_payload_image(reference)
+        float_payload_image = image is not None
+    if image is None:
+        return
 
     try:
         image["classiCAD_proxy_image"] = True
         image.name = reference.get("imageName") or image.name
-        if packed_data:
+        if not tiles and (packed_data or float_payload_image):
             image.filepath = ""
             image.filepath_raw = ""
         elif reference.get("filepath") and not tiles:
             image.filepath = reference["filepath"]
             image.filepath_raw = reference["filepath"]
-        image.alpha_mode = reference.get("alphaMode", "STRAIGHT")
-        color_space = reference.get("colorSpace", "sRGB")
+        if not float_payload_image:
+            image.alpha_mode = reference.get("alphaMode", "STRAIGHT")
+        color_space = ("Non-Color" if float_payload_image else
+                       reference.get("colorSpace", "sRGB"))
         if color_space:
             image.colorspace_settings.name = color_space
     except (TypeError, ValueError):

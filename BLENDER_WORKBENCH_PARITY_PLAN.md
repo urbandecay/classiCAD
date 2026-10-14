@@ -2945,10 +2945,29 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   transform ID, and a scene-linear payload. It checks float pixels, sampler
   settings, colorspace, alpha mode, packed bytes, and `.blend` reopen after
   deleting the source EXR. This path uses original file bytes rather than
-  reconstructing texels from the float payload. Generated or missing-source
-  images that only carry the converted payload still cannot be represented in
-  a Blender proxy; PREMUL and other alpha-mode pixel parity for reconstructed
-  payloads remains open.
+  reconstructing texels from the float payload. Source-less references can
+  use the bounded payload materialization described below.
 - Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
   `cmake --build build -j4` passed with the dependency audit checking 314
   source files. Rendered pixel parity was not compared.
+
+### Blender proxy scene-linear float-payload materialization (2026-10-14)
+
+- Active non-tiled image references with no usable packed or external source
+  can now materialize their bounded scene-linear RGBA32F payload as a packed
+  OpenEXR image. The adapter checks the declared dimensions, exact payload
+  length, finite components, and the existing 32 MiB image limit. It writes
+  the sampler-ready channels without another color transform or PREMUL
+  multiply, restores the captured alpha mode after loading the EXR, and stores
+  the source colorspace and alpha metadata on the managed image. Blender 5.2.2
+  Workbench's image sampling remains the shader reference in
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60).
+- The Blender proxy contract covers source-less 2×1 payloads for STRAIGHT,
+  PREMUL, NONE, and CHANNEL_PACKED modes, including negative and above-one
+  values and fractional alpha. It verifies exact float texels, restored mode,
+  active node and sampler state, packed data, repeated synchronization, and
+  save/reopen. This checks stored sampling data and mode transport; a matched
+  rendered-pixel comparison is still open. Tiled per-tile float payloads and
+  payloads that fail the declared bounds remain unsupported.
+- Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
+  `cmake --build build -j4` and the 314-file dependency audit passed.

@@ -46,6 +46,10 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
                                   qreal apertureRotationRadians,
                                   qreal apertureRatio) noexcept;
 
+// Blender Workbench's DOF resolve uses smoothstep(1, 3, abs(CoC)) to blend
+// its gathered bokeh image over the sharp source.
+float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept;
+
 // Blender Workbench's signed screen-curvature response from four cardinal
 // view-space normal components and their object-ID outline mask.
 float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,

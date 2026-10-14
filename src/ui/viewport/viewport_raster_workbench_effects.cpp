@@ -463,6 +463,13 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
                    std::sin(angle) * radius);
 }
 
+float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept
+{
+    const float t = std::clamp((std::abs(cocPixels) - 1.0f) / 2.0f,
+                               0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 bool compositeRasterWorkbenchSurfaces(
     QImage *colorImage,
     const QVector<ViewportRenderObject> &objects,
@@ -2311,7 +2318,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         ((z - focus) / std::max<qreal>(z, 1.0e-6)));
                     const qreal radius = std::clamp(
                         cocMm * outputWidth / sensorWidth, 0.0, 12.0) * colorDpr;
-                    if (radius < 0.75 * colorDpr) continue;
+                    const qreal mix = rasterWorkbenchDofResolveBlend(
+                        static_cast<float>(radius / colorDpr));
+                    if (mix <= 0.0) continue;
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     int count = 0;
                     // QPainter has no temporal AA sample sequence to rotate
@@ -2349,7 +2358,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                     if (count == 0) continue;
                     const QRgb original = source.pixel(x, y);
-                    const qreal mix = std::clamp(radius / (6.0 * colorDpr), 0.0, 1.0);
                     out[x] = qRgba(
                         qRound(qRed(original) * (1.0 - mix) + red / count * mix),
                         qRound(qGreen(original) * (1.0 - mix) + green / count * mix),

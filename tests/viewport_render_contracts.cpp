@@ -99,6 +99,15 @@ int main(int argc, char *argv[])
     passed &= check(std::abs(expectedDofNoise.x() - 0.05872736f) < 2.0e-6f &&
                         std::abs(expectedDofNoise.y() + 0.37078980f) < 2.0e-6f,
                     "Workbench DOF IGN and blue-noise vector must match the pinned shader equation");
+    passed &= check(
+        rasterWorkbenchDofResolveBlend(0.8f) == 0.0f &&
+            rasterWorkbenchDofResolveBlend(1.0f) == 0.0f &&
+            std::abs(rasterWorkbenchDofResolveBlend(2.0f) - 0.5f) < 1.0e-7f &&
+            rasterWorkbenchDofResolveBlend(3.0f) == 1.0f &&
+            rasterWorkbenchDofResolveBlend(4.0f) == 1.0f &&
+            rasterWorkbenchDofResolveBlend(-2.0f) ==
+                rasterWorkbenchDofResolveBlend(2.0f),
+        "QPainter Workbench DOF resolve must use Blender's smoothstep CoC blend from one to three pixels");
     if (application.arguments().contains(QStringLiteral("--dof-jitter-only"))) {
         return passed ? 0 : 1;
     }
@@ -384,6 +393,28 @@ int main(int argc, char *argv[])
         orthographicDofImage.pixelColor(32, 64).red();
     const int defocusedOrthographicRed =
         orthographicDofImage.pixelColor(96, 64).red();
+    const qreal focalMeters =
+        orthographicDofOptics.focalLengthMillimeters * 0.001;
+    const qreal focusDistance = orthographicDofOptics.focusDistance;
+    const qreal sensorWidthMeters =
+        orthographicDofOptics.opticalSensorSizeMillimeters * 0.001;
+    const qreal cocScale =
+        0.5 * focalMeters * focalMeters /
+        (orthographicDofOptics.fStop *
+         std::abs(focusDistance - focalMeters)) *
+        orthographicDofSize.width() / sensorWidthMeters;
+    const qreal subpixelCocDepth =
+        focusDistance / (1.0 - 0.8 / cocScale);
+    const ViewportRenderObject subpixelCocObject =
+        makeOrthographicDofObject(5, subpixelCocDepth, 8.0, 56.0);
+    QImage subpixelCocImage(orthographicDofSize,
+                            QImage::Format_ARGB32_Premultiplied);
+    subpixelCocImage.fill(Qt::black);
+    subpixelCocImage.setPixelColor(32, 64, Qt::red);
+    const QImage subpixelCocSharpImage = subpixelCocImage.copy();
+    applyRasterWorkbenchEffects(
+        &subpixelCocImage, {subpixelCocObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, orthographicDofSettings);
 
     // CPU shadow fallback: an opaque elevated quad casts onto an opaque
     // receiver. The input image is deliberately uniform so changed pixels
@@ -583,8 +614,9 @@ int main(int argc, char *argv[])
     passed &= check(
         focusedOrthographicRed == 255 && defocusedOrthographicRed > 0 &&
             defocusedOrthographicRed < 240 &&
+            subpixelCocImage == subpixelCocSharpImage &&
             translatedOrthographicDofImage == orthographicDofImage,
-        "orthographic scene-camera DOF must preserve an in-focus impulse, gather a defocused surface, and remain invariant when the view target and scene translate together");
+        "orthographic scene-camera DOF must preserve an in-focus impulse, leave a 0.8-pixel-CoC image sharp, gather a defocused surface, and remain invariant when the view target and scene translate together");
 
     const auto makeOutlineScaleObject = [&]() {
         ViewportRenderObject object;

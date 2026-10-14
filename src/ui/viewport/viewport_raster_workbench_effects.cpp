@@ -1440,8 +1440,18 @@ bool compositeRasterWorkbenchSurfaces(
             }
         }
     }
+    const bool sortedSceneLinearDofPending =
+        surfaceLayers != nullptr && shadingSettings.depthOfField &&
+        !shadingSettings.shadows &&
+        !shadingSettings.xrayEnabled() &&
+        transform.cameraPreferences().sceneCameraEnabled;
+    const bool sortedXraySuppressesDof = shadingSettings.xrayEnabled();
     const bool retainSortedSceneLinear = surfaceLayers != nullptr &&
-        !shadingSettings.depthOfField && sceneLinearDestinationValid;
+        (!shadingSettings.depthOfField || sortedSceneLinearDofPending ||
+         sortedXraySuppressesDof) &&
+        !(shadingSettings.shadows && shadingSettings.depthOfField &&
+          !shadingSettings.xrayEnabled()) &&
+        sceneLinearDestinationValid;
     const bool canResolveSortedOutlineInSceneLinear =
         retainSortedSceneLinear && shadingSettings.outline;
     const bool deferSortedOutlineUntilEffects =
@@ -1547,6 +1557,7 @@ bool compositeRasterWorkbenchSurfaces(
                 static_cast<std::size_t>(pixelCount), 0.0f);
             surfaceLayers->sceneLinearOutlinePending = true;
         }
+        surfaceLayers->sceneLinearDofPending = sortedSceneLinearDofPending;
     }
     const QVector3D sortedOutlineColor = canResolveSortedOutlineInSceneLinear
         ? workbenchSrgbToSceneLinear(QVector3D(
@@ -2917,7 +2928,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             surfaceLayers->sceneLinearSize == QSize(outputWidth, outputHeight) &&
             surfaceLayers->sceneLinearColor.size() ==
                 static_cast<std::size_t>(outputWidth) * outputHeight &&
-            surfaceLayers->outlineAppliedBeforeDisplay;
+            (!settings.outline ||
+             surfaceLayers->outlineAppliedBeforeDisplay);
         const QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage gatheredResult = source.copy();
         std::vector<LinearGatherPixel> gatheredLinear;

@@ -2662,18 +2662,21 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   and AgX. The gather kernel, CoC approximation, and far-plane spill behavior
   remain the QPainter fallback's existing approximations.
 - The sorted fallback now retains its scene-linear result and resolves
-  four-cardinal object-ID outline coverage before display conversion when DOF
-  is inactive and the destination is transparent or its background was
-  supplied in scene-linear form. With shadows enabled, it retains the opaque
-  and transparent linear contributions, applies the software shadow, then
-  resolves the outline before display conversion. Its nearest visible ID
-  includes partial-alpha transparent fragments and in-front geometry.
-  Production-path CPU contracts verify the outline and shadow-plus-outline
-  resolves under Standard and AgX and confirm the later effects call does not
-  apply the outline twice. Sorted scenes with DOF enabled, plus legacy paths
-  without a trustworthy scene-linear destination, still use the display-space
-  outline fallback; already display-transformed pixels cannot generally be
-  inverted under AgX, Filmic, or a custom LUT.
+  four-cardinal object-ID outline coverage before display conversion when the
+  destination is transparent or its background was supplied in scene-linear
+  form. With shadows enabled and DOF off, it retains the opaque and transparent
+  linear contributions, applies the software shadow, then resolves the outline
+  before display conversion. With camera DOF enabled and shadows off, it
+  composites the outline before the existing bounded scene-linear gather and
+  display conversion. Its nearest visible ID includes partial-alpha
+  transparent fragments and in-front geometry. Production-path CPU contracts
+  verify outline-only, shadow-plus-outline, and DOF-plus-outline resolves under
+  Standard and AgX, including no duplicate outline application. Sorted scenes
+  combining shadows and DOF, plus legacy paths without a trustworthy
+  scene-linear destination, still use the display-space outline fallback;
+  already display-transformed pixels cannot generally be inverted under AgX,
+  Filmic, or a custom LUT. The sorted DOF gather remains the QPainter
+  approximation documented above.
 - Blender 5.2.2 reference: [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L368)
   binds the scene color target, and
   [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L252-L271)

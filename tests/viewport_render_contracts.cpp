@@ -521,6 +521,147 @@ int main(int argc, char *argv[])
             standardOutlineDof.first != agxOutlineDof.first,
         "weighted QPainter outline-plus-DOF must filter retained scene-linear color before one Standard or AgX display transform");
 
+    CurveHitTester sortedDofHitTester;
+    ViewportRenderer sortedDofRenderer(orthographicDofTransform,
+                                       sortedDofHitTester);
+    QVector<ViewportRenderObject> sortedDofObjects = orthographicDofObjects;
+    for (ViewportRenderObject &object : sortedDofObjects) {
+        object.shape.geometryType = GeometryType::PolygonMesh;
+        const QVector<QVector3D> &vertices =
+            object.preparedDepthGeometry->surfaceVertices;
+        object.shape.polygonMesh.vertices.reserve(vertices.size());
+        for (const QVector3D &vertex : vertices) {
+            object.shape.polygonMesh.vertices.append(
+                Point3D{vertex.x(), vertex.y(), vertex.z()});
+        }
+        object.shape.polygonMesh.faces = {{0, 1, 2}, {3, 4, 5}};
+        object.shape.polygonMesh.faceMaterialIndices = {0, 0};
+        object.hasWorkbenchMaterial = true;
+        object.workbenchMaterial.baseColorSceneLinear =
+            object.objectId.value() == 1
+                ? QVector3D(0.9f, 0.08f, 0.03f)
+                : QVector3D(0.02f, 0.12f, 0.85f);
+        object.meshMaterials = {object.workbenchMaterial};
+    }
+    const auto drawSortedDofObject = [&sortedDofRenderer,
+                                      &orthographicDofSize](
+        QPainter &painter, const ViewportRenderObject &object,
+        RasterWorkbenchFragmentSink *fragmentSink) {
+        sortedDofRenderer.drawShape(
+            painter, object.shape, orthographicDofSize, false, false, true,
+            QColor(), QString(), 0.0, object.objectId,
+            object.geometryRevision, object.preparedDepthGeometry.data(),
+            object.preparedGeometryOffset, object.displayColorSceneLinear,
+            object.workbenchMaterial, object.displayName, object.libraryPath,
+            object.meshObjectTransform, object.meshMaterials, fragmentSink);
+    };
+    struct SortedDofOutlineRender {
+        QImage image;
+        RasterWorkbenchSurfaceLayers layers;
+        std::vector<RasterWorkbenchLinearPixel> beforeEffects;
+        bool rendered = false;
+    };
+    const auto renderSortedDofOutline = [&](int colorTransform,
+                                            bool withOutline,
+                                            bool withDof) {
+        ViewportShadingSettings settings = orthographicDofSettings;
+        settings.outline = withOutline;
+        settings.depthOfField = withDof;
+        settings.shadows = false;
+        settings.outlineColor = QColor(235, 185, 35);
+        settings.colorTransform = colorTransform;
+        QImage image(orthographicDofSize,
+                     QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        SortedDofOutlineRender result;
+        sortedDofRenderer.setShadingSettings(settings);
+        result.rendered = compositeRasterWorkbenchSurfaces(
+            &image, sortedDofObjects, orthographicDofTransform,
+            orthographicDofSize, 1.0, false, false, settings,
+            QVector3D(0.12f, 0.07f, 0.035f), drawSortedDofObject,
+            &result.layers);
+        result.beforeEffects = result.layers.sceneLinearColor;
+        applyRasterWorkbenchEffects(
+            &image, sortedDofObjects, orthographicDofTransform,
+            orthographicDofSize, 1.0, settings, &result.layers);
+        result.image = std::move(image);
+        return result;
+    };
+    const SortedDofOutlineRender sortedStandardDofOutline =
+        renderSortedDofOutline(1, true, true);
+    const SortedDofOutlineRender sortedAgxDofOutline =
+        renderSortedDofOutline(0, true, true);
+    const SortedDofOutlineRender sortedStandardDofOnly =
+        renderSortedDofOutline(1, false, true);
+    bool sortedDofDisplayMatches = true;
+    bool sortedDofChangedScene = false;
+    bool sortedDofOutlineChangedScene = false;
+    if (sortedStandardDofOutline.layers.sceneLinearSize ==
+            orthographicDofSize &&
+        sortedAgxDofOutline.layers.sceneLinearSize == orthographicDofSize &&
+        sortedStandardDofOnly.layers.sceneLinearSize == orthographicDofSize) {
+        for (int y = 0; y < orthographicDofSize.height(); ++y) {
+            for (int x = 0; x < orthographicDofSize.width(); ++x) {
+                const std::size_t index = static_cast<std::size_t>(
+                    y * orthographicDofSize.width() + x);
+                const RasterWorkbenchLinearPixel &standard =
+                    sortedStandardDofOutline.layers.sceneLinearColor[index];
+                const RasterWorkbenchLinearPixel &agx =
+                    sortedAgxDofOutline.layers.sceneLinearColor[index];
+                const RasterWorkbenchLinearPixel &withoutOutline =
+                    sortedStandardDofOnly.layers.sceneLinearColor[index];
+                sortedDofChangedScene |= std::abs(
+                    standard.red - sortedStandardDofOutline.beforeEffects[
+                        index].red) > 1.0e-5f || std::abs(
+                    standard.green - sortedStandardDofOutline.beforeEffects[
+                        index].green) > 1.0e-5f || std::abs(
+                    standard.blue - sortedStandardDofOutline.beforeEffects[
+                        index].blue) > 1.0e-5f;
+                sortedDofOutlineChangedScene |= std::abs(
+                    standard.red - withoutOutline.red) > 1.0e-5f ||
+                    std::abs(standard.green - withoutOutline.green) > 1.0e-5f ||
+                    std::abs(standard.blue - withoutOutline.blue) > 1.0e-5f;
+                sortedDofDisplayMatches &=
+                    std::abs(standard.red - agx.red) < 1.0e-5f &&
+                    std::abs(standard.green - agx.green) < 1.0e-5f &&
+                    std::abs(standard.blue - agx.blue) < 1.0e-5f &&
+                    std::abs(standard.alpha - agx.alpha) < 1.0e-5f;
+                for (const auto &[pixel, transformIndex] : {
+                         std::pair<QRgb, int>{
+                             sortedStandardDofOutline.image.pixel(x, y), 1},
+                         std::pair<QRgb, int>{
+                             sortedAgxDofOutline.image.pixel(x, y), 0}}) {
+                    const RasterWorkbenchLinearPixel &linear =
+                        transformIndex == 1 ? standard : agx;
+                    const QVector3D display =
+                        workbenchSceneLinearToDisplaySrgb(
+                            QVector3D(linear.red / linear.alpha,
+                                      linear.green / linear.alpha,
+                                      linear.blue / linear.alpha),
+                            transformIndex, 0.0f, 1.0f, {}, {});
+                    sortedDofDisplayMatches &= pixel == qPremultiply(qRgba(
+                        qRound(display.x() * 255.0f),
+                        qRound(display.y() * 255.0f),
+                        qRound(display.z() * 255.0f),
+                        qRound(linear.alpha * 255.0f)));
+                }
+            }
+        }
+    } else {
+        sortedDofDisplayMatches = false;
+    }
+    sortedDofRenderer.setShadingSettings(orthographicDofSettings);
+    passed &= check(
+        sortedStandardDofOutline.rendered && sortedAgxDofOutline.rendered &&
+            sortedStandardDofOnly.rendered &&
+            sortedStandardDofOutline.layers.outlineAppliedBeforeDisplay &&
+            sortedAgxDofOutline.layers.outlineAppliedBeforeDisplay &&
+            !sortedStandardDofOutline.layers.sceneLinearDofPending &&
+            !sortedAgxDofOutline.layers.sceneLinearDofPending &&
+            sortedDofChangedScene && sortedDofOutlineChangedScene &&
+            sortedDofDisplayMatches,
+        "sorted QPainter outline-plus-DOF must resolve outline and blur in scene-linear color before one Standard or AgX display transform");
+
     // CPU shadow fallback: an opaque elevated quad casts onto an opaque
     // receiver. The input image is deliberately uniform so changed pixels
     // expose only the software shadow pass.

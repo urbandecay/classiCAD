@@ -2446,6 +2446,15 @@ above is from scene-linear captures and remains the preferred color metric.
   Float RGBA16F offscreen contracts confirm both sub-cutoff positive density
   and negative density contribute Blender-style alpha/scattering. This follows
   Blender's pinned [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L225-L250).
+- GPU and QPainter slice opacity use the selected object-space dimension
+  multiplied by object scale, without rotating the bounds into a world AABB.
+  A direct offscreen GPU contract rotates an anisotropic 2×2×4 volume so the
+  world-X AABB is twice its object-X dimension, then verifies the GPU opacity
+  still corresponds to Blender's `0.05 * dimensions[axis]` step. The pinned
+  [`VolumePass::draw_slice_ps`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc#L1026-L1063)
+  gets dimensions from `BKE_object_dimensions_get`; the pinned
+  [`object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc#L3498-L3509)
+  defines those dimensions without rotating the bounds into world axes.
 - A direct `QOpenGLContext` + `QOffscreenSurface` + FBO contract renders a
   synthetic active volume, confirms the `Volume` pass is reported, and checks
   that more than 100 pixels change. This does not launch the classiCAD window.

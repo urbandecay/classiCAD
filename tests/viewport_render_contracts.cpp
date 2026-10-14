@@ -4891,6 +4891,7 @@ int main(int argc, char *argv[])
             int gpuVolumeChangedPixels = 0;
             bool gpuLowDensityVolumePreserved = false;
             bool gpuSignedVolumeScatteringPreserved = false;
+            bool gpuRotatedVolumeSliceOpacityMatches = false;
             const QSize glSize(640, 480);
             ViewportTransform gpuTransform;
             gpuTransform.zoom() = 17.28;
@@ -8012,6 +8013,62 @@ int main(int argc, char *argv[])
                             negativeDensityDrawSucceeded &&
                             minimumNegativeDensityRed < 0.0f &&
                             maximumLowDensityAlpha > 0.0f;
+
+                        ScalarVolume3D rotatedSliceVolume;
+                        rotatedSliceVolume.name =
+                            QStringLiteral("rotated anisotropic slice");
+                        rotatedSliceVolume.activeBounds = {
+                            -1, -1, -2, 0, 0, 1};
+                        rotatedSliceVolume.expandedVoxelCount = 16;
+                        rotatedSliceVolume.denseVoxelCount = 16;
+                        rotatedSliceVolume.activeRecords = {
+                            {-1, -1, -2, 2, true, 1.0f},
+                            {-1, -1, 0, 2, true, 1.0f}};
+                        rotatedSliceVolume.displayDensity = 1.0f;
+                        rotatedSliceVolume.densityScale = 1.0f;
+                        rotatedSliceVolume.useSlice = true;
+                        rotatedSliceVolume.sliceAxis = QStringLiteral("X");
+                        rotatedSliceVolume.sliceDepth = 0.5f;
+                        rotatedSliceVolume.interpolationMethod =
+                            QStringLiteral("LINEAR");
+                        // A 90-degree Y rotation makes the world X AABB
+                        // extent 4, while Blender's selected object X
+                        // dimension remains 2. The expected opacity is
+                        // 1-exp(-density*2*0.05).
+                        rotatedSliceVolume.objectToWorld = {
+                            0.0, 0.0, -1.0, 0.0,
+                            0.0, 1.0, 0.0, 0.0,
+                            1.0, 0.0, 0.0, 0.0,
+                            0.0, 0.0, 0.0, 1.0};
+                        ViewportRenderObject rotatedSliceObject = volumeObject;
+                        rotatedSliceObject.shape.scalarVolume =
+                            rotatedSliceVolume;
+                        functions.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        const bool rotatedSliceDrawSucceeded =
+                            gpuSurfaceRenderer.draw(
+                                {rotatedSliceObject}, gpuTransform, glSize,
+                                1.0, volumeShading, false, true, false,
+                                &volumeTargets, nullptr, true);
+                        QVector<GLfloat> rotatedSlicePixels(
+                            glSize.width() * glSize.height() * 4);
+                        functions.glReadPixels(
+                            0, 0, glSize.width(), glSize.height(), GL_RGBA,
+                            GL_FLOAT, rotatedSlicePixels.data());
+                        GLfloat maximumRotatedSliceAlpha = 0.0f;
+                        for (qsizetype pixel = 0;
+                             pixel < qsizetype(glSize.width()) *
+                                         glSize.height();
+                             ++pixel) {
+                            maximumRotatedSliceAlpha = std::max(
+                                maximumRotatedSliceAlpha,
+                                rotatedSlicePixels[pixel * 4 + 3]);
+                        }
+                        gpuRotatedVolumeSliceOpacityMatches =
+                            rotatedSliceDrawSucceeded &&
+                            std::abs(maximumRotatedSliceAlpha -
+                                     (1.0f - std::exp(-0.1f))) < 0.015f;
                         floatFramebuffer.release();
                     }
                     functions.glDeleteTextures(1, &sceneDepthTexture);
@@ -8715,6 +8772,9 @@ int main(int argc, char *argv[])
                             "low-density volume extinction must remain nonzero in the float target");
             passed &= check(gpuSignedVolumeScatteringPreserved,
                             "negative scalar density must retain Blender's signed scattering");
+            passed &= check(
+                gpuRotatedVolumeSliceOpacityMatches,
+                "GPU scalar-volume slice opacity must use the selected object-axis extent without rotating it into a world AABB");
         }
     }
 

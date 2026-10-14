@@ -64,6 +64,76 @@ exact_geometry_before = {
     for record in document["objects"]
 }
 
+# Per-object proxy construction retains an independent UV pair for each
+# polygon corner, which allows NURBS seams without duplicating mesh vertices.
+single_proxy = adapter.add_nurbs_surface_mesh(
+    bpy.context.scene.collection,
+    "classiCAD.surface-proxy.uv-contract",
+    {},
+    {
+        "vertices": [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)],
+        "faces": [(0, 1, 2), (0, 2, 3)],
+        "cornerUvs": [
+            ((0.0, 0.0), (0.5, 0.0), (0.5, 1.0)),
+            ((0.8, 0.2), (0.5, 1.0), (0.0, 1.0)),
+        ],
+    },
+)
+assert single_proxy.data.uv_layers.active.name == "classiCAD.ParametricUV"
+assert single_proxy.data.uv_layers.active_render.name == "classiCAD.ParametricUV"
+single_uvs = [tuple(loop.uv) for loop in single_proxy.data.uv_layers.active.data]
+expected_single_uvs = [
+    (0.0, 0.0), (0.5, 0.0), (0.5, 1.0),
+    (0.8, 0.2), (0.5, 1.0), (0.0, 1.0),
+]
+assert len(single_uvs) == len(expected_single_uvs)
+assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
+           for actual_pair, expected_pair in zip(single_uvs, expected_single_uvs)
+           for actual, expected in zip(actual_pair, expected_pair))
+
+# Grouping surfaces from different NURBS parameter domains preserves their
+# per-face UV islands and does not normalize the whole layer as one object.
+uv_layer_id = "uv-contract-layer"
+uv_layer_collection = bpy.data.collections.new("ProxyContract.UVLayer")
+bpy.context.scene.collection.children.link(uv_layer_collection)
+adapter.create_grouped_scene_objects(
+    {uv_layer_id: uv_layer_collection},
+    [
+        {"id": "uv-a", "layerId": uv_layer_id,
+         "geometry": {"geometryType": 14}},
+        {"id": "uv-b", "layerId": uv_layer_id,
+         "geometry": {"geometryType": 14}},
+    ],
+    {
+        "uv-a": {
+            "vertices": [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            "faces": [(0, 1, 2)],
+            "cornerUvs": [((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))],
+        },
+        "uv-b": {
+            "vertices": [(2, 0, 0), (3, 0, 0), (2, 1, 0)],
+            "faces": [(0, 1, 2)],
+            "cornerUvs": [((0.25, 0.75), (0.75, 0.75), (0.25, 0.25))],
+        },
+    },
+    {"materials": []},
+)
+grouped_uv_proxy = next(
+    obj for obj in bpy.data.objects
+    if obj.get("classiCAD_layer_id") == uv_layer_id
+)
+assert grouped_uv_proxy.data.uv_layers.active.name == "classiCAD.ParametricUV"
+grouped_uvs = [tuple(loop.uv)
+               for loop in grouped_uv_proxy.data.uv_layers.active.data]
+expected_grouped_uvs = [
+    (0.0, 0.0), (1.0, 0.0), (0.0, 1.0),
+    (0.25, 0.75), (0.75, 0.75), (0.25, 0.25),
+]
+assert len(grouped_uvs) == len(expected_grouped_uvs)
+assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
+           for actual_pair, expected_pair in zip(grouped_uvs, expected_grouped_uvs)
+           for actual, expected in zip(actual_pair, expected_pair))
+
 # One grouped proxy contains two seed solids; its stable references do not
 # depend on polygon order or triangle count.
 mesh = bpy.data.meshes.new("ProxyContract.Group")
@@ -300,4 +370,4 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     assert external_texture_node.show_texture
     assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
 
-print("Blender project solid proxy face-material contract passed")
+print("Blender project proxy UV and solid face-material contract passed")

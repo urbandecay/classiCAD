@@ -4,6 +4,7 @@
 #include "core/document/collection_id.h"
 #include "core/document/document_collection.h"
 #include "core/geometry/geometry_type.h"
+#include "core/geometry/nurbs_surface_evaluator.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "core/geometry/polygon_mesh.h"
 #include "core/geometry/work_plane.h"
@@ -134,6 +135,7 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
         }
         QJsonArray vertices;
         QJsonArray faces;
+        QJsonArray cornerUvs;
         QJsonArray solidFaceIds;
         int surfaceIndex = 0;
         for (const auto &surface : classiCAD::shapeSurfaceFaces(sceneObject.geometry)) {
@@ -141,6 +143,22 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
             if (!tessellation.prepare(surface, displayOptions)) {
                 setError(errorMessage,
                          QStringLiteral("Could not tessellate NURBS surface object %1 for display")
+                             .arg(sceneObject.id.value()));
+                return false;
+            }
+            classiCAD::PreparedNurbsSurfaceEvaluator evaluator;
+            qreal uStart = 0.0;
+            qreal uEnd = 0.0;
+            qreal vStart = 0.0;
+            qreal vEnd = 0.0;
+            const QVector<QPointF> &textureParameters =
+                tessellation.vertexTextureParameters();
+            if (!evaluator.prepare(surface) ||
+                !evaluator.parameterDomains(&uStart, &uEnd, &vStart, &vEnd) ||
+                textureParameters.size() != tessellation.vertices().size() ||
+                uEnd <= uStart || vEnd <= vStart) {
+                setError(errorMessage,
+                         QStringLiteral("Could not prepare NURBS proxy texture coordinates for object %1")
                              .arg(sceneObject.id.value()));
                 return false;
             }
@@ -157,10 +175,20 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
             for (const classiCAD::PreparedNurbsSurfaceTessellation::Triangle &triangle :
                  tessellation.triangles()) {
                 QJsonArray face;
-                face.append(vertexOffset + triangle[0]);
-                face.append(vertexOffset + triangle[reversed ? 2 : 1]);
-                face.append(vertexOffset + triangle[reversed ? 1 : 2]);
+                QJsonArray uvFace;
+                const int orderedVertices[] = {
+                    triangle[0], triangle[reversed ? 2 : 1],
+                    triangle[reversed ? 1 : 2]};
+                for (const int vertexIndex : orderedVertices) {
+                    face.append(vertexOffset + vertexIndex);
+                    const QPointF parameter = textureParameters[vertexIndex];
+                    QJsonArray uv;
+                    uv.append((parameter.x() - uStart) / (uEnd - uStart));
+                    uv.append((parameter.y() - vStart) / (vEnd - vStart));
+                    uvFace.append(uv);
+                }
                 faces.append(face);
+                cornerUvs.append(uvFace);
                 if (sceneObject.geometry.geometryType == classiCAD::GeometryType::NurbsSolid) {
                     const auto &solid = sceneObject.geometry.nurbsSolid;
                     QString semanticFaceId;
@@ -183,6 +211,7 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
         QJsonObject mesh;
         mesh.insert(QStringLiteral("vertices"), vertices);
         mesh.insert(QStringLiteral("faces"), faces);
+        mesh.insert(QStringLiteral("cornerUvs"), cornerUvs);
         mesh.insert(QStringLiteral("solidFaceIds"), solidFaceIds);
         displayMeshes.insert(QString::number(sceneObject.id.value()), mesh);
     }

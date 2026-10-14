@@ -501,6 +501,7 @@ def add_nurbs_surface_mesh(layer_collection, object_name, surface_data, display_
                     for point in display_mesh.get("vertices", [])]
         faces = [tuple(int(index) for index in face)
                  for face in display_mesh.get("faces", [])]
+        corner_uvs = display_mesh.get("cornerUvs")
         if not vertices or not faces:
             raise ValueError("derived NURBS surface display mesh is empty")
     else:
@@ -517,18 +518,47 @@ def add_nurbs_surface_mesh(layer_collection, object_name, surface_data, display_
                 v = surface["domain_v"][0] + (surface["domain_v"][1] - surface["domain_v"][0]) * v_index / sample_count
                 vertices.append(evaluate_nurbs_surface(surface, u, v))
         faces = []
+        corner_uvs = []
         row_size = sample_count + 1
         for u_index in range(sample_count):
             for v_index in range(sample_count):
                 lower_left = u_index * row_size + v_index
                 lower_right = (u_index + 1) * row_size + v_index
                 faces.append((lower_left, lower_right, lower_right + 1, lower_left + 1))
+                u0 = u_index / sample_count
+                u1 = (u_index + 1) / sample_count
+                v0 = v_index / sample_count
+                v1 = (v_index + 1) / sample_count
+                corner_uvs.append(((u0, v0), (u1, v0), (u1, v1), (u0, v1)))
     mesh = bpy.data.meshes.new(object_name)
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
+    if corner_uvs is not None:
+        attach_proxy_corner_uvs(mesh, corner_uvs)
     obj = bpy.data.objects.new(object_name, mesh)
     layer_collection.objects.link(obj)
     return obj
+
+
+def attach_proxy_corner_uvs(mesh, corner_uvs):
+    """Attach normalized NURBS parameter UVs to each proxy polygon corner."""
+    if len(corner_uvs) != len(mesh.polygons):
+        raise ValueError("proxy UV face count does not match proxy polygons")
+    flattened = []
+    for polygon, face_uvs in zip(mesh.polygons, corner_uvs):
+        if len(face_uvs) != polygon.loop_total:
+            raise ValueError("proxy UV corner count does not match polygon loops")
+        for uv in face_uvs:
+            if len(uv) != 2:
+                raise ValueError("proxy UV coordinate must have two values")
+            pair = (float(uv[0]), float(uv[1]))
+            if not all(math.isfinite(value) for value in pair):
+                raise ValueError("proxy UV coordinate is not finite")
+            flattened.extend(pair)
+    layer = mesh.uv_layers.new(name="classiCAD.ParametricUV")
+    layer.data.foreach_set("uv", flattened)
+    mesh.uv_layers.active = layer
+    mesh.uv_layers.active_render_index = mesh.uv_layers.active_index
 
 
 def classiCAD_materials(document):
@@ -963,10 +993,15 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
                 continue
             source_vertices = display_mesh.get("vertices", [])
             source_faces = display_mesh.get("faces", [])
+            source_corner_uvs = display_mesh.get("cornerUvs")
             if not source_vertices or not source_faces:
                 raise ValueError("derived NURBS surface display mesh is empty")
+            if (source_corner_uvs is not None and
+                    len(source_corner_uvs) != len(source_faces)):
+                raise ValueError("derived NURBS surface proxy UV count is invalid")
             batch = mesh_batches.setdefault(
-                layer_id, {"vertices": [], "faces": [], "face_refs": [], "count": 0}
+                layer_id, {"vertices": [], "faces": [], "corner_uvs": [],
+                           "uv_incomplete": False, "face_refs": [], "count": 0}
             )
             vertex_offset = len(batch["vertices"])
             batch["vertices"].extend(
@@ -977,6 +1012,10 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
                 tuple(vertex_offset + int(index) for index in face)
                 for face in source_faces
             )
+            if source_corner_uvs is None:
+                batch["uv_incomplete"] = True
+            else:
+                batch["corner_uvs"].extend(source_corner_uvs)
             semantic_ids = display_mesh.get("solidFaceIds", [])
             if len(semantic_ids) != len(source_faces):
                 semantic_ids = [""] * len(source_faces)
@@ -1009,6 +1048,9 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
         mesh = bpy.data.meshes.new("classiCAD.surface-proxy." + layer_id)
         mesh.from_pydata(batch["vertices"], [], batch["faces"])
         mesh.update()
+        if (not batch["uv_incomplete"] and
+                len(batch["corner_uvs"]) == len(batch["faces"])):
+            attach_proxy_corner_uvs(mesh, batch["corner_uvs"])
         obj = bpy.data.objects.new("classiCAD.surface-proxy." + layer_id, mesh)
         attach_solid_face_metadata(mesh, batch["face_refs"], document)
         obj["classiCAD_layer_id"] = layer_id

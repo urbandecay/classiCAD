@@ -3562,6 +3562,29 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   modes rather than observing the widget preference itself. No new matched
   Blender image metric is claimed for this wiring-only change.
 
+### QPainter mesh edge-coverage candidate re-audit (2026-10-14)
+
+- Rechecked `workbenchTrianglePixelCoverage` in
+  `src/ui/viewport/viewport_renderer.cpp` and the widget's AA preference
+  wiring. The suspected center-only rasterization is limited to AA Off; every
+  enabled QPainter raster-AA mode already estimates edge coverage with a
+  bounded 4×4 subpixel grid. Interior pixels keep the center-sample fast path.
+- Blender 5.2.2 resolves scene AA after the mesh passes. Its AA Off mode is a
+  single raster sample, while FXAA/Single Pass and the multisample choices use
+  the TAA/SMAA stages recorded in the pinned
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc)
+  and
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L197-L225).
+  Thus forcing supersampled coverage into AA Off would diverge from Blender;
+  increasing the enabled-mode grid without an edge-profile comparison would
+  be speculative. The existing 4×4 path remains the bounded CPU approximation.
+- No renderer change was justified. Validation: the existing full-frame
+  QPainter AA capture matrix documents all seven modes and the Blender
+  comparison; `viewport_render_contracts` and
+  `workbench_raster_fragment_contracts` both passed offscreen (2/2). The C++
+  build and dependency audit passed immediately before this audit; no source
+  code changed during the re-audit.
+
 ### QPainter MatCap full-frame comparison (2026-10-14)
 
 - Compared a 640×480 QPainter AA-Off polygon cube using the `metal_bronze`

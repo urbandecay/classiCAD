@@ -3403,6 +3403,42 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                (screenB.y() - screenA.y()) *
                                    (screenC.x() - screenA.x());
             if (std::abs(area) < 1.0e-12) return;
+            const auto coverageWeights = [&](qreal px, qreal py,
+                                             qreal *w0, qreal *w1, qreal *w2) {
+                const auto weightsAt = [&](qreal x, qreal y,
+                                           qreal *a, qreal *b, qreal *c) {
+                    *b = ((x - screenA.x()) * (screenC.y() - screenA.y()) -
+                          (y - screenA.y()) * (screenC.x() - screenA.x())) / area;
+                    *c = ((screenB.x() - screenA.x()) * (y - screenA.y()) -
+                          (screenB.y() - screenA.y()) * (x - screenA.x())) / area;
+                    *a = 1.0 - *b - *c;
+                };
+                weightsAt(px, py, w0, w1, w2);
+                const qreal e0 = std::hypot(screenC.x() - screenB.x(), screenC.y() - screenB.y());
+                const qreal e1 = std::hypot(screenA.x() - screenC.x(), screenA.y() - screenC.y());
+                const qreal e2 = std::hypot(screenB.x() - screenA.x(), screenB.y() - screenA.y());
+                const qreal edgeDistance = std::min({std::abs(*w0) * std::abs(area) / e0,
+                                                     std::abs(*w1) * std::abs(area) / e1,
+                                                     std::abs(*w2) * std::abs(area) / e2});
+                if (*w0 >= 0.0 && *w1 >= 0.0 && *w2 >= 0.0 && edgeDistance >= 0.75) {
+                    return qreal(1.0);
+                }
+                qreal sum0 = 0.0, sum1 = 0.0, sum2 = 0.0;
+                int covered = 0;
+                for (int sy = 0; sy < 4; ++sy) {
+                    for (int sx = 0; sx < 4; ++sx) {
+                        qreal a, b, c;
+                        weightsAt(px + (sx - 1.5) * 0.25,
+                                  py + (sy - 1.5) * 0.25, &a, &b, &c);
+                        if (a < 0.0 || b < 0.0 || c < 0.0) continue;
+                        sum0 += a; sum1 += b; sum2 += c;
+                        ++covered;
+                    }
+                }
+                if (covered == 0) return qreal(0.0);
+                *w0 = sum0 / covered; *w1 = sum1 / covered; *w2 = sum2 / covered;
+                return covered / 16.0;
+            };
             // QPainter's screen Y axis points down, so a negative projected
             // signed area corresponds to Blender/OpenGL's CCW front face.
             bool frontFacing = area < 0.0;
@@ -3458,12 +3494,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     for (int x = 0; x < raster.width(); ++x) {
                         const qreal px = left + x + 0.5;
                         const qreal py = top + y + 0.5;
-                        const qreal w1 = ((px - screenA.x()) * (screenC.y() - screenA.y()) -
-                                          (py - screenA.y()) * (screenC.x() - screenA.x())) / area;
-                        const qreal w2 = ((screenB.x() - screenA.x()) * (py - screenA.y()) -
-                                          (screenB.y() - screenA.y()) * (px - screenA.x())) / area;
-                        const qreal w0 = 1.0 - w1 - w2;
-                        if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
+                        qreal w0, w1, w2;
+                        const qreal coverage = coverageWeights(px, py, &w0, &w1, &w2);
+                        if (coverage <= 0.0) continue;
                         const qreal cw0 = w0 * reciprocal[0];
                         const qreal cw1 = w1 * reciprocal[1];
                         const qreal cw2 = w2 * reciprocal[2];
@@ -3496,11 +3529,12 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             observeWorkbenchFragment(
                                 fragmentSink, painter, QPointF(px, py),
                                 fragmentPosition, cameraPosition, viewDirection,
-                                sampleLinear, sample.alphaF(), objectId,
+                                sampleLinear, sample.alphaF() * coverage, objectId,
                                 transform_);
                         }
                         row[x] = qPremultiply(qRgba(sample.red(), sample.green(),
-                                                    sample.blue(), sample.alpha()));
+                                                    sample.blue(),
+                                                    qRound(sample.alpha() * coverage)));
                     }
                 }
                 painter.drawImage(QPoint(left, top), raster);
@@ -3537,10 +3571,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
                 for (int x = 0; x < raster.width(); ++x) {
                     const qreal px = left + x + 0.5, py = top + y + 0.5;
-                    const qreal w1 = ((px-screenA.x())*(screenC.y()-screenA.y()) - (py-screenA.y())*(screenC.x()-screenA.x())) / area;
-                    const qreal w2 = ((screenB.x()-screenA.x())*(py-screenA.y()) - (screenB.y()-screenA.y())*(px-screenA.x())) / area;
-                    const qreal w0 = 1.0-w1-w2;
-                    if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                    qreal w0, w1, w2;
+                    const qreal coverage = coverageWeights(px, py, &w0, &w1, &w2);
+                    if (coverage <= 0.0) continue;
                     const qreal cw0=w0*reciprocal[0], cw1=w1*reciprocal[1], cw2=w2*reciprocal[2];
                     const qreal denominator=cw0+cw1+cw2;
                     if (denominator <= 1.0e-12) continue;
@@ -3633,12 +3666,13 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         observeWorkbenchFragment(
                             fragmentSink, painter, QPointF(px, py),
                             fragmentPosition, cameraPosition, viewDirection,
-                            texturedLinear, alpha, objectId, transform_);
+                            texturedLinear, alpha * coverage, objectId, transform_);
                     }
                     const int red = textured.red();
                     const int green = textured.green();
                     const int blue = textured.blue();
-                    row[x]=qPremultiply(qRgba(red,green,blue,qRound(alpha*255)));
+                    row[x]=qPremultiply(qRgba(red,green,blue,
+                                              qRound(alpha * coverage * 255)));
                 }
             }
             painter.drawImage(QPoint(left,top), raster);

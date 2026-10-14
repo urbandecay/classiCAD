@@ -2403,6 +2403,20 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   Build and matched-image validation are recorded with this change; visual
   comparison against Blender remains part of the acceptance checklist.
 
+## QPainter NURBS triangle edge coverage (2026-10-13)
+
+- The QPainter tessellated NURBS surface and solid face raster paths now use
+  the same bounded 4x4 edge coverage estimate as polygon meshes. The
+  subpixel-averaged barycentric weights feed textured UV sampling and
+  perspective shading, and fractional coverage reaches both the color alpha
+  and the software fragment sink. Image alpha cutoff behavior is unchanged.
+- This makes the NURBS software edges use the same approximation as mesh
+  edges; it does not reproduce Blender's TAA/SMAA temporal and filter stages.
+  Blender 5.2.2 AA remains a later pass in
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc).
+  Build and matched-image validation are recorded with this change; controlled
+  Blender comparison remains open.
+
 ## Phase Two: imported scene materials and result contracts (2026-10-13)
 
 - **Render-result shading source:** an imported Blender scene's saved

@@ -738,6 +738,12 @@ def main():
              (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
         ):
             loop.uv = uv
+        if args.texture_uv_pattern:
+            for loop in uv_layer.data:
+                loop.uv = (
+                    loop.uv.x * args.texture_uv_scale + args.texture_uv_offset,
+                    loop.uv.y * args.texture_uv_scale + args.texture_uv_offset,
+                )
         if args.texture_udim or args.texture_udim_vertical:
             for loop in uv_layer.data:
                 if args.texture_udim_vertical:

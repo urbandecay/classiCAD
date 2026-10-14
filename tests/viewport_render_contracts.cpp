@@ -9349,6 +9349,85 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &=
                             gpuPerspectiveMeshTextureSaved;
 
+                        ViewportRenderObject perspectiveExtensionObject =
+                            perspectiveMeshTextureObject;
+                        QVector<QPointF> perspectiveExtensionUvs;
+                        perspectiveExtensionUvs.reserve(
+                            perspectiveExtensionObject.shape.polygonMesh
+                                .uvMaps[0].cornerValues.size());
+                        for (const QPointF &uv :
+                             perspectiveExtensionObject.shape.polygonMesh
+                                 .uvMaps[0].cornerValues) {
+                            perspectiveExtensionUvs.append(
+                                QPointF(uv.x() * 2.0 - 0.5,
+                                        uv.y() * 2.0 - 0.5));
+                        }
+                        perspectiveExtensionObject.shape.polygonMesh.uvMaps[0]
+                            .cornerValues = perspectiveExtensionUvs;
+                        const QStringList perspectiveTextureExtensionModes{
+                            QStringLiteral("EXTEND"),
+                            QStringLiteral("CLIP"),
+                            QStringLiteral("MIRROR")};
+                        bool perspectiveExtensionCapturesSucceeded = true;
+                        for (const QString &extension :
+                             perspectiveTextureExtensionModes) {
+                            if (!perspectiveExtensionObject.meshMaterials
+                                     .isEmpty()) {
+                                perspectiveExtensionObject.meshMaterials[0]
+                                    .textureImageExtension = extension;
+                            }
+                            const QByteArray extensionKey =
+                                QByteArrayLiteral(
+                                    "color-source-match-mesh-texture-perspective-extension-") +
+                                extension.toLower().toUtf8();
+                            QImage extensionDisplay;
+                            QVector<float> extensionSceneLinear;
+                            const bool extensionRendered =
+                                renderCoordinatedScene(
+                                    textureColorShading, extensionKey,
+                                    &extensionDisplay,
+                                    &perspectiveExtensionObject,
+                                    &perspectiveTextureTransform, nullptr,
+                                    QString{}, &extensionSceneLinear,
+                                    &textureBackground);
+                            const QString extensionStem =
+                                QStringLiteral(
+                                    "color_texture_mesh_perspective_%1_gpu")
+                                    .arg(extension.toLower());
+                            const QString extensionDisplayPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    extensionStem + QStringLiteral(".png"));
+                            QFile extensionLinearFile(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    extensionStem + QStringLiteral(".pfm")));
+                            const bool extensionLinearSaved =
+                                extensionRendered &&
+                                extensionSceneLinear.size() ==
+                                    textureExpectedValues &&
+                                extensionLinearFile.open(
+                                    QIODevice::WriteOnly) &&
+                                extensionLinearFile.write(texturePfmHeader) ==
+                                    texturePfmHeader.size() &&
+                                extensionLinearFile.write(
+                                    reinterpret_cast<const char *>(
+                                        extensionSceneLinear.constData()),
+                                    extensionSceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    extensionSceneLinear.size() *
+                                        qsizetype(sizeof(float));
+                            const bool extensionSaved = extensionRendered &&
+                                extensionDisplay.size() == glSize &&
+                                extensionLinearSaved &&
+                                extensionDisplay.save(extensionDisplayPath);
+                            perspectiveExtensionCapturesSucceeded &=
+                                extensionSaved;
+                        }
+                        passed &= check(
+                            perspectiveExtensionCapturesSucceeded,
+                            "GPU perspective mesh texture captures must render Extend, Clip, and Mirror UV extensions");
+                        lightingCapturesSucceeded &=
+                            perspectiveExtensionCapturesSucceeded;
+
                         QImage alphaCutoutTexture(2, 2,
                                                   QImage::Format_RGBA8888);
                         alphaCutoutTexture.setPixelColor(

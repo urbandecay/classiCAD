@@ -5555,3 +5555,36 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   Linear --texture-image <fixture> --world-color 0.0219421387 0.0219421387
   0.0219421387 --zero-dither`; the scene-linear capture uses
   `--linear-output` and `--linear-pfm-output`.
+
+### Matched GPU perspective mesh texture extension modes (2026-10-14)
+
+- Extended the established perspective two-triangle mesh fixture to capture
+  GPU output for Image Texture `EXTEND`, `CLIP`, and `MIRROR` in addition to
+  its existing `REPEAT` baseline. The test scales and offsets each corner UV
+  from `[0, 1]` to `[-0.5, 1.5]`, so all modes exercise coordinates beyond the
+  image bounds under perspective-correct interpolation. The Blender reference
+  helper now applies the same optional UV scale/offset to the mesh fixture.
+- Against Blender 5.2.2, all three GPU PFM captures have zero scene-linear RGB
+  error in every channel, with zero edge-coverage error. The PNG foreground
+  masks each have IoU `1.0` and zero XOR pixels. Display-channel MAE over the
+  shared foreground is `0.0157/255` for EXTEND, `0.0485/255` for CLIP, and
+  `0.0290/255` for MIRROR. CLIP retains fewer foreground samples because its
+  out-of-range UVs return the configured border color. No GPU sampler change
+  is indicated by these captures.
+- Blender 5.2.2 maps Image Texture EXTEND to sampler extend, REPEAT to repeat,
+  MIRROR to mirrored repeat, and CLIP to clamp-to-border in pinned
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L513).
+  The matched fixture tests opaque STRAIGHT texture color with Linear filtering;
+  other filtering modes, perspective NURBS, and non-coplanar geometry remain
+  open.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  39.82 seconds); the three Blender references reported 5.2.2 LTS; and paired
+  PNG/PFM comparisons completed for each extension. Reproduce classiCAD output
+  with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>` and Blender with
+  `--scene MESH_TEXTURE --match-classicad-perspective --view-direction 4 -6 4
+  --aa OFF --lighting FLAT --color-source TEXTURE --texture-interpolation
+  Linear --texture-uv-pattern --texture-uv-scale 2 --texture-uv-offset -0.5
+  --texture-extension <EXTEND|CLIP|MIRROR> --texture-image <fixture>
+  --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither` plus
+  `--linear-output` and `--linear-pfm-output`.

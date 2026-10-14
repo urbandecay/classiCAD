@@ -1726,6 +1726,35 @@ and selects the texture pass for mesh draws in
 The secondary image is passed with `--texture-image-secondary` to
 `workbench_cube_reference.py --scene MESH_TEXTURE`.
 
+**QPainter mesh texture alpha-mode comparison (2026-10-14):** A matched
+640×480 two-triangle mesh uses a 2×2 sRGB image with zero, below-cutoff,
+just-above-cutoff, and half-alpha texels. Blender 5.2.2 and QPainter were
+captured for `STRAIGHT`, `PREMUL`, `CHANNEL_PACKED`, and Blender `NONE` alpha
+modes, with Linear filtering, Flat lighting, AgX, and the same orthographic
+view. Relative to the opaque mesh baseline, the `STRAIGHT` and `PREMUL` hole
+masks have IoU `0.986872` (145 XOR pixels; 10,926 Blender and 11,019 QPainter
+hole pixels). Their full foreground masks have IoU `0.983718` (345 XOR;
+20,868 Blender and 21,165 QPainter foreground pixels). The two cutoff-disabled
+modes retain every texel and match the opaque baseline mask; their remaining
+mask difference is the same silhouette raster coverage recorded above.
+
+On the shared foreground, excluding a two-pixel silhouette border and a
+six-pixel band around the internal diagonal, `STRAIGHT` scene-linear channel
+MAE is `0.00139` (p95 `0.00386`, max `0.00798`) and `PREMUL` MAE is `0.00454`
+(p95 `0.00877`, max `0.01386`). `CHANNEL_PACKED` and `NONE` both measure MAE
+`0.00140` (p95 `0.00377`, max `0.00798`). The PREMUL result has the largest
+filtered-color difference near low-alpha texels; these captures establish the
+alpha interpretation and cutoff behavior for one regular mesh image, not all
+filters, image formats, or perspective cases. Blender 5.2.2 unpremultiplies
+nonzero, nonopaque PREMUL samples and applies its fragment cutoff in pinned
+[`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L433);
+`workbench_materials.cc` disables that cutoff for `IGNORE` and
+`CHANNEL_PACKED` ([lines 536–553](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L536-L553)).
+classiCAD's QPainter capture writes
+`color_texture_mesh_alpha_<mode>.png/.pfm`; Blender uses
+`--scene MESH_TEXTURE` and the same alpha-mode option. The fixture also writes
+equivalent straight and premultiplied image assets to the capture directory.
+
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
 Blender node interpolation labels Linear, Cubic, and Smart. A production mesh

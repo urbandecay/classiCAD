@@ -7083,6 +7083,174 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &=
                             qpainterMeshTextureSaved;
 
+                        const QString meshAlphaStraightPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-texture-alpha-straight.png"));
+                        const QString meshAlphaPremultipliedPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-texture-alpha-premultiplied.png"));
+                        QImage meshAlphaStraight(2, 2,
+                                                 QImage::Format_RGBA8888);
+                        const std::array<QColor, 4> meshAlphaColors{
+                            QColor(244, 24, 16, 0),
+                            QColor(20, 224, 40, 13),
+                            QColor(32, 56, 240, 26),
+                            QColor(240, 200, 24, 128)};
+                        for (int index = 0; index < 4; ++index) {
+                            meshAlphaStraight.setPixelColor(index % 2,
+                                                           index / 2,
+                                                           meshAlphaColors[index]);
+                        }
+                        QImage meshAlphaPremultiplied(
+                            2, 2, QImage::Format_RGBA8888);
+                        for (int index = 0; index < 4; ++index) {
+                            const QColor source = meshAlphaColors[index];
+                            const qreal alpha = source.alphaF();
+                            meshAlphaPremultiplied.setPixelColor(
+                                index % 2, index / 2,
+                                QColor(qRound(source.red() * alpha),
+                                       qRound(source.green() * alpha),
+                                       qRound(source.blue() * alpha),
+                                       source.alpha()));
+                        }
+                        const bool meshAlphaTexturesSaved =
+                            meshAlphaStraight.save(meshAlphaStraightPath) &&
+                            meshAlphaPremultiplied.save(
+                                meshAlphaPremultipliedPath);
+                        const std::array<QString, 4> meshAlphaModes{
+                            QStringLiteral("STRAIGHT"),
+                            QStringLiteral("PREMUL"),
+                            QStringLiteral("CHANNEL_PACKED"),
+                            QStringLiteral("NONE")};
+                        for (int modeIndex = 0;
+                             modeIndex < int(meshAlphaModes.size());
+                             ++modeIndex) {
+                            const QString &alphaMode =
+                                meshAlphaModes[modeIndex];
+                            ViewportRenderObject alphaMeshObject;
+                            alphaMeshObject.shape.geometryType =
+                                GeometryType::PolygonMesh;
+                            PolygonMesh3D &alphaMesh =
+                                alphaMeshObject.shape.polygonMesh;
+                            alphaMesh.vertices = {
+                                {-1.0, -1.0, 0.0}, {1.0, -1.0, 0.0},
+                                {1.0, 1.0, 0.0}, {-1.0, 1.0, 0.0}};
+                            alphaMesh.faces = {{0, 1, 2}, {0, 2, 3}};
+                            alphaMesh.faceMaterialIndices = {0, 0};
+                            alphaMesh.materialSlotIds = {
+                                QStringLiteral("AlphaTextureSlot")};
+                            alphaMesh.uvMaps = {
+                                {QStringLiteral("UVMap"),
+                                 {QPointF(0.0, 0.0), QPointF(1.0, 0.0),
+                                  QPointF(1.0, 1.0), QPointF(0.0, 0.0),
+                                  QPointF(1.0, 1.0), QPointF(0.0, 1.0)}}};
+                            alphaMesh.activeUvMapName =
+                                QStringLiteral("UVMap");
+                            alphaMesh.defaultUvMapName =
+                                QStringLiteral("UVMap");
+                            WorkbenchMaterialData alphaMeshMaterial;
+                            alphaMeshMaterial.baseColorSceneLinear =
+                                QVector3D(0.8f, 0.8f, 0.8f);
+                            alphaMeshMaterial.textureImagePath =
+                                alphaMode == QStringLiteral("PREMUL")
+                                    ? meshAlphaPremultipliedPath
+                                    : meshAlphaStraightPath;
+                            alphaMeshMaterial.textureImageSrgb = true;
+                            alphaMeshMaterial.textureImageAlphaMode =
+                                alphaMode;
+                            alphaMeshMaterial.textureImageInterpolation =
+                                QStringLiteral("Linear");
+                            alphaMeshMaterial.textureImageExtension =
+                                QStringLiteral("REPEAT");
+                            const QVector<WorkbenchMaterialData> alphaMaterials{
+                                alphaMeshMaterial};
+                            alphaMeshObject.meshMaterials = alphaMaterials;
+                            alphaMeshObject.objectId =
+                                ObjectId::fromValue(9110 + modeIndex);
+                            alphaMeshObject.displayName =
+                                QStringLiteral("MeshAlphaTexturePatch");
+                            alphaMeshObject.geometryRevision = 1;
+                            QImage alphaMeshDisplay(
+                                glSize, QImage::Format_ARGB32_Premultiplied);
+                            alphaMeshDisplay.fill(
+                                nurbsTextureDisplay.pixelColor(0, 0));
+                            RasterWorkbenchFragmentSink alphaMeshFragments;
+                            QPainter alphaMeshPainter(&alphaMeshDisplay);
+                            qpainterTextureRenderer.drawShape(
+                                alphaMeshPainter, alphaMeshObject.shape,
+                                glSize, false, false, true, QColor(),
+                                QString(), 0.0, alphaMeshObject.objectId,
+                                alphaMeshObject.geometryRevision, nullptr, {},
+                                std::nullopt, std::nullopt,
+                                alphaMeshObject.displayName, QString(),
+                                identityMeshObjectTransform, alphaMaterials,
+                                &alphaMeshFragments);
+                            alphaMeshPainter.end();
+                            const QString modeFileName = alphaMode.toLower();
+                            const QString alphaMeshDisplayPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    QStringLiteral("color_texture_mesh_alpha_") +
+                                    modeFileName + QStringLiteral(".png"));
+                            QVector<float> alphaMeshSceneLinear(
+                                textureExpectedValues);
+                            for (qsizetype pixel = 0;
+                                 pixel + 2 < alphaMeshSceneLinear.size();
+                                 pixel += 3) {
+                                alphaMeshSceneLinear[pixel] =
+                                    textureBackground.x();
+                                alphaMeshSceneLinear[pixel + 1] =
+                                    textureBackground.y();
+                                alphaMeshSceneLinear[pixel + 2] =
+                                    textureBackground.z();
+                            }
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 alphaMeshFragments) {
+                                if (fragment.x < 0 ||
+                                    fragment.x >= glSize.width() ||
+                                    fragment.y < 0 ||
+                                    fragment.y >= glSize.height()) {
+                                    continue;
+                                }
+                                const qsizetype pixel =
+                                    (qsizetype(fragment.y) * glSize.width() +
+                                     fragment.x) * 3;
+                                alphaMeshSceneLinear[pixel] =
+                                    fragment.sceneLinearRgb[0];
+                                alphaMeshSceneLinear[pixel + 1] =
+                                    fragment.sceneLinearRgb[1];
+                                alphaMeshSceneLinear[pixel + 2] =
+                                    fragment.sceneLinearRgb[2];
+                            }
+                            QFile alphaMeshLinearFile(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    QStringLiteral("color_texture_mesh_alpha_") +
+                                    modeFileName + QStringLiteral(".pfm")));
+                            const bool alphaMeshLinearSaved =
+                                alphaMeshLinearFile.open(QIODevice::WriteOnly) &&
+                                alphaMeshLinearFile.write(texturePfmHeader) ==
+                                    texturePfmHeader.size() &&
+                                alphaMeshLinearFile.write(
+                                    reinterpret_cast<const char *>(
+                                        alphaMeshSceneLinear.constData()),
+                                    alphaMeshSceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    alphaMeshSceneLinear.size() *
+                                        qsizetype(sizeof(float));
+                            const bool alphaMeshCaptureSaved =
+                                meshAlphaTexturesSaved &&
+                                validatePolygonMesh(alphaMesh) &&
+                                alphaMeshFragments.size() > 1000 &&
+                                alphaMeshLinearSaved &&
+                                alphaMeshDisplay.save(alphaMeshDisplayPath);
+                            passed &= check(
+                                alphaMeshCaptureSaved,
+                                "QPainter mesh texture alpha-mode capture must render a nonblank cutoff fixture");
+                            lightingCapturesSucceeded &=
+                                alphaMeshCaptureSaved;
+                        }
+
                         QImage alphaCutoutTexture(2, 2,
                                                   QImage::Format_RGBA8888);
                         alphaCutoutTexture.setPixelColor(

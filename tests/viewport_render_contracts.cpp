@@ -3564,6 +3564,9 @@ int main(int argc, char *argv[])
                              ViewportLightingMode::Studio, "Paint", true, 90},
                             {"matcap_metal_bronze", ViewportLightingMode::MatCap,
                              "metal_bronze", false, 0},
+                            {"matcap_check_normal_y",
+                             ViewportLightingMode::MatCap, "check_normal+y",
+                             false, 0},
                             {"flat", ViewportLightingMode::Flat, "Default",
                              false, 0}};
                         for (const LightingCaptureCase &captureCase :

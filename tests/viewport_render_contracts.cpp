@@ -9239,92 +9239,100 @@ int main(int argc, char *argv[])
                             multisampleFirstJitter.isNull() &&
                             !multisampleSecondJitter.isNull(),
                         "AA Off, Single Pass, and first multisample position are centered; later multisample positions are jittered");
-                    ViewportAaRenderer interruptedAaRenderer;
-                    interruptedAaRenderer.setMode(static_cast<int>(
-                        ViewportAntiAliasingMode::Samples8));
-                    interruptedAaRenderer.setDisplayTransform(
-                        gpuSolidShading, true);
-                    const bool interruptedFirstSampleStarted =
-                        interruptedAaRenderer.beginSceneSample(
-                            glSize, 1.0, gpuTransform, aaBaselineKey,
-                            false, true);
-                    const quint64 interruptedInitialEpoch =
-                        interruptedAaRenderer.targets().historyEpoch;
-                    bool interruptedAaContract =
-                        interruptedFirstSampleStarted &&
-                        interruptedAaRenderer.targets().sampleIndex == 0 &&
-                        interruptedAaRenderer.targets().sampleCount == 8 &&
-                        interruptedAaRenderer.sampleCamera()
-                            .renderJitterPixels().isNull();
-                    if (interruptedAaRenderer.sceneSampleActive()) {
-                        interruptedAaRenderer.finishSceneSample();
-                    }
-                    const bool interruptedSecondSampleStarted =
-                        interruptedAaRenderer.beginSceneSample(
-                            glSize, 1.0, gpuTransform, aaBaselineKey,
-                            false, true);
-                    interruptedAaContract &=
-                        interruptedSecondSampleStarted &&
-                        interruptedAaRenderer.targets().sampleIndex == 1 &&
-                        !interruptedAaRenderer.sampleCamera()
-                             .renderJitterPixels().isNull();
-                    if (interruptedAaRenderer.sceneSampleActive()) {
-                        interruptedAaRenderer.finishSceneSample();
-                    }
-                    ViewportTransform navigatingAaCamera = gpuTransform;
-                    navigatingAaCamera.setViewDirection({3.5, -6.0, 4.0});
-                    const QByteArray navigatingAaHistoryKey =
-                        aaBaselineKey + QByteArrayLiteral("-camera-moved");
-                    const bool navigationSampleStarted =
-                        interruptedAaRenderer.beginSceneSample(
-                            glSize, 1.0, navigatingAaCamera,
-                            navigatingAaHistoryKey, true, true);
-                    const quint64 navigationAaEpoch =
-                        interruptedAaRenderer.targets().historyEpoch;
-                    interruptedAaContract &=
-                        navigationSampleStarted &&
-                        navigationAaEpoch > interruptedInitialEpoch &&
-                        interruptedAaRenderer.targets().sampleIndex == 0 &&
-                        interruptedAaRenderer.targets().sampleCount == 1 &&
-                        interruptedAaRenderer.sampleCamera()
-                            .renderJitterPixels().isNull();
-                    if (interruptedAaRenderer.sceneSampleActive()) {
-                        interruptedAaRenderer.finishSceneSample();
-                    }
-                    const bool resumedFirstSampleStarted =
-                        interruptedAaRenderer.beginSceneSample(
-                            glSize, 1.0, navigatingAaCamera,
-                            navigatingAaHistoryKey, false, true);
-                    const quint64 resumedAaEpoch =
-                        interruptedAaRenderer.targets().historyEpoch;
-                    interruptedAaContract &=
-                        resumedFirstSampleStarted &&
-                        resumedAaEpoch > navigationAaEpoch &&
-                        interruptedAaRenderer.targets().sampleIndex == 0 &&
-                        interruptedAaRenderer.targets().sampleCount == 8 &&
-                        interruptedAaRenderer.sampleCamera()
-                            .renderJitterPixels().isNull();
-                    if (interruptedAaRenderer.sceneSampleActive()) {
-                        interruptedAaRenderer.finishSceneSample();
-                    }
-                    const bool resumedSecondSampleStarted =
-                        interruptedAaRenderer.beginSceneSample(
-                            glSize, 1.0, navigatingAaCamera,
-                            navigatingAaHistoryKey, false, true);
-                    interruptedAaContract &=
-                        resumedSecondSampleStarted &&
-                        interruptedAaRenderer.targets().historyEpoch ==
-                            resumedAaEpoch &&
-                        interruptedAaRenderer.targets().sampleIndex == 1 &&
-                        interruptedAaRenderer.targets().sampleCount == 8 &&
-                        !interruptedAaRenderer.sampleCamera()
-                             .renderJitterPixels().isNull();
-                    if (interruptedAaRenderer.sceneSampleActive()) {
-                        interruptedAaRenderer.finishSceneSample();
+                    bool interruptedAaContract = true;
+                    const std::array<int, 5> multisampleModes = {
+                        static_cast<int>(ViewportAntiAliasingMode::Samples5),
+                        static_cast<int>(ViewportAntiAliasingMode::Samples8),
+                        static_cast<int>(ViewportAntiAliasingMode::Samples11),
+                        static_cast<int>(ViewportAntiAliasingMode::Samples16),
+                        static_cast<int>(ViewportAntiAliasingMode::Samples32)};
+                    for (const int sampleCount : multisampleModes) {
+                        ViewportAaRenderer interruptedAaRenderer;
+                        interruptedAaRenderer.setMode(sampleCount);
+                        interruptedAaRenderer.setDisplayTransform(
+                            gpuSolidShading, true);
+                        const bool interruptedFirstSampleStarted =
+                            interruptedAaRenderer.beginSceneSample(
+                                glSize, 1.0, gpuTransform, aaBaselineKey,
+                                false, true);
+                        const quint64 interruptedInitialEpoch =
+                            interruptedAaRenderer.targets().historyEpoch;
+                        bool modeContract = interruptedFirstSampleStarted &&
+                            interruptedAaRenderer.targets().sampleIndex == 0 &&
+                            interruptedAaRenderer.targets().sampleCount ==
+                                sampleCount &&
+                            interruptedAaRenderer.sampleCamera()
+                                .renderJitterPixels().isNull();
+                        if (interruptedAaRenderer.sceneSampleActive()) {
+                            interruptedAaRenderer.finishSceneSample();
+                        }
+                        const bool interruptedSecondSampleStarted =
+                            interruptedAaRenderer.beginSceneSample(
+                                glSize, 1.0, gpuTransform, aaBaselineKey,
+                                false, true);
+                        modeContract &= interruptedSecondSampleStarted &&
+                            interruptedAaRenderer.targets().sampleIndex == 1 &&
+                            !interruptedAaRenderer.sampleCamera()
+                                 .renderJitterPixels().isNull();
+                        if (interruptedAaRenderer.sceneSampleActive()) {
+                            interruptedAaRenderer.finishSceneSample();
+                        }
+
+                        ViewportTransform navigatingAaCamera = gpuTransform;
+                        navigatingAaCamera.setViewDirection({3.5, -6.0, 4.0});
+                        const QByteArray navigatingAaHistoryKey =
+                            aaBaselineKey + QByteArrayLiteral("-camera-moved");
+                        const bool navigationSampleStarted =
+                            interruptedAaRenderer.beginSceneSample(
+                                glSize, 1.0, navigatingAaCamera,
+                                navigatingAaHistoryKey, true, true);
+                        const quint64 navigationAaEpoch =
+                            interruptedAaRenderer.targets().historyEpoch;
+                        modeContract &= navigationSampleStarted &&
+                            navigationAaEpoch > interruptedInitialEpoch &&
+                            interruptedAaRenderer.targets().sampleIndex == 0 &&
+                            interruptedAaRenderer.targets().sampleCount == 1 &&
+                            interruptedAaRenderer.sampleCamera()
+                                .renderJitterPixels().isNull();
+                        if (interruptedAaRenderer.sceneSampleActive()) {
+                            interruptedAaRenderer.finishSceneSample();
+                        }
+                        const bool resumedFirstSampleStarted =
+                            interruptedAaRenderer.beginSceneSample(
+                                glSize, 1.0, navigatingAaCamera,
+                                navigatingAaHistoryKey, false, true);
+                        const quint64 resumedAaEpoch =
+                            interruptedAaRenderer.targets().historyEpoch;
+                        modeContract &= resumedFirstSampleStarted &&
+                            resumedAaEpoch > navigationAaEpoch &&
+                            interruptedAaRenderer.targets().sampleIndex == 0 &&
+                            interruptedAaRenderer.targets().sampleCount ==
+                                sampleCount &&
+                            interruptedAaRenderer.sampleCamera()
+                                .renderJitterPixels().isNull();
+                        if (interruptedAaRenderer.sceneSampleActive()) {
+                            interruptedAaRenderer.finishSceneSample();
+                        }
+                        const bool resumedSecondSampleStarted =
+                            interruptedAaRenderer.beginSceneSample(
+                                glSize, 1.0, navigatingAaCamera,
+                                navigatingAaHistoryKey, false, true);
+                        modeContract &= resumedSecondSampleStarted &&
+                            interruptedAaRenderer.targets().historyEpoch ==
+                                resumedAaEpoch &&
+                            interruptedAaRenderer.targets().sampleIndex == 1 &&
+                            interruptedAaRenderer.targets().sampleCount ==
+                                sampleCount &&
+                            !interruptedAaRenderer.sampleCamera()
+                                 .renderJitterPixels().isNull();
+                        if (interruptedAaRenderer.sceneSampleActive()) {
+                            interruptedAaRenderer.finishSceneSample();
+                        }
+                        interruptedAaContract &= modeContract;
                     }
                     passed &= check(
                         interruptedAaContract,
-                        "navigation must interrupt partial multisample history with one centered sample, then restart idle accumulation at centered sample zero");
+                        "navigation must interrupt partial 5/8/11/16/32-sample history with one centered sample, then restart idle accumulation at centered sample zero");
                     ViewportTransform positiveYJitter = gpuTransform;
                     positiveYJitter.setRenderJitterPixels(QPointF(0.0, 0.5));
                     const QVector4D centerPoint(0.0f, 0.0f, 0.0f, 1.0f);

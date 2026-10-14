@@ -3245,7 +3245,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, and a two-tile mesh UDIM Closest- and Linear-filter image comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
-- No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; an interruption/resume state contract covers Samples8 during navigation. A matched fixed-cube QPainter supersampling matrix now covers all seven preference values using silhouette coverage; full QPainter color/effect comparisons and other sample-count navigation remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
+- No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter supersampling matrix covers all seven preference values using silhouette coverage; full QPainter color/effect comparisons and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
 - Accumulation reset after camera movement, geometry edits, selection changes, setting changes, resize, and display-scale changes.
 - Overlay Smooth Wires and Edit Mode Smooth Wires independently, including confirming the grid remains antialiased when overlay wire smoothing is off.
 - Save/reopen behavior for all persistent settings and any new material or color data.
@@ -3273,6 +3273,21 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   this capture isolates coverage; QPainter full-frame material/color/effect
   comparison remains open.
 - Blender reference: [Workbench state and AA selection](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc), [Workbench AA resolve](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc), and [Workbench TAA shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_fx_taa.bsl.hh). This is a measured fallback approximation, not a port of those GPU resolve passes.
+
+### Multisample navigation history contract (2026-10-14)
+
+- The renderer interruption/resume contract now exercises all five supported
+  multisample preferences: 5, 8, 11, 16, and 32. For each one it checks that
+  idle accumulation begins with a centered sample and advances to a jittered
+  sample; navigation interrupts that history with one centered sample; and
+  returning idle starts a new history epoch at centered sample zero before
+  advancing to sample one.
+- This matches Blender 5.2.2 Workbench's one-sample unjittered behavior during
+  navigation, while classiCAD resumes its selected multisample accumulation
+  afterward. It validates renderer state and jitter placement, not rendered
+  navigation image equivalence. Playback integration is still deferred until
+  classiCAD has a scene playback owner, and matched navigation captures remain
+  open.
 
 The port is complete when every enabled option has matching Blender 5.2.2 behavior, no enabled saved setting is inert, and the comparison checklist passes. Disabled unsupported features must remain clearly documented. Workbench shadows now use validated stencil volumes for closed `NurbsSolid` and imported `PolygonMesh3D` subsets, plus validated open surfaces; full parity still requires comparison and a matching path for the currently disclosed unsupported-geometry and transparency fallbacks.
 

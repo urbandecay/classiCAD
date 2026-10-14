@@ -213,6 +213,16 @@ png_data = (
     png_chunk(b"IDAT", zlib.compress(b"".join(png_rows))) +
     png_chunk(b"IEND", b"")
 )
+png_rows_udim = (
+    b"\x00" + bytes((10, 90, 240, 255, 210, 30, 70, 255)),
+    b"\x00" + bytes((70, 200, 120, 255, 15, 25, 35, 128)),
+)
+png_data_udim = (
+    b"\x89PNG\r\n\x1a\n" +
+    png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 6, 0, 0, 0)) +
+    png_chunk(b"IDAT", zlib.compress(b"".join(png_rows_udim))) +
+    png_chunk(b"IEND", b"")
+)
 material_a_record = next(
     record for record in document["materials"] if record["id"] == "material-a"
 )
@@ -330,8 +340,129 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     assert external_texture_node.show_texture
     assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
 
+    # Rebuild packed and external UDIM sources as packed Blender tiled images.
+    packed_udim_template = str(pathlib.Path(directory) / "packed.<UDIM>.png")
+    external_udim_template = str(pathlib.Path(directory) / "external.<UDIM>.png")
+    external_udim_paths = []
+    for number, payload in ((1001, png_data), (1002, png_data_udim)):
+        external_tile_path = pathlib.Path(
+            external_udim_template.replace("<UDIM>", str(number))
+        )
+        external_tile_path.write_bytes(payload)
+        external_udim_paths.append((number, payload, external_tile_path))
+
+    udim_records = [
+        {
+            "id": "material-udim-packed", "name": "UDIM Packed",
+            "baseColorSceneLinear": [1, 1, 1, 1], "roughness": 0.5,
+            "metallic": 0.0,
+            "imageTextures": [{
+                "nodeName": "ProxyContract.PackedUDIM",
+                "nodeType": "TEX_IMAGE",
+                "imageName": "ProxyContract.PackedUDIMImage",
+                "filepath": packed_udim_template,
+                "colorSpace": "sRGB", "alphaMode": "STRAIGHT",
+                "interpolation": "Closest", "extension": "MIRROR",
+                "sourceTransformId": "identity", "packedDataBase64": "",
+                "packed": True, "sourceFileExists": True,
+                "sceneLinearFloatDataBase64": "",
+                "tiles": [
+                    {"number": 1001,
+                     "filepath": packed_udim_template.replace("<UDIM>", "1001"),
+                     "sourceFileExists": False,
+                     "packedDataBase64": base64.b64encode(png_data).decode("ascii"),
+                     "sceneLinearFloatDataBase64": ""},
+                    {"number": 1002,
+                     "filepath": packed_udim_template.replace("<UDIM>", "1002"),
+                     "sourceFileExists": False,
+                     "packedDataBase64": base64.b64encode(png_data_udim).decode("ascii"),
+                     "sceneLinearFloatDataBase64": ""},
+                ],
+            }],
+        },
+        {
+            "id": "material-udim-external", "name": "UDIM External",
+            "baseColorSceneLinear": [1, 1, 1, 1], "roughness": 0.5,
+            "metallic": 0.0,
+            "imageTextures": [{
+                "nodeName": "ProxyContract.ExternalUDIM",
+                "nodeType": "TEX_IMAGE",
+                "imageName": "ProxyContract.ExternalUDIMImage",
+                "filepath": external_udim_template,
+                "colorSpace": "sRGB", "alphaMode": "STRAIGHT",
+                "interpolation": "Linear", "extension": "REPEAT",
+                "sourceTransformId": "identity", "packedDataBase64": "",
+                "packed": False, "sourceFileExists": True,
+                "sceneLinearFloatDataBase64": "",
+                "tiles": [
+                    {"number": number, "filepath": str(path),
+                     "sourceFileExists": True, "packedDataBase64": "",
+                     "sceneLinearFloatDataBase64": ""}
+                    for number, _, path in external_udim_paths
+                ],
+            }],
+        },
+    ]
+    document["materials"].extend(udim_records)
+    udim_materials = adapter.classiCAD_materials(document)
+    obj.data.materials.append(udim_materials["material-udim-packed"])
+    obj.data.materials.append(udim_materials["material-udim-external"])
+    for material_id, expected_node, expected_interpolation, expected_extension in (
+            ("material-udim-packed", "ProxyContract.PackedUDIM", "Closest", "MIRROR"),
+            ("material-udim-external", "ProxyContract.ExternalUDIM", "Linear", "REPEAT")):
+        udim_material = next(
+            material for material in bpy.data.materials
+            if material.get("classiCAD_material_id") == material_id
+        )
+        udim_node = next(
+            node for node in udim_material.node_tree.nodes
+            if node.get("classiCAD_proxy_image_node")
+        )
+        assert udim_node.name == expected_node
+        assert udim_node.type == "TEX_IMAGE" and udim_node.show_texture
+        assert udim_material.node_tree.nodes.active == udim_node
+        assert udim_node.interpolation == expected_interpolation
+        assert udim_node.extension == expected_extension
+        assert udim_node.image.source == "TILED"
+        assert sorted(tile.number for tile in udim_node.image.tiles) == [1001, 1002]
+        packed_tiles = {
+            packed.tile_number: bytes(packed.packed_file.data)
+            for packed in udim_node.image.packed_files
+        }
+        assert packed_tiles == {1001: png_data, 1002: png_data_udim}
+
+    image_count_after_udim_sync = sum(
+        1 for image in bpy.data.images if image.get("classiCAD_proxy_image")
+    )
+    adapter.classiCAD_materials(document)
+    assert sum(1 for image in bpy.data.images
+               if image.get("classiCAD_proxy_image")) == image_count_after_udim_sync
+
+    udim_temporary_templates = []
+    for material_id in ("material-udim-packed", "material-udim-external"):
+        udim_material = next(
+            material for material in bpy.data.materials
+            if material.get("classiCAD_material_id") == material_id
+        )
+        udim_node = next(
+            node for node in udim_material.node_tree.nodes
+            if node.get("classiCAD_proxy_image_node")
+        )
+        udim_temporary_templates.append(
+            (pathlib.Path(bpy.path.abspath(udim_node.image.filepath)),
+             tuple(tile.number for tile in udim_node.image.tiles))
+        )
+
     blend_path = pathlib.Path(directory) / "proxy.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+    # The proxy has embedded bytes; the adapter's temporary source tiles can
+    # disappear before the project is reopened.
+    for template_path, numbers in udim_temporary_templates:
+        for number in numbers:
+            pathlib.Path(str(template_path).replace(
+                "<UDIM>", str(number)
+            )).unlink(missing_ok=True)
+        template_path.parent.rmdir()
     bpy.ops.wm.open_mainfile(filepath=str(blend_path))
     material_a = next(
         material for material in bpy.data.materials
@@ -369,5 +500,25 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     )
     assert external_texture_node.show_texture
     assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
+    for material_id, expected_node, expected_tiles in (
+            ("material-udim-packed", "ProxyContract.PackedUDIM",
+             {1001: png_data, 1002: png_data_udim}),
+            ("material-udim-external", "ProxyContract.ExternalUDIM",
+             {1001: png_data, 1002: png_data_udim})):
+        udim_material = next(
+            material for material in bpy.data.materials
+            if material.get("classiCAD_material_id") == material_id
+        )
+        udim_node = next(
+            node for node in udim_material.node_tree.nodes
+            if node.get("classiCAD_proxy_image_node")
+        )
+        assert udim_node.name == expected_node
+        assert udim_node.image.source == "TILED"
+        packed_tiles = {
+            packed.tile_number: bytes(packed.packed_file.data)
+            for packed in udim_node.image.packed_files
+        }
+        assert packed_tiles == expected_tiles
 
-print("Blender project proxy UV and solid face-material contract passed")
+print("Blender project proxy UV, UDIM, and face-material contract passed")

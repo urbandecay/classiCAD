@@ -6,6 +6,7 @@ import base64
 import hashlib
 import math
 import os
+import shutil
 import sys
 import tempfile
 import traceback
@@ -26,6 +27,10 @@ def _remove_temporary_image_file(path):
         os.remove(path)
     except OSError:
         pass
+
+
+def _remove_temporary_image_directory(path):
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def require_pinned_blender():
@@ -603,7 +608,9 @@ def _sync_classicad_image_texture(material, record):
     if reference.get("sourceTransformId", "identity") != "identity":
         _remove_classicad_image_nodes(material, managed_nodes)
         return
-    if reference.get("tiles") or reference.get("sceneLinearFloatDataBase64"):
+    tiles = reference.get("tiles") or []
+    if (reference.get("sceneLinearFloatDataBase64") or
+            (tiles and node_type != "TEX_IMAGE")):
         _remove_classicad_image_nodes(material, managed_nodes)
         return
 
@@ -618,7 +625,11 @@ def _sync_classicad_image_texture(material, record):
 
     image = None
     packed_data = reference.get("packedDataBase64", "")
-    if packed_data:
+    if tiles:
+        image = _create_classicad_tiled_image(reference)
+        if image is None:
+            return
+    elif packed_data:
         try:
             image_bytes = base64.b64decode(packed_data, validate=True)
         except (ValueError, TypeError):
@@ -665,7 +676,7 @@ def _sync_classicad_image_texture(material, record):
         if packed_data:
             image.filepath = ""
             image.filepath_raw = ""
-        elif reference.get("filepath"):
+        elif reference.get("filepath") and not tiles:
             image.filepath = reference["filepath"]
             image.filepath_raw = reference["filepath"]
         image.alpha_mode = reference.get("alphaMode", "STRAIGHT")
@@ -690,6 +701,122 @@ def _sync_classicad_image_texture(material, record):
     node["classiCAD_proxy_image_node"] = True
     node["classiCAD_proxy_image_key"] = reference_key
     _activate_classicad_image_node(material, node)
+
+
+def _create_classicad_tiled_image(reference):
+    """Rebuild a bounded packed UDIM image for a Workbench Image Texture."""
+    tiles = reference.get("tiles")
+    template = reference.get("filepath", "")
+    if (not isinstance(tiles, list) or not tiles or
+            not isinstance(template, str) or "<UDIM>" not in template):
+        return None
+
+    tile_payloads = []
+    tile_numbers = set()
+    total_bytes = 0
+    template_extension = os.path.splitext(template)[1].lower()
+    for tile in tiles:
+        if not isinstance(tile, dict):
+            return None
+        number = tile.get("number")
+        if (isinstance(number, bool) or not isinstance(number, int) or
+                number < 1001 or number > 1999 or number in tile_numbers):
+            return None
+        tile_numbers.add(number)
+        tile_path = tile.get("filepath", "")
+        expected_path = template.replace("<UDIM>", str(number))
+        if (not isinstance(tile_path, str) or
+                os.path.normpath(tile_path) != os.path.normpath(expected_path)):
+            return None
+
+        encoded = tile.get("packedDataBase64", "")
+        if encoded:
+            if not isinstance(encoded, str) or len(encoded) > 44 * 1024 * 1024:
+                return None
+            try:
+                payload = base64.b64decode(encoded, validate=True)
+            except (ValueError, TypeError):
+                return None
+        else:
+            if (not tile.get("sourceFileExists") or not tile_path or
+                    not os.path.isfile(tile_path)):
+                return None
+            try:
+                size = os.path.getsize(tile_path)
+                if size <= 0 or size > 32 * 1024 * 1024:
+                    return None
+                with open(tile_path, "rb") as handle:
+                    payload = handle.read(32 * 1024 * 1024 + 1)
+            except OSError:
+                return None
+            if len(payload) != size:
+                return None
+        if not payload:
+            return None
+        total_bytes += len(payload)
+        if total_bytes > 32 * 1024 * 1024:
+            return None
+        extension = os.path.splitext(tile_path)[1].lower() or template_extension
+        if template_extension and extension != template_extension:
+            return None
+        if not extension:
+            if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+                extension = ".png"
+            elif payload.startswith(b"\xff\xd8"):
+                extension = ".jpg"
+            else:
+                return None
+        tile_payloads.append((number, payload, extension))
+
+    if not tile_payloads or len({extension for _, _, extension in tile_payloads}) != 1:
+        return None
+    tile_payloads.sort(key=lambda entry: entry[0])
+    extension = tile_payloads[0][2]
+    image = None
+    directory = tempfile.mkdtemp(prefix="classiCAD_udim_proxy_")
+    try:
+        for number, payload, _ in tile_payloads:
+            path = os.path.join(directory, "texture.%d%s" % (number, extension))
+            with open(path, "wb") as handle:
+                handle.write(payload)
+        first_number = tile_payloads[0][0]
+        first_path = os.path.join(
+            directory, "texture.%d%s" % (first_number, extension)
+        )
+        image = bpy.data.images.load(first_path, check_existing=False)
+        image.source = "TILED"
+        existing_numbers = {int(tile.number) for tile in image.tiles}
+        if first_number not in existing_numbers:
+            bpy.data.images.remove(image)
+            image = None
+            _remove_temporary_image_directory(directory)
+            return None
+        for number, _, _ in tile_payloads:
+            if number not in existing_numbers:
+                image.tiles.new(number)
+                existing_numbers.add(number)
+        image.filepath = os.path.join(directory, "texture.<UDIM>" + extension)
+        image.filepath_raw = image.filepath
+        image.reload()
+        image.pack()
+        packed = {
+            int(item.tile_number): bytes(item.packed_file.data)
+            for item in image.packed_files
+        }
+        if (set(packed) != tile_numbers or any(
+                packed[number] != payload
+                for number, payload, _ in tile_payloads)):
+            bpy.data.images.remove(image)
+            image = None
+            _remove_temporary_image_directory(directory)
+            return None
+        atexit.register(_remove_temporary_image_directory, directory)
+        return image
+    except (RuntimeError, OSError, ValueError, TypeError):
+        if image is not None:
+            bpy.data.images.remove(image)
+        _remove_temporary_image_directory(directory)
+        return None
 
 
 def _activate_classicad_image_node(material, node):

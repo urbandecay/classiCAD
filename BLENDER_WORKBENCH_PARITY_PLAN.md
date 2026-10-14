@@ -5199,3 +5199,25 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   QPainter color path; the float path shares the corrected row-selection
   rule but does not yet have its own rendered vertical-tile fixture. No
   matched Blender render comparison was made for this category.
+
+### Matched GPU cavity effect comparison (2026-10-14)
+
+- Captured baseline and World Cavity output from the offscreen classiCAD GPU
+  viewport contract and Blender 5.2.2 using the shared 640×480 orthographic
+  cube fixture, AA Off, zero dither, and matched neutral background. Cavity
+  toggles are measured against each application's own baseline so the
+  comparison isolates the rendered effect rather than baseline shading.
+- At a 3/255 RGB change threshold, the effect masks contain 27,109 Blender
+  pixels and 27,212 classiCAD pixels, with 1,135 XOR pixels and IoU
+  `0.959067`. On their union, the signed RGB-delta error is MAE `0.25031/255`,
+  p95 `1/255`, and maximum `20/255`. This records a bounded cavity effect
+  mismatch; it does not compare Blender's internal cavity buffers, and the
+  mask result does not justify a shader adjustment by itself.
+- Blender 5.2.2 builds a 64×64 cavity jitter texture in pinned
+  [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L74-L98)
+  and samples it in
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L63).
+  Validation: both background Blender captures reported 5.2.2 LTS; the
+  offscreen classiCAD capture contract passed; and
+  `workbench_effect_delta_compare.py` completed at threshold 3/255. No source
+  code changed, so no rebuild was required.

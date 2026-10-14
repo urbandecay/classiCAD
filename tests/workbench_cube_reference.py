@@ -120,6 +120,11 @@ def arguments():
         help="Image Texture interpolation used for TEXTURE color source",
     )
     parser.add_argument(
+        "--texture-uv-pattern",
+        action="store_true",
+        help="vary cube UVs from vertex X/Z for a patterned image comparison",
+    )
+    parser.add_argument(
         "--material-color",
         nargs=3,
         type=float,
@@ -278,8 +283,20 @@ def main():
             image_node.interpolation = args.texture_interpolation
             image_node.show_texture = True
             material.node_tree.nodes.active = image_node
-            for loop in cube.data.uv_layers.active.data:
-                loop.uv = (0.5, 0.5)
+            uv_layer = cube.data.uv_layers.active.data
+            if args.texture_uv_pattern:
+                for polygon in cube.data.polygons:
+                    for loop_index in polygon.loop_indices:
+                        vertex = cube.data.vertices[
+                            cube.data.loops[loop_index].vertex_index
+                        ].co
+                        uv_layer[loop_index].uv = (
+                            (vertex.x + 1.0) * 0.5,
+                            (vertex.z + 1.0) * 0.5,
+                        )
+            else:
+                for loop in uv_layer:
+                    loop.uv = (0.5, 0.5)
         if args.color_source == "VERTEX":
             color_attribute = cube.data.color_attributes.new(
                 name="Color", type="FLOAT_COLOR", domain="CORNER"

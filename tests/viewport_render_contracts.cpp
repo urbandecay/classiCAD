@@ -6601,6 +6601,89 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &= textureAssetSaved &&
                             textureLinearSaved && textureDisplaySaved;
 
+                        ViewportRenderObject patternedTextureObject =
+                            textureSourceObject;
+                        QVector<QPointF> patternedUvCorners;
+                        const PolygonMesh3D &patternedMesh =
+                            patternedTextureObject.shape.polygonMesh;
+                        for (const QVector<int> &face : patternedMesh.faces) {
+                            for (int vertexIndex : face) {
+                                const Point3D &point =
+                                    patternedMesh.vertices[vertexIndex];
+                                patternedUvCorners.append(QPointF(
+                                    (point.x + 1.0) * 0.5,
+                                    (point.z + 1.0) * 0.5));
+                            }
+                        }
+                        patternedTextureObject.shape.polygonMesh.uvMaps[0]
+                            .cornerValues = patternedUvCorners;
+                        const QString patternedTexturePath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("workbench-texture-pattern.png"));
+                        QImage patternedTexture(2, 2,
+                                                QImage::Format_RGBA8888);
+                        patternedTexture.setPixelColor(0, 0,
+                                                       QColor(240, 32, 16));
+                        patternedTexture.setPixelColor(1, 0,
+                                                       QColor(24, 224, 48));
+                        patternedTexture.setPixelColor(0, 1,
+                                                       QColor(32, 64, 240));
+                        patternedTexture.setPixelColor(1, 1,
+                                                       QColor(240, 208, 24));
+                        const bool patternedTextureSaved =
+                            patternedTexture.save(patternedTexturePath);
+                        if (!patternedTextureObject.meshMaterials.isEmpty()) {
+                            WorkbenchMaterialData &patternedMaterial =
+                                patternedTextureObject.meshMaterials[0];
+                            patternedMaterial.textureImagePath =
+                                patternedTexturePath;
+                            patternedMaterial.textureImageInterpolation =
+                                QStringLiteral("Linear");
+                        }
+                        QImage patternedTextureDisplay;
+                        QVector<float> patternedTextureSceneLinear;
+                        const bool patternedTextureRendered =
+                            renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-texture-uv"),
+                                &patternedTextureDisplay,
+                                &patternedTextureObject, nullptr, nullptr,
+                                QString{}, &patternedTextureSceneLinear);
+                        const QString patternedTextureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture_uv.png"));
+                        const QString patternedTextureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture_uv.pfm"));
+                        QFile patternedTextureLinearFile(
+                            patternedTextureLinearPath);
+                        const bool patternedTextureLinearSaved =
+                            patternedTextureRendered &&
+                            patternedTextureSceneLinear.size() ==
+                                textureExpectedValues &&
+                            patternedTextureLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            patternedTextureLinearFile.write(
+                                texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            patternedTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    patternedTextureSceneLinear.constData()),
+                                patternedTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                patternedTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool patternedTextureDisplaySaved =
+                            patternedTextureRendered &&
+                            patternedTextureDisplay.size() == QSize(640, 480) &&
+                            patternedTextureDisplay.save(
+                                patternedTextureDisplayPath);
+                        lightingCapturesSucceeded &=
+                            patternedTextureSaved &&
+                            patternedTextureLinearSaved &&
+                            patternedTextureDisplaySaved;
+
                         textureColorShading.lightingMode =
                             ViewportLightingMode::Studio;
                         QImage studioTextureDisplay;

@@ -3681,11 +3681,35 @@ int main(int argc, char *argv[])
     filteredTextureMaterial.textureImageInterpolation = QStringLiteral("Smart");
     const QImage smartTextureImage = renderColorMesh(
         textureSettings, {filteredTextureMaterial});
+    filteredTextureMaterial.textureImageInterpolation = QStringLiteral("Closest");
+    const QImage closestTextureImage = renderColorMesh(
+        textureSettings, {filteredTextureMaterial});
+    const int closestProbeX = qRound(nearGreenCorner.x());
+    const int closestProbeY = qRound(nearGreenCorner.y());
+    const QColor closestTexturePixel = closestTextureImage.pixelColor(
+        closestProbeX, closestProbeY);
+    const QColor linearTexturePixel = linearTextureImage.pixelColor(
+        closestProbeX, closestProbeY);
+    QImage closestReferenceTexture(1, 1, QImage::Format_RGBA8888);
+    closestReferenceTexture.fill(interpolationTexture.pixelColor(1, 1));
+    const QString closestReferencePath =
+        colorTextureDirectory.filePath(QStringLiteral("closest-reference.png"));
+    const bool savedClosestReference =
+        closestReferenceTexture.save(closestReferencePath);
+    WorkbenchMaterialData closestReferenceMaterial = filteredTextureMaterial;
+    closestReferenceMaterial.textureImagePath = closestReferencePath;
+    const QImage closestReferenceImage = renderColorMesh(
+        textureSettings, {closestReferenceMaterial});
+    const QColor closestReferencePixel = closestReferenceImage.pixelColor(
+        closestProbeX, closestProbeY);
     passed &= check(savedInterpolationTexture &&
+                        savedClosestReference &&
                         !linearTextureImage.isNull() &&
                         linearTextureImage == cubicTextureImage &&
-                        linearTextureImage == smartTextureImage,
-                    "QPainter Workbench Texture mode must use the same filtered sampling for Linear, Cubic, and Smart image-node modes");
+                        linearTextureImage == smartTextureImage &&
+                        closestTexturePixel == closestReferencePixel &&
+                        closestTexturePixel != linearTexturePixel,
+                    "QPainter Workbench Texture mode must filter Linear, Cubic, and Smart alike while Closest selects only the expected yellow texel");
 
     const std::array<float, 8> floatTexels{
         1.5f, -0.25f, 0.5f, 0.4f,

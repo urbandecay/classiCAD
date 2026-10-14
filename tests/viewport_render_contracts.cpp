@@ -2942,6 +2942,38 @@ int main(int argc, char *argv[])
                         std::abs(sampledTexture.alpha() - 179) <= 2,
                     "QPainter Texture mode must replace material RGB with the image sample and retain material alpha");
 
+    QImage interpolationTexture(2, 2, QImage::Format_RGBA8888);
+    interpolationTexture.setPixelColor(0, 0, QColor(240, 20, 30, 255));
+    interpolationTexture.setPixelColor(1, 0, QColor(20, 220, 40, 255));
+    interpolationTexture.setPixelColor(0, 1, QColor(30, 40, 230, 255));
+    interpolationTexture.setPixelColor(1, 1, QColor(230, 210, 20, 255));
+    const QString interpolationTexturePath =
+        colorTextureDirectory.filePath(QStringLiteral("interpolation.png"));
+    const bool savedInterpolationTexture =
+        interpolationTexture.save(interpolationTexturePath);
+    colorSourceMesh.polygonMesh.uvMaps = {
+        {QStringLiteral("RenderUV"), {QPointF(0.0, 0.0), QPointF(1.0, 0.0),
+                                      QPointF(0.5, 1.0)}}};
+    colorSourceMesh.polygonMesh.defaultUvMapName = QStringLiteral("RenderUV");
+    WorkbenchMaterialData filteredTextureMaterial;
+    filteredTextureMaterial.textureImagePath = interpolationTexturePath;
+    filteredTextureMaterial.textureImageSrgb = false;
+    filteredTextureMaterial.textureImageExtension = QStringLiteral("CLIP");
+    filteredTextureMaterial.textureImageInterpolation = QStringLiteral("Linear");
+    const QImage linearTextureImage = renderColorMesh(
+        textureSettings, {filteredTextureMaterial});
+    filteredTextureMaterial.textureImageInterpolation = QStringLiteral("Cubic");
+    const QImage cubicTextureImage = renderColorMesh(
+        textureSettings, {filteredTextureMaterial});
+    filteredTextureMaterial.textureImageInterpolation = QStringLiteral("Smart");
+    const QImage smartTextureImage = renderColorMesh(
+        textureSettings, {filteredTextureMaterial});
+    passed &= check(savedInterpolationTexture &&
+                        !linearTextureImage.isNull() &&
+                        linearTextureImage == cubicTextureImage &&
+                        linearTextureImage == smartTextureImage,
+                    "QPainter Workbench Texture mode must use the same filtered sampling for Linear, Cubic, and Smart image-node modes");
+
     const std::array<float, 8> floatTexels{
         1.5f, -0.25f, 0.5f, 0.4f,
         -0.5f, 0.75f, 1.5f, 0.8f};

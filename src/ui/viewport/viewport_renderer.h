@@ -59,7 +59,9 @@ public:
                        identityMeshObjectTransform,
                    const QVector<WorkbenchMaterialData> &meshMaterials = {},
                    RasterWorkbenchFragmentSink *fragmentSink = nullptr,
-                   const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials = {}) const;
+                   const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials = {},
+                   const QVector<float> *opaqueSceneDepth = nullptr,
+                   const QSize &opaqueSceneDepthSize = {}) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -124,7 +126,9 @@ private:
     bool drawPreparedCurveSegments(
         QPainter &painter,
         const ViewportDepthGeometry &preparedGeometry,
-        const QSize &viewportSize) const;
+        const QSize &viewportSize,
+        const QVector<float> *opaqueSceneDepth = nullptr,
+        const QSize &opaqueSceneDepthSize = {}) const;
     bool subdivisionCurve(const Shape &shape,
                           Shape::NurbsCurve2D *curve) const;
     QVector<QPointF> rectangleVertices(const Shape &shape) const;

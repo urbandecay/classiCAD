@@ -122,6 +122,11 @@ float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,
 struct RasterWorkbenchSurfaceLayers {
     QImage opaqueColor;
     QImage transparentColor;
+    // Physical-target camera depth of the nearest regular opaque surface.
+    // Negative infinity marks uncovered pixels. Retained for QPainter strokes
+    // that must depth-test against the already composited surface pass.
+    QVector<float> opaqueSceneDepth;
+    QSize opaqueSceneDepthSize;
     // Optional pre-display resolved scene for the bounded weighted-compositor
     // outline path. Pixels are row-major physical-target samples.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearColor;

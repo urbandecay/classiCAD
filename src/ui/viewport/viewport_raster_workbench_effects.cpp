@@ -886,6 +886,8 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->transparentShadowFragmentsAvailable = false;
         surfaceLayers->sceneLinearOutlineCoverage.clear();
         surfaceLayers->sceneLinearSize = QSize();
+        surfaceLayers->opaqueSceneDepth.clear();
+        surfaceLayers->opaqueSceneDepthSize = QSize();
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         surfaceLayers->opaqueColor.setDevicePixelRatio(
@@ -1638,6 +1640,10 @@ bool compositeRasterWorkbenchSurfaces(
                                0, 255));
             }
         }
+        if (surfaceLayers != nullptr) {
+            surfaceLayers->opaqueSceneDepth = opaqueSceneDepth;
+            surfaceLayers->opaqueSceneDepthSize = QSize(width, height);
+        }
         return true;
     }
 
@@ -2107,6 +2113,10 @@ bool compositeRasterWorkbenchSurfaces(
     if (canResolveSortedOutlineInSceneLinear)
         surfaceLayers->outlineAppliedBeforeDisplay =
             !deferSortedOutlineUntilEffects;
+    if (surfaceLayers != nullptr) {
+        surfaceLayers->opaqueSceneDepth = opaqueSceneDepth;
+        surfaceLayers->opaqueSceneDepthSize = QSize(width, height);
+    }
     return true;
 }
 

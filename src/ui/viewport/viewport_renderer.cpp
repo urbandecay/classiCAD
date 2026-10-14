@@ -1245,12 +1245,114 @@ QVector<QPointF> ViewportRenderer::rectangleVertices(const Shape &shape) const
 bool ViewportRenderer::drawPreparedCurveSegments(
     QPainter &painter,
     const ViewportDepthGeometry &preparedGeometry,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    const QVector<float> *opaqueSceneDepth,
+    const QSize &opaqueSceneDepthSize) const
 {
     const QVector<Point3D> &worldVertices =
         preparedGeometry.preciseLineVertices;
     if (worldVertices.isEmpty() || worldVertices.size() % 2 != 0) {
         return false;
+    }
+
+    if (opaqueSceneDepth != nullptr &&
+        opaqueSceneDepthSize.width() > 0 &&
+        opaqueSceneDepthSize.height() > 0 &&
+        opaqueSceneDepth->size() ==
+            opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height()) {
+        const QTransform deviceTransform = painter.deviceTransform();
+        const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
+        const Point3D viewDirection = transform_.viewDirection();
+        const auto cameraDepth = [&](const Point3D &point) {
+            if (transform_.isPerspectiveEnabled()) {
+                return (point.x - cameraPosition.x) * viewDirection.x +
+                       (point.y - cameraPosition.y) * viewDirection.y +
+                       (point.z - cameraPosition.z) * viewDirection.z;
+            }
+            return transform_.worldDirectionToView(point).towardCamera;
+        };
+        QPainterPath visiblePath;
+        bool visibleRun = false;
+        quint64 sampleBudget = 0;
+        constexpr quint64 maximumDepthSamples = 1'000'000;
+        for (int index = 0; index + 1 < worldVertices.size(); index += 2) {
+            QPointF screenStart;
+            QPointF screenEnd;
+            const Point3D &worldStart = worldVertices[index];
+            const Point3D &worldEnd = worldVertices[index + 1];
+            if (index > 0) {
+                const Point3D &previousEnd = worldVertices[index - 1];
+                if (previousEnd.x != worldStart.x ||
+                    previousEnd.y != worldStart.y ||
+                    previousEnd.z != worldStart.z) {
+                    visibleRun = false;
+                }
+            }
+            if (!transform_.worldPointToScreenUnclipped(
+                    worldStart, viewportSize, &screenStart) ||
+                !transform_.worldPointToScreenUnclipped(
+                    worldEnd, viewportSize, &screenEnd)) {
+                visibleRun = false;
+                continue;
+            }
+            const QPointF deviceStart = deviceTransform.map(screenStart);
+            const QPointF deviceEnd = deviceTransform.map(screenEnd);
+            const qreal deviceLength = std::hypot(
+                deviceEnd.x() - deviceStart.x(),
+                deviceEnd.y() - deviceStart.y());
+            const int steps = std::max(1, qCeil(deviceLength * 2.0));
+            sampleBudget += static_cast<quint64>(steps);
+            if (sampleBudget > maximumDepthSamples) {
+                return false;
+            }
+            const qreal startDepth = cameraDepth(worldStart);
+            const qreal endDepth = cameraDepth(worldEnd);
+            for (int step = 0; step <= steps; ++step) {
+                const qreal fraction = static_cast<qreal>(step) / steps;
+                const QPointF devicePoint =
+                    deviceStart + (deviceEnd - deviceStart) * fraction;
+                const int x = qFloor(devicePoint.x());
+                const int y = qFloor(devicePoint.y());
+                bool visible = true;
+                if (x >= 0 && x < opaqueSceneDepthSize.width() &&
+                    y >= 0 && y < opaqueSceneDepthSize.height()) {
+                    qreal curveDepth = startDepth +
+                        (endDepth - startDepth) * fraction;
+                    if (transform_.isPerspectiveEnabled() &&
+                        startDepth > 1.0e-9 && endDepth > 1.0e-9) {
+                        const qreal reciprocal =
+                            (1.0 - fraction) / startDepth +
+                            fraction / endDepth;
+                        if (reciprocal > 1.0e-12) {
+                            curveDepth = 1.0 / reciprocal;
+                        }
+                    }
+                    const float surfaceDepth = (*opaqueSceneDepth)[
+                        y * opaqueSceneDepthSize.width() + x];
+                    const qreal depthTolerance = std::max<qreal>(
+                        1.0e-4, std::abs(curveDepth) * 1.0e-6);
+                    visible = !std::isfinite(surfaceDepth) ||
+                              surfaceDepth <= curveDepth + depthTolerance;
+                }
+                const QPointF screenPoint = screenStart +
+                    (screenEnd - screenStart) * fraction;
+                if (visible) {
+                    if (!visibleRun) {
+                        visiblePath.moveTo(screenPoint);
+                        visibleRun = true;
+                    } else {
+                        visiblePath.lineTo(screenPoint);
+                    }
+                } else {
+                    visibleRun = false;
+                }
+            }
+        }
+        if (visiblePath.isEmpty()) {
+            return true;
+        }
+        painter.drawPath(visiblePath);
+        return true;
     }
 
     QPainterPath path;
@@ -1385,7 +1487,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const MeshObjectTransform &meshTransform,
                                  const QVector<WorkbenchMaterialData> &meshMaterials,
                                  RasterWorkbenchFragmentSink *fragmentSink,
-                                 const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials) const
+                                 const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials,
+                                 const QVector<float> *opaqueSceneDepth,
+                                 const QSize &opaqueSceneDepthSize) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -2704,15 +2808,31 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.setRenderHint(QPainter::Antialiasing,
                                   smoothWiresOverlay_);
         }
-        if (!canUsePreparedCurve ||
-            !drawPreparedCurveSegments(painter,
-                                       *preparedGeometry,
-                                       viewportSize)) {
+        bool curveDrawn = canUsePreparedCurve &&
+            drawPreparedCurveSegments(
+                painter, *preparedGeometry, viewportSize,
+                preview ? nullptr : opaqueSceneDepth,
+                opaqueSceneDepthSize);
+        if (!curveDrawn) {
             WorkPlaneFrame placedFrame = frame;
             placedFrame.origin.x += preparedOffset.x;
             placedFrame.origin.y += preparedOffset.y;
             placedFrame.origin.z += preparedOffset.z;
-            drawNurbsCurve(painter, curve, placedFrame, viewportSize);
+            if (!preview && opaqueSceneDepth != nullptr) {
+                Shape directCurve;
+                directCurve.geometryType = GeometryType::Line;
+                directCurve.points = curve.controlPoints;
+                directCurve.nurbs = curve;
+                directCurve.workPlaneFrame = placedFrame;
+                const ViewportDepthGeometry sampledCurve =
+                    buildViewportDepthGeometry(directCurve);
+                curveDrawn = drawPreparedCurveSegments(
+                    painter, sampledCurve, viewportSize, opaqueSceneDepth,
+                    opaqueSceneDepthSize);
+            }
+            if (!curveDrawn) {
+                drawNurbsCurve(painter, curve, placedFrame, viewportSize);
+            }
         }
         painter.restore();
     };
@@ -2883,7 +3003,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
             for (const Shape::NurbsCurve2D &component : shape.components) {
                 if (isValidNurbsCurve(component)) {
                     preparedCurveDrawn = drawPreparedCurveSegments(
-                        painter, *preparedGeometry, viewportSize);
+                        painter, *preparedGeometry, viewportSize,
+                        preview ? nullptr : opaqueSceneDepth,
+                        opaqueSceneDepthSize);
                     break;
                 }
             }

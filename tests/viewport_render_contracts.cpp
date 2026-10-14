@@ -897,6 +897,131 @@ int main(int argc, char *argv[])
     const QVector<ViewportRenderObject> shadowObjects{
         makeShadowQuad(11, 4, 4, 124, 124, 0.0),
         makeShadowQuad(12, 48, 48, 80, 80, 2.0)};
+    {
+        ViewportRenderObject opaqueCurveBlocker = makeShadowQuad(
+            10, 40, 56, 88, 72, 0.0);
+        opaqueCurveBlocker.hasWorkbenchMaterial = true;
+        opaqueCurveBlocker.workbenchMaterial.baseColorSceneLinear =
+            QVector3D(0.5f, 0.5f, 0.5f);
+        opaqueCurveBlocker.workbenchMaterial.alpha = 1.0f;
+        opaqueCurveBlocker.meshMaterials = {
+            opaqueCurveBlocker.workbenchMaterial};
+        const QVector<ViewportRenderObject> opaqueCurveBlockers{
+            opaqueCurveBlocker};
+        ViewportShadingSettings curveOcclusionSettings;
+        curveOcclusionSettings.mode = ViewportShadingMode::Solid;
+        curveOcclusionSettings.lightingMode = ViewportLightingMode::Flat;
+        curveOcclusionSettings.colorMode = ViewportColorMode::Material;
+        curveOcclusionSettings.outline = false;
+        CurveHitTester curveOcclusionHitTester;
+        ViewportRenderer curveOcclusionRenderer(
+            orthographicDofTransform, curveOcclusionHitTester);
+        curveOcclusionRenderer.setShadingSettings(curveOcclusionSettings);
+        const auto drawCurveOcclusionBlocker =
+            [&curveOcclusionRenderer, &orthographicDofSize](
+                QPainter &painter, const ViewportRenderObject &object,
+                RasterWorkbenchFragmentSink *fragmentSink) {
+                curveOcclusionRenderer.drawShape(
+                    painter, object.shape, orthographicDofSize, false,
+                    object.selected, true, object.layerColor,
+                    object.layerLineType, object.layerLineWeightMm,
+                    object.objectId, object.geometryRevision,
+                    object.preparedDepthGeometry.data(),
+                    object.preparedGeometryOffset,
+                    object.displayColorSceneLinear,
+                    object.workbenchMaterial, object.displayName,
+                    object.libraryPath, object.meshObjectTransform,
+                    object.meshMaterials, fragmentSink);
+            };
+        QImage curveOcclusionBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        curveOcclusionBase.fill(QColor(22, 22, 22));
+        RasterWorkbenchSurfaceLayers curveOcclusionLayers;
+        const bool curveOcclusionBaseRendered =
+            compositeRasterWorkbenchSurfaces(
+                &curveOcclusionBase, opaqueCurveBlockers,
+                orthographicDofTransform, orthographicDofSize, 1.0, false,
+                true, curveOcclusionSettings, std::nullopt,
+                drawCurveOcclusionBlocker, &curveOcclusionLayers);
+
+        QPointF curveStart;
+        QPointF curveEnd;
+        const bool curvePointsMapped =
+            orthographicDofTransform.screenToWorkPlaneUnclipped(
+                QPointF(12.0, 64.0), orthographicDofSize, WorkPlane::XY,
+                0.0, &curveStart) &&
+            orthographicDofTransform.screenToWorkPlaneUnclipped(
+                QPointF(116.0, 64.0), orthographicDofSize, WorkPlane::XY,
+                0.0, &curveEnd);
+        Shape occludedCurve;
+        occludedCurve.geometryType = GeometryType::Line;
+        occludedCurve.points = {curveStart, curveEnd};
+        occludedCurve.workPlaneFrame = makeWorkPlaneFrameFromNormal(
+            {-orthographicDofOutward.x, -orthographicDofOutward.y,
+             -orthographicDofOutward.z},
+            {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0});
+        occludedCurve.nurbs.degree = 1;
+        occludedCurve.nurbs.order = 2;
+        occludedCurve.nurbs.controlPoints = {curveStart, curveEnd};
+        occludedCurve.nurbs.knots = {0.0, 1.0};
+        occludedCurve.nurbs.weights = {1.0, 1.0};
+        const ViewportDepthGeometry occludedCurveGeometry =
+            buildViewportDepthGeometry(occludedCurve);
+        const auto drawOccludedCurve = [&](QImage *image, bool useSceneDepth,
+                                           bool usePreparedGeometry) {
+            if (image == nullptr) return false;
+            QPainter painter(image);
+            curveOcclusionRenderer.drawShape(
+                painter, occludedCurve, orthographicDofSize, false, false,
+                true, QColor(Qt::black), QString(), 0.0,
+                ObjectId::fromValue(20), 1,
+                usePreparedGeometry ? &occludedCurveGeometry : nullptr, {},
+                std::nullopt, std::nullopt, QStringLiteral("OccludedCurve"),
+                QString(), identityMeshObjectTransform, {}, nullptr, {},
+                useSceneDepth ? &curveOcclusionLayers.opaqueSceneDepth
+                              : nullptr,
+                curveOcclusionLayers.opaqueSceneDepthSize);
+            painter.end();
+            return true;
+        };
+        QImage curveWithoutDepth = curveOcclusionBase;
+        QImage curveWithDepth = curveOcclusionBase;
+        QImage curveWithGeneratedDepth = curveOcclusionBase;
+        const bool curveWithoutDepthRendered =
+            drawOccludedCurve(&curveWithoutDepth, false, true);
+        const bool curveWithDepthRendered =
+            drawOccludedCurve(&curveWithDepth, true, true);
+        const bool curveWithGeneratedDepthRendered =
+            drawOccludedCurve(&curveWithGeneratedDepth, true, false);
+        const bool curveDepthSamplesValid =
+            curveOcclusionLayers.opaqueSceneDepth.size() ==
+                orthographicDofSize.width() * orthographicDofSize.height() &&
+            std::isfinite(curveOcclusionLayers.opaqueSceneDepth[
+                64 * orthographicDofSize.width() + 64]) &&
+            !std::isfinite(curveOcclusionLayers.opaqueSceneDepth[
+                64 * orthographicDofSize.width() + 20]);
+        passed &= check(curveOcclusionBaseRendered && curveDepthSamplesValid,
+                        "QPainter curve occlusion fixture must produce opaque software scene depth");
+        passed &= check(curvePointsMapped &&
+                            !occludedCurveGeometry.preciseLineVertices.isEmpty(),
+                        "QPainter curve occlusion fixture must prepare a valid NURBS line");
+        passed &= check(curveWithoutDepthRendered && curveWithDepthRendered &&
+                            curveWithGeneratedDepthRendered &&
+                            curveWithoutDepth.pixelColor(64, 64) !=
+                                curveOcclusionBase.pixelColor(64, 64),
+                        "QPainter curve occlusion fixture must render its baseline stroke through the blocker");
+        passed &= check(curveWithDepth.pixelColor(64, 64) ==
+                            curveOcclusionBase.pixelColor(64, 64),
+                        "QPainter committed curve wires must be hidden by opaque surface depth");
+        passed &= check(curveWithGeneratedDepth.pixelColor(64, 64) ==
+                            curveOcclusionBase.pixelColor(64, 64),
+                        "QPainter direct NURBS fallback must depth-test using bounded sampled curve segments");
+        passed &= check(curveWithDepth.pixelColor(20, 64) !=
+                                curveOcclusionBase.pixelColor(20, 64) &&
+                            curveWithGeneratedDepth.pixelColor(20, 64) !=
+                                curveOcclusionBase.pixelColor(20, 64),
+                        "QPainter committed curve wires must remain visible outside the blocker");
+    }
     const auto renderCpuShadow = [&](ViewportShadingSettings shading) {
         QImage image(orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::white);

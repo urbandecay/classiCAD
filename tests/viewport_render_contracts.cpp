@@ -8354,6 +8354,196 @@ int main(int argc, char *argv[])
                             cavityCaptured && baselineCaptured,
                             "matched polygon cube cavity captures must render and save");
                     }
+                    const QString qpainterCavityCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_CAPTURE");
+                    if (!qpainterCavityCapturePath.isEmpty()) {
+                        const QString qpainterCavityBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_BASELINE_CAPTURE");
+                        const QString qpainterCavityLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_LINEAR_CAPTURE");
+                        const QString qpainterCavityBaselineLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_BASELINE_LINEAR_CAPTURE");
+                        CurveHitTester qpainterCavityHitTester;
+                        ViewportRenderer qpainterCavityRenderer(
+                            gpuTransform, qpainterCavityHitTester);
+                        ViewportRenderObject qpainterCavityObject =
+                            polygonCubeObject;
+                        auto qpainterCavityDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create();
+                        const PolygonMesh3D &qpainterCavityMesh =
+                            qpainterCavityObject.shape.polygonMesh;
+                        for (const QVector<int> &face :
+                             qpainterCavityMesh.faces) {
+                            if (face.size() < 3) continue;
+                            for (int corner = 1; corner + 1 < face.size();
+                                 ++corner) {
+                                const int indices[] = {
+                                    face[0], face[corner], face[corner + 1]};
+                                const auto pointAt =
+                                    [&qpainterCavityMesh](int index) {
+                                        const Point3D &point =
+                                            qpainterCavityMesh.vertices[index];
+                                        return QVector3D(
+                                            float(point.x), float(point.y),
+                                            float(point.z));
+                                    };
+                                const QVector3D a = pointAt(indices[0]);
+                                const QVector3D b = pointAt(indices[1]);
+                                const QVector3D c = pointAt(indices[2]);
+                                const QVector3D normal =
+                                    QVector3D::crossProduct(b - a, c - a)
+                                        .normalized();
+                                for (const QVector3D &point : {a, b, c}) {
+                                    qpainterCavityDepthGeometry
+                                        ->surfaceVertices.append(point);
+                                    qpainterCavityDepthGeometry
+                                        ->surfaceNormals.append(normal);
+                                }
+                            }
+                        }
+                        qpainterCavityObject.preparedDepthGeometry =
+                            qpainterCavityDepthGeometry;
+                        const auto captureQPainterCavity = [&] (
+                            const ViewportShadingSettings &settings,
+                            QImage *display,
+                            QVector<float> *linear) {
+                            if (display == nullptr) return false;
+                            ViewportShadingSettings captureSettings = settings;
+                            if (linear != nullptr) {
+                                // The weighted compositor retains its
+                                // scene-linear target for outline resolve.
+                                // A zero-alpha outline keeps this cavity image
+                                // unchanged while exposing that target.
+                                captureSettings.outline = true;
+                                captureSettings.outlineColor.setAlpha(0);
+                            }
+                            qpainterCavityRenderer.setShadingSettings(
+                                captureSettings);
+                            *display = QImage(
+                                glSize, QImage::Format_ARGB32_Premultiplied);
+                            display->fill(Qt::transparent);
+                            RasterWorkbenchSurfaceLayers layers;
+                            const auto drawObject = [&] (
+                                QPainter &painter,
+                                const ViewportRenderObject &object,
+                                RasterWorkbenchFragmentSink *fragmentSink) {
+                                qpainterCavityRenderer.drawShape(
+                                    painter, object.shape, glSize, false, false,
+                                    true, QColor(), QString(), 0.0,
+                                    object.objectId, object.geometryRevision,
+                                    object.preparedDepthGeometry.data(),
+                                    object.preparedGeometryOffset,
+                                    object.displayColorSceneLinear,
+                                    object.workbenchMaterial,
+                                    object.displayName, object.libraryPath,
+                                    object.meshObjectTransform,
+                                    object.meshMaterials, fragmentSink);
+                            };
+                            const QVector3D worldBackground(0.12f, 0.07f,
+                                                            0.035f);
+                            const bool composed =
+                                compositeRasterWorkbenchSurfaces(
+                                    display, {qpainterCavityObject}, gpuTransform,
+                                    glSize, 1.0, false, true, captureSettings,
+                                    worldBackground, drawObject, &layers);
+                            if (!composed) return false;
+                            applyRasterWorkbenchEffects(
+                                display, {qpainterCavityObject}, gpuTransform,
+                                glSize, 1.0, captureSettings, &layers);
+                            if (linear != nullptr) {
+                                if (layers.sceneLinearSize != glSize ||
+                                    layers.sceneLinearColor.size() !=
+                                        static_cast<std::size_t>(
+                                            glSize.width() * glSize.height())) {
+                                    return false;
+                                }
+                                linear->resize(glSize.width() *
+                                               glSize.height() * 3);
+                                for (int y = 0; y < glSize.height(); ++y) {
+                                    for (int x = 0; x < glSize.width(); ++x) {
+                                        const std::size_t source =
+                                            static_cast<std::size_t>(
+                                                y * glSize.width() + x);
+                                        const qsizetype destination =
+                                            (qsizetype(glSize.height() - 1 - y) *
+                                                 glSize.width() + x) * 3;
+                                        const RasterWorkbenchLinearPixel &pixel =
+                                            layers.sceneLinearColor[source];
+                                        (*linear)[destination] = pixel.red;
+                                        (*linear)[destination + 1] = pixel.green;
+                                        (*linear)[destination + 2] = pixel.blue;
+                                    }
+                                }
+                            }
+                            return !display->isNull();
+                        };
+                        ViewportShadingSettings qpainterCavityBaselineSettings =
+                            rawFaceShading;
+                        qpainterCavityBaselineSettings.outline = false;
+                        qpainterCavityBaselineSettings.shadows = false;
+                        qpainterCavityBaselineSettings.cavity = false;
+                        ViewportShadingSettings qpainterCavitySettings =
+                            qpainterCavityBaselineSettings;
+                        qpainterCavitySettings.cavity = true;
+                        qpainterCavitySettings.cavityType =
+                            ViewportCavityType::World;
+                        qpainterCavitySettings.cavityDistance = 0.2;
+                        qpainterCavitySettings.cavityAttenuation = 1.0;
+                        qpainterCavitySettings.cavitySamples = 16;
+                        QImage qpainterCavityImage;
+                        QImage qpainterCavityBaselineImage;
+                        QVector<float> qpainterCavityLinear;
+                        QVector<float> qpainterCavityBaselineLinear;
+                        const bool qpainterCavityCaptured =
+                            captureQPainterCavity(
+                                qpainterCavitySettings,
+                                &qpainterCavityImage,
+                                qpainterCavityLinearPath.isEmpty()
+                                    ? nullptr : &qpainterCavityLinear) &&
+                            qpainterCavityImage.save(
+                                qpainterCavityCapturePath);
+                        const bool qpainterCavityBaselineCaptured =
+                            qpainterCavityBaselinePath.isEmpty() ||
+                            (captureQPainterCavity(
+                                 qpainterCavityBaselineSettings,
+                                 &qpainterCavityBaselineImage,
+                                 qpainterCavityBaselineLinearPath.isEmpty()
+                                     ? nullptr
+                                     : &qpainterCavityBaselineLinear) &&
+                             qpainterCavityBaselineImage.save(
+                                 qpainterCavityBaselinePath));
+                        const auto saveQPainterLinearCapture = [&] (
+                            const QString &path,
+                            const QVector<float> &pixels) {
+                            if (path.isEmpty()) return true;
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            return pixels.size() == 640 * 480 * 3 &&
+                                file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               pixels.constData()),
+                                           pixels.size() * qsizetype(sizeof(float))) ==
+                                    pixels.size() * qsizetype(sizeof(float));
+                        };
+                        const bool qpainterLinearSaved =
+                            saveQPainterLinearCapture(
+                                qpainterCavityLinearPath,
+                                qpainterCavityLinear) &&
+                            saveQPainterLinearCapture(
+                                qpainterCavityBaselineLinearPath,
+                                qpainterCavityBaselineLinear);
+                        passed &= check(
+                            qpainterCavityCaptured &&
+                                qpainterCavityBaselineCaptured &&
+                                qpainterLinearSaved,
+                            "opt-in QPainter cavity captures must render matched baseline and effect output");
+                    }
                     const QString transparencyCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_TRANSPARENCY_CAPTURE");

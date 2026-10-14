@@ -2672,6 +2672,30 @@ above is from scene-linear captures and remains the preferred color metric.
   `BASELINE` and `OUTLINE` fixtures. PNG mask attribution and linear PFM
   metrics were both run after the full build and offscreen
   `viewport_render_contracts` test passed.
+- **Matched QPainter world-cavity comparison (2026-10-14):** The offscreen
+  contract can now capture QPainter baseline and WORLD-cavity output for the
+  same 640×480 cube, camera, Studio light, AgX transform, and cavity controls
+  used by the Blender 5.2.2 reference, including pre-display RGB PFM targets.
+  The baseline silhouette masks contain 111,480 Blender pixels and 111,878
+  QPainter pixels (XOR 398; IoU 0.9964), so the large cavity difference is
+  not explained by the outer silhouette. At a 0.001 scene-linear effect
+  threshold, the cavity masks contain 81,314 Blender pixels and 21,273
+  QPainter pixels (XOR 69,211; IoU 0.1943). Mean max-channel effect is
+  0.003154 for Blender and 0.001652 for QPainter; scene-linear effect-delta
+  RGB MAE over the mask union is 0.01411 (p95 0.05684). The baseline RGB MAE
+  is 0.05099, reflecting different CPU/GPU surface shading, while the
+  within-renderer linear deltas still show QPainter's smaller cavity coverage
+  and magnitude. Blender's pinned [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L100)
+  and [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L52-L68)
+  define the screen-space offset, depth sampling, and Hammersley disk points;
+  QPainter retains a discrete software-neighborhood approximation. These
+  measurements confirm that the fallback cavity still needs parity work but
+  do not isolate a single safe formula correction. Reproduce with the
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_*` capture variables,
+  `tests/workbench_cube_reference.py --effect BASELINE|CAVITY --linear-output
+  <path.exr> --linear-pfm-output <path.pfm>`, and
+  `tests/workbench_effect_linear_compare.py` at a 0.001 threshold. The full
+  C++ build and offscreen `viewport_render_contracts` test passed.
 - World cavity's first measured mask mismatch was caused in part by the depth
   sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
   while Blender binds its Workbench depth texture with the default sampler,

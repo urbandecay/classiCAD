@@ -1720,6 +1720,27 @@ int main(int argc, char *argv[])
             QVector3D(1.0f, 0.0f, 0.0f),
             QVector3D(0.0f, 1.0f, 0.0f),
             QVector3D(0.0f, 0.0f, 1.0f));
+    WorkbenchStudioLighting axisMappingSource;
+    axisMappingSource.lights[0].enabled = true;
+    axisMappingSource.lights[0].direction = QVector3D(0.2f, 0.3f, 0.4f);
+    const WorkbenchStudioLighting axisMappedWorldLighting =
+        workbenchStudioLightingForView(
+            axisMappingSource, 0, true,
+            QVector3D(1.0f, 0.0f, 0.0f),
+            QVector3D(0.0f, 1.0f, 0.0f),
+            QVector3D(0.0f, 0.0f, 1.0f));
+    const WorkbenchStudioLighting rotatedAxisMappedWorldLighting =
+        workbenchStudioLightingForView(
+            axisMappingSource, 90, true,
+            QVector3D(1.0f, 0.0f, 0.0f),
+            QVector3D(0.0f, 1.0f, 0.0f),
+            QVector3D(0.0f, 0.0f, 1.0f));
+    const WorkbenchStudioLighting unchangedCameraLighting =
+        workbenchStudioLightingForView(
+            axisMappingSource, 0, false,
+            QVector3D(1.0f, 0.0f, 0.0f),
+            QVector3D(0.0f, 1.0f, 0.0f),
+            QVector3D(0.0f, 0.0f, 1.0f));
     passed &= check(basicStudioLight.lights[0].enabled &&
                         std::abs(basicStudioLight.lights[0].wrap - 0.1f) < 1.0e-6f &&
                         !basicGreyDiffuse.isNull() &&
@@ -1737,6 +1758,22 @@ int main(int argc, char *argv[])
                         std::abs(worldRotatedLighting.lights[1].direction.x() -
                                  workbenchLighting.lights[1].direction.x()) > 0.1f,
                     "Workbench Studio Light presets and diffuse/specular MatCap layers must load, with rotation applied only to world-space lighting");
+    passed &= check(
+        std::abs(axisMappedWorldLighting.lights[0].direction.x() - 0.2f) <
+                1.0e-6f &&
+            std::abs(axisMappedWorldLighting.lights[0].direction.y() + 0.4f) <
+                1.0e-6f &&
+            std::abs(axisMappedWorldLighting.lights[0].direction.z() - 0.3f) <
+                1.0e-6f &&
+            std::abs(rotatedAxisMappedWorldLighting.lights[0].direction.x() +
+                     0.4f) < 1.0e-6f &&
+            std::abs(rotatedAxisMappedWorldLighting.lights[0].direction.y() +
+                     0.2f) < 1.0e-6f &&
+            std::abs(rotatedAxisMappedWorldLighting.lights[0].direction.z() -
+                     0.3f) < 1.0e-6f &&
+            unchangedCameraLighting.lights[0].direction ==
+                axisMappingSource.lights[0].direction,
+        "world-space Studio directions must apply Blender's (x, -z, y) axis remap while camera-following preset vectors remain unchanged");
 
     ViewportShadingSettings shading;
     passed &= check(shading.mode == ViewportShadingMode::Solid &&
@@ -3560,6 +3597,8 @@ int main(int argc, char *argv[])
                         const LightingCaptureCase lightingCases[] = {
                             {"studio_default", ViewportLightingMode::Studio,
                              "Default", false, 0},
+                            {"studio_paint_world_0",
+                             ViewportLightingMode::Studio, "Paint", true, 0},
                             {"studio_paint_world_90",
                              ViewportLightingMode::Studio, "Paint", true, 90},
                             {"matcap_metal_bronze", ViewportLightingMode::MatCap,

@@ -522,10 +522,15 @@ inline WorkbenchStudioLighting workbenchStudioLightingForView(
         if (!light.enabled) {
             continue;
         }
+        // Blender 5.2.2's world shading rotation maps stored Studio Light
+        // directions into its view transform's axes. Keep preset vectors in
+        // their native form and apply the mapping only to world-space output.
+        const QVector3D viewMapped(
+            light.direction.x(), -light.direction.z(), light.direction.y());
         const QVector3D rotated(
-            cosine * light.direction.x() - sine * light.direction.y(),
-            sine * light.direction.x() + cosine * light.direction.y(),
-            light.direction.z());
+            cosine * viewMapped.x() - sine * viewMapped.y(),
+            sine * viewMapped.x() + cosine * viewMapped.y(),
+            viewMapped.z());
         light.direction = QVector3D(
             QVector3D::dotProduct(rotated, viewRight),
             QVector3D::dotProduct(rotated, viewUp),

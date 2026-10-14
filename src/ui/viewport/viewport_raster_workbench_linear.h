@@ -37,10 +37,15 @@ struct RasterWorkbenchLinearFragment {
     // means the caller has only cameraDepth, which remains useful to depth
     // sort and is used as the weight-depth fallback by CPU contracts.
     float oitLinearDepth = -1.0f;
+    // World-space receiver data for the QPainter shadow compositor. These
+    // fields are optional for diagnostic and legacy fragment producers.
+    std::array<float, 3> worldPosition{};
+    std::array<float, 3> worldNormal{};
+    bool hasShadowReceiver = false;
 };
 
-// Optional observation target used by CPU surface rasterization. Collected
-// fragments are diagnostic inputs only; the QPainter display path is unchanged.
+// Optional observation target used by CPU surface rasterization. Fragments
+// provide the bounded compositor and effects passes with source-layer data.
 using RasterWorkbenchFragmentSink =
     std::vector<RasterWorkbenchLinearFragment>;
 

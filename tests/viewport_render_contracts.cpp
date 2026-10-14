@@ -806,6 +806,14 @@ int main(int argc, char *argv[])
             QPointF(0.0, 0.0), QPointF(1.0, 1.0), QPointF(1.0, 0.0),
             QPointF(0.0, 0.0), QPointF(0.0, 1.0), QPointF(1.0, 1.0)};
         object.preparedDepthGeometry = geometry;
+        object.shape.nurbsSurface.controlVertexCountU = 2;
+        object.shape.nurbsSurface.controlVertexCountV = 2;
+        object.shape.nurbsSurface.controlPoints = {
+            {a.x(), a.y(), a.z()}, {d.x(), d.y(), d.z()},
+            {b.x(), b.y(), b.z()}, {c.x(), c.y(), c.z()}};
+        object.shape.nurbsSurface.weights = {1.0, 1.0, 1.0, 1.0};
+        object.shape.nurbsSurface.knotsU = {0.0, 1.0};
+        object.shape.nurbsSurface.knotsV = {0.0, 1.0};
         return object;
     };
     const QVector<ViewportRenderObject> shadowObjects{
@@ -991,6 +999,159 @@ int main(int argc, char *argv[])
     passed &= check(
         transparentReceiverWasShadowed,
         "QPainter software shadows must darken a frontmost translucent receiver contribution while preserving its alpha");
+
+    // Retain and shadow each transparent layer independently. The fixture
+    // searches for a pixel where the lower receiver is shadowed, the upper
+    // receiver and opaque underlay are lit, so a top-layer-only factor cannot
+    // accidentally satisfy the combined-scene assertion.
+    struct TransparentShadowCapture {
+        std::vector<RasterWorkbenchLinearPixel> pixels;
+        QSize size;
+        bool rendered = false;
+    };
+    const auto captureLayeredTransparentShadow = [&](
+        const QVector<ViewportRenderObject> &receivers, bool shadows) {
+        ViewportShadingSettings settings = shadowSettings;
+        settings.shadows = shadows;
+        settings.outline = true;
+        settings.outlineColor = QColor(0, 0, 0, 0);
+        settings.colorMode = ViewportColorMode::Material;
+        settings.lightingMode = ViewportLightingMode::Flat;
+        settings.depthOfField = false;
+        QVector<ViewportRenderObject> scene;
+        ViewportRenderObject opaque = makeShadowQuad(
+            35, 4, 4, 124, 124, -0.5);
+        opaque.hasWorkbenchMaterial = true;
+        opaque.workbenchMaterial.baseColorSceneLinear =
+            QVector3D(0.7f, 0.7f, 0.7f);
+        opaque.workbenchMaterial.alpha = 1.0f;
+        opaque.meshMaterials = {opaque.workbenchMaterial};
+        scene.append(opaque);
+        for (const ViewportRenderObject &receiver : receivers)
+            scene.append(receiver);
+        scene.append(shadowObjects[1]);
+
+        CurveHitTester layeredHitTester;
+        ViewportRenderer layeredRenderer(orthographicDofTransform,
+                                         layeredHitTester);
+        layeredRenderer.setShadingSettings(settings);
+        const auto drawLayeredObject = [&layeredRenderer,
+                                        &orthographicDofSize](
+            QPainter &painter, const ViewportRenderObject &object,
+            RasterWorkbenchFragmentSink *fragmentSink) {
+            layeredRenderer.drawShape(
+                painter, object.shape, orthographicDofSize, false, false,
+                true, QColor(), QString(), 0.0, object.objectId,
+                object.geometryRevision, object.preparedDepthGeometry.data(),
+                object.preparedGeometryOffset, object.displayColorSceneLinear,
+                object.workbenchMaterial, object.displayName,
+                object.libraryPath, object.meshObjectTransform,
+                object.meshMaterials, fragmentSink);
+        };
+        QImage image(orthographicDofSize,
+                     QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers layers;
+        const bool composited = compositeRasterWorkbenchSurfaces(
+            &image, scene, orthographicDofTransform, orthographicDofSize,
+            1.0, false, true, settings, QVector3D(0.7f, 0.7f, 0.7f),
+            drawLayeredObject, &layers);
+        if (composited) {
+            applyRasterWorkbenchEffects(
+                &image, scene, orthographicDofTransform,
+                orthographicDofSize, 1.0, settings, &layers);
+        }
+        return TransparentShadowCapture{
+            std::move(layers.sceneLinearColor), layers.sceneLinearSize,
+            composited};
+    };
+    ViewportRenderObject rearShadowReceiver = makeShadowQuad(
+        36, 4, 4, 124, 124, 0.0);
+    rearShadowReceiver.hasWorkbenchMaterial = true;
+    rearShadowReceiver.workbenchMaterial.baseColorSceneLinear =
+        QVector3D(0.05f, 0.85f, 0.1f);
+    rearShadowReceiver.workbenchMaterial.alpha = 0.5f;
+    rearShadowReceiver.meshMaterials = {rearShadowReceiver.workbenchMaterial};
+    ViewportRenderObject frontShadowReceiver = makeShadowQuad(
+        37, 4, 4, 124, 124, 0.5);
+    frontShadowReceiver.hasWorkbenchMaterial = true;
+    frontShadowReceiver.workbenchMaterial.baseColorSceneLinear =
+        QVector3D(0.85f, 0.05f, 0.1f);
+    frontShadowReceiver.workbenchMaterial.alpha = 0.5f;
+    frontShadowReceiver.meshMaterials = {frontShadowReceiver.workbenchMaterial};
+    const TransparentShadowCapture opaqueShadowLayers =
+        captureLayeredTransparentShadow({}, true);
+    const TransparentShadowCapture opaqueLitLayers =
+        captureLayeredTransparentShadow({}, false);
+    const TransparentShadowCapture rearShadowLayers =
+        captureLayeredTransparentShadow({rearShadowReceiver}, true);
+    const TransparentShadowCapture rearLitLayers =
+        captureLayeredTransparentShadow({rearShadowReceiver}, false);
+    const TransparentShadowCapture frontShadowLayers =
+        captureLayeredTransparentShadow({frontShadowReceiver}, true);
+    const TransparentShadowCapture frontLitLayers =
+        captureLayeredTransparentShadow({frontShadowReceiver}, false);
+    const TransparentShadowCapture stackedShadowLayers =
+        captureLayeredTransparentShadow(
+            {rearShadowReceiver, frontShadowReceiver}, true);
+    const TransparentShadowCapture stackedLitLayers =
+        captureLayeredTransparentShadow(
+            {rearShadowReceiver, frontShadowReceiver}, false);
+    bool rearOnlyShadowPixel = false;
+    bool stackedAlphaUnchanged = false;
+    bool opaqueShadowVisibleThroughStack = false;
+    const int layeredPixelCount = orthographicDofSize.width() *
+                                  orthographicDofSize.height();
+    if (opaqueShadowLayers.rendered && opaqueLitLayers.rendered &&
+        rearShadowLayers.rendered && rearLitLayers.rendered &&
+        frontShadowLayers.rendered && frontLitLayers.rendered &&
+        stackedShadowLayers.rendered && stackedLitLayers.rendered &&
+        opaqueShadowLayers.pixels.size() ==
+            static_cast<std::size_t>(layeredPixelCount) &&
+        rearShadowLayers.pixels.size() ==
+            static_cast<std::size_t>(layeredPixelCount) &&
+        frontShadowLayers.pixels.size() ==
+            static_cast<std::size_t>(layeredPixelCount) &&
+        stackedShadowLayers.pixels.size() ==
+            static_cast<std::size_t>(layeredPixelCount)) {
+        const auto colorChangedAt = [](const TransparentShadowCapture &a,
+                                       const TransparentShadowCapture &b,
+                                       std::size_t index) {
+            return std::abs(a.pixels[index].red - b.pixels[index].red) >
+                       1.0e-4f ||
+                   std::abs(a.pixels[index].green - b.pixels[index].green) >
+                       1.0e-4f ||
+                   std::abs(a.pixels[index].blue - b.pixels[index].blue) >
+                       1.0e-4f;
+        };
+        for (std::size_t index = 0; index <
+             static_cast<std::size_t>(layeredPixelCount); ++index) {
+            if (colorChangedAt(opaqueShadowLayers, opaqueLitLayers, index) &&
+                colorChangedAt(stackedShadowLayers, stackedLitLayers, index) &&
+                std::abs(stackedShadowLayers.pixels[index].alpha -
+                         stackedLitLayers.pixels[index].alpha) < 1.0e-5f) {
+                opaqueShadowVisibleThroughStack = true;
+            }
+            if (colorChangedAt(opaqueShadowLayers, opaqueLitLayers, index) ||
+                !colorChangedAt(rearShadowLayers, rearLitLayers, index) ||
+                colorChangedAt(frontShadowLayers, frontLitLayers, index)) {
+                continue;
+            }
+            rearOnlyShadowPixel = true;
+            stackedAlphaUnchanged = std::abs(
+                stackedShadowLayers.pixels[index].alpha -
+                stackedLitLayers.pixels[index].alpha) < 1.0e-5f;
+            rearOnlyShadowPixel &= colorChangedAt(
+                stackedShadowLayers, stackedLitLayers, index);
+            break;
+        }
+    }
+    passed &= check(
+        rearOnlyShadowPixel && stackedAlphaUnchanged,
+        "QPainter stacked transparent receivers must shade a shadowed rear layer independently of a lit front layer while preserving final alpha and the lit opaque underlay");
+    passed &= check(
+        opaqueShadowVisibleThroughStack,
+        "QPainter stacked transparent receivers must preserve shadowing of the opaque underlay through transparency without changing final alpha");
 
     const auto renderTransparentCasterShadow = [&](float casterAlpha,
                                                     bool includeCaster) {
@@ -2483,31 +2644,60 @@ int main(int argc, char *argv[])
                 &sortedCavityStandardImage, cavityObjects, transform, size,
                 1.0, true, false, sortedCavityStandardSettings,
                 backgroundLinear, drawObject, &sortedCavityStandardLayers);
-        int maximumSortedTransformError = 0;
-        for (int y = 0; y < size.height(); ++y) {
-            for (int x = 0; x < size.width(); ++x) {
-                const QColor standardPixel =
-                    sortedCavityStandardImage.pixelColor(x, y);
-                const QVector3D linear = workbenchSrgbToSceneLinear(
-                    QVector3D(standardPixel.redF(), standardPixel.greenF(),
-                              standardPixel.blueF()));
-                const QVector3D expectedAgx = workbenchSceneLinearToDisplaySrgb(
-                    linear, sortedCavitySettings.colorTransform,
-                    sortedCavitySettings.colorExposure,
-                    sortedCavitySettings.colorGamma,
-                    sortedCavitySettings.colorLutData,
-                    sortedCavitySettings.colorLutMetadata);
-                const QColor actualAgx = sortedCavityOnImage.pixelColor(x, y);
-                maximumSortedTransformError = std::max({
-                    maximumSortedTransformError,
-                    std::abs(actualAgx.red() - qRound(expectedAgx.x() * 255.0f)),
-                    std::abs(actualAgx.green() - qRound(expectedAgx.y() * 255.0f)),
-                    std::abs(actualAgx.blue() - qRound(expectedAgx.z() * 255.0f))});
+        int maximumSortedDisplayError = 0;
+        float maximumSortedLinearError = 0.0f;
+        const auto &standardLinear =
+            sortedCavityStandardLayers.sceneLinearColor;
+        const auto &agxLinear = sortedCavityOnLayers.sceneLinearColor;
+        const bool sortedLinearLayersMatch =
+            standardLinear.size() == static_cast<std::size_t>(size.width()) *
+                                         size.height() &&
+            agxLinear.size() == standardLinear.size();
+        if (sortedLinearLayersMatch) {
+            for (int y = 0; y < size.height(); ++y) {
+                for (int x = 0; x < size.width(); ++x) {
+                    const std::size_t index =
+                        static_cast<std::size_t>(y) * size.width() + x;
+                    const RasterWorkbenchLinearPixel &standard =
+                        standardLinear[index];
+                    const RasterWorkbenchLinearPixel &agx = agxLinear[index];
+                    maximumSortedLinearError = std::max({
+                        maximumSortedLinearError,
+                        std::abs(standard.red - agx.red),
+                        std::abs(standard.green - agx.green),
+                        std::abs(standard.blue - agx.blue),
+                        std::abs(standard.alpha - agx.alpha)});
+                    QVector3D expectedDisplay;
+                    if (standard.alpha > 0.0f) {
+                        expectedDisplay = workbenchSceneLinearToDisplaySrgb(
+                            QVector3D(standard.red / standard.alpha,
+                                      standard.green / standard.alpha,
+                                      standard.blue / standard.alpha),
+                            sortedCavitySettings.colorTransform,
+                            sortedCavitySettings.colorExposure,
+                            sortedCavitySettings.colorGamma,
+                            sortedCavitySettings.colorLutData,
+                            sortedCavitySettings.colorLutMetadata);
+                    }
+                    const QRgb expected = qPremultiply(qRgba(
+                        std::clamp(qRound(expectedDisplay.x() * 255.0f), 0, 255),
+                        std::clamp(qRound(expectedDisplay.y() * 255.0f), 0, 255),
+                        std::clamp(qRound(expectedDisplay.z() * 255.0f), 0, 255),
+                        std::clamp(qRound(standard.alpha * 255.0f), 0, 255)));
+                    const QRgb actual = sortedCavityOnImage.pixel(x, y);
+                    maximumSortedDisplayError = std::max({
+                        maximumSortedDisplayError,
+                        std::abs(qRed(actual) - qRed(expected)),
+                        std::abs(qGreen(actual) - qGreen(expected)),
+                        std::abs(qBlue(actual) - qBlue(expected)),
+                        std::abs(qAlpha(actual) - qAlpha(expected))});
+                }
             }
         }
-        // Both captures are quantized to 8-bit sRGB before this round trip.
         passed &= check(
-            sortedCavityStandardRendered && maximumSortedTransformError <= 8,
+            sortedCavityStandardRendered && sortedLinearLayersMatch &&
+                maximumSortedLinearError <= 1.0e-6f &&
+                maximumSortedDisplayError <= 1,
             "QPainter sorted cavity and transparency must resolve in scene-linear color before AgX display conversion");
         renderer.setShadingSettings(shading);
 

@@ -738,6 +738,7 @@ namespace {
 void observeWorkbenchFragment(
     RasterWorkbenchFragmentSink *sink, const QPainter &painter,
     const QPointF &logicalPixelCenter, const Point3D &worldPosition,
+    const QVector3D &worldNormal,
     const Point3D &cameraPosition, const Point3D &viewDirection,
     const QVector3D &sceneLinearRgb, qreal alpha, ObjectId sourceId,
     const ViewportTransform &transform)
@@ -772,12 +773,26 @@ void observeWorkbenchFragment(
         !std::isfinite(alpha) || !std::isfinite(oitLinearDepth)) {
         return;
     }
-    sink->push_back({qFloor(devicePixel.x()), qFloor(devicePixel.y()),
-                     static_cast<float>(depth),
-                     {sceneLinearRgb.x(), sceneLinearRgb.y(), sceneLinearRgb.z()},
-                     static_cast<float>(std::clamp<qreal>(alpha, 0.0, 1.0)),
-                     sourceId.value(),
-                     static_cast<float>(oitLinearDepth)});
+    RasterWorkbenchLinearFragment fragment;
+    fragment.x = qFloor(devicePixel.x());
+    fragment.y = qFloor(devicePixel.y());
+    fragment.cameraDepth = static_cast<float>(depth);
+    fragment.sceneLinearRgb = {sceneLinearRgb.x(), sceneLinearRgb.y(),
+                               sceneLinearRgb.z()};
+    fragment.alpha = static_cast<float>(std::clamp<qreal>(alpha, 0.0, 1.0));
+    fragment.sourceId = sourceId.value();
+    fragment.oitLinearDepth = static_cast<float>(oitLinearDepth);
+    const QVector3D normal = workbenchNormalize(worldNormal);
+    if (normal.lengthSquared() > 1.0e-12f &&
+        std::isfinite(worldPosition.x) && std::isfinite(worldPosition.y) &&
+        std::isfinite(worldPosition.z)) {
+        fragment.worldPosition = {static_cast<float>(worldPosition.x),
+                                  static_cast<float>(worldPosition.y),
+                                  static_cast<float>(worldPosition.z)};
+        fragment.worldNormal = {normal.x(), normal.y(), normal.z()};
+        fragment.hasShadowReceiver = true;
+    }
+    sink->push_back(fragment);
 }
 
 } // namespace
@@ -2122,6 +2137,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QVector3D displayRgb;
             QVector3D sceneLinearRgb;
             Point3D worldPosition;
+            QVector3D worldNormal;
         };
         QHash<quint64, QVector<MeshCoverageFragment>> meshCoverageFragments;
         painter.save();
@@ -2375,7 +2391,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         observeWorkbenchFragment(
                             fragmentSink, painter,
                             logicalFromDevice.map(QPointF(px, py)),
-                            fragmentPosition, meshCameraPosition,
+                            fragmentPosition,
+                            normalView.x() * meshViewRight +
+                                normalView.y() * meshViewUpVector +
+                                normalView.z() * meshViewFacing,
+                            meshCameraPosition,
                             meshViewDirection, shadedLinear, pixelAlpha,
                             shapeObjectId, transform_);
                     }
@@ -2410,7 +2430,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 meshViewDirection.z);
                         meshCoverageFragments[pixelKey].append(
                             {depth, coverage, sampleMask, fragmentAlpha,
-                             displayColor, shadedLinear, worldPosition});
+                             displayColor, shadedLinear, worldPosition,
+                             normalView.x() * meshViewRight +
+                                 normalView.y() * meshViewUpVector +
+                                 normalView.z() * meshViewFacing});
                     } else {
                         pixel[0] = static_cast<uchar>(std::clamp(
                             qRound(displayColor.x() * 255.0f), 0, 255));
@@ -2507,6 +2530,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     QVector3D displayPremultiplied;
                     QVector3D sceneLinearPremultiplied;
                     Point3D worldPosition{};
+                    QVector3D worldNormal;
                     for (int index = first; index < end; ++index) {
                         const MeshCoverageFragment &fragment = fragments[index];
                         const qreal coveredAlpha = fragment.alpha *
@@ -2527,6 +2551,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                            fragment.coverage;
                         worldPosition.z += fragment.worldPosition.z *
                                            fragment.coverage;
+                        worldNormal += fragment.worldNormal *
+                                       static_cast<float>(fragment.coverage);
                     }
                     const bool disjointCoverage =
                         disjointSamples && coverageSum <= 1.0 + 1.0e-6;
@@ -2550,7 +2576,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                     fragmentSink, painter,
                                     logicalFromDevice.map(
                                         QPointF(x + 0.5, y + 0.5)),
-                                    worldPosition, meshCameraPosition,
+                                    worldPosition,
+                                    worldNormal * static_cast<float>(
+                                        coverageSum > 0.0 ?
+                                            1.0 / coverageSum : 0.0),
+                                    meshCameraPosition,
                                     meshViewDirection, sceneLinearRgb, alpha,
                                     shapeObjectId, transform_);
                             }
@@ -2570,6 +2600,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                     logicalFromDevice.map(
                                         QPointF(x + 0.5, y + 0.5)),
                                     fragment.worldPosition,
+                                    fragment.worldNormal,
                                     meshCameraPosition, meshViewDirection,
                                     fragment.sceneLinearRgb, alpha,
                                     shapeObjectId, transform_);
@@ -3659,6 +3690,16 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                static_cast<float>(cameraPosition.y),
                                static_cast<float>(cameraPosition.z));
         const QVector3D baseColorVector = sourceColorLinear;
+        const auto shadowReceiverNormal = [&](const QVector3D &sourceNormal,
+                                              bool frontFacing,
+                                              qreal fragmentAlpha) {
+            QVector3D normalWorld = workbenchNormalize(
+                reverseOrientation && preparedGeometry == nullptr
+                    ? -sourceNormal : sourceNormal,
+                QVector3D(0.0f, 0.0f, 1.0f));
+            if (fragmentAlpha >= 1.0 && !frontFacing) normalWorld = -normalWorld;
+            return normalWorld;
+        };
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition,
                                const QVector3D &surfaceBaseColor,
@@ -3756,8 +3797,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             float coverage = 0.0f;
         };
         struct CoverageResolveFragment {
-            // Weighted scene-linear RGB, world XYZ, and effective alpha.
-            std::array<float, 7> values{};
+            // Weighted scene-linear RGB, world XYZ, effective alpha, and
+            // receiver normal XYZ for the bounded shadow-layer resolve.
+            std::array<float, 10> values{};
         };
         std::vector<CoverageResolvePixel> coverageResolvePixels;
         std::vector<CoverageResolveFragment> coverageResolveFragments;
@@ -3946,7 +3988,10 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             observeWorkbenchFragment(
                                 fragmentSink, painter,
                                 logicalFromCoverageDevice.map(QPointF(px, py)),
-                                fragmentPosition, cameraPosition, viewDirection,
+                                fragmentPosition,
+                                shadowReceiverNormal(sampleNormal, frontFacing,
+                                                     sample.alphaF()),
+                                cameraPosition, viewDirection,
                                 sampleLinear, sample.alphaF() * coverage, objectId,
                                 transform_);
                         }
@@ -3992,6 +4037,16 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                     static_cast<float>(fragmentPosition.z * coverage);
                                 fragment.values[6] +=
                                     static_cast<float>(sampleAlpha * coverage);
+                                const QVector3D receiverNormal =
+                                    shadowReceiverNormal(sampleNormal,
+                                                         frontFacing,
+                                                         sample.alphaF());
+                                fragment.values[7] += receiverNormal.x() *
+                                                      static_cast<float>(coverage);
+                                fragment.values[8] += receiverNormal.y() *
+                                                      static_cast<float>(coverage);
+                                fragment.values[9] += receiverNormal.z() *
+                                                      static_cast<float>(coverage);
                             }
                         } else {
                             row[x] = qPremultiply(qRgba(
@@ -4163,7 +4218,10 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         observeWorkbenchFragment(
                             fragmentSink, painter,
                             logicalFromCoverageDevice.map(QPointF(px, py)),
-                            fragmentPosition, cameraPosition, viewDirection,
+                            fragmentPosition,
+                            shadowReceiverNormal(triangle.normal, frontFacing,
+                                                 textured.alphaF() * coverage),
+                            cameraPosition, viewDirection,
                             texturedLinear, alpha * coverage, objectId, transform_);
                     }
                     const int red = textured.red();
@@ -4373,11 +4431,14 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             fragment.values[3] * inverseCoverage,
                             fragment.values[4] * inverseCoverage,
                             fragment.values[5] * inverseCoverage};
+                        const QVector3D worldNormal = workbenchNormalize(
+                            QVector3D(fragment.values[7], fragment.values[8],
+                                      fragment.values[9]));
                         observeWorkbenchFragment(
                             fragmentSink, painter,
                             logicalFromCoverageDevice.map(
                                 QPointF(x + 0.5, y + 0.5)),
-                            worldPosition,
+                            worldPosition, worldNormal,
                             cameraPosition, viewDirection,
                             QVector3D(fragment.values[0], fragment.values[1],
                                       fragment.values[2]) /

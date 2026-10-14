@@ -2633,6 +2633,30 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   remain open; this remains a bounded CPU
   approximation to Blender's GPU shadow path.
 
+## QPainter per-fragment transparent shadow factors (2026-10-14)
+
+- The QPainter compositor now retains each transparent receiver's scene-linear
+  color, alpha, world position, and world normal, then evaluates its software
+  shadow factor before resolving weighted transparency. Regular and
+  `showInFront` fragments keep separate resolves so their layering stays
+  consistent with the existing compositor. The final alpha is taken from the
+  unshadowed resolve, and opaque receiver shadowing remains a separate
+  contribution beneath transparency.
+- Retention is capped at 1,000,000 receiver fragments. If any fragment lacks
+  receiver metadata, dimensions do not match, or the cap is exceeded, the
+  effects pass uses its prior nearest-visible-layer fallback. Material and
+  geometry inputs remain the existing renderer contracts; retained data is an
+  effects-pass adapter.
+- Blender 5.2.2's
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L478-L526)
+  evaluates `get_shadow` on each transparent fragment before accumulating its
+  weighted color and alpha. A CPU contract checks a shadowed rear receiver
+  under a lit front receiver and separately checks that opaque-underlay
+  shadowing remains visible through the stack while final alpha is unchanged.
+  The software light-depth map, receiver coverage, and weighted resolve remain
+  approximations to Blender's stencil-volume and GPU accumulation paths;
+  matched Blender image comparisons remain open.
+
 ## QPainter transparent-material shadow casters (2026-10-14)
 
 - QPainter now adds transparent-material geometry to the software light-depth

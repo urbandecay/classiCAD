@@ -340,6 +340,63 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     assert external_texture_node.show_texture
     assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
 
+    # File-backed float images can use Blender's own loader/upload path. The
+    # scene-linear payload is present too, but the packed EXR remains the
+    # authoritative proxy source so Blender applies its original alpha mode.
+    float_exr_path = pathlib.Path(directory) / "float-source.exr"
+    float_pixels = [
+        -0.25, 0.75, 2.5, 0.0,
+        0.125, -1.0, 4.0, 0.4,
+        10.0, 0.5, -2.0, 1.0,
+    ]
+    float_source = bpy.data.images.new(
+        "ProxyContract.FloatSource", width=3, height=1,
+        float_buffer=True, alpha=True,
+    )
+    float_source.colorspace_settings.name = "Non-Color"
+    float_source.alpha_mode = "STRAIGHT"
+    float_source.pixels.foreach_set(float_pixels)
+    float_source.file_format = "OPEN_EXR"
+    previous_color_mode = bpy.context.scene.render.image_settings.color_mode
+    bpy.context.scene.render.image_settings.color_mode = "RGBA"
+    float_source.filepath_raw = str(float_exr_path)
+    float_source.save()
+    bpy.context.scene.render.image_settings.color_mode = previous_color_mode
+    float_exr_data = float_exr_path.read_bytes()
+    float_material_record = {
+        "id": "material-float-proxy", "name": "Float Proxy",
+        "baseColorSceneLinear": [1, 1, 1, 1], "roughness": 0.5,
+        "metallic": 0.0,
+        "imageTextures": [{
+            "nodeName": "ProxyContract.FloatTexture",
+            "nodeType": "TEX_IMAGE",
+            "imageName": "ProxyContract.FloatImage",
+            "filepath": "",
+            "colorSpace": "Non-Color", "alphaMode": "STRAIGHT",
+            "interpolation": "Linear", "extension": "REPEAT",
+            "sourceTransformId": "blender-float-buffer",
+            "sceneLinearFloatDataBase64": base64.b64encode(
+                b"".join(struct.pack("<f", value) for value in float_pixels)
+            ).decode("ascii"),
+            "packedDataBase64": base64.b64encode(float_exr_data).decode("ascii"),
+            "packed": True, "sourceFileExists": False, "tiles": [],
+        }],
+    }
+    document["materials"].append(float_material_record)
+    float_material = adapter.classiCAD_materials(document)["material-float-proxy"]
+    obj.data.materials.append(float_material)
+    float_texture_node = next(
+        node for node in float_material.node_tree.nodes
+        if node.get("classiCAD_proxy_image_node")
+    )
+    assert float_texture_node.show_texture
+    assert float_texture_node.image.is_float
+    assert float_texture_node.image.alpha_mode == "STRAIGHT"
+    assert float_texture_node.image.colorspace_settings.name == "Non-Color"
+    assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
+               for actual, expected in zip(float_texture_node.image.pixels[:], float_pixels))
+    assert bytes(float_texture_node.image.packed_file.data) == float_exr_data
+
     # Rebuild packed and external UDIM sources as packed Blender tiled images.
     packed_udim_template = str(pathlib.Path(directory) / "packed.<UDIM>.png")
     external_udim_template = str(pathlib.Path(directory) / "external.<UDIM>.png")
@@ -463,6 +520,7 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
                 "<UDIM>", str(number)
             )).unlink(missing_ok=True)
         template_path.parent.rmdir()
+    float_exr_path.unlink()
     bpy.ops.wm.open_mainfile(filepath=str(blend_path))
     material_a = next(
         material for material in bpy.data.materials
@@ -500,6 +558,21 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
     )
     assert external_texture_node.show_texture
     assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
+    float_material = next(
+        material for material in bpy.data.materials
+        if material.get("classiCAD_material_id") == "material-float-proxy"
+    )
+    float_texture_node = next(
+        node for node in float_material.node_tree.nodes
+        if node.get("classiCAD_proxy_image_node")
+    )
+    assert float_texture_node.show_texture
+    assert float_texture_node.image.is_float
+    assert float_texture_node.image.alpha_mode == "STRAIGHT"
+    assert float_texture_node.image.colorspace_settings.name == "Non-Color"
+    assert all(math.isclose(actual, expected, abs_tol=1.0e-6)
+               for actual, expected in zip(float_texture_node.image.pixels[:], float_pixels))
+    assert bytes(float_texture_node.image.packed_file.data) == float_exr_data
     for material_id, expected_node, expected_tiles in (
             ("material-udim-packed", "ProxyContract.PackedUDIM",
              {1001: png_data, 1002: png_data_udim}),

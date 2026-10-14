@@ -2930,3 +2930,25 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
   `cmake --build build -j4`, the dependency audit, and
   `blender_surface_material_resolution_contracts` passed.
+
+### Blender proxy file-backed float Image Texture export (2026-10-14)
+
+- The `.blend` proxy adapter now preserves active file-backed float image
+  references even when extraction also supplies a non-identity scene-linear
+  transform ID and RGBA32F payload. It loads the original packed or existing
+  source image and preserves its Blender colorspace and alpha mode, letting
+  Blender's own float image path provide the proxy texels. Packed OpenEXR is
+  recognized by its file signature when the source path has no extension and
+  remains embedded in the saved proxy.
+- The Blender 5.2.2 proxy contract creates a packed RGBA OpenEXR with negative
+  and above-one RGB, zero/fractional/unit alpha, a `blender-float-buffer`
+  transform ID, and a scene-linear payload. It checks float pixels, sampler
+  settings, colorspace, alpha mode, packed bytes, and `.blend` reopen after
+  deleting the source EXR. This path uses original file bytes rather than
+  reconstructing texels from the float payload. Generated or missing-source
+  images that only carry the converted payload still cannot be represented in
+  a Blender proxy; PREMUL and other alpha-mode pixel parity for reconstructed
+  payloads remains open.
+- Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
+  `cmake --build build -j4` passed with the dependency audit checking 314
+  source files. Rendered pixel parity was not compared.

@@ -605,12 +605,8 @@ def _sync_classicad_image_texture(material, record):
     if node_type not in {"TEX_IMAGE", "TEX_ENVIRONMENT"}:
         _remove_classicad_image_nodes(material, managed_nodes)
         return
-    if reference.get("sourceTransformId", "identity") != "identity":
-        _remove_classicad_image_nodes(material, managed_nodes)
-        return
     tiles = reference.get("tiles") or []
-    if (reference.get("sceneLinearFloatDataBase64") or
-            (tiles and node_type != "TEX_IMAGE")):
+    if tiles and node_type != "TEX_IMAGE":
         _remove_classicad_image_nodes(material, managed_nodes)
         return
 
@@ -642,6 +638,8 @@ def _sync_classicad_image_texture(material, record):
                 suffix = ".png"
             elif image_bytes.startswith(b"\xff\xd8"):
                 suffix = ".jpg"
+            elif image_bytes.startswith(b"\x76\x2f\x31\x01"):
+                suffix = ".exr"
             else:
                 return
         temporary_path = ""

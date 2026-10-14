@@ -1772,6 +1772,43 @@ int main(int argc, char *argv[])
             rotatedSliceSampled && rotatedSliceStepMatchesObjectDimension,
             "QPainter rotated anisotropic volume slice opacity must use the selected object-space dimension after object scale");
 
+        ScalarVolume3D layeredVolume = sliceVolume;
+        layeredVolume.displayDensity = 20.0f;
+        layeredVolume.densityScale = 20.0f;
+        ViewportRenderObject redBackVolume = sliceVolumeObject;
+        redBackVolume.objectId = ObjectId::fromValue(9112);
+        redBackVolume.displayColorSceneLinear =
+            QVector4D(0.9f, 0.0f, 0.0f, 1.0f);
+        redBackVolume.shape.scalarVolume = layeredVolume;
+        redBackVolume.shape.scalarVolume.sliceDepth = 0.25f;
+        ViewportRenderObject blueFrontVolume = sliceVolumeObject;
+        blueFrontVolume.objectId = ObjectId::fromValue(9113);
+        blueFrontVolume.displayColorSceneLinear =
+            QVector4D(0.0f, 0.0f, 0.9f, 1.0f);
+        blueFrontVolume.shape.scalarVolume = layeredVolume;
+        blueFrontVolume.shape.scalarVolume.sliceDepth = 0.5f;
+        const auto renderOverlappingVolumes = [&](
+            const QVector<ViewportRenderObject> &volumeOrder) {
+            QImage result(size, QImage::Format_ARGB32_Premultiplied);
+            result.fill(Qt::transparent);
+            const bool rendered = compositeRasterWorkbenchSurfaces(
+                &result, noSurfaceObjects, transform, size, 1.0, false, true,
+                volumeSliceSettings, QVector3D(0.0f, 0.0f, 0.0f),
+                drawObject, nullptr, {}, false, volumeOrder);
+            return std::pair<bool, QColor>{
+                rendered, result.pixelColor(size.width() / 2,
+                                            size.height() / 2)};
+        };
+        const auto [redThenBlueRendered, redThenBluePixel] =
+            renderOverlappingVolumes({redBackVolume, blueFrontVolume});
+        const auto [blueThenRedRendered, blueThenRedPixel] =
+            renderOverlappingVolumes({blueFrontVolume, redBackVolume});
+        passed &= check(
+            redThenBlueRendered && blueThenRedRendered &&
+                redThenBluePixel.blue() > redThenBluePixel.red() &&
+                blueThenRedPixel.red() > blueThenRedPixel.blue(),
+            "QPainter overlapping volume slices must composite in scene object order instead of reordering them by camera depth");
+
         ViewportRenderObject transparentSliceOccluder = makeQuad(
             9111, 64, 48, 576, 432, -1.0,
             QVector3D(0.05f, 0.1f, 0.9f), 0.65);

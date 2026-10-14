@@ -577,8 +577,13 @@ bool compositeRasterWorkbenchSurfaces(
     const int pixelCount = static_cast<int>(pixelCount64);
     struct VolumeSlicePixel {
         float depth = 0.0f;
+        int objectOrder = 0;
         RasterWorkbenchLinearPixel color;
         bool depthPreClipped = false;
+    };
+    struct RayMarchVolume {
+        ViewportRenderObject object;
+        int objectOrder = 0;
     };
     std::vector<std::vector<VolumeSlicePixel>> volumeSlicePixels;
     if (!scalarVolumeObjects.isEmpty())
@@ -590,7 +595,7 @@ bool compositeRasterWorkbenchSurfaces(
             ? noVolumePixels
             : volumeSlicePixels[static_cast<std::size_t>(index)];
     };
-    QVector<ViewportRenderObject> rayMarchVolumes;
+    QVector<RayMarchVolume> rayMarchVolumes;
     const auto volumeBaseColor = [&shadingSettings](
         const ViewportRenderObject &object) {
         QVector3D baseColor = workbenchDefaultSolidMaterialDiffuseColor();
@@ -622,9 +627,11 @@ bool compositeRasterWorkbenchSurfaces(
     };
     constexpr std::size_t kMaximumVolumeSamples = 1'000'000;
     std::size_t retainedVolumeSamples = 0;
-    for (const ViewportRenderObject &object : scalarVolumeObjects) {
+    for (int objectOrder = 0; objectOrder < scalarVolumeObjects.size();
+         ++objectOrder) {
+        const ViewportRenderObject &object = scalarVolumeObjects.at(objectOrder);
         if (!object.shape.scalarVolume.useSlice) {
-            rayMarchVolumes.append(object);
+            rayMarchVolumes.append({object, objectOrder});
             continue;
         }
         QVector<RasterWorkbenchVolumeSliceSample> samples;
@@ -652,6 +659,7 @@ bool compositeRasterWorkbenchSurfaces(
             const float scatterScale = density / extinction;
             VolumeSlicePixel pixel;
             pixel.depth = sample.cameraDepth;
+            pixel.objectOrder = objectOrder;
             pixel.color = {baseColor.x() * alpha * scatterScale * 0.25f,
                            baseColor.y() * alpha * scatterScale * 0.25f,
                            baseColor.z() * alpha * scatterScale * 0.25f,
@@ -664,7 +672,7 @@ bool compositeRasterWorkbenchSurfaces(
         std::stable_sort(pixelSamples.begin(), pixelSamples.end(),
                          [](const VolumeSlicePixel &left,
                             const VolumeSlicePixel &right) {
-                             return left.depth < right.depth;
+                             return left.objectOrder < right.objectOrder;
                          });
     }
     const auto compositeVolumeSlices = [](
@@ -693,8 +701,9 @@ bool compositeRasterWorkbenchSurfaces(
                                            const QVector<bool> &frontCoverage) {
         std::size_t remainingIntegrationSamples =
             kMaximumVolumeRayIntegrationSamples;
-        for (const ViewportRenderObject &object : rayMarchVolumes) {
+        for (const RayMarchVolume &rayMarchVolume : rayMarchVolumes) {
             if (remainingIntegrationSamples == 0) break;
+            const ViewportRenderObject &object = rayMarchVolume.object;
             QVector<RasterWorkbenchVolumeRaySample> samples;
             std::size_t integratedSampleCount = 0;
             const bool sampled = rasterWorkbenchVolumeRaySamples(
@@ -716,6 +725,7 @@ bool compositeRasterWorkbenchSurfaces(
                     sample.y >= height) continue;
                 VolumeSlicePixel pixel;
                 pixel.depth = sample.cameraDepth;
+                pixel.objectOrder = rayMarchVolume.objectOrder;
                 pixel.depthPreClipped = true;
                 pixel.color = {
                     sample.premultipliedColor.red * baseColor.x(),
@@ -730,7 +740,7 @@ bool compositeRasterWorkbenchSurfaces(
             std::stable_sort(pixelSamples.begin(), pixelSamples.end(),
                              [](const VolumeSlicePixel &left,
                                 const VolumeSlicePixel &right) {
-                                 return left.depth < right.depth;
+                                 return left.objectOrder < right.objectOrder;
                              });
         }
         return true;

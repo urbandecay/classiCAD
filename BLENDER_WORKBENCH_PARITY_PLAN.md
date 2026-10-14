@@ -3380,6 +3380,26 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   per volume, and 4M aggregate integration samples per composition;
   multiple/vector grids, animation, and larger bounds remain unsupported.
 
+### QPainter scalar-volume object composition order (2026-10-14)
+
+- Per-pixel QPainter volume contributions now follow the incoming scalar-volume
+  scene order for both slice objects and ray-marched objects. They are no longer
+  reordered by camera depth. Blender 5.2.2 calls `VolumePass::object_sync_volume`
+  from its object-sync loop, then draws the volume pass after regular transparent
+  depth. Slice and ray-march draws use premultiplied alpha blending and write
+  color without writing depth, so overlapping volume objects retain submission
+  order.
+- The production viewport contract uses two partial-opacity slice volumes at
+  different depths and verifies reversing their scene order reverses the
+  dominant output color. Existing slice contracts continue to cover opaque and
+  transparent surface-depth clipping and `showInFront` rejection.
+- Pinned Blender 5.2.2 sources:
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L147-L203)
+  syncs volume objects and draws the Volume pass after transparent depth at
+  [lines 457–464](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L457-L464).
+  [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc#L190-L231)
+  sets premultiplied alpha blending and submits each slice or ray-march draw.
+
 ### QPainter scalar-volume ray-marched fallback (2026-10-14)
 
 - The QPainter Solid compositor now integrates ray-marched scalar volumes in

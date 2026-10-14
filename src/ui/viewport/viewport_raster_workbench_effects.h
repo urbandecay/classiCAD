@@ -11,6 +11,7 @@
 #include <QPainter>
 #include <QVector3D>
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <vector>
@@ -49,6 +50,11 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
 // Blender Workbench's DOF resolve uses smoothstep(1, 3, abs(CoC)) to blend
 // its gathered bokeh image over the sharp source.
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept;
+
+// Blender Workbench's DOF cleanup takes a component-wise median over a 3x3
+// neighborhood of gathered RGBA samples.
+QRgb rasterWorkbenchDofMedian3x3(
+    const std::array<QRgb, 9> &samples) noexcept;
 
 // Blender Workbench's signed screen-curvature response from four cardinal
 // view-space normal components and their object-ID outline mask.

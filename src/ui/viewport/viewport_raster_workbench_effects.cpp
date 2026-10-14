@@ -476,6 +476,24 @@ float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept
     return t * t * (3.0f - 2.0f * t);
 }
 
+QRgb rasterWorkbenchDofMedian3x3(
+    const std::array<QRgb, 9> &samples) noexcept
+{
+    std::array<int, 9> channels{};
+    const auto median = [&](auto channelValue) {
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            channels[i] = channelValue(samples[i]);
+        }
+        std::nth_element(channels.begin(), channels.begin() + 4,
+                         channels.end());
+        return channels[4];
+    };
+    return qRgba(median([](QRgb pixel) { return qRed(pixel); }),
+                 median([](QRgb pixel) { return qGreen(pixel); }),
+                 median([](QRgb pixel) { return qBlue(pixel); }),
+                 median([](QRgb pixel) { return qAlpha(pixel); }));
+}
+
 bool compositeRasterWorkbenchSurfaces(
     QImage *colorImage,
     const QVector<ViewportRenderObject> &objects,
@@ -2281,7 +2299,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // camera-gated and uses camera-relative depth for either projection.
     if (depthOfFieldEnabled) {
         const QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
-        QImage dofResult = source.copy();
+        QImage gatheredResult = source.copy();
+        const qsizetype outputPixelCount =
+            qsizetype(outputWidth) * outputHeight;
+        QVector<float> dofMixes(outputPixelCount, 0.0f);
+        QVector<float> medianRadii(outputPixelCount, 0.0f);
         constexpr std::array<QPointF, 12> disk{{
             {0.0, 0.0}, {0.527, 0.085}, {-0.040, 0.536},
             {-0.670, -0.179}, {0.244, -0.647}, {0.765, 0.429},
@@ -2300,7 +2322,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             std::isfinite(sensorWidth) && sensorWidth > 0.0 &&
             std::abs(focus - focal) > 1.0e-6) {
             for (int y = 0; y < outputHeight; ++y) {
-                QRgb *out = reinterpret_cast<QRgb *>(dofResult.scanLine(y));
+                QRgb *out = reinterpret_cast<QRgb *>(gatheredResult.scanLine(y));
                 const int depthY = std::clamp(
                     static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
                     0, height - 1);
@@ -2323,6 +2345,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const qreal mix = rasterWorkbenchDofResolveBlend(
                         static_cast<float>(radius / colorDpr));
                     if (mix <= 0.0) continue;
+                    const qsizetype pixelIndex =
+                        qsizetype(y) * outputWidth + x;
+                    dofMixes[pixelIndex] = static_cast<float>(mix);
+                    medianRadii[pixelIndex] = static_cast<float>(
+                        std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     int count = 0;
                     // QPainter has no temporal AA sample sequence to rotate
@@ -2359,11 +2386,77 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         ++count;
                     }
                     if (count == 0) continue;
-                    const QRgb original = source.pixel(x, y);
                     out[x] = qRgba(
-                        qRound(qRed(original) * (1.0 - mix) + red / count * mix),
-                        qRound(qGreen(original) * (1.0 - mix) + green / count * mix),
-                        qRound(qBlue(original) * (1.0 - mix) + blue / count * mix),
+                        qRound(red / count), qRound(green / count),
+                        qRound(blue / count), qAlpha(source.pixel(x, y)));
+                }
+            }
+            // Blender's half-resolution blur cleanup samples a 3x3 median
+            // only for large CoCs. The CPU fallback gathers at full resolution,
+            // so one half-resolution texel maps to two output pixels.
+            QImage filteredGather = gatheredResult.copy();
+            const auto sampleGatherLinear = [&](qreal sampleX,
+                                                qreal sampleY) {
+                sampleX = std::clamp(sampleX, 0.0,
+                                     qreal(outputWidth - 1));
+                sampleY = std::clamp(sampleY, 0.0,
+                                     qreal(outputHeight - 1));
+                const int x0 = static_cast<int>(std::floor(sampleX));
+                const int y0 = static_cast<int>(std::floor(sampleY));
+                const int x1 = std::min(x0 + 1, outputWidth - 1);
+                const int y1 = std::min(y0 + 1, outputHeight - 1);
+                const qreal tx = sampleX - x0;
+                const qreal ty = sampleY - y0;
+                const auto interpolate = [&](auto channel) {
+                    const qreal top =
+                        channel(gatheredResult.pixel(x0, y0)) * (1.0 - tx) +
+                        channel(gatheredResult.pixel(x1, y0)) * tx;
+                    const qreal bottom =
+                        channel(gatheredResult.pixel(x0, y1)) * (1.0 - tx) +
+                        channel(gatheredResult.pixel(x1, y1)) * tx;
+                    return qRound(top * (1.0 - ty) + bottom * ty);
+                };
+                return qRgba(interpolate([](QRgb pixel) { return qRed(pixel); }),
+                             interpolate([](QRgb pixel) { return qGreen(pixel); }),
+                             interpolate([](QRgb pixel) { return qBlue(pixel); }),
+                             interpolate([](QRgb pixel) { return qAlpha(pixel); }));
+            };
+            for (int y = 0; y < outputHeight; ++y) {
+                QRgb *out = reinterpret_cast<QRgb *>(filteredGather.scanLine(y));
+                for (int x = 0; x < outputWidth; ++x) {
+                    const qsizetype pixelIndex =
+                        qsizetype(y) * outputWidth + x;
+                    const float cocRadius = medianRadii[pixelIndex];
+                    if (cocRadius <= 0.0f) continue;
+                    const qreal step = 2.0 * cocRadius * colorDpr;
+                    std::array<QRgb, 9> neighborhood{};
+                    int sampleIndex = 0;
+                    for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+                        for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+                            neighborhood[sampleIndex++] = sampleGatherLinear(
+                                x + offsetX * step, y + offsetY * step);
+                        }
+                    }
+                    out[x] = rasterWorkbenchDofMedian3x3(neighborhood);
+                }
+            }
+            QImage dofResult = source.copy();
+            for (int y = 0; y < outputHeight; ++y) {
+                QRgb *out = reinterpret_cast<QRgb *>(dofResult.scanLine(y));
+                for (int x = 0; x < outputWidth; ++x) {
+                    const qsizetype pixelIndex =
+                        qsizetype(y) * outputWidth + x;
+                    const float mix = dofMixes[pixelIndex];
+                    if (mix <= 0.0f) continue;
+                    const QRgb original = source.pixel(x, y);
+                    const QRgb blurred = filteredGather.pixel(x, y);
+                    out[x] = qRgba(
+                        qRound(qRed(original) * (1.0f - mix) +
+                               qRed(blurred) * mix),
+                        qRound(qGreen(original) * (1.0f - mix) +
+                               qGreen(blurred) * mix),
+                        qRound(qBlue(original) * (1.0f - mix) +
+                               qBlue(blurred) * mix),
                         qAlpha(original));
                 }
             }

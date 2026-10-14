@@ -108,6 +108,15 @@ int main(int argc, char *argv[])
             rasterWorkbenchDofResolveBlend(-2.0f) ==
                 rasterWorkbenchDofResolveBlend(2.0f),
         "QPainter Workbench DOF resolve must use Blender's smoothstep CoC blend from one to three pixels");
+    const std::array<QRgb, 9> dofMedianSamples{{
+        qRgba(0, 80, 0, 255), qRgba(10, 70, 80, 255),
+        qRgba(20, 60, 10, 255), qRgba(30, 50, 70, 0),
+        qRgba(40, 40, 20, 255), qRgba(50, 30, 60, 255),
+        qRgba(60, 20, 30, 255), qRgba(70, 10, 50, 255),
+        qRgba(255, 0, 255, 255)}};
+    passed &= check(rasterWorkbenchDofMedian3x3(dofMedianSamples) ==
+                        qRgba(40, 40, 50, 255),
+                    "QPainter Workbench DOF median cleanup must select the component-wise center of nine RGBA samples");
     if (application.arguments().contains(QStringLiteral("--dof-jitter-only"))) {
         return passed ? 0 : 1;
     }
@@ -667,6 +676,22 @@ int main(int argc, char *argv[])
             subpixelCocImage == subpixelCocSharpImage &&
             translatedOrthographicDofImage == orthographicDofImage,
         "orthographic scene-camera DOF must preserve an in-focus impulse, leave a 0.8-pixel-CoC image sharp, gather a defocused surface, and remain invariant when the view target and scene translate together");
+    ViewportTransform largeCocDofTransform = orthographicDofTransform;
+    ViewportCameraPreferences largeCocDofOptics = orthographicDofOptics;
+    largeCocDofOptics.opticalSensorSizeMillimeters = 10.0;
+    const bool largeCocDofOpticsSet =
+        largeCocDofTransform.setCameraPreferences(largeCocDofOptics);
+    QImage largeCocImpulseImage(orthographicDofSize,
+                                QImage::Format_ARGB32_Premultiplied);
+    largeCocImpulseImage.fill(Qt::black);
+    largeCocImpulseImage.setPixelColor(96, 64, Qt::red);
+    applyRasterWorkbenchEffects(
+        &largeCocImpulseImage, {orthographicDofObjects[1]},
+        largeCocDofTransform, orthographicDofSize, 1.0,
+        orthographicDofSettings);
+    passed &= check(largeCocDofOpticsSet &&
+                        largeCocImpulseImage.pixelColor(96, 64).red() < 5,
+                    "QPainter Workbench DOF must median-filter an isolated impulse after a large-CoC gather");
 
     const auto makeOutlineScaleObject = [&]() {
         ViewportRenderObject object;

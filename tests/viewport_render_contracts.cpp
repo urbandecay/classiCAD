@@ -500,15 +500,34 @@ int main(int argc, char *argv[])
         renderMaterialAlphaShadow(0.9985f);
     const QImage fullyOpaqueMaterialShadowImage =
         renderMaterialAlphaShadow(1.0f);
+    const float alphaHalfByteBoundary = 254.5f / 255.0f;
+    const float alphaJustBelowHalfByte =
+        std::nextafter(alphaHalfByteBoundary, 0.0f);
+    const float alphaJustAboveHalfByte =
+        std::nextafter(alphaHalfByteBoundary, 1.0f);
+    const QImage alphaBelowHalfByteShadowImage =
+        renderMaterialAlphaShadow(alphaJustBelowHalfByte);
+    const QImage alphaAtHalfByteShadowImage =
+        renderMaterialAlphaShadow(alphaHalfByteBoundary);
+    const QImage alphaAboveHalfByteShadowImage =
+        renderMaterialAlphaShadow(alphaJustAboveHalfByte);
     passed &= check(
         workbenchPackUnitFloatToUnorm8(254.0f / 255.0f) < 1.0f &&
+            workbenchPackUnitFloatToUnorm8(alphaJustBelowHalfByte) < 1.0f &&
+            workbenchPackUnitFloatToUnorm8(alphaHalfByteBoundary) == 1.0f &&
+            workbenchPackUnitFloatToUnorm8(alphaJustAboveHalfByte) == 1.0f &&
             workbenchPackUnitFloatToUnorm8(0.9985f) == 1.0f,
-        "Workbench material alpha packing must match Blender's 8-bit UNorm threshold");
+        "Workbench material alpha packing must round around Blender's 8-bit UNorm boundary");
     passed &= check(alpha254ShadowImage == alphaZeroShadowImage,
         "QPainter Workbench must exclude a material alpha that packs to 254/255 from software shadow casting");
     passed &= check(
         alphaRoundedOpaqueShadowImage == fullyOpaqueMaterialShadowImage,
         "QPainter Workbench must cast the same software shadow for an alpha that rounds to 255/255 as for fully opaque material");
+    passed &= check(
+        alphaBelowHalfByteShadowImage == alpha254ShadowImage &&
+            alphaAtHalfByteShadowImage == fullyOpaqueMaterialShadowImage &&
+            alphaAboveHalfByteShadowImage == fullyOpaqueMaterialShadowImage,
+        "QPainter software shadows must classify material alpha on both sides of Blender's UNorm8 half-byte boundary");
     ViewportShadingSettings zeroShadowSettings = shadowSettings;
     zeroShadowSettings.shadowIntensity = 0.0;
     passed &= check(renderCpuShadow(zeroShadowSettings) == noShadowImage,

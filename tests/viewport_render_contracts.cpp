@@ -10257,6 +10257,207 @@ int main(int argc, char *argv[])
                             fourSlotStudioQPainterSaved &&
                                 fourSlotStudioQPainterLightingMatches,
                             "QPainter Studio four-face material slots must capture and shade all four packed material payloads");
+
+                        ViewportShadingSettings fourSlotMatcapShading =
+                            fourSlotShading;
+                        fourSlotMatcapShading.lightingMode =
+                            ViewportLightingMode::MatCap;
+                        fourSlotMatcapShading.matcapPreset =
+                            QStringLiteral("metal_bronze");
+                        fourSlotMatcapShading.specularLighting = true;
+                        QImage fourSlotMatcapGpuDisplay;
+                        QVector<float> fourSlotMatcapGpuLinear;
+                        const bool fourSlotMatcapGpuRendered =
+                            renderCoordinatedScene(
+                                fourSlotMatcapShading,
+                                QByteArrayLiteral("material-slots-four-matcap"),
+                                &fourSlotMatcapGpuDisplay, &fourSlotObject,
+                                nullptr, nullptr, QString{},
+                                &fourSlotMatcapGpuLinear);
+                        const QString fourSlotMatcapGpuStem =
+                            QStringLiteral("material_slots_four_matcap");
+                        const QString fourSlotMatcapGpuPng = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotMatcapGpuStem + QStringLiteral(".png"));
+                        QFile fourSlotMatcapGpuPfm(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotMatcapGpuStem + QStringLiteral(".pfm")));
+                        const bool fourSlotMatcapGpuSaved =
+                            fourSlotMatcapGpuRendered &&
+                            fourSlotMatcapGpuDisplay.size() == QSize(640, 480) &&
+                            fourSlotMatcapGpuDisplay.save(fourSlotMatcapGpuPng) &&
+                            fourSlotMatcapGpuLinear.size() ==
+                                fourSlotExpectedValues &&
+                            fourSlotMatcapGpuPfm.open(QIODevice::WriteOnly) &&
+                            fourSlotMatcapGpuPfm.write(fourSlotPfmHeader) ==
+                                fourSlotPfmHeader.size() &&
+                            fourSlotMatcapGpuPfm.write(
+                                reinterpret_cast<const char *>(
+                                    fourSlotMatcapGpuLinear.constData()),
+                                fourSlotMatcapGpuLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                fourSlotMatcapGpuLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const QVector3D fourSlotViewNormal(
+                            QVector3D::dotProduct(fourSlotFacing,
+                                                  materialRight),
+                            QVector3D::dotProduct(fourSlotFacing,
+                                                  materialUp),
+                            QVector3D::dotProduct(fourSlotFacing,
+                                                  materialFacing));
+                        const QVector3D fourSlotIncidentView(
+                            0.0f, 0.0f, 1.0f);
+                        bool fourSlotMatcapGpuSamplesMatch = true;
+                        for (int slot = 0; slot < 4; ++slot) {
+                            const QVector3D expected = workbenchMatcapShade(
+                                fourSlotMatcapShading.matcapPreset,
+                                fourSlotColors[slot], fourSlotViewNormal,
+                                fourSlotIncidentView,
+                                fourSlotMatcapShading.specularLighting,
+                                fourSlotMatcapShading.matcapFlipX);
+                            const qsizetype offset =
+                                (qsizetype(glSize.height() - 1 -
+                                           fourSlotProbes[slot].y()) *
+                                     glSize.width() +
+                                 fourSlotProbes[slot].x()) * 3;
+                            const QVector3D actual(
+                                fourSlotMatcapGpuLinear.value(offset),
+                                fourSlotMatcapGpuLinear.value(offset + 1),
+                                fourSlotMatcapGpuLinear.value(offset + 2));
+                            fourSlotMatcapGpuSamplesMatch &=
+                                fourSlotMatcapGpuLinear.size() >= offset + 3 &&
+                                (expected - actual).length() < 0.001f;
+                        }
+
+                        CurveHitTester fourSlotMatcapHitTester;
+                        ViewportRenderer fourSlotMatcapRenderer(
+                            gpuTransform, fourSlotMatcapHitTester);
+                        fourSlotMatcapRenderer.setShadingSettings(
+                            fourSlotMatcapShading);
+                        QImage fourSlotMatcapQPainterDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        fourSlotMatcapQPainterDisplay.fill(captureBackground);
+                        RasterWorkbenchFragmentSink fourSlotMatcapFragments;
+                        QPainter fourSlotMatcapPainter(
+                            &fourSlotMatcapQPainterDisplay);
+                        fourSlotMatcapPainter.setRenderHint(
+                            QPainter::Antialiasing, false);
+                        fourSlotMatcapRenderer.drawShape(
+                            fourSlotMatcapPainter, fourSlotObject.shape,
+                            glSize, false, false, true, QColor(), QString(),
+                            0.0, fourSlotObject.objectId,
+                            fourSlotObject.geometryRevision,
+                            fourSlotObject.preparedDepthGeometry.data(), {},
+                            fourSlotObject.displayColorSceneLinear,
+                            fourSlotObject.workbenchMaterial,
+                            fourSlotObject.displayName,
+                            fourSlotObject.libraryPath,
+                            identityMeshObjectTransform,
+                            fourSlotObject.meshMaterials,
+                            &fourSlotMatcapFragments);
+                        fourSlotMatcapPainter.end();
+                        QVector<float> fourSlotMatcapQPainterLinear(
+                            fourSlotExpectedValues);
+                        for (qsizetype offset = 0;
+                             offset + 2 <
+                                 fourSlotMatcapQPainterLinear.size();
+                             offset += 3) {
+                            fourSlotMatcapQPainterLinear[offset] =
+                                materialSlotsBackgroundSceneLinear;
+                            fourSlotMatcapQPainterLinear[offset + 1] =
+                                materialSlotsBackgroundSceneLinear;
+                            fourSlotMatcapQPainterLinear[offset + 2] =
+                                materialSlotsBackgroundSceneLinear;
+                        }
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             fourSlotMatcapFragments) {
+                            if (fragment.x < 0 ||
+                                fragment.x >= glSize.width() ||
+                                fragment.y < 0 ||
+                                fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype offset =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            fourSlotMatcapQPainterLinear[offset] =
+                                fragment.sceneLinearRgb[0];
+                            fourSlotMatcapQPainterLinear[offset + 1] =
+                                fragment.sceneLinearRgb[1];
+                            fourSlotMatcapQPainterLinear[offset + 2] =
+                                fragment.sceneLinearRgb[2];
+                        }
+                        QVector<float> fourSlotMatcapQPainterBottomUp(
+                            fourSlotExpectedValues);
+                        for (int y = 0; y < glSize.height(); ++y) {
+                            std::copy_n(
+                                fourSlotMatcapQPainterLinear.constData() +
+                                    qsizetype(y) * fourSlotRowValues,
+                                fourSlotRowValues,
+                                fourSlotMatcapQPainterBottomUp.data() +
+                                    qsizetype(glSize.height() - 1 - y) *
+                                        fourSlotRowValues);
+                        }
+                        const QString fourSlotMatcapQPainterStem =
+                            QStringLiteral("material_slots_four_matcap_qpainter");
+                        const QString fourSlotMatcapQPainterPng = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotMatcapQPainterStem +
+                                QStringLiteral(".png"));
+                        QFile fourSlotMatcapQPainterPfm(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotMatcapQPainterStem +
+                                QStringLiteral(".pfm")));
+                        const bool fourSlotMatcapQPainterSaved =
+                            fourSlotMatcapFragments.size() > 1000 &&
+                            fourSlotMatcapQPainterDisplay.save(
+                                fourSlotMatcapQPainterPng) &&
+                            fourSlotMatcapQPainterPfm.open(
+                                QIODevice::WriteOnly) &&
+                            fourSlotMatcapQPainterPfm.write(
+                                fourSlotPfmHeader) ==
+                                fourSlotPfmHeader.size() &&
+                            fourSlotMatcapQPainterPfm.write(
+                                reinterpret_cast<const char *>(
+                                    fourSlotMatcapQPainterBottomUp.constData()),
+                                fourSlotMatcapQPainterBottomUp.size() *
+                                    qsizetype(sizeof(float))) ==
+                                fourSlotMatcapQPainterBottomUp.size() *
+                                    qsizetype(sizeof(float));
+                        bool fourSlotMatcapQPainterSamplesMatch = true;
+                        for (int slot = 0; slot < 4; ++slot) {
+                            const QVector3D expected = workbenchMatcapShade(
+                                fourSlotMatcapShading.matcapPreset,
+                                fourSlotColors[slot], fourSlotViewNormal,
+                                fourSlotIncidentView,
+                                fourSlotMatcapShading.specularLighting,
+                                fourSlotMatcapShading.matcapFlipX);
+                            const RasterWorkbenchLinearFragment *sample =
+                                nullptr;
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 fourSlotMatcapFragments) {
+                                if (fragment.x == fourSlotProbes[slot].x() &&
+                                    fragment.y == fourSlotProbes[slot].y()) {
+                                    sample = &fragment;
+                                    break;
+                                }
+                            }
+                            fourSlotMatcapQPainterSamplesMatch &=
+                                sample != nullptr &&
+                                (expected - QVector3D(
+                                     sample->sceneLinearRgb[0],
+                                     sample->sceneLinearRgb[1],
+                                     sample->sceneLinearRgb[2]))
+                                        .length() < 0.00001f;
+                        }
+                        passed &= check(
+                            fourSlotMatcapGpuSaved &&
+                                fourSlotMatcapGpuSamplesMatch,
+                            "GPU metal_bronze MatCap four-face fixture must capture and shade all four material slots");
+                        passed &= check(
+                            fourSlotMatcapQPainterSaved &&
+                                fourSlotMatcapQPainterSamplesMatch,
+                            "QPainter metal_bronze MatCap four-face fixture must capture and shade all four material slots");
                     }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(

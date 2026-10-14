@@ -4815,6 +4815,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   comparisons passed with `workbench_image_compare.py` and
   `workbench_pfm_compare.py`.
 
+#### Four visible material slots in MatCap
+
+- Extended the same four-face fixture to the `metal_bronze` MatCap preset with
+  specular enabled. The classiCAD offscreen contract now captures GPU and
+  QPainter display images and scene-linear PFM buffers, and checks the expected
+  face-center shading for each material slot.
+- Blender 5.2.2 full-frame comparisons have exact foreground masks for both
+  backends. GPU display RGB differs by at most `1/255` (channel MAE
+  `0.0711/255`); QPainter has the same display error. Scene-linear PFM maximum
+  error is `0.001953125` for GPU and `0.0019226` for QPainter. No partial edge
+  coverage differs in this orthographic fixture.
+- This verifies four opaque material slots for one MatCap preset and one view.
+  Other MatCap presets and rotations, specular variations, invalid or higher
+  slot indices, textured/transparent slots, and broader geometry parity remain
+  open. Blender's per-face material selection is pinned in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067);
+  MatCap color multiplication and orientation UV computation are pinned in
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L580-L600)
+  and [`workbench_matcap.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh#L331-L355).
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed; Blender reported version
+  5.2.2 LTS; and the full-frame PNG/PFM comparisons passed for GPU and
+  QPainter captures.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

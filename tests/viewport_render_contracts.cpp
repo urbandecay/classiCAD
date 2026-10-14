@@ -1622,6 +1622,150 @@ int main(int argc, char *argv[])
                 transparentOutlineEffectReplay == transparentOutlineImage,
             "QPainter transparent-material outlines must use the retained scene-linear resolve and avoid a duplicate display-space pass");
 
+        struct XrayOutlineRender {
+            QImage image;
+            RasterWorkbenchSurfaceLayers layers;
+            bool rendered = false;
+            bool replayMatches = true;
+        };
+        const auto renderXrayOutline = [&](int colorTransform,
+                                           bool withOutline,
+                                           bool visibleOutline = true) {
+            ViewportShadingSettings settings = standardOutlineSettings;
+            settings.colorTransform = colorTransform;
+            settings.xray = true;
+            settings.xrayAlpha = 0.5;
+            settings.shadows = false;
+            settings.depthOfField = false;
+            settings.cavity = false;
+            settings.outline = withOutline;
+            if (!visibleOutline)
+                settings.outlineColor.setAlpha(0);
+            QImage image(size, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            XrayOutlineRender result;
+            renderer.setShadingSettings(settings);
+            const QVector<ViewportRenderObject> xrayOutlineObjects{
+                opaqueOutlineObject, objects[1]};
+            result.rendered = compositeRasterWorkbenchSurfaces(
+                &image, xrayOutlineObjects, transform, size, 1.0, false, true,
+                settings, backgroundLinear, drawObject, &result.layers);
+            result.image = std::move(image);
+            if (withOutline) {
+                QImage replay = result.image;
+                applyRasterWorkbenchEffects(
+                    &replay, xrayOutlineObjects, transform, size, 1.0, settings,
+                    &result.layers);
+                result.replayMatches = replay == result.image;
+            }
+            return result;
+        };
+        XrayOutlineRender standardXrayOutline =
+            renderXrayOutline(1, true);
+        XrayOutlineRender agxXrayOutline =
+            renderXrayOutline(0, true);
+        XrayOutlineRender noXrayOutline =
+            renderXrayOutline(1, true, false);
+        bool xrayLinearBasesMatch = true;
+        bool xrayOutlineMatchesLinearResolve = false;
+        const QVector3D xrayOutlineColorLinear =
+            workbenchSrgbToSceneLinear(QVector3D(
+                standardOutlineSettings.outlineColor.redF(),
+                standardOutlineSettings.outlineColor.greenF(),
+                standardOutlineSettings.outlineColor.blueF()));
+        if (standardXrayOutline.layers.sceneLinearColor.size() ==
+                static_cast<std::size_t>(size.width()) * size.height() &&
+            agxXrayOutline.layers.sceneLinearColor.size() ==
+                standardXrayOutline.layers.sceneLinearColor.size() &&
+            noXrayOutline.layers.sceneLinearColor.size() ==
+                standardXrayOutline.layers.sceneLinearColor.size()) {
+            for (int y = 0; y < size.height(); ++y) {
+                for (int x = 0; x < size.width(); ++x) {
+                    const std::size_t index =
+                        static_cast<std::size_t>(y) * size.width() + x;
+                    const RasterWorkbenchLinearPixel &standard =
+                        standardXrayOutline.layers.sceneLinearColor[index];
+                    const RasterWorkbenchLinearPixel &agx =
+                        agxXrayOutline.layers.sceneLinearColor[index];
+                    const RasterWorkbenchLinearPixel &withoutOutline =
+                        noXrayOutline.layers.sceneLinearColor[index];
+                    xrayLinearBasesMatch &=
+                        std::abs(standard.red - agx.red) <= 1.0e-5f &&
+                        std::abs(standard.green - agx.green) <= 1.0e-5f &&
+                        std::abs(standard.blue - agx.blue) <= 1.0e-5f &&
+                        std::abs(standard.alpha - agx.alpha) <= 1.0e-5f;
+                    const QColor standardActual =
+                        standardXrayOutline.image.pixelColor(x, y);
+                    const QColor agxActual = agxXrayOutline.image.pixelColor(x, y);
+                    for (int coverageStep = 1; coverageStep <= 4;
+                         ++coverageStep) {
+                        const float coverage = coverageStep / 4.0f;
+                        const float expectedAlpha = coverage +
+                            withoutOutline.alpha * (1.0f - coverage);
+                        const QVector3D expectedLinear(
+                            xrayOutlineColorLinear.x() * coverage +
+                                withoutOutline.red * (1.0f - coverage),
+                            xrayOutlineColorLinear.y() * coverage +
+                                withoutOutline.green * (1.0f - coverage),
+                            xrayOutlineColorLinear.z() * coverage +
+                                withoutOutline.blue * (1.0f - coverage));
+                        const QVector3D expectedStandard =
+                            workbenchSceneLinearToDisplaySrgb(
+                                expectedLinear, 1,
+                                standardOutlineSettings.colorExposure,
+                                standardOutlineSettings.colorGamma,
+                                standardOutlineSettings.colorLutData,
+                                standardOutlineSettings.colorLutMetadata);
+                        const QVector3D expectedAgx =
+                            workbenchSceneLinearToDisplaySrgb(
+                                expectedLinear, 0,
+                                agxOutlineSettings.colorExposure,
+                                agxOutlineSettings.colorGamma,
+                                agxOutlineSettings.colorLutData,
+                                agxOutlineSettings.colorLutMetadata);
+                        const auto withinTwoCodes = [](int actual,
+                                                       float expected) {
+                            return std::abs(actual -
+                                qRound(expected * 255.0f)) <= 2;
+                        };
+                        if (withinTwoCodes(standardActual.red(),
+                                           expectedStandard.x()) &&
+                            withinTwoCodes(standardActual.green(),
+                                           expectedStandard.y()) &&
+                            withinTwoCodes(standardActual.blue(),
+                                           expectedStandard.z()) &&
+                            withinTwoCodes(agxActual.red(), expectedAgx.x()) &&
+                            withinTwoCodes(agxActual.green(), expectedAgx.y()) &&
+                            withinTwoCodes(agxActual.blue(), expectedAgx.z()) &&
+                            std::abs(standardActual.alpha() -
+                                     qRound(expectedAlpha * 255.0f)) <= 2 &&
+                            standardActual.alpha() == agxActual.alpha()) {
+                            xrayOutlineMatchesLinearResolve = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        passed &= check(
+            standardXrayOutline.rendered && agxXrayOutline.rendered &&
+                noXrayOutline.rendered,
+            "weighted QPainter X-Ray outline fixtures must render");
+        passed &= check(
+            standardXrayOutline.layers.outlineAppliedBeforeDisplay &&
+                agxXrayOutline.layers.outlineAppliedBeforeDisplay &&
+                !standardXrayOutline.layers.sceneLinearOutlinePending &&
+                !agxXrayOutline.layers.sceneLinearOutlinePending,
+            "weighted QPainter X-Ray outlines must resolve before display conversion without a deferred outline");
+        passed &= check(xrayLinearBasesMatch,
+            "weighted QPainter X-Ray outline must preserve one view-independent scene-linear OIT base");
+        passed &= check(xrayOutlineMatchesLinearResolve,
+            "weighted QPainter X-Ray outline output must match scene-linear blend color and alpha under Standard and AgX");
+        passed &= check(
+            standardXrayOutline.replayMatches && agxXrayOutline.replayMatches &&
+                standardXrayOutline.image != agxXrayOutline.image,
+            "weighted QPainter X-Ray outlines must not be applied twice and Standard/AgX output must differ");
+
         bool standardShadowRendered = false;
         bool standardShadowChangedLinearScene = false;
         bool standardShadowDisplayMatched = false;

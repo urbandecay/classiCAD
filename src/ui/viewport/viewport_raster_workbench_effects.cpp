@@ -995,8 +995,7 @@ bool compositeRasterWorkbenchSurfaces(
         }
         const bool canResolveOutlineInSceneLinear =
             surfaceLayers != nullptr && shadingSettings.outline &&
-            !(shadingSettings.shadows && shadingSettings.depthOfField) &&
-            !shadingSettings.xrayEnabled();
+            !(shadingSettings.shadows && shadingSettings.depthOfField);
         if (canResolveOutlineInSceneLinear) {
             std::vector<quint64> regularObjectIds(
                 static_cast<std::size_t>(pixelCount), 0);
@@ -1059,8 +1058,10 @@ bool compositeRasterWorkbenchSurfaces(
             surfaceLayers->sceneLinearColor = resolved;
             surfaceLayers->sceneLinearSize = QSize(width, height);
             const bool deferOutlineUntilEffects =
-                shadingSettings.shadows || shadingSettings.depthOfField;
-            if (shadingSettings.shadows) {
+                !shadingSettings.xrayEnabled() &&
+                (shadingSettings.shadows || shadingSettings.depthOfField);
+            if (shadingSettings.shadows &&
+                !shadingSettings.xrayEnabled()) {
                 surfaceLayers->sceneLinearOpaqueColor = opaqueScenePixels;
                 surfaceLayers->sceneLinearTransparentColor = transparentResolved;
             }
@@ -1070,6 +1071,7 @@ bool compositeRasterWorkbenchSurfaces(
                 surfaceLayers->sceneLinearOutlinePending = true;
                 surfaceLayers->sceneLinearDofPending =
                     shadingSettings.depthOfField && !shadingSettings.shadows &&
+                    !shadingSettings.xrayEnabled() &&
                     transform.cameraPreferences().sceneCameraEnabled;
             }
             for (int y = 0; y < height; ++y) {

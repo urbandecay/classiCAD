@@ -1551,6 +1551,28 @@ int main(int argc, char *argv[])
             perspectiveDofImage.pixelColor(96, 64).red() < 240,
         "perspective scene-camera DOF CoC must retain the Blender aperture-radius factor while preserving focus");
 
+    QImage dofBackgroundBleedImage(
+        orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+    dofBackgroundBleedImage.fill(Qt::black);
+    for (int y = 8; y < 120; ++y) {
+        for (int x = 8; x < 56; ++x)
+            dofBackgroundBleedImage.setPixelColor(x, y, Qt::red);
+    }
+    const int dofBackgroundProbeX = 56;
+    const int dofBackgroundProbeY = 64;
+    const QColor sharpBackgroundProbe = dofBackgroundBleedImage.pixelColor(
+        dofBackgroundProbeX, dofBackgroundProbeY);
+    applyRasterWorkbenchEffects(
+        &dofBackgroundBleedImage,
+        {makeOrthographicDofObject(6, 16.0, 8.0, 56.0)},
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        orthographicDofSettings);
+    passed &= check(sharpBackgroundProbe.red() == 0 &&
+                        dofBackgroundBleedImage.pixelColor(
+                            dofBackgroundProbeX,
+                            dofBackgroundProbeY).red() > 0,
+                    "QPainter full-screen DOF resolve must spread a defocused foreground edge into far-plane background pixels");
+
     QImage cpuDitherInput(1, 1, QImage::Format_RGBA64);
     cpuDitherInput.setPixelColor(0, 0, QColor::fromRgbF(0.18, 0.18, 0.18,
                                                        0.37));

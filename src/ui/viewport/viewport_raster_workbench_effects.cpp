@@ -2397,6 +2397,67 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             focus > 0.0 && std::isfinite(fStop) && fStop > 0.0 &&
             std::isfinite(sensorWidth) && sensorWidth > 0.0 &&
             std::abs(focus - focal) > 1.0e-6) {
+            // The full-screen resolve needs to consider clear-depth pixels
+            // near geometry, while avoiding a 12-tap gather across empty
+            // regions of a large software target. Dilate covered output
+            // pixels by the maximum bounded CoC radius in linear time.
+            QVector<quint8> dofCoverage(outputPixelCount, 0);
+            QVector<quint8> horizontalCoverage(outputPixelCount, 0);
+            for (int y = 0; y < outputHeight; ++y) {
+                const int depthY = std::clamp(
+                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                    0, height - 1);
+                for (int x = 0; x < outputWidth; ++x) {
+                    const int depthX = std::clamp(
+                        static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                        0, width - 1);
+                    if (samples[depthY * width + depthX].objectId != 0) {
+                        dofCoverage[qsizetype(y) * outputWidth + x] = 1;
+                    }
+                }
+            }
+            const int dilationX = std::min(
+                qCeil(12.0 * colorDpr), outputWidth);
+            const int dilationY = std::min(
+                qCeil(12.0 * colorDpr), outputHeight);
+            for (int y = 0; y < outputHeight; ++y) {
+                int covered = 0;
+                for (int x = 0; x <= dilationX && x < outputWidth; ++x) {
+                    if (dofCoverage[qsizetype(y) * outputWidth + x] != 0)
+                        ++covered;
+                }
+                for (int x = 0; x < outputWidth; ++x) {
+                    horizontalCoverage[qsizetype(y) * outputWidth + x] =
+                        covered > 0 ? 1 : 0;
+                    const int removeX = x - dilationX;
+                    const int addX = x + dilationX + 1;
+                    if (removeX >= 0 && dofCoverage[
+                            qsizetype(y) * outputWidth + removeX] != 0)
+                        --covered;
+                    if (addX < outputWidth && dofCoverage[
+                            qsizetype(y) * outputWidth + addX] != 0)
+                        ++covered;
+                }
+            }
+            for (int x = 0; x < outputWidth; ++x) {
+                int covered = 0;
+                for (int y = 0; y <= dilationY && y < outputHeight; ++y) {
+                    if (horizontalCoverage[qsizetype(y) * outputWidth + x] != 0)
+                        ++covered;
+                }
+                for (int y = 0; y < outputHeight; ++y) {
+                    dofCoverage[qsizetype(y) * outputWidth + x] =
+                        covered > 0 ? 1 : 0;
+                    const int removeY = y - dilationY;
+                    const int addY = y + dilationY + 1;
+                    if (removeY >= 0 && horizontalCoverage[
+                            qsizetype(removeY) * outputWidth + x] != 0)
+                        --covered;
+                    if (addY < outputHeight && horizontalCoverage[
+                            qsizetype(addY) * outputWidth + x] != 0)
+                        ++covered;
+                }
+            }
             for (int y = 0; y < outputHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(gatheredResult.scanLine(y));
                 const int depthY = std::clamp(
@@ -2407,8 +2468,18 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                         0, width - 1);
                     const RasterSample &center = samples[depthY * width + depthX];
-                    if (center.objectId == 0 || center.depth <= 0.0f) continue;
-                    const qreal z = center.depth;
+                    const bool backgroundCenter = center.objectId == 0;
+                    const qsizetype pixelIndex =
+                        qsizetype(y) * outputWidth + x;
+                    if (backgroundCenter && dofCoverage[pixelIndex] == 0)
+                        continue;
+                    // The GPU resolve runs across the full target. A clear
+                    // depth sample represents the far plane, allowing a
+                    // nearby out-of-focus foreground surface to contribute
+                    // blur beyond its silhouette.
+                    const qreal z = backgroundCenter
+                        ? cameraOptics.clipEnd : center.depth;
+                    if (!std::isfinite(z) || z <= 0.0) continue;
                     // Blender's aperture radius is 0.5 * focal / f-stop;
                     // multiplying by focal / focus-distance produces this
                     // factor for both perspective and orthographic view depth.
@@ -2421,8 +2492,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const qreal mix = rasterWorkbenchDofResolveBlend(
                         static_cast<float>(radius / colorDpr));
                     if (mix <= 0.0) continue;
-                    const qsizetype pixelIndex =
-                        qsizetype(y) * outputWidth + x;
                     dofMixes[pixelIndex] = static_cast<float>(mix);
                     medianRadii[pixelIndex] = static_cast<float>(
                         std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
@@ -2453,7 +2522,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             static_cast<int>(std::floor((sy + 0.5) / colorDpr * dpr)),
                             0, height - 1);
                         const RasterSample &neighbor = samples[sampleY * width + sampleX];
-                        if (neighbor.objectId != 0 &&
+                        if (!backgroundCenter && neighbor.objectId != 0 &&
                             neighbor.depth < center.depth -
                                 std::max(1.0e-4f, std::abs(center.depth) * 0.002f))
                             continue;

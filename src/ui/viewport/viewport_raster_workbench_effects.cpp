@@ -1421,6 +1421,129 @@ bool compositeRasterWorkbenchSurfaces(
                            qRound(qAlpha(background) * remain), 0, 255));
     };
 
+    // The sorted fallback can retain an exact scene-linear resolve when its
+    // destination is empty or its background was supplied in scene-linear
+    // form. In that case, resolve the outline here before display conversion,
+    // matching the weighted compositor path.
+    bool sceneLinearDestinationValid =
+        hasPixelBackground || sceneLinearBackground.has_value();
+    if (!sceneLinearDestinationValid) {
+        sceneLinearDestinationValid = true;
+        for (int y = 0; y < height && sceneLinearDestinationValid; ++y) {
+            const auto *row = reinterpret_cast<const QRgb *>(
+                colorImage->constScanLine(y));
+            for (int x = 0; x < width; ++x) {
+                if (qAlpha(row[x]) != 0) {
+                    sceneLinearDestinationValid = false;
+                    break;
+                }
+            }
+        }
+    }
+    const bool retainSortedSceneLinear = surfaceLayers != nullptr &&
+        !shadingSettings.shadows && !shadingSettings.depthOfField &&
+        sceneLinearDestinationValid;
+    const bool canResolveSortedOutlineInSceneLinear =
+        retainSortedSceneLinear && shadingSettings.outline;
+    std::vector<quint64> sortedVisibleObjectIds;
+    QVector<quint64> sortedRegularTransparentObject;
+    QVector<float> sortedRegularTransparentDepth;
+    QVector<quint64> sortedFrontTransparentObject;
+    QVector<float> sortedFrontTransparentDepth;
+    if (canResolveSortedOutlineInSceneLinear) {
+        sortedRegularTransparentObject.fill(0, pixelCount);
+        sortedRegularTransparentDepth.fill(noDepth, pixelCount);
+        sortedFrontTransparentObject.fill(0, pixelCount);
+        sortedFrontTransparentDepth.fill(noDepth, pixelCount);
+        for (const TransparentFragment &fragment : regularTransparentFragments) {
+            if (fragment.alpha <= 0.0f) continue;
+            if (fragment.depth > sortedRegularTransparentDepth[
+                                     static_cast<int>(fragment.pixelIndex)]) {
+                sortedRegularTransparentDepth[
+                    static_cast<int>(fragment.pixelIndex)] = fragment.depth;
+                sortedRegularTransparentObject[
+                    static_cast<int>(fragment.pixelIndex)] =
+                    objects[fragment.objectOrder].objectId.value();
+            }
+        }
+        for (const TransparentFragment &fragment : frontTransparentFragments) {
+            if (fragment.alpha <= 0.0f) continue;
+            const int pixelIndex = fragment.pixelIndex;
+            if (fragment.depth > sortedFrontTransparentDepth[pixelIndex]) {
+                sortedFrontTransparentDepth[pixelIndex] = fragment.depth;
+                sortedFrontTransparentObject[pixelIndex] =
+                    objects[fragment.objectOrder].objectId.value();
+            }
+        }
+        std::vector<quint64> regularObjectIds(
+            static_cast<std::size_t>(pixelCount), 0);
+        std::vector<quint64> frontObjectIds(
+            static_cast<std::size_t>(pixelCount), 0);
+        std::vector<float> regularObjectDepth(
+            static_cast<std::size_t>(pixelCount), noDepth);
+        std::vector<float> frontObjectDepth(
+            static_cast<std::size_t>(pixelCount), noDepth);
+        for (int index = 0; index < pixelCount; ++index) {
+            const int regularIndex = opaqueObject[index];
+            if (regularIndex >= 0 && regularIndex < objects.size()) {
+                regularObjectIds[static_cast<std::size_t>(index)] =
+                    objects[regularIndex].objectId.value();
+                regularObjectDepth[static_cast<std::size_t>(index)] =
+                    opaqueSceneDepth[index];
+            }
+            const int frontIndex = frontOpaqueObject[index];
+            if (frontIndex >= 0 && frontIndex < objects.size()) {
+                frontObjectIds[static_cast<std::size_t>(index)] =
+                    objects[frontIndex].objectId.value();
+                frontObjectDepth[static_cast<std::size_t>(index)] =
+                    frontOpaqueSceneDepth[index];
+            }
+        }
+        const auto updateTransparentObjectIds = [&](
+            const QVector<quint64> &transparentIds,
+            const QVector<float> &transparentDepth,
+            std::vector<quint64> *objectIds,
+            std::vector<float> *objectDepth) {
+            for (int index = 0; index < pixelCount; ++index) {
+                const quint64 objectId = transparentIds[index];
+                if (objectId == 0 || transparentDepth[index] <=
+                        (*objectDepth)[static_cast<std::size_t>(index)]) {
+                    continue;
+                }
+                (*objectDepth)[static_cast<std::size_t>(index)] =
+                    transparentDepth[index];
+                (*objectIds)[static_cast<std::size_t>(index)] = objectId;
+            }
+        };
+        updateTransparentObjectIds(sortedRegularTransparentObject,
+                                   sortedRegularTransparentDepth,
+                                   &regularObjectIds, &regularObjectDepth);
+        updateTransparentObjectIds(sortedFrontTransparentObject,
+                                   sortedFrontTransparentDepth,
+                                   &frontObjectIds, &frontObjectDepth);
+        sortedVisibleObjectIds.resize(static_cast<std::size_t>(pixelCount));
+        for (int index = 0; index < pixelCount; ++index) {
+            const std::size_t pixelIndex = static_cast<std::size_t>(index);
+            sortedVisibleObjectIds[pixelIndex] =
+                frontObjectIds[pixelIndex] != 0
+                    ? frontObjectIds[pixelIndex] : regularObjectIds[pixelIndex];
+        }
+    }
+    if (retainSortedSceneLinear) {
+        surfaceLayers->sceneLinearSize = QSize(width, height);
+        surfaceLayers->sceneLinearColor.assign(
+            static_cast<std::size_t>(pixelCount), {});
+    }
+    const QVector3D sortedOutlineColor = canResolveSortedOutlineInSceneLinear
+        ? workbenchSrgbToSceneLinear(QVector3D(
+              shadingSettings.outlineColor.redF(),
+              shadingSettings.outlineColor.greenF(),
+              shadingSettings.outlineColor.blueF()))
+        : QVector3D();
+    const float sortedOutlineAlpha = canResolveSortedOutlineInSceneLinear
+        ? static_cast<float>(shadingSettings.outlineColor.alphaF()) : 0.0f;
+    const int sortedOutlineOffset = workbenchEffectUiScale(devicePixelRatio);
+
     for (int y = 0; y < height; ++y) {
         auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
         auto *opaqueRow = surfaceLayers != nullptr
@@ -1455,6 +1578,35 @@ bool compositeRasterWorkbenchSurfaces(
             regular = overLinear(regularTransparent, regular);
             RasterWorkbenchLinearPixel final = overLinear(frontOpaque, regular);
             final = overLinear(frontTransparent, final);
+            if (canResolveSortedOutlineInSceneLinear) {
+                const quint64 objectId = sortedVisibleObjectIds[
+                    static_cast<std::size_t>(index)];
+                int differentNeighbors = 0;
+                const std::array<QPoint, 4> offsets = {
+                    QPoint(sortedOutlineOffset, 0),
+                    QPoint(-sortedOutlineOffset, 0),
+                    QPoint(0, sortedOutlineOffset),
+                    QPoint(0, -sortedOutlineOffset)};
+                for (const QPoint &offset : offsets) {
+                    const int sx = std::clamp(x + offset.x(), 0, width - 1);
+                    const int sy = std::clamp(y + offset.y(), 0, height - 1);
+                    differentNeighbors += sortedVisibleObjectIds[
+                        static_cast<std::size_t>(sy * width + sx)] != objectId;
+                }
+                const float alpha = sortedOutlineAlpha *
+                    (static_cast<float>(differentNeighbors) / 4.0f);
+                const float remain = 1.0f - alpha;
+                final.red = sortedOutlineColor.x() * alpha +
+                            final.red * remain;
+                final.green = sortedOutlineColor.y() * alpha +
+                              final.green * remain;
+                final.blue = sortedOutlineColor.z() * alpha +
+                             final.blue * remain;
+                final.alpha = alpha + final.alpha * remain;
+            }
+            if (retainSortedSceneLinear)
+                surfaceLayers->sceneLinearColor[
+                    static_cast<std::size_t>(index)] = final;
             RasterWorkbenchLinearPixel opaqueLayer = overLinear(
                 frontOpaque, regularOpaque);
             const QRgb opaqueDisplay = displayPremultiplied(opaqueLayer);
@@ -1476,6 +1628,8 @@ bool compositeRasterWorkbenchSurfaces(
             destination[x] = compositeDisplay(combined, destination[x]);
         }
     }
+    if (canResolveSortedOutlineInSceneLinear)
+        surfaceLayers->outlineAppliedBeforeDisplay = true;
     return true;
 }
 

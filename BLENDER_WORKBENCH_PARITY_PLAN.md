@@ -2661,16 +2661,23 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   A retained-layer contract checks the combined path and output under Standard
   and AgX. The gather kernel, CoC approximation, and far-plane spill behavior
   remain the QPainter fallback's existing approximations.
-- Remaining gaps include legacy or sorted display-space paths and DOF without
-  the weighted compositor's retained scene-linear target. These paths can
-  still apply the outline after display conversion, so outline color can differ
-  under nonlinear view transforms. The destination may already have passed
-  through AgX, Filmic, or a custom LUT, which cannot generally be inverted to
-  reconstruct scene-linear color.
+- The sorted fallback now retains its scene-linear result and resolves
+  four-cardinal object-ID outline coverage before display conversion when
+  shadows and DOF are inactive and the destination is transparent or its
+  background was supplied in scene-linear form. Its nearest visible ID
+  includes partial-alpha transparent fragments and in-front geometry. A
+  production-path CPU contract verifies the retained linear blend, Standard
+  and AgX output, and that the later effects call does not apply the outline a
+  second time. Sorted scenes with shadow or DOF enabled, plus legacy paths
+  without a trustworthy scene-linear destination, still use the display-space
+  outline fallback; already display-transformed pixels cannot generally be
+  inverted under AgX, Filmic, or a custom LUT.
 - Blender 5.2.2 reference: [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L368)
   binds the scene color target, and
   [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L252-L271)
-  writes the outline color times the four-neighbor edge opacity.
+  writes the outline color times the four-neighbor edge opacity. The pinned
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2635-L2645)
+  dispatches the outline pass before DOF and anti-aliasing.
 
 ## QPainter mesh triangle edge coverage (2026-10-13)
 

@@ -1706,6 +1706,121 @@ int main(int argc, char *argv[])
                 outlineMatchesSceneLinearResolve &&
                 outlineEffectReplay == agxOutlineImage,
             "opaque QPainter outlines must blend in scene-linear space before Standard or AgX display conversion");
+
+        struct SortedOutlineRender {
+            QImage image;
+            RasterWorkbenchSurfaceLayers layers;
+            bool rendered = false;
+            bool replayMatches = false;
+        };
+        const auto renderSortedOutline = [&](int colorTransform,
+                                             bool withOutline) {
+            ViewportShadingSettings settings = standardOutlineSettings;
+            settings.colorTransform = colorTransform;
+            settings.outline = withOutline;
+            QImage image(size, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            SortedOutlineRender result;
+            renderer.setShadingSettings(settings);
+            result.rendered = compositeRasterWorkbenchSurfaces(
+                &image, {opaqueOutlineObject}, transform, size, 1.0, false,
+                false, settings, backgroundLinear, drawObject, &result.layers);
+            result.image = image;
+            QImage replay = image;
+            applyRasterWorkbenchEffects(
+                &replay, {opaqueOutlineObject}, transform, size, 1.0,
+                settings, &result.layers);
+            result.replayMatches = replay == image;
+            return result;
+        };
+        const SortedOutlineRender sortedStandardOutline =
+            renderSortedOutline(1, true);
+        const SortedOutlineRender sortedAgxOutline =
+            renderSortedOutline(0, true);
+        const SortedOutlineRender sortedNoOutline =
+            renderSortedOutline(1, false);
+        bool sortedOutlineDisplayMatches = true;
+        bool sortedOutlineLinearBlendFound = false;
+        const QVector3D sortedOutlineLinear = workbenchSrgbToSceneLinear(
+            QVector3D(standardOutlineSettings.outlineColor.redF(),
+                      standardOutlineSettings.outlineColor.greenF(),
+                      standardOutlineSettings.outlineColor.blueF()));
+        if (sortedStandardOutline.layers.sceneLinearSize == size &&
+            sortedAgxOutline.layers.sceneLinearSize == size &&
+            sortedNoOutline.layers.sceneLinearSize == size) {
+            for (int y = 0; y < size.height(); ++y) {
+                for (int x = 0; x < size.width(); ++x) {
+                    const std::size_t index = static_cast<std::size_t>(
+                        y * size.width() + x);
+                    const RasterWorkbenchLinearPixel &standard =
+                        sortedStandardOutline.layers.sceneLinearColor[index];
+                    const RasterWorkbenchLinearPixel &agx =
+                        sortedAgxOutline.layers.sceneLinearColor[index];
+                    const RasterWorkbenchLinearPixel &base =
+                        sortedNoOutline.layers.sceneLinearColor[index];
+                    sortedOutlineDisplayMatches &=
+                        std::abs(standard.red - agx.red) < 1.0e-5f &&
+                        std::abs(standard.green - agx.green) < 1.0e-5f &&
+                        std::abs(standard.blue - agx.blue) < 1.0e-5f &&
+                        std::abs(standard.alpha - agx.alpha) < 1.0e-5f;
+                    if (std::abs(standard.red - base.red) > 1.0e-5f ||
+                        std::abs(standard.green - base.green) > 1.0e-5f ||
+                        std::abs(standard.blue - base.blue) > 1.0e-5f) {
+                        const float alpha = (standard.red - base.red) /
+                            (sortedOutlineLinear.x() - base.red);
+                        sortedOutlineLinearBlendFound |= alpha > 0.0f &&
+                            alpha <= 1.0f &&
+                            std::abs(standard.green -
+                                (sortedOutlineLinear.y() * alpha +
+                                 base.green * (1.0f - alpha))) < 1.0e-4f &&
+                            std::abs(standard.blue -
+                                (sortedOutlineLinear.z() * alpha +
+                                 base.blue * (1.0f - alpha))) < 1.0e-4f;
+                    }
+                    for (const auto &[rendered, image, transformIndex] : {
+                             std::tuple<bool, const QImage &, int>{
+                                 sortedStandardOutline.rendered,
+                                 sortedStandardOutline.image, 1},
+                             std::tuple<bool, const QImage &, int>{
+                                 sortedAgxOutline.rendered,
+                                 sortedAgxOutline.image, 0}}) {
+                        (void)rendered;
+                        const RasterWorkbenchLinearPixel &pixel =
+                            transformIndex == 1 ? standard : agx;
+                        if (pixel.alpha <= 0.0f) {
+                            sortedOutlineDisplayMatches &=
+                                image.pixel(x, y) == qRgba(0, 0, 0, 0);
+                            continue;
+                        }
+                        const QVector3D display =
+                            workbenchSceneLinearToDisplaySrgb(
+                                QVector3D(pixel.red / pixel.alpha,
+                                          pixel.green / pixel.alpha,
+                                          pixel.blue / pixel.alpha),
+                                transformIndex, 0.0f, 1.0f, {}, {});
+                        const QRgb expected = qPremultiply(qRgba(
+                            qRound(display.x() * 255.0f),
+                            qRound(display.y() * 255.0f),
+                            qRound(display.z() * 255.0f),
+                            qRound(pixel.alpha * 255.0f)));
+                        sortedOutlineDisplayMatches &=
+                            image.pixel(x, y) == expected;
+                    }
+                }
+            }
+        } else {
+            sortedOutlineDisplayMatches = false;
+        }
+        renderer.setShadingSettings(standardOutlineSettings);
+        passed &= check(
+            sortedStandardOutline.rendered && sortedAgxOutline.rendered &&
+                sortedNoOutline.rendered &&
+                sortedStandardOutline.layers.outlineAppliedBeforeDisplay &&
+                sortedAgxOutline.layers.outlineAppliedBeforeDisplay &&
+                sortedStandardOutline.replayMatches &&
+                sortedAgxOutline.replayMatches &&
+                sortedOutlineDisplayMatches && sortedOutlineLinearBlendFound,
+            "sorted QPainter outlines must blend into retained scene-linear color before Standard or AgX display conversion");
         ViewportShadingSettings transparentOutlineSettings =
             standardOutlineSettings;
         transparentOutlineSettings.colorTransform = 0;

@@ -7481,7 +7481,9 @@ int main(int argc, char *argv[])
                                 (captureCase.colorMode !=
                                      ViewportColorMode::Object &&
                                  captureCase.colorMode !=
-                                     ViewportColorMode::Random) ||
+                                     ViewportColorMode::Random &&
+                                 captureCase.colorMode !=
+                                     ViewportColorMode::Custom) ||
                                 captureQPainterColorSource(
                                     stem, colorSourceObject, colorShading);
                             lightingCapturesSucceeded &= linearSaved &&

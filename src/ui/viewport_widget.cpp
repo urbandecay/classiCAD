@@ -9259,9 +9259,11 @@ protected:
                                   object.nurbsSolidFaceMaterials);
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels);
                 if (rasterSurfaceBatchRendered &&
-                    renderShadingSettings.shadows &&
                     renderShadingSettings.outline &&
-                    !renderShadingSettings.depthOfField &&
+                    (renderShadingSettings.shadows ||
+                     renderShadingSettings.depthOfField) &&
+                    !(renderShadingSettings.shadows &&
+                      renderShadingSettings.depthOfField) &&
                     !renderShadingSettings.xrayEnabled()) {
                     // Workbench resolves scene effects before editor wires,
                     // previews, and other QPainter overlays. Keep the surface

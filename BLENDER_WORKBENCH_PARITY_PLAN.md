@@ -2578,14 +2578,19 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   effect pass does not apply the outline twice. A combined shadow-plus-outline
   production contract verifies the retained linear resolve under Standard and
   AgX. The C++ build and focused viewport contract pass.
-- DOF combinations, X-Ray, and legacy display-space fallbacks still apply the
-  QPainter outline after display conversion, so their color can differ under
-  nonlinear view transforms.
-- The remaining combinations cannot be corrected by decoding only the
-  outline color: the destination has already passed through AgX, Filmic, or a
-  custom LUT, and those transforms are not generally invertible. Full parity
-  needs the float scene-linear target retained through DOF, X-Ray, and legacy
-  fallback paths.
+- The weighted compositor now also retains the float target through outline
+  and camera DOF when shadows and X-Ray are off. It composites the outline,
+  performs the existing bounded 12-tap gather and 3x3 median on straight
+  scene-linear RGB, preserves the sharp alpha, then display-transforms once.
+  A retained-layer contract checks the combined path and output under Standard
+  and AgX. The gather kernel, CoC approximation, and far-plane spill behavior
+  remain the QPainter fallback's existing approximations.
+- Remaining gaps include X-Ray and legacy or sorted display-space paths, plus
+  DOF without the weighted compositor's retained scene-linear target. These
+  paths can still apply the outline after display conversion, so outline color
+  can differ under nonlinear view transforms. The destination may already
+  have passed through AgX, Filmic, or a custom LUT, which cannot generally be
+  inverted to reconstruct scene-linear color.
 - Blender 5.2.2 reference: [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L368)
   binds the scene color target, and
   [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L252-L271)

@@ -549,6 +549,7 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->cavityAppliedBeforeTransparency = false;
         surfaceLayers->outlineAppliedBeforeDisplay = false;
         surfaceLayers->sceneLinearOutlinePending = false;
+        surfaceLayers->sceneLinearDofPending = false;
         surfaceLayers->sceneLinearColor.clear();
         surfaceLayers->sceneLinearOpaqueColor.clear();
         surfaceLayers->sceneLinearTransparentColor.clear();
@@ -994,7 +995,7 @@ bool compositeRasterWorkbenchSurfaces(
         }
         const bool canResolveOutlineInSceneLinear =
             surfaceLayers != nullptr && shadingSettings.outline &&
-            !shadingSettings.depthOfField &&
+            !(shadingSettings.shadows && shadingSettings.depthOfField) &&
             !shadingSettings.xrayEnabled();
         if (canResolveOutlineInSceneLinear) {
             std::vector<quint64> regularObjectIds(
@@ -1057,14 +1058,19 @@ bool compositeRasterWorkbenchSurfaces(
             const int sampleOffset = workbenchEffectUiScale(dpr);
             surfaceLayers->sceneLinearColor = resolved;
             surfaceLayers->sceneLinearSize = QSize(width, height);
-            const bool deferOutlineUntilAfterShadow =
-                shadingSettings.shadows;
-            if (deferOutlineUntilAfterShadow) {
+            const bool deferOutlineUntilEffects =
+                shadingSettings.shadows || shadingSettings.depthOfField;
+            if (shadingSettings.shadows) {
                 surfaceLayers->sceneLinearOpaqueColor = opaqueScenePixels;
                 surfaceLayers->sceneLinearTransparentColor = transparentResolved;
+            }
+            if (deferOutlineUntilEffects) {
                 surfaceLayers->sceneLinearOutlineCoverage.assign(
                     static_cast<std::size_t>(pixelCount), 0.0f);
                 surfaceLayers->sceneLinearOutlinePending = true;
+                surfaceLayers->sceneLinearDofPending =
+                    shadingSettings.depthOfField && !shadingSettings.shadows &&
+                    transform.cameraPreferences().sceneCameraEnabled;
             }
             for (int y = 0; y < height; ++y) {
                 for (int x = 0; x < width; ++x) {
@@ -1085,7 +1091,7 @@ bool compositeRasterWorkbenchSurfaces(
                     const float alpha = outlineAlpha *
                         (static_cast<float>(differentNeighbors) / 4.0f);
                     if (alpha <= 0.0f) continue;
-                    if (deferOutlineUntilAfterShadow) {
+                    if (deferOutlineUntilEffects) {
                         surfaceLayers->sceneLinearOutlineCoverage[
                             static_cast<std::size_t>(index)] = alpha;
                         continue;
@@ -1100,7 +1106,7 @@ bool compositeRasterWorkbenchSurfaces(
                 }
             }
             surfaceLayers->outlineAppliedBeforeDisplay =
-                !deferOutlineUntilAfterShadow;
+                !deferOutlineUntilEffects;
         }
         for (int y = 0; y < height; ++y) {
             auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
@@ -1505,6 +1511,43 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const int height = qRound(viewportSize.height() * dpr);
     if (width <= 0 || height <= 0 || outputWidth <= 0 || outputHeight <= 0)
         return;
+    const auto displayRetainedSceneLinear = [&]() {
+        if (surfaceLayers == nullptr ||
+            surfaceLayers->sceneLinearSize != QSize(outputWidth, outputHeight) ||
+            surfaceLayers->sceneLinearColor.size() !=
+                static_cast<std::size_t>(outputWidth) * outputHeight) {
+            return false;
+        }
+        QImage resolvedImage(outputWidth, outputHeight,
+                             QImage::Format_ARGB32_Premultiplied);
+        resolvedImage.setDevicePixelRatio(colorImage->devicePixelRatioF());
+        for (int y = 0; y < outputHeight; ++y) {
+            auto *row = reinterpret_cast<QRgb *>(resolvedImage.scanLine(y));
+            for (int x = 0; x < outputWidth; ++x) {
+                const RasterWorkbenchLinearPixel &pixel =
+                    surfaceLayers->sceneLinearColor[
+                        static_cast<std::size_t>(y) * outputWidth + x];
+                if (pixel.alpha <= 0.0f) {
+                    row[x] = qRgba(0, 0, 0, 0);
+                    continue;
+                }
+                const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+                    QVector3D(pixel.red / pixel.alpha,
+                              pixel.green / pixel.alpha,
+                              pixel.blue / pixel.alpha),
+                    settings.colorTransform, settings.colorExposure,
+                    settings.colorGamma, settings.colorLutData,
+                    settings.colorLutMetadata);
+                row[x] = qPremultiply(qRgba(
+                    std::clamp(qRound(display.x() * 255.0f), 0, 255),
+                    std::clamp(qRound(display.y() * 255.0f), 0, 255),
+                    std::clamp(qRound(display.z() * 255.0f), 0, 255),
+                    std::clamp(qRound(pixel.alpha * 255.0f), 0, 255)));
+            }
+        }
+        *colorImage = resolvedImage.convertToFormat(colorImage->format());
+        return true;
+    };
     QVector<RasterSample> samples(width * height);
     QVector<RasterSample> inFrontSamples(width * height);
     QVector<RasterSample> opaqueSamples;
@@ -2547,45 +2590,22 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const QColor outline = settings.outlineColor;
         const QVector3D outlineColor = workbenchSrgbToSceneLinear(
             QVector3D(outline.redF(), outline.greenF(), outline.blueF()));
-        QImage resolvedImage(outputWidth, outputHeight,
-                             QImage::Format_ARGB32_Premultiplied);
-        resolvedImage.setDevicePixelRatio(colorImage->devicePixelRatioF());
-        for (int y = 0; y < outputHeight; ++y) {
-            auto *row = reinterpret_cast<QRgb *>(resolvedImage.scanLine(y));
-            for (int x = 0; x < outputWidth; ++x) {
-                const std::size_t index =
-                    static_cast<std::size_t>(y) * outputWidth + x;
-                RasterWorkbenchLinearPixel &pixel =
-                    surfaceLayers->sceneLinearColor[index];
-                const float outlineAlpha = std::clamp(
-                    surfaceLayers->sceneLinearOutlineCoverage[index],
-                    0.0f, 1.0f);
-                const float remain = 1.0f - outlineAlpha;
-                pixel.red = outlineColor.x() * outlineAlpha + pixel.red * remain;
-                pixel.green = outlineColor.y() * outlineAlpha + pixel.green * remain;
-                pixel.blue = outlineColor.z() * outlineAlpha + pixel.blue * remain;
-                pixel.alpha = outlineAlpha + pixel.alpha * remain;
-                if (pixel.alpha <= 0.0f) {
-                    row[x] = qRgba(0, 0, 0, 0);
-                    continue;
-                }
-                const QVector3D display = workbenchSceneLinearToDisplaySrgb(
-                    QVector3D(pixel.red / pixel.alpha,
-                              pixel.green / pixel.alpha,
-                              pixel.blue / pixel.alpha),
-                    settings.colorTransform, settings.colorExposure,
-                    settings.colorGamma, settings.colorLutData,
-                    settings.colorLutMetadata);
-                row[x] = qPremultiply(qRgba(
-                    std::clamp(qRound(display.x() * 255.0f), 0, 255),
-                    std::clamp(qRound(display.y() * 255.0f), 0, 255),
-                    std::clamp(qRound(display.z() * 255.0f), 0, 255),
-                    std::clamp(qRound(pixel.alpha * 255.0f), 0, 255)));
-            }
+        for (std::size_t index = 0;
+             index < surfaceLayers->sceneLinearColor.size(); ++index) {
+            RasterWorkbenchLinearPixel &pixel =
+                surfaceLayers->sceneLinearColor[index];
+            const float outlineAlpha = std::clamp(
+                surfaceLayers->sceneLinearOutlineCoverage[index], 0.0f, 1.0f);
+            const float remain = 1.0f - outlineAlpha;
+            pixel.red = outlineColor.x() * outlineAlpha + pixel.red * remain;
+            pixel.green = outlineColor.y() * outlineAlpha + pixel.green * remain;
+            pixel.blue = outlineColor.z() * outlineAlpha + pixel.blue * remain;
+            pixel.alpha = outlineAlpha + pixel.alpha * remain;
         }
-        *colorImage = resolvedImage.convertToFormat(colorImage->format());
         surfaceLayers->outlineAppliedBeforeDisplay = true;
         surfaceLayers->sceneLinearOutlinePending = false;
+        if (!surfaceLayers->sceneLinearDofPending)
+            (void)displayRetainedSceneLinear();
     }
 
     applyOutline();
@@ -2595,8 +2615,35 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // a small disk of same-or-behind-depth colors. This is intentionally
     // camera-gated and uses camera-relative depth for either projection.
     if (depthOfFieldEnabled) {
+        struct LinearGatherPixel {
+            // Straight scene-linear RGB with the sharp source alpha.
+            float red = 0.0f;
+            float green = 0.0f;
+            float blue = 0.0f;
+            float alpha = 0.0f;
+        };
+        const bool sceneLinearDofActive = surfaceLayers != nullptr &&
+            surfaceLayers->sceneLinearDofPending &&
+            surfaceLayers->sceneLinearSize == QSize(outputWidth, outputHeight) &&
+            surfaceLayers->sceneLinearColor.size() ==
+                static_cast<std::size_t>(outputWidth) * outputHeight &&
+            surfaceLayers->outlineAppliedBeforeDisplay;
         const QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage gatheredResult = source.copy();
+        std::vector<LinearGatherPixel> gatheredLinear;
+        if (sceneLinearDofActive) {
+            gatheredLinear.resize(
+                static_cast<std::size_t>(outputWidth) * outputHeight);
+            for (std::size_t index = 0; index < gatheredLinear.size(); ++index) {
+                const RasterWorkbenchLinearPixel &pixel =
+                    surfaceLayers->sceneLinearColor[index];
+                if (pixel.alpha > 0.0f) {
+                    gatheredLinear[index] = {
+                        pixel.red / pixel.alpha, pixel.green / pixel.alpha,
+                        pixel.blue / pixel.alpha, pixel.alpha};
+                }
+            }
+        }
         const qsizetype outputPixelCount =
             qsizetype(outputWidth) * outputHeight;
         QVector<float> dofMixes(outputPixelCount, 0.0f);
@@ -2747,14 +2794,38 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             neighbor.depth < center.depth -
                                 std::max(1.0e-4f, std::abs(center.depth) * 0.002f))
                             continue;
-                        const QRgb pixel = source.pixel(sx, sy);
-                        red += qRed(pixel); green += qGreen(pixel); blue += qBlue(pixel);
+                        if (sceneLinearDofActive) {
+                            const RasterWorkbenchLinearPixel &pixel =
+                                surfaceLayers->sceneLinearColor[
+                                    static_cast<std::size_t>(sy) *
+                                        outputWidth + sx];
+                            if (pixel.alpha > 0.0f) {
+                                red += pixel.red / pixel.alpha;
+                                green += pixel.green / pixel.alpha;
+                                blue += pixel.blue / pixel.alpha;
+                            }
+                        } else {
+                            const QRgb pixel = source.pixel(sx, sy);
+                            red += qRed(pixel);
+                            green += qGreen(pixel);
+                            blue += qBlue(pixel);
+                        }
                         ++count;
                     }
                     if (count == 0) continue;
-                    out[x] = qRgba(
-                        qRound(red / count), qRound(green / count),
-                        qRound(blue / count), qAlpha(source.pixel(x, y)));
+                    if (sceneLinearDofActive) {
+                        const std::size_t pixelIndex =
+                            static_cast<std::size_t>(y) * outputWidth + x;
+                        gatheredLinear[pixelIndex] = {
+                            static_cast<float>(red / count),
+                            static_cast<float>(green / count),
+                            static_cast<float>(blue / count),
+                            surfaceLayers->sceneLinearColor[pixelIndex].alpha};
+                    } else {
+                        out[x] = qRgba(
+                            qRound(red / count), qRound(green / count),
+                            qRound(blue / count), qAlpha(source.pixel(x, y)));
+                    }
                 }
             }
             // Blender's half-resolution blur cleanup samples a 3x3 median
@@ -2806,6 +2877,79 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     out[x] = rasterWorkbenchDofMedian3x3(neighborhood);
                 }
             }
+            std::vector<LinearGatherPixel> filteredLinearGather = gatheredLinear;
+            if (sceneLinearDofActive) {
+                const auto sampleLinearGather = [&](qreal sampleX,
+                                                    qreal sampleY) {
+                    sampleX = std::clamp(sampleX, 0.0,
+                                         qreal(outputWidth - 1));
+                    sampleY = std::clamp(sampleY, 0.0,
+                                         qreal(outputHeight - 1));
+                    const int x0 = static_cast<int>(std::floor(sampleX));
+                    const int y0 = static_cast<int>(std::floor(sampleY));
+                    const int x1 = std::min(x0 + 1, outputWidth - 1);
+                    const int y1 = std::min(y0 + 1, outputHeight - 1);
+                    const qreal tx = sampleX - x0;
+                    const qreal ty = sampleY - y0;
+                    const LinearGatherPixel &p00 = gatheredLinear[
+                        static_cast<std::size_t>(y0) * outputWidth + x0];
+                    const LinearGatherPixel &p10 = gatheredLinear[
+                        static_cast<std::size_t>(y0) * outputWidth + x1];
+                    const LinearGatherPixel &p01 = gatheredLinear[
+                        static_cast<std::size_t>(y1) * outputWidth + x0];
+                    const LinearGatherPixel &p11 = gatheredLinear[
+                        static_cast<std::size_t>(y1) * outputWidth + x1];
+                    const auto interpolate = [&](float LinearGatherPixel::*channel) {
+                        const qreal top = p00.*channel * (1.0 - tx) +
+                                          p10.*channel * tx;
+                        const qreal bottom = p01.*channel * (1.0 - tx) +
+                                             p11.*channel * tx;
+                        return static_cast<float>(top * (1.0 - ty) +
+                                                  bottom * ty);
+                    };
+                    return LinearGatherPixel{
+                        interpolate(&LinearGatherPixel::red),
+                        interpolate(&LinearGatherPixel::green),
+                        interpolate(&LinearGatherPixel::blue),
+                        interpolate(&LinearGatherPixel::alpha)};
+                };
+                const auto medianChannel = [](auto channel,
+                                              const std::array<LinearGatherPixel, 9> &pixels) {
+                    std::array<float, 9> values{};
+                    for (std::size_t i = 0; i < values.size(); ++i)
+                        values[i] = channel(pixels[i]);
+                    std::nth_element(values.begin(), values.begin() + 4,
+                                     values.end());
+                    return values[4];
+                };
+                for (int y = 0; y < outputHeight; ++y) {
+                    for (int x = 0; x < outputWidth; ++x) {
+                        const std::size_t pixelIndex =
+                            static_cast<std::size_t>(y) * outputWidth + x;
+                        const float cocRadius = medianRadii[
+                            static_cast<qsizetype>(pixelIndex)];
+                        if (cocRadius <= 0.0f) continue;
+                        const qreal step = 2.0 * cocRadius * colorDpr;
+                        std::array<LinearGatherPixel, 9> neighborhood{};
+                        int sampleIndex = 0;
+                        for (int offsetY = -1; offsetY <= 1; ++offsetY) {
+                            for (int offsetX = -1; offsetX <= 1; ++offsetX) {
+                                neighborhood[sampleIndex++] = sampleLinearGather(
+                                    x + offsetX * step, y + offsetY * step);
+                            }
+                        }
+                        filteredLinearGather[pixelIndex] = {
+                            medianChannel([](const auto &p) { return p.red; },
+                                          neighborhood),
+                            medianChannel([](const auto &p) { return p.green; },
+                                          neighborhood),
+                            medianChannel([](const auto &p) { return p.blue; },
+                                          neighborhood),
+                            medianChannel([](const auto &p) { return p.alpha; },
+                                          neighborhood)};
+                    }
+                }
+            }
             QImage dofResult = source.copy();
             for (int y = 0; y < outputHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(dofResult.scanLine(y));
@@ -2814,6 +2958,27 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         qsizetype(y) * outputWidth + x;
                     const float mix = dofMixes[pixelIndex];
                     if (mix <= 0.0f) continue;
+                    if (sceneLinearDofActive) {
+                        RasterWorkbenchLinearPixel &original =
+                            surfaceLayers->sceneLinearColor[
+                                static_cast<std::size_t>(pixelIndex)];
+                        if (original.alpha > 0.0f) {
+                            const LinearGatherPixel &blurred =
+                                filteredLinearGather[
+                                    static_cast<std::size_t>(pixelIndex)];
+                            const float inverseAlpha = 1.0f / original.alpha;
+                            original.red = original.alpha * (
+                                (original.red * inverseAlpha) * (1.0f - mix) +
+                                blurred.red * mix);
+                            original.green = original.alpha * (
+                                (original.green * inverseAlpha) * (1.0f - mix) +
+                                blurred.green * mix);
+                            original.blue = original.alpha * (
+                                (original.blue * inverseAlpha) * (1.0f - mix) +
+                                blurred.blue * mix);
+                        }
+                        continue;
+                    }
                     const QRgb original = source.pixel(x, y);
                     const QRgb blurred = filteredGather.pixel(x, y);
                     out[x] = qRgba(
@@ -2826,8 +2991,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         qAlpha(original));
                 }
             }
-            *colorImage = dofResult.convertToFormat(colorImage->format());
+            if (!sceneLinearDofActive)
+                *colorImage = dofResult.convertToFormat(colorImage->format());
         }
+    }
+    if (surfaceLayers != nullptr && surfaceLayers->sceneLinearDofPending) {
+        (void)displayRetainedSceneLinear();
+        surfaceLayers->sceneLinearDofPending = false;
     }
 }
 

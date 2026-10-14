@@ -94,8 +94,10 @@ struct RasterWorkbenchSurfaceLayers {
     // before its display transform.
     bool outlineAppliedBeforeDisplay = false;
     // True when a shadow-enabled scene-linear outline mask awaits the shadow
-    // resolve, after which the combined result is display-transformed once.
+    // or depth-of-field resolve, after which the combined result is
+    // display-transformed once.
     bool sceneLinearOutlinePending = false;
+    bool sceneLinearDofPending = false;
 };
 
 // Software Workbench screen-space effects for the QPainter fallback. The color

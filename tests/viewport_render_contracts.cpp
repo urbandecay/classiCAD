@@ -425,6 +425,101 @@ int main(int argc, char *argv[])
         &subpixelCocImage, {subpixelCocObject}, orthographicDofTransform,
         orthographicDofSize, 1.0, orthographicDofSettings);
 
+    const auto renderRetainedOutlineDof = [&](int colorTransform,
+                                              bool withOutline,
+                                              bool withDof) {
+        QImage image(orthographicDofSize,
+                     QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers layers;
+        layers.sceneLinearSize = orthographicDofSize;
+        const std::size_t pixelCount = static_cast<std::size_t>(
+            orthographicDofSize.width() * orthographicDofSize.height());
+        layers.sceneLinearColor.resize(pixelCount);
+        layers.sceneLinearOutlineCoverage.assign(pixelCount, 0.0f);
+        for (int y = 0; y < orthographicDofSize.height(); ++y) {
+            for (int x = 0; x < orthographicDofSize.width(); ++x) {
+                const float alpha = 0.75f;
+                const QVector3D straight = x < 64
+                    ? QVector3D(0.9f, 0.08f, 0.03f)
+                    : QVector3D(0.02f, 0.12f, 0.85f);
+                layers.sceneLinearColor[
+                    static_cast<std::size_t>(y) * orthographicDofSize.width() + x] = {
+                    straight.x() * alpha, straight.y() * alpha,
+                    straight.z() * alpha, alpha};
+                if (withOutline && x == 64)
+                    layers.sceneLinearOutlineCoverage[
+                        static_cast<std::size_t>(y) *
+                            orthographicDofSize.width() + x] = 0.5f;
+            }
+        }
+        layers.sceneLinearOutlinePending = withOutline;
+        layers.sceneLinearDofPending = withDof;
+        ViewportShadingSettings settings = orthographicDofSettings;
+        settings.outline = withOutline;
+        settings.depthOfField = withDof;
+        settings.outlineColor = QColor(235, 185, 35);
+        settings.colorTransform = colorTransform;
+        applyRasterWorkbenchEffects(
+            &image, orthographicDofObjects, orthographicDofTransform,
+            orthographicDofSize, 1.0, settings, &layers);
+        return std::make_pair(std::move(image), std::move(layers));
+    };
+    auto standardOutlineDof = renderRetainedOutlineDof(1, true, true);
+    auto agxOutlineDof = renderRetainedOutlineDof(0, true, true);
+    auto noOutlineDof = renderRetainedOutlineDof(1, false, true);
+    auto sharpOutline = renderRetainedOutlineDof(1, true, false);
+    bool retainedDofDisplayMatches = true;
+    bool retainedDofOutlineChangedScene = false;
+    bool retainedDofChangedScene = false;
+    for (int y = 0; y < orthographicDofSize.height(); ++y) {
+        for (int x = 0; x < orthographicDofSize.width(); ++x) {
+            const std::size_t index = static_cast<std::size_t>(
+                y * orthographicDofSize.width() + x);
+            const RasterWorkbenchLinearPixel &pixel =
+                standardOutlineDof.second.sceneLinearColor[index];
+            const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+                QVector3D(pixel.red / pixel.alpha, pixel.green / pixel.alpha,
+                          pixel.blue / pixel.alpha),
+                1, 0.0f, 1.0f, {}, {});
+            const QRgb expected = qPremultiply(qRgba(
+                qRound(display.x() * 255.0f),
+                qRound(display.y() * 255.0f),
+                qRound(display.z() * 255.0f), qRound(pixel.alpha * 255.0f)));
+            retainedDofDisplayMatches &=
+                standardOutlineDof.first.pixel(x, y) == expected;
+            retainedDofChangedScene |= std::abs(
+                pixel.red - sharpOutline.second.sceneLinearColor[index].red) >
+                1.0e-4f || std::abs(
+                pixel.green - sharpOutline.second.sceneLinearColor[index].green) >
+                1.0e-4f || std::abs(
+                pixel.blue - sharpOutline.second.sceneLinearColor[index].blue) >
+                1.0e-4f;
+            retainedDofOutlineChangedScene |= std::abs(
+                pixel.red - noOutlineDof.second.sceneLinearColor[index].red) >
+                1.0e-4f || std::abs(
+                pixel.green - noOutlineDof.second.sceneLinearColor[index].green) >
+                1.0e-4f || std::abs(
+                pixel.blue - noOutlineDof.second.sceneLinearColor[index].blue) >
+                1.0e-4f;
+            const float expectedAlpha = x == 64 ? 0.875f : 0.75f;
+            passed &= check(std::abs(pixel.alpha - expectedAlpha) < 1.0e-5f,
+                "scene-linear QPainter DOF must preserve sharp alpha apart from outline coverage");
+        }
+    }
+    passed &= check(
+        !standardOutlineDof.second.sceneLinearDofPending &&
+            !standardOutlineDof.second.sceneLinearOutlinePending &&
+            standardOutlineDof.second.outlineAppliedBeforeDisplay &&
+            !agxOutlineDof.second.sceneLinearDofPending &&
+            !agxOutlineDof.second.sceneLinearOutlinePending &&
+            !sharpOutline.second.sceneLinearDofPending &&
+            sharpOutline.second.outlineAppliedBeforeDisplay &&
+            retainedDofDisplayMatches && retainedDofChangedScene &&
+            retainedDofOutlineChangedScene &&
+            standardOutlineDof.first != agxOutlineDof.first,
+        "weighted QPainter outline-plus-DOF must filter retained scene-linear color before one Standard or AgX display transform");
+
     // CPU shadow fallback: an opaque elevated quad casts onto an opaque
     // receiver. The input image is deliberately uniform so changed pixels
     // expose only the software shadow pass.

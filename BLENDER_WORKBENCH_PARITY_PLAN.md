@@ -2191,6 +2191,32 @@ depth domain. Visual depth comparison remains open.
   on the default six-quad mesh; the earlier production-path measurement on a
   NURBS extrusion solid remains 0.388/255 MAE.
 
+### Matched Workbench multisample modes (2026-10-14)
+
+- Compared the nonblank 640x480 polygon-cube captures for Blender 5.2.2 and
+  classiCAD at 5, 8, 11, 16, and 32 samples. Both used AA Off-compatible
+  camera/view settings, AgX, no outlines/effects, and the same neutral
+  scene-linear background (`0.021942` per channel). Matching the background is
+  necessary because the existing comparison's foreground threshold would
+  otherwise classify Blender's earlier brown World color as geometry.
+- Scene-linear whole-frame RGB MAE per channel stayed between `0.000025` and
+  `0.000149`. With a `0.1` foreground threshold, mask IoU / XOR pixels were:
+  5 samples `0.996258 / 299`, 8 `0.997173 / 226`, 11 `0.997171 / 226`, 16
+  `0.999987 / 1`, and 32 `0.999975 / 2`. The edge-coverage MAE decreased
+  from `0.017231` at 5 samples to `0.008244` at 32 samples.
+- All five modes matched exactly at the 27 face-interior probes in
+  scene-linear RGB. Display RGB also matched exactly at 5, 8, 11, and 16
+  samples; 32 samples had `0.1111/255` probe MAE and `1/255` maximum error.
+  These results cover this controlled cube and do not close navigation-time
+  accumulation resets, other geometries, effects, or QPainter AA parity.
+- Blender references used `tests/workbench_cube_reference.py` with the
+  corresponding `--aa` value and
+  `--world-color 0.0219421387 0.0219421387 0.0219421387`. classiCAD captures
+  came from the matching `CLASSICAD_VIEWPORT_AA_SAMPLES*_CAPTURE` and
+  `*_LINEAR_CAPTURE` outputs of `viewport_render_contracts_test`. The offscreen
+  contract passed; `tests/workbench_pfm_compare.py` and
+  `tests/workbench_display_probe_compare.py` produced the metrics above.
+
 **Opaque hard-shadow capture rerun (2026-10-13):** Reused the
 `viewport_render_contracts` opt-in polygon-cube shadow and baseline captures
 with Qt's offscreen platform, then rendered the Blender 5.2.2 `CUBE` fixture

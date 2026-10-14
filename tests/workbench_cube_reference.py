@@ -90,6 +90,14 @@ def arguments():
         default="BASELINE",
     )
     parser.add_argument(
+        "--outline-color",
+        nargs=3,
+        type=float,
+        metavar=("R", "G", "B"),
+        default=(0.0, 0.0, 0.0),
+        help="Workbench object outline color in Blender scene-linear values",
+    )
+    parser.add_argument(
         "--lighting",
         choices=("STUDIO", "MATCAP", "FLAT"),
         default="STUDIO",
@@ -633,7 +641,7 @@ def main():
     scene.display.matcap_ssao_samples = 16
     scene.display.matcap_ssao_distance = 0.2
     scene.display.matcap_ssao_attenuation = 1.0
-    shading.object_outline_color = (0.0, 0.0, 0.0)
+    shading.object_outline_color = tuple(args.outline_color)
     shading.show_object_outline = args.effect == "OUTLINE"
     shading.background_type = args.background_source
     scene.world.color = args.world_color

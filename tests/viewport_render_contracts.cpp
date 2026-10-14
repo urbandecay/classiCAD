@@ -9104,6 +9104,96 @@ int main(int argc, char *argv[])
                                 linearCapturesSaved,
                             "matched polygon cube outline captures must render and save");
                     }
+                    const QString outlineSweepDirectory =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_GPU_OUTLINE_SWEEP_DIR");
+                    if (!outlineSweepDirectory.isEmpty()) {
+                        struct OutlineSweepColor {
+                            const char *name;
+                            QColor color;
+                        };
+                        const OutlineSweepColor outlineColors[] = {
+                            {"black", QColor(0, 0, 0)},
+                            {"white", QColor(255, 255, 255)},
+                            {"red", QColor(255, 0, 0)}};
+                        struct OutlineSweepBackground {
+                            const char *name;
+                            QVector3D sceneLinear;
+                        };
+                        const OutlineSweepBackground outlineBackgrounds[] = {
+                            {"dark", QVector3D(0.02f, 0.02f, 0.02f)},
+                            {"light", QVector3D(0.18f, 0.18f, 0.18f)}};
+                        const bool outlineSweepDirectoryReady =
+                            QDir().mkpath(outlineSweepDirectory);
+                        bool outlineSweepCaptured =
+                            outlineSweepDirectoryReady;
+                        const auto saveOutlineSweepPfm = [&] (
+                            const QString &path,
+                            const QVector<float> &pixels) {
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            return pixels.size() == 640 * 480 * 3 &&
+                                file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               pixels.constData()),
+                                           pixels.size() * qsizetype(sizeof(float))) ==
+                                    pixels.size() * qsizetype(sizeof(float));
+                        };
+                        for (const OutlineSweepBackground &backgroundCase :
+                             outlineBackgrounds) {
+                            QVector<float> baselineLinear;
+                            QImage baselineImage;
+                            outlineSweepCaptured =
+                                renderCoordinatedScene(
+                                    rawFaceShading,
+                                    QByteArrayLiteral("outline-sweep-baseline"),
+                                    &baselineImage, &polygonCubeObject,
+                                    nullptr, nullptr, QString{}, &baselineLinear,
+                                    &backgroundCase.sceneLinear) &&
+                                saveOutlineSweepPfm(
+                                    QDir(outlineSweepDirectory).filePath(
+                                        QStringLiteral("%1_baseline.pfm")
+                                            .arg(QString::fromLatin1(
+                                                backgroundCase.name))),
+                                    baselineLinear) && outlineSweepCaptured;
+                            for (const OutlineSweepColor &colorCase :
+                                 outlineColors) {
+                                ViewportShadingSettings outlineCase =
+                                    rawFaceShading;
+                                outlineCase.outline = true;
+                                outlineCase.outlineColor = colorCase.color;
+                                QVector<float> effectLinear;
+                                QImage effectImage;
+                                const bool effectRendered =
+                                    renderCoordinatedScene(
+                                        outlineCase,
+                                        QByteArrayLiteral("outline-sweep-effect"),
+                                        &effectImage, &polygonCubeObject,
+                                        nullptr, nullptr, QString{},
+                                        &effectLinear,
+                                        &backgroundCase.sceneLinear);
+                                const QString captureStem =
+                                    QStringLiteral("%1_%2")
+                                        .arg(QString::fromLatin1(
+                                                 backgroundCase.name),
+                                             QString::fromLatin1(
+                                                 colorCase.name));
+                                outlineSweepCaptured =
+                                    effectRendered &&
+                                    saveOutlineSweepPfm(
+                                        QDir(outlineSweepDirectory)
+                                            .filePath(captureStem +
+                                                      QStringLiteral(".pfm")),
+                                        effectLinear) &&
+                                    outlineSweepCaptured;
+                            }
+                        }
+                        passed &= check(
+                            outlineSweepCaptured,
+                            "matched GPU outline color/background sweep must save scene-linear baseline/effect captures");
+                    }
                     const bool gpuWorkbenchShadowDrawSucceeded =
                         renderCoordinatedScene(
                             shadowShading,

@@ -61,9 +61,16 @@ def main():
                                      effect_classicad[start + channel]))
     intersection = sum(a and b for a, b in zip(blender_mask, classicad_mask))
     union = sum(a or b for a, b in zip(blender_mask, classicad_mask))
+    shared_indices = [index for index in range(count)
+                      if blender_mask[index] and classicad_mask[index]]
     union_errors = [
         effect_errors[pixel * 3 + channel]
         for pixel in range(count) if blender_mask[pixel] or classicad_mask[pixel]
+        for channel in range(3)
+    ]
+    intersection_errors = [
+        effect_errors[pixel * 3 + channel]
+        for pixel in range(count) if blender_mask[pixel] and classicad_mask[pixel]
         for channel in range(3)
     ]
     result = {
@@ -80,15 +87,31 @@ def main():
             "blender": statistics.fmean(blender_magnitudes),
             "classiCAD": statistics.fmean(classicad_magnitudes),
         },
+        "mean_max_channel_effect_on_mask_intersection": {
+            "blender": statistics.fmean(
+                blender_magnitudes[index] for index in shared_indices
+            ) if shared_indices else 0.0,
+            "classiCAD": statistics.fmean(
+                classicad_magnitudes[index] for index in shared_indices
+            ) if shared_indices else 0.0,
+        },
         "mean_absolute_rgb_error": {
             "baseline": statistics.fmean(baseline_errors),
             "effect_output": statistics.fmean(output_errors),
             "effect_delta": statistics.fmean(effect_errors),
             "effect_delta_on_mask_union": statistics.fmean(union_errors),
+            "effect_delta_on_mask_intersection": (
+                statistics.fmean(intersection_errors)
+                if intersection_errors else 0.0
+            ),
             "effect_delta_union_p95": sorted(union_errors)[
                 min(len(union_errors) - 1,
                     math.ceil(len(union_errors) * 0.95) - 1)
             ] if union_errors else 0.0,
+            "effect_delta_intersection_p95": sorted(intersection_errors)[
+                min(len(intersection_errors) - 1,
+                    math.ceil(len(intersection_errors) * 0.95) - 1)
+            ] if intersection_errors else 0.0,
         },
     }
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))

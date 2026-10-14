@@ -4371,8 +4371,21 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   each renderer's observed effect mask matches the four-cardinal boundary of
   its own baseline silhouette exactly (zero XOR). The outline-mask XOR is
   therefore inherited from silhouette raster coverage in this capture; it
-  does not indicate a different outline neighbor rule. Outline color and
-  magnitude differences remain.
+  does not indicate a different outline neighbor rule.
+- The Blender cube fixture now accepts `--outline-color` in scene-linear RGB.
+  The GPU contract has an opt-in scene-linear capture sweep for black, white,
+  and red outlines over linear backgrounds 0.02 and 0.18. The effect comparator
+  also reports RGB-delta error and average effect magnitude on the shared
+  changed-pixel mask. All six pairs retain the same 2,312 Blender / 2,316
+  classiCAD outline pixels, 448 XOR pixels, and 0.823483 mask IoU. On shared
+  changed pixels, scene-linear mean max-channel effect is 0.03390 vs 0.04161
+  for dark-background black; 0.30027 vs 0.29283 for dark-background white;
+  0.30002 vs 0.29260 for dark-background red; 0.06261 vs 0.06605 for
+  light-background black; 0.27162 vs 0.26844 for light-background white; and
+  0.27137 vs 0.26821 for light-background red (Blender vs classiCAD). Shared
+  changed-pixel RGB-delta MAE ranges from 0.00425 to 0.00799 linear units.
+  The response varies with outline color and background, so this sweep does
+  not support one uniform magnitude correction; no production change is made.
 - This comparison covers one unselected default cube only. Selected outlines,
   multiple or overlapping objects, smoothing, UI scaling, camera variation,
   and additional QPainter outline comparisons remain open. No implementation
@@ -4408,7 +4421,9 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   the offscreen `viewport_render_contracts` test passed. A direct offscreen
   invocation with both capture variables saved the QPainter pair. The Blender
   reference script reported Blender 5.2.2 and the effect-delta comparison
-  completed successfully.
+  completed successfully. The GPU outline color/background sweep also passed
+  in the offscreen viewport contract; six Blender 5.2.2 scene-linear capture
+  pairs and `workbench_effect_linear_compare.py` completed successfully.
 
 ### Matched QPainter shadow comparison (2026-10-14)
 

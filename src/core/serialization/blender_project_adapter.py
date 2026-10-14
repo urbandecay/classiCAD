@@ -694,10 +694,6 @@ def _sync_classicad_image_texture(material, record):
         _remove_classicad_image_nodes(material, managed_nodes)
         return
     tiles = reference.get("tiles") or []
-    if tiles and node_type != "TEX_IMAGE":
-        _remove_classicad_image_nodes(material, managed_nodes)
-        return
-
     reference_key = hashlib.sha256(json.dumps(
         reference, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")).hexdigest()
@@ -818,7 +814,7 @@ def _classicad_float_tile_bytes(reference, tile, number):
 
 
 def _create_classicad_tiled_image(reference):
-    """Rebuild a bounded packed UDIM image for a Workbench Image Texture."""
+    """Rebuild a bounded packed UDIM image for a Workbench image node."""
     tiles = reference.get("tiles")
     template = reference.get("filepath", "")
     if (not isinstance(tiles, list) or not tiles or

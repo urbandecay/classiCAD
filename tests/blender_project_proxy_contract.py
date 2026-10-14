@@ -569,16 +569,30 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             }],
         },
     ]
-    document["materials"].extend(udim_records)
+    environment_udim_records = []
+    for suffix, source_record in zip(
+            ("packed", "external", "float"), udim_records):
+        environment_record = copy.deepcopy(source_record)
+        environment_record["id"] = "material-udim-env-" + suffix
+        environment_record["name"] = "Environment UDIM " + suffix.title()
+        environment_texture = environment_record["imageTextures"][0]
+        environment_texture["nodeType"] = "TEX_ENVIRONMENT"
+        environment_texture["nodeName"] = "ProxyContract.EnvironmentUDIM." + suffix
+        environment_texture["imageName"] = "ProxyContract.EnvironmentUDIMImage." + suffix
+        environment_texture.pop("extension", None)
+        environment_udim_records.append(environment_record)
+    document["materials"].extend(udim_records + environment_udim_records)
     udim_materials = adapter.classiCAD_materials(document)
-    obj.data.materials.append(udim_materials["material-udim-packed"])
-    obj.data.materials.append(udim_materials["material-udim-external"])
-    obj.data.materials.append(udim_materials["material-udim-float"])
+    for record in udim_records + environment_udim_records:
+        obj.data.materials.append(udim_materials[record["id"]])
     udim_float_packed_tiles = {}
-    for material_id, expected_node, expected_interpolation, expected_extension in (
-            ("material-udim-packed", "ProxyContract.PackedUDIM", "Closest", "MIRROR"),
-            ("material-udim-external", "ProxyContract.ExternalUDIM", "Linear", "REPEAT"),
-            ("material-udim-float", "ProxyContract.FloatUDIM", "Closest", "MIRROR")):
+    for material_id, expected_node, expected_interpolation, expected_extension, expected_type in (
+            ("material-udim-packed", "ProxyContract.PackedUDIM", "Closest", "MIRROR", "TEX_IMAGE"),
+            ("material-udim-external", "ProxyContract.ExternalUDIM", "Linear", "REPEAT", "TEX_IMAGE"),
+            ("material-udim-float", "ProxyContract.FloatUDIM", "Closest", "MIRROR", "TEX_IMAGE"),
+            ("material-udim-env-packed", "ProxyContract.EnvironmentUDIM.packed", "Closest", None, "TEX_ENVIRONMENT"),
+            ("material-udim-env-external", "ProxyContract.EnvironmentUDIM.external", "Linear", None, "TEX_ENVIRONMENT"),
+            ("material-udim-env-float", "ProxyContract.EnvironmentUDIM.float", "Closest", None, "TEX_ENVIRONMENT")):
         udim_material = next(
             material for material in bpy.data.materials
             if material.get("classiCAD_material_id") == material_id
@@ -588,21 +602,24 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             if node.get("classiCAD_proxy_image_node")
         )
         assert udim_node.name == expected_node
-        assert udim_node.type == "TEX_IMAGE" and udim_node.show_texture
+        assert udim_node.type == expected_type and udim_node.show_texture
         assert udim_material.node_tree.nodes.active == udim_node
         assert udim_node.interpolation == expected_interpolation
-        assert udim_node.extension == expected_extension
+        if expected_type == "TEX_IMAGE":
+            assert udim_node.extension == expected_extension
+        else:
+            assert not hasattr(udim_node, "extension")
         assert udim_node.image.source == "TILED"
         assert sorted(tile.number for tile in udim_node.image.tiles) == [1001, 1002]
         packed_tiles = {
             packed.tile_number: bytes(packed.packed_file.data)
             for packed in udim_node.image.packed_files
         }
-        if material_id == "material-udim-float":
+        if material_id.endswith("-float"):
             assert set(packed_tiles) == {1001, 1002}
             assert all(payload.startswith(b"\x76\x2f\x31\x01")
                        for payload in packed_tiles.values())
-            udim_float_packed_tiles = packed_tiles
+            udim_float_packed_tiles[material_id] = packed_tiles
             assert udim_node.image.is_float
             assert udim_node.image.alpha_mode == "PREMUL"
             assert udim_node.image.colorspace_settings.name == "Non-Color"
@@ -619,7 +636,8 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
 
     udim_temporary_templates = []
     for material_id in ("material-udim-packed", "material-udim-external",
-                        "material-udim-float"):
+                        "material-udim-float", "material-udim-env-packed",
+                        "material-udim-env-external", "material-udim-env-float"):
         udim_material = next(
             material for material in bpy.data.materials
             if material.get("classiCAD_material_id") == material_id
@@ -723,7 +741,13 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             ("material-udim-external", "ProxyContract.ExternalUDIM",
              {1001: png_data, 1002: png_data_udim}),
             ("material-udim-float", "ProxyContract.FloatUDIM",
-             udim_float_packed_tiles)):
+             udim_float_packed_tiles["material-udim-float"]),
+            ("material-udim-env-packed", "ProxyContract.EnvironmentUDIM.packed",
+             {1001: png_data, 1002: png_data_udim}),
+            ("material-udim-env-external", "ProxyContract.EnvironmentUDIM.external",
+             {1001: png_data, 1002: png_data_udim}),
+            ("material-udim-env-float", "ProxyContract.EnvironmentUDIM.float",
+             udim_float_packed_tiles["material-udim-env-float"])):
         udim_material = next(
             material for material in bpy.data.materials
             if material.get("classiCAD_material_id") == material_id
@@ -733,6 +757,9 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             if node.get("classiCAD_proxy_image_node")
         )
         assert udim_node.name == expected_node
+        assert udim_node.type == ("TEX_ENVIRONMENT"
+                                  if material_id.startswith("material-udim-env-")
+                                  else "TEX_IMAGE")
         assert udim_node.image.source == "TILED"
         packed_tiles = {
             packed.tile_number: bytes(packed.packed_file.data)

@@ -719,10 +719,9 @@ def workbench_shading_record(scene, shading=None):
         unsupported.append("use_scene_lights_render")
     if record["use_scene_world_render"]:
         unsupported.append("use_scene_world_render")
-    if record["studiolight_background_alpha"] > 0.0:
-        unsupported.append("studiolight_background_alpha")
-    if record["studiolight_background_blur"] != 0.5:
-        unsupported.append("studiolight_background_blur")
+    # Blender 5.2.2's Workbench Solid renderer does not consume these
+    # Eevee Lookdev background controls. Keep their raw values in the record
+    # for future renderer support without reporting them as Workbench gaps.
     if matcap_flip_x is None:
         unsupported.append("matcap_flip_x (not exposed by Blender 5.2.2 scene shading RNA)")
     record["unsupported"] = unsupported

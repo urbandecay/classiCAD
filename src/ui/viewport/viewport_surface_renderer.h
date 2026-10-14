@@ -81,6 +81,7 @@ private:
         bool outlineHandledBySceneStroke = false;
         bool shadowVolumeSupported = false;
         bool shadowVolumeClosed = false;
+        bool shadowVolumeForceDepthFail = false;
         bool shadowVolumePolygonMesh = false;
         bool shadowTextureAlphaMask = false;
         QVector<QVector3D> shadowVertices;

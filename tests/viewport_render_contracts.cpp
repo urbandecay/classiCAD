@@ -5992,6 +5992,112 @@ int main(int argc, char *argv[])
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    // A face-material split can make one imported mesh
+                    // transparent as a whole even when its first draw range
+                    // is opaque. Blender keeps its validated shared volume
+                    // and forces depth-fail; its binary shadow must ignore
+                    // the fully transparent image on the raised component.
+                    ViewportRenderObject mixedAlphaShadowMesh =
+                        polygonCubeObject;
+                    mixedAlphaShadowMesh.objectId = ObjectId::fromValue(804);
+                    const QVector<Point3D> receiverVertices =
+                        mixedAlphaShadowMesh.shape.polygonMesh.vertices;
+                    const QVector<QVector<int>> receiverFaces =
+                        mixedAlphaShadowMesh.shape.polygonMesh.faces;
+                    for (const Point3D &vertex : receiverVertices) {
+                        mixedAlphaShadowMesh.shape.polygonMesh.vertices.append(
+                            {vertex.x, vertex.y, vertex.z + 1.2});
+                    }
+                    for (const QVector<int> &face : receiverFaces) {
+                        QVector<int> raisedFace;
+                        raisedFace.reserve(face.size());
+                        for (const int vertexIndex : face) {
+                            raisedFace.append(vertexIndex +
+                                receiverVertices.size());
+                        }
+                        mixedAlphaShadowMesh.shape.polygonMesh.faces.append(
+                            raisedFace);
+                    }
+                    mixedAlphaShadowMesh.shape.polygonMesh.faceMaterialIndices =
+                        QVector<int>(receiverFaces.size(), 0);
+                    for (qsizetype faceIndex = 0;
+                         faceIndex < receiverFaces.size(); ++faceIndex) {
+                        mixedAlphaShadowMesh.shape.polygonMesh
+                            .faceMaterialIndices.append(1);
+                    }
+                    QVector<QPointF> mixedShadowUvs;
+                    for (const QVector<int> &face :
+                         mixedAlphaShadowMesh.shape.polygonMesh.faces) {
+                        for (qsizetype corner = 0; corner < face.size();
+                             ++corner) {
+                            mixedShadowUvs.append(QPointF(0.5, 0.5));
+                        }
+                    }
+                    mixedAlphaShadowMesh.shape.polygonMesh.uvMaps = {
+                        {QStringLiteral("ShadowAlphaUV"), mixedShadowUvs}};
+                    mixedAlphaShadowMesh.shape.polygonMesh.activeUvMapName =
+                        QStringLiteral("ShadowAlphaUV");
+                    mixedAlphaShadowMesh.shape.polygonMesh.defaultUvMapName =
+                        QStringLiteral("ShadowAlphaUV");
+                    WorkbenchMaterialData transparentShadowMaterial;
+                    transparentShadowMaterial.alpha = 0.5f;
+                    transparentShadowMaterial.textureImagePackedDataBase64 =
+                        QString::fromLatin1(packedTextureBytes.toBase64());
+                    transparentShadowMaterial.textureImageSrgb = false;
+                    transparentShadowMaterial.textureImageAlphaMode =
+                        QStringLiteral("STRAIGHT");
+                    transparentShadowMaterial.textureImageInterpolation =
+                        QStringLiteral("Closest");
+                    mixedAlphaShadowMesh.meshMaterials = {
+                        WorkbenchMaterialData{}, transparentShadowMaterial};
+                    mixedAlphaShadowMesh.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            buildViewportDepthGeometry(
+                                mixedAlphaShadowMesh.shape));
+                    ViewportShadingSettings texturedShadowShading =
+                        shadowShading;
+                    texturedShadowShading.colorMode =
+                        ViewportColorMode::Texture;
+                    QImage opaqueReceiverShadowImage;
+                    QImage transparentMeshShadowImage;
+                    const bool opaqueReceiverShadowRendered =
+                        renderCoordinatedScene(
+                            texturedShadowShading,
+                            QByteArrayLiteral("transparent-mesh-shadow-baseline"),
+                            &opaqueReceiverShadowImage, &polygonCubeObject);
+                    const bool transparentMeshShadowRendered =
+                        renderCoordinatedScene(
+                            texturedShadowShading,
+                            QByteArrayLiteral("transparent-mesh-shadow-volume"),
+                            &transparentMeshShadowImage,
+                            &mixedAlphaShadowMesh);
+                    int transparentMeshShadowChangedPixels = 0;
+                    if (opaqueReceiverShadowRendered &&
+                        transparentMeshShadowRendered &&
+                        opaqueReceiverShadowImage.size() ==
+                            transparentMeshShadowImage.size()) {
+                        for (int y = 0;
+                             y < opaqueReceiverShadowImage.height(); ++y) {
+                            for (int x = 0;
+                                 x < opaqueReceiverShadowImage.width(); ++x) {
+                                const QColor baseline =
+                                    opaqueReceiverShadowImage.pixelColor(x, y);
+                                const QColor withCaster =
+                                    transparentMeshShadowImage.pixelColor(x, y);
+                                if (std::abs(baseline.red() - withCaster.red()) > 1 ||
+                                    std::abs(baseline.green() - withCaster.green()) > 1 ||
+                                    std::abs(baseline.blue() - withCaster.blue()) > 1) {
+                                    ++transparentMeshShadowChangedPixels;
+                                }
+                            }
+                        }
+                    }
+                    passed &= check(
+                        packedTextureReady &&
+                            opaqueReceiverShadowRendered &&
+                            transparentMeshShadowRendered &&
+                            transparentMeshShadowChangedPixels > 0,
+                        "transparent polygon-mesh material ranges must retain binary stencil casting despite a fully transparent image-alpha texture");
                     // Exercise the production scene-color target, float
                     // texture readback, and HDR writer with a controlled
                     // scene-linear background above display range.

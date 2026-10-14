@@ -4669,7 +4669,7 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
         if (!range.shadowVolumeSupported || range.shadowTriangles.isEmpty()) {
             continue;
         }
-        if (!range.shadowVolumeClosed ||
+        if (!range.shadowVolumeClosed || range.shadowVolumeForceDepthFail ||
             !opaqueRangeIndices.contains(rangeIndex)) {
             useDepthPass = false;
         }
@@ -5959,10 +5959,10 @@ bool ViewportSurfaceRenderer::draw(
                 hasPartialAlpha = true;
             }
         }
-        // Imported meshes are split into one color range per face. Admit the
-        // shared indexed volume only when every range for that object is
-        // opaque in the current Workbench color/alpha mode. Otherwise restore
-        // every face to the normal fallback-caster set.
+        // Imported meshes are split into one color range per face. Blender
+        // keeps transparent-material meshes in the stencil volume pass and
+        // forces depth-fail for the whole object, so retain valid shared
+        // topology when every face range is present regardless of alpha.
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &candidate = ranges_[index];
             if (!candidate.shadowVolumeSupported ||
@@ -5970,19 +5970,25 @@ bool ViewportSurfaceRenderer::draw(
                 candidate.shadowTriangles.isEmpty()) {
                 continue;
             }
+            bool allObjectRangesPresent = true;
             bool allObjectRangesOpaque = true;
             for (int rangeIndex = 0; rangeIndex < ranges_.size(); ++rangeIndex) {
-                const DrawRange &objectRange = ranges_[rangeIndex];
+                DrawRange &objectRange = ranges_[rangeIndex];
                 if (objectRange.shadowVolumePolygonMesh &&
-                    objectRange.objectSeed == candidate.objectSeed &&
-                    (objectRange.count <= 0 ||
-                     (!opaqueRangeIndices.contains(rangeIndex) &&
-                      !frontOpaqueRangeIndices.contains(rangeIndex)))) {
-                    allObjectRangesOpaque = false;
-                    break;
+                    objectRange.objectSeed == candidate.objectSeed) {
+                    if (objectRange.count <= 0) {
+                        allObjectRangesPresent = false;
+                        break;
+                    }
+                    if (!opaqueRangeIndices.contains(rangeIndex) &&
+                        !frontOpaqueRangeIndices.contains(rangeIndex)) {
+                        allObjectRangesOpaque = false;
+                    }
                 }
             }
-            if (allObjectRangesOpaque) {
+            if (allObjectRangesPresent) {
+                ranges_[index].shadowVolumeForceDepthFail =
+                    !allObjectRangesOpaque;
                 shadowVolumeRangeIndices.append(index);
             } else {
                 const quint64 objectSeed = candidate.objectSeed;

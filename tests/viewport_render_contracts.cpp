@@ -2832,8 +2832,8 @@ int main(int argc, char *argv[])
                         {1.0, -1.0, -1.0},  {1.0, -1.0, 1.0},
                         {1.0, 1.0, -1.0},   {1.0, 1.0, 1.0}};
                     polygonCubeObject.shape.polygonMesh.faces = {
-                        {0, 4, 6, 2}, {1, 3, 7, 5}, {0, 1, 5, 4},
-                        {4, 5, 7, 6}, {1, 0, 2, 3}, {2, 6, 7, 3}};
+                        {0, 2, 6, 4}, {1, 5, 7, 3}, {0, 4, 5, 1},
+                        {4, 6, 7, 5}, {1, 3, 2, 0}, {2, 3, 7, 6}};
                     polygonCubeObject.shape.polygonMesh.faceMaterialIndices =
                         {0, 0, 0, 0, 0, 0};
                     polygonCubeObject.meshMaterials = {WorkbenchMaterialData{}};

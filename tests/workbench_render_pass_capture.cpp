@@ -150,7 +150,7 @@ void main()
                 const float sourceV =
                     (float(rows[probe]) + 0.5f) / float(height);
                 const QVector3D centerCoordinate(
-                    sourceU, 1.0f - sourceV, float(layer));
+                    sourceU, sourceV, float(layer));
                 const QVector3D centerExpected =
                     workbenchMatcapSampleLinearHalf(
                         layers, width, height, layer, sourceU, sourceV);
@@ -168,7 +168,7 @@ void main()
                     (float(rows[probe]) + 1.0f) / float(height);
                 program.setUniformValue(
                     "uCoordinate",
-                    QVector3D(midpointU, 1.0f - midpointV, float(layer)));
+                    QVector3D(midpointU, midpointV, float(layer)));
                 const QVector3D midpointExpected =
                     workbenchMatcapSampleLinearHalf(
                         layers, width, height, layer, midpointU, midpointV);

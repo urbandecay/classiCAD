@@ -747,13 +747,13 @@ inline QVector3D workbenchMatcapShade(const QString &presetName,
     const QVector3D diffuse = exactLayers.isEmpty()
         ? workbenchMatcapSampleLinear(diffuseImage, uv.x(), 1.0f - uv.y())
         : workbenchMatcapSampleLinearHalf(exactLayers, width, height, 0,
-                                          uv.x(), 1.0f - uv.y());
+                                          uv.x(), uv.y());
     const QVector3D specular = !useSpecular
         ? QVector3D()
         : exactLayers.isEmpty()
               ? workbenchMatcapSampleLinear(specularImage, uv.x(), 1.0f - uv.y())
               : workbenchMatcapSampleLinearHalf(exactLayers, width, height, 1,
-                                                uv.x(), 1.0f - uv.y());
+                                                uv.x(), uv.y());
     return {diffuse.x() * baseColor.x() + specular.x(),
             diffuse.y() * baseColor.y() + specular.y(),
             diffuse.z() * baseColor.z() + specular.z()};

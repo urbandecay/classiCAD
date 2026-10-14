@@ -6,11 +6,13 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QtEndian>
 
+#include <cstring>
+
 namespace classiCAD {
 
 // Upload the exact two-layer half-float MatCap payload used by the Workbench
-// GPU path. Preserve QMC row order: Blender's MatCap ImBuf upload presents
-// its first row at normalized texture coordinate v=0.
+// GPU path. QMC rows are top-down; reverse them for GL so normalized Workbench
+// MatCap UVs address the same source rows as Blender's rendered path.
 inline bool uploadWorkbenchMatcapTextureArray(
     QOpenGLFunctions_3_3_Core &gl, GLuint *texture,
     const QByteArray &layers, int width, int height)
@@ -21,6 +23,24 @@ inline bool uploadWorkbenchMatcapTextureArray(
     const qsizetype rowBytes = qsizetype(width) * 3 * qsizetype(sizeof(quint16));
     const qsizetype expectedBytes = rowBytes * height * 2;
     if (layers.size() != expectedBytes) return false;
+
+    // QMC stores Blender's EXR pixels in top-down order. Match Blender's
+    // ImBuf-to-GPU texture orientation and the byte-image fallback below by
+    // reversing each layer's rows before uploading to the GL texture array.
+    QByteArray glOrientedLayers(expectedBytes, Qt::Uninitialized);
+    const qsizetype layerBytes = rowBytes * height;
+    for (int layer = 0; layer < 2; ++layer) {
+        for (int row = 0; row < height; ++row) {
+            const qsizetype sourceOffset =
+                qsizetype(layer) * layerBytes + qsizetype(row) * rowBytes;
+            const qsizetype destinationOffset =
+                qsizetype(layer) * layerBytes +
+                qsizetype(height - 1 - row) * rowBytes;
+            std::memcpy(glOrientedLayers.data() + destinationOffset,
+                        layers.constData() + sourceOffset,
+                        static_cast<size_t>(rowBytes));
+        }
+    }
 
     GLint previousBinding = 0;
     GLint previousUnpackAlignment = 4;
@@ -36,7 +56,7 @@ inline bool uploadWorkbenchMatcapTextureArray(
     gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
     gl.glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGB16F, width, height, 2, 0,
-                    GL_RGB, GL_HALF_FLOAT, layers.constData());
+                    GL_RGB, GL_HALF_FLOAT, glOrientedLayers.constData());
     gl.glPixelStorei(GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
     gl.glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(previousBinding));
     return true;

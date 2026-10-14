@@ -642,12 +642,13 @@ inline QVector3D workbenchMatcapSampleLinearHalf(const QByteArray &data,
 {
     if (data.isEmpty() || width <= 0 || height <= 0 || layer < 0 || layer > 1)
         return {};
-    // OpenGL normalized linear sampling addresses texel centers at
-    // (index + 0.5) / dimension, then clamps the filter footprint to the
-    // edge texels. This is the CPU equivalent of the GPU MatCap sampler.
+    // QMC rows are top-down. Convert Workbench's normalized GL coordinate to
+    // that row order, then address texel centers at (index + 0.5) / dimension
+    // and clamp the filter footprint to the edge texels.
     const float x = std::clamp(std::clamp(u, 0.0f, 1.0f) * width - 0.5f,
                                0.0f, float(width - 1));
-    const float y = std::clamp(std::clamp(v, 0.0f, 1.0f) * height - 0.5f,
+    const float y = std::clamp((1.0f - std::clamp(v, 0.0f, 1.0f)) * height -
+                                   0.5f,
                                0.0f, float(height - 1));
     const int x0 = static_cast<int>(x);
     const int y0 = static_cast<int>(y);

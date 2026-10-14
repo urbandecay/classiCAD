@@ -21,7 +21,7 @@ def arguments():
     parser.add_argument("output", help="PNG output path")
     parser.add_argument(
         "--scene",
-        choices=("CUBE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
+        choices=("CUBE", "NURBS_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
     )
@@ -317,6 +317,38 @@ def main():
             cube.data.color_attributes.render_color_index = color_index
         if args.object_color is not None:
             cube.color = (*args.object_color, 1.0)
+    elif args.scene == "NURBS_TEXTURE":
+        if args.color_source != "TEXTURE" or not args.texture_image:
+            raise ValueError("NURBS_TEXTURE requires TEXTURE color source and --texture-image")
+        # classiCAD's regular planar NURBS fixture is a degree-one patch over
+        # [-1, 1] in both directions. Render its equivalent display proxy with
+        # explicit corner UVs so this comparison isolates Workbench sampling.
+        mesh = bpy.data.meshes.new("NurbsTextureProxyMesh")
+        mesh.from_pydata(
+            [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+             (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
+            [], [(0, 1, 2, 3)],
+        )
+        mesh.update()
+        proxy = bpy.data.objects.new("NurbsTextureProxy", mesh)
+        bpy.context.collection.objects.link(proxy)
+        uv_layer = mesh.uv_layers.new(name="UVMap")
+        for loop, uv in zip(uv_layer.data, ((0.0, 0.0), (1.0, 0.0),
+                                            (1.0, 1.0), (0.0, 1.0))):
+            loop.uv = uv
+        material = bpy.data.materials.new("NurbsTextureMaterial")
+        material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
+        material.use_nodes = True
+        image_node = material.node_tree.nodes.new("ShaderNodeTexImage")
+        image_node.image = bpy.data.images.load(
+            os.path.abspath(args.texture_image), check_existing=True
+        )
+        if args.texture_color_space:
+            image_node.image.colorspace_settings.name = args.texture_color_space
+        image_node.interpolation = args.texture_interpolation
+        image_node.show_texture = True
+        material.node_tree.nodes.active = image_node
+        mesh.materials.append(material)
     elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):
         # Two camera-facing quads provide stable, known overlap regions without
         # perspective or surface-lighting changes between captures.

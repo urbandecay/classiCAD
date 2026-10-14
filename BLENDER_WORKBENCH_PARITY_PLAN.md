@@ -1548,7 +1548,7 @@ and display RGB. Full-frame foreground-mask IoU is `0.997991` (224 XOR pixels)
 for each mode. Per-channel scene-linear MAE is at most `0.000567`; whole-frame
 display MAE ranges from `0.06514/255` (Texture) to `0.10354/255` (Random).
 These captures validate constant face color/UV samples and imported Random
-identity for this cube. Attribute output is validated separately below; varying UVs, texture filtering/alpha, other geometry, and QPainter output remain open.
+identity for this cube. Attribute output is validated separately below; other texture filters/alpha/UDIMs, additional surface geometries, and QPainter output remain open.
 classiCAD captures use
 `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=/tmp/classicad-workbench-colors`; the
 Blender fixture uses `--lighting FLAT --color-source` with matching material,
@@ -1596,10 +1596,31 @@ foreground-mask IoU is `0.997991` (224 XOR pixels), per-channel scene-linear
 MAE is at most `0.000330`, edge-coverage MAE is `0.03599`, and whole-frame
 display MAE is `0.09705/255`. This covers GPU varying-UV interpolation and
 Linear image sampling on this cube; Closest/Cubic/Smart with a patterned
-image, alpha cutouts, UDIMs, other geometry, and QPainter output remain open.
+image, alpha cutouts, UDIMs, additional surface geometries, and QPainter output remain open.
 The fixture capture is `color_texture_uv.png/.pfm`; Blender uses
 `--color-source TEXTURE --texture-interpolation Linear
 --texture-uv-pattern` with the same generated pattern image.
+
+**Full-frame Flat GPU Image Texture on a NURBS patch (2026-10-14):** Added a
+production capture for classiCAD's degree-one planar NURBS surface with U knot
+domain `[2, 6]` and V domain `[-3, 5]`, plus an equivalent Blender 5.2.2
+display-proxy mesh carrying matching normalized corner UVs. Both use the same
+asymmetric 2×2 sRGB image, Linear interpolation, Repeat extension, Flat
+lighting, AA Off, AgX, and a matched scene-linear background. The Blender
+5.2.2 scene-linear Combined comparison has foreground-mask IoU `0.999937`
+(2 XOR pixels); per-channel full-frame MAE is at most `0.000010`, with the
+maximum errors confined to edge coverage. Eroding the matching foreground by
+two pixels leaves 29,718 samples with channel MAE `0.0000498` and maximum
+`0.00684`; fixed probes at `(240,200)`, `(320,200)`, `(400,200)`,
+`(240,240)`, `(320,240)`, `(400,240)`, `(240,280)`, `(320,280)`, and
+`(400,280)` match exactly. This validates
+GPU texture filtering and normalized parameter UVs for a regular planar NURBS
+patch, not trimmed/nonplanar surfaces, texture alpha, UDIMs, or QPainter
+rendering. The classiCAD capture is `color_texture_nurbs.png/.pfm` from
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; Blender uses
+`--scene NURBS_TEXTURE --match-classicad-ortho --lighting FLAT
+--color-source TEXTURE --texture-interpolation Linear` with the captured
+`workbench-texture-pattern.png`.
 
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
@@ -2856,7 +2877,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. Other presets, Studio
   rotations, camera orientations, and QPainter output remain open.
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; point/face domains, other texture filters/alpha/UDIM, other geometries, and QPainter parity remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; a matched regular planar NURBS patch comparison also covers filtered Texture UVs. Point/face domains, other texture filters/alpha/UDIM, trimmed/nonplanar surface cases, and QPainter parity remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling, both idle and during navigation.

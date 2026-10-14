@@ -6684,6 +6684,124 @@ int main(int argc, char *argv[])
                             patternedTextureLinearSaved &&
                             patternedTextureDisplaySaved;
 
+                        // Exercise Image Texture filtering through the
+                        // production GPU path for a planar NURBS patch. Its
+                        // normalized UVs must remain stable when the stored
+                        // knot domains are shifted and scaled.
+                        ViewportRenderObject nurbsTextureObject;
+                        nurbsTextureObject.shape.geometryType =
+                            GeometryType::NurbsSurface;
+                        nurbsTextureObject.shape.nurbsSurface = fillSurface;
+                        nurbsTextureObject.shape.nurbsSurface.knotsU =
+                            {2.0, 6.0};
+                        nurbsTextureObject.shape.nurbsSurface.knotsV =
+                            {-3.0, 5.0};
+                        nurbsTextureObject.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                buildViewportDepthGeometry(
+                                    nurbsTextureObject.shape));
+                        nurbsTextureObject.objectId =
+                            ObjectId::fromValue(9101);
+                        nurbsTextureObject.displayName =
+                            QStringLiteral("NurbsTexturePatch");
+                        nurbsTextureObject.geometryRevision = 1;
+                        nurbsTextureObject.hasWorkbenchMaterial = true;
+                        nurbsTextureObject.workbenchMaterial
+                            .baseColorSceneLinear = QVector3D(0.8f, 0.8f, 0.8f);
+                        nurbsTextureObject.workbenchMaterial.textureImagePath =
+                            patternedTexturePath;
+                        nurbsTextureObject.workbenchMaterial.textureImageSrgb =
+                            true;
+                        nurbsTextureObject.workbenchMaterial
+                            .textureImageAlphaMode = QStringLiteral("STRAIGHT");
+                        nurbsTextureObject.workbenchMaterial
+                            .textureImageInterpolation = QStringLiteral("Linear");
+                        nurbsTextureObject.workbenchMaterial
+                            .textureImageExtension = QStringLiteral("REPEAT");
+                        QImage nurbsTextureDisplay;
+                        QVector<float> nurbsTextureSceneLinear;
+                        const QVector3D textureBackground(0.0219421387f,
+                                                         0.0219421387f,
+                                                         0.0219421387f);
+                        const bool nurbsTextureRendered =
+                            validateNurbsSurface(
+                                nurbsTextureObject.shape.nurbsSurface) &&
+                            renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-nurbs-texture"),
+                                &nurbsTextureDisplay, &nurbsTextureObject,
+                                nullptr, nullptr, QString{},
+                                &nurbsTextureSceneLinear,
+                                &textureBackground);
+                        int nurbsTextureForegroundPixels = 0;
+                        QVector3D nurbsTextureMinimum(
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max());
+                        QVector3D nurbsTextureMaximum(
+                            -std::numeric_limits<float>::max(),
+                            -std::numeric_limits<float>::max(),
+                            -std::numeric_limits<float>::max());
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < nurbsTextureSceneLinear.size();
+                             pixel += 3) {
+                            const QVector3D color(
+                                nurbsTextureSceneLinear[pixel],
+                                nurbsTextureSceneLinear[pixel + 1],
+                                nurbsTextureSceneLinear[pixel + 2]);
+                            if ((color - textureBackground).lengthSquared() >
+                                1.0e-5f) {
+                                ++nurbsTextureForegroundPixels;
+                                nurbsTextureMinimum.setX(std::min(
+                                    nurbsTextureMinimum.x(), color.x()));
+                                nurbsTextureMinimum.setY(std::min(
+                                    nurbsTextureMinimum.y(), color.y()));
+                                nurbsTextureMinimum.setZ(std::min(
+                                    nurbsTextureMinimum.z(), color.z()));
+                                nurbsTextureMaximum.setX(std::max(
+                                    nurbsTextureMaximum.x(), color.x()));
+                                nurbsTextureMaximum.setY(std::max(
+                                    nurbsTextureMaximum.y(), color.y()));
+                                nurbsTextureMaximum.setZ(std::max(
+                                    nurbsTextureMaximum.z(), color.z()));
+                            }
+                        }
+                        passed &= check(
+                            nurbsTextureRendered &&
+                                nurbsTextureForegroundPixels > 5000 &&
+                                (nurbsTextureMaximum -
+                                 nurbsTextureMinimum).length() > 0.25f,
+                            "GPU NURBS Image Texture capture must contain the full nonblank, varying-color patch");
+                        const QString nurbsTextureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture_nurbs.pfm"));
+                        const QString nurbsTextureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture_nurbs.png"));
+                        QFile nurbsTextureLinearFile(nurbsTextureLinearPath);
+                        const bool nurbsTextureLinearSaved =
+                            nurbsTextureRendered &&
+                            nurbsTextureSceneLinear.size() ==
+                                textureExpectedValues &&
+                            nurbsTextureLinearFile.open(QIODevice::WriteOnly) &&
+                            nurbsTextureLinearFile.write(texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            nurbsTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    nurbsTextureSceneLinear.constData()),
+                                nurbsTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                nurbsTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool nurbsTextureDisplaySaved =
+                            nurbsTextureRendered &&
+                            nurbsTextureDisplay.size() == QSize(640, 480) &&
+                            nurbsTextureDisplay.save(nurbsTextureDisplayPath);
+                        lightingCapturesSucceeded &=
+                            nurbsTextureRendered && nurbsTextureLinearSaved &&
+                            nurbsTextureDisplaySaved;
+
                         textureColorShading.lightingMode =
                             ViewportLightingMode::Studio;
                         QImage studioTextureDisplay;

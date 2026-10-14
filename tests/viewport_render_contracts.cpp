@@ -5896,6 +5896,12 @@ int main(int argc, char *argv[])
                         const bool directoryReady = QDir().mkpath(
                             qpainterAaCaptureDirectory);
                         bool capturesSucceeded = directoryReady;
+                        ViewportShadingSettings aaCaptureShading =
+                            rawFaceShading;
+                        aaCaptureShading.outline = false;
+                        aaCaptureShading.shadows = false;
+                        aaCaptureShading.depthOfField = false;
+                        aaCaptureShading.cavity = false;
                         struct QPainterAaCaptureCase {
                             const char *name;
                             int mode;
@@ -5918,7 +5924,7 @@ int main(int argc, char *argv[])
                             ViewportRenderer qpainterAaRenderer(
                                 gpuTransform, qpainterAaHitTester);
                             qpainterAaRenderer.setShadingSettings(
-                                rawFaceShading);
+                                aaCaptureShading);
                             const QVector<ViewportRenderObject> aaObjects{
                                 polygonCubeObject};
                             const QVector3D backgroundSceneLinear =
@@ -5930,7 +5936,7 @@ int main(int argc, char *argv[])
                                 compositeRasterWorkbenchSurfaces(
                                     &supersampled, aaObjects, gpuTransform,
                                     glSize, scale, captureCase.mode != 0,
-                                    true, rawFaceShading,
+                                    true, aaCaptureShading,
                                     backgroundSceneLinear,
                                     [&qpainterAaRenderer, &polygonCubeObject,
                                      &glSize](
@@ -5974,7 +5980,7 @@ int main(int argc, char *argv[])
                             } else {
                                 applyRasterWorkbenchEffects(
                                     &supersampled, aaObjects, gpuTransform,
-                                    glSize, scale, rawFaceShading,
+                                    glSize, scale, aaCaptureShading,
                                     &surfaceLayers);
                             }
 

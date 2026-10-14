@@ -1578,17 +1578,21 @@ background render and PFM conversion completed.
 **QPainter MatCap horizontal flip (2026-10-14):** The CPU MatCap UV helper already accepts the Workbench horizontal-reflection control, and both the mesh-fragment and NURBS-surface shading call sites pass the viewport's persisted `matcapFlipX` setting. Headless production-path contracts render tilted NURBS and polygon-mesh fixtures with the asymmetric `metal_bronze` preset and verify that enabling Flip X changes each output. Blender 5.2.2 negates the computed MatCap UV X coordinate when flipped in [`workbench_matcap.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh#L11-L22). These contracts verify setting flow through both QPainter geometry paths, not matched Blender output; other presets, camera orientations, and full-frame parity remain open.
 
 **QPainter MatCap rendered probes (2026-10-14):** The offscreen lighting
-capture now also renders the polygon cube through the production QPainter
-`ViewportRenderer` and writes a bottom-up scene-linear PFM alongside the
-display PNG. Against matched Blender 5.2.2 captures, `metal_bronze` with
-specular enabled has 27-probe scene-linear MAE `0.0003603` (max `0.0012085`)
-and display MAE `0.3333/255` (max `1/255`). `check_normal+y` with specular
-disabled has scene-linear MAE `0.0004826` (max `0.0012679`) and display MAE
-`0.1111/255` (max `1/255`). Full-frame PFM masks still differ at the software
-edge coverage: IoU is `0.9360` for bronze and `0.9944` for check_normal+y;
-the QPainter 4×4 coverage estimate differs from Blender's AA-Off pixel
-coverage. This verifies the selected preset shading at face interiors, not
-full-frame or other-preset parity. Reproduce the classiCAD captures with
+capture renders the polygon cube through the production QPainter
+`ViewportRenderer` and writes a scene-linear PFM alongside the display PNG.
+The PFM is reconstructed from the fragment sink, which intentionally omits
+pixels in the fractional-edge coverage band; its foreground mask is not a
+valid full-frame display-coverage comparison. Against matched Blender 5.2.2
+captures, `metal_bronze` with specular enabled has 27-probe scene-linear MAE
+`0.0003603` (max `0.0012085`) and display MAE `0.3333/255` (max `1/255`).
+`check_normal+y` with specular disabled has scene-linear MAE `0.0004826` (max
+`0.0012679`) and display MAE `0.1111/255` (max `1/255`). A fresh matched
+`metal_bronze` comparison of the visible QPainter PNG gives foreground-mask
+IoU `0.994440` (622 XOR pixels) against Blender AA Off; the matched GPU output
+has IoU `0.997991` (224 XOR pixels). The image comparison isolates residual
+silhouette/edge coverage; the face-interior probes continue to show close
+MatCap shading. Other presets, cameras, and full-frame RGB parity remain open.
+Reproduce the classiCAD captures with
 `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=/tmp/classicad-workbench-lighting
 QT_QPA_PLATFORM=offscreen ctest --test-dir build -R
 '^viewport_render_contracts$' --output-on-failure`; the PFM uses bottom-up

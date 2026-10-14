@@ -6734,24 +6734,72 @@ int main(int argc, char *argv[])
                                     QImage::Format_ARGB32_Premultiplied);
                                 qpainterDisplay.fill(QColor(34, 34, 34));
                                 RasterWorkbenchFragmentSink qpainterFragments;
-                                QPainter qpainter(&qpainterDisplay);
-                                qpainterMatcapRenderer.drawShape(
-                                    qpainter, polygonCubeObject.shape, glSize,
-                                    false, false, true, QColor(), QString(),
-                                    0.0, polygonCubeObject.objectId,
-                                    polygonCubeObject.geometryRevision,
-                                    polygonCubeObject.preparedDepthGeometry.data(),
-                                    {}, polygonCubeObject.displayColorSceneLinear,
-                                    std::nullopt,
-                                    polygonCubeObject.displayName, QString(),
-                                    identityMeshObjectTransform,
-                                    polygonCubeObject.meshMaterials,
-                                    &qpainterFragments);
-                                qpainter.end();
-                                QVector<float> qpainterSceneLinear(
-                                    expectedValues);
                                 constexpr float qpainterBackgroundSceneLinear =
                                     0.0219421387f;
+                                const QVector3D qpainterBackgroundLinear(
+                                    qpainterBackgroundSceneLinear,
+                                    qpainterBackgroundSceneLinear,
+                                    qpainterBackgroundSceneLinear);
+                                const QVector<ViewportRenderObject>
+                                    qpainterMatcapObjects{
+                                        polygonCubeObject};
+                                const bool qpainterMatcapComposed =
+                                    compositeRasterWorkbenchSurfaces(
+                                        &qpainterDisplay,
+                                        qpainterMatcapObjects, gpuTransform,
+                                        glSize, 1.0, false, true,
+                                        lightingShading,
+                                        qpainterBackgroundLinear,
+                                        [&qpainterMatcapRenderer,
+                                         &qpainterFragments, &glSize](
+                                            QPainter &surfacePainter,
+                                            const ViewportRenderObject &object,
+                                            RasterWorkbenchFragmentSink *sink) {
+                                            qpainterMatcapRenderer.drawShape(
+                                                surfacePainter, object.shape,
+                                                glSize, false, object.selected,
+                                                true, QColor(), QString(), 0.0,
+                                                object.objectId,
+                                                object.geometryRevision,
+                                                object.preparedDepthGeometry.data(),
+                                                {}, object.displayColorSceneLinear,
+                                                object.workbenchMaterial,
+                                                object.displayName,
+                                                object.libraryPath,
+                                                identityMeshObjectTransform,
+                                                object.meshMaterials, sink);
+                                            if (sink != nullptr) {
+                                                qpainterFragments = *sink;
+                                            }
+                                        });
+                                if (qpainterMatcapComposed) {
+                                    applyRasterWorkbenchEffects(
+                                        &qpainterDisplay,
+                                        qpainterMatcapObjects, gpuTransform,
+                                        glSize, 1.0, lightingShading);
+                                } else {
+                                    // The widget uses this same direct draw
+                                    // path when its bounded surface compositor
+                                    // declines the scene.
+                                    QPainter qpainter(&qpainterDisplay);
+                                    qpainterMatcapRenderer.drawShape(
+                                        qpainter, polygonCubeObject.shape,
+                                        glSize, false, false, true, QColor(),
+                                        QString(), 0.0,
+                                        polygonCubeObject.objectId,
+                                        polygonCubeObject.geometryRevision,
+                                        polygonCubeObject.preparedDepthGeometry.data(),
+                                        {},
+                                        polygonCubeObject.displayColorSceneLinear,
+                                        std::nullopt,
+                                        polygonCubeObject.displayName, QString(),
+                                        identityMeshObjectTransform,
+                                        polygonCubeObject.meshMaterials,
+                                        &qpainterFragments);
+                                    qpainter.end();
+                                }
+                                QVector<float> qpainterSceneLinear(
+                                    expectedValues);
                                 for (qsizetype pixel = 0;
                                      pixel + 2 < qpainterSceneLinear.size();
                                      pixel += 3) {

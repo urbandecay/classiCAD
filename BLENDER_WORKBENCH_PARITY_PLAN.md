@@ -876,15 +876,20 @@ in ordinary free views or orthographic views is superseded by this correction.
   perspective eye depth or Blender's orthographic near-plane depth offset. The
   native-renderer failure fallback remains on its old path because it runs
   after the GPU scene has been display transformed.
-- **Remaining blocker:** the QPainter Workbench path now retains scene-linear
-  shaded fragments for transparent OIT, but opaque fills and the scene
-  background still use display-referred `QImage` layers. It transforms the
-  weighted transparent surface color before blending it over those layers, so
-  this does not yet match Blender's one transform after full scene
-  composition. QPainter cavity/outline also remain byte-oriented. Merely
-  changing the intermediate `QImage` format to RGBA64 or RGBA32F is
-  insufficient: the existing QColor path does not preserve HDR values or
-  guarantee scene-linear blending.
+- **Historical blocker, resolved for the bounded surface compositor
+  (2026-10-14):** the ordinary QPainter path no longer blends transformed OIT
+  color over display-referred opaque fills/background. The widget supplies
+  scene-linear World/Custom colors or per-pixel Theme samples to
+  `compositeRasterWorkbenchSurfaces`; that resolver retains opaque fragments
+  and visibility in float scene-linear pixels, resolves transparent OIT over
+  them, and applies the display transform to the completed pixel once. The
+  native-renderer failure fallback uses the same bounded compositor when its
+  geometry and memory budgets permit. Its per-object `QImage` is used for
+  raster coverage, while color comes from the scene-linear fragment sink.
+  This closes the blocker for the bounded paths, not the fallback cases below.
+  QPainter cavity/outline and exceptional legacy fallbacks still have
+  separate limitations; merely changing an intermediate `QImage` format
+  would not preserve HDR or guarantee scene-linear blending.
 - **Next implementation contract:** route opaque mesh and NURBS colors plus
   the scene-linear background into the same per-pixel float target as the
   transparent fragments. Preserve nearest-depth visibility, HDR values, and

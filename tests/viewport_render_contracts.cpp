@@ -3398,6 +3398,24 @@ int main(int argc, char *argv[])
                         (tiltedNurbsNormal.meanColor -
                          tiltedNurbsFlipped.meanColor).length() > 0.01,
                     "QPainter MatCap Flip X must mirror asymmetric MatCap shading for NURBS surfaces");
+    Shape tiltedMeshShape;
+    tiltedMeshShape.geometryType = GeometryType::PolygonMesh;
+    tiltedMeshShape.polygonMesh.vertices = {
+        {-1.0, -1.0, -0.7}, {1.0, -1.0, 0.7},
+        {1.0, 1.0, 0.7}, {-1.0, 1.0, -0.7}};
+    tiltedMeshShape.polygonMesh.faces = {{0, 1, 2, 3}};
+    tiltedMeshShape.polygonMesh.faceMaterialIndices = {0};
+    matcapFlipSettings.matcapFlipX = false;
+    const RenderedSurface tiltedMeshNormal = renderedSurface(
+        tiltedMeshShape, matcapFlipSettings);
+    matcapFlipSettings.matcapFlipX = true;
+    const RenderedSurface tiltedMeshFlipped = renderedSurface(
+        tiltedMeshShape, matcapFlipSettings);
+    passed &= check(tiltedMeshNormal.coveredPixels > 0 &&
+                        tiltedMeshFlipped.coveredPixels > 0 &&
+                        (tiltedMeshNormal.meanColor -
+                         tiltedMeshFlipped.meanColor).length() > 0.01,
+                    "QPainter MatCap Flip X must change asymmetric MatCap shading for polygon meshes");
 
     // Color-mode source contracts for the software renderer. The attribute
     // triangle has three deliberately distinct corner colors; the texture

@@ -8716,9 +8716,22 @@ int main(int argc, char *argv[])
                                 ++floatTile1011Samples;
                             }
                         }
+                        const QString floatVerticalCaptureStem =
+                            QStringLiteral(
+                                "color_texture_mesh_udim_vertical_float");
+                        const bool floatVerticalCaptured =
+                            captureGpuColorSource(
+                                floatVerticalCaptureStem,
+                                floatVerticalUdimObject,
+                                textureColorShading) &&
+                            captureQPainterColorSource(
+                                floatVerticalCaptureStem,
+                                floatVerticalUdimObject,
+                                textureColorShading);
                         passed &= check(
                             floatTile1001Samples > 1000 &&
-                                floatTile1011Samples > 1000,
+                                floatTile1011Samples > 1000 &&
+                                floatVerticalCaptured,
                             "QPainter float UDIM color sampling must select both lower and upper V tiles");
 
                         ViewportTransform perspectiveTextureTransform;

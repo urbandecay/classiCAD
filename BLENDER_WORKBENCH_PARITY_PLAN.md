@@ -5211,8 +5211,31 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   alpha checks.
 - Validation: the capture-enabled offscreen CTest `viewport_render_contracts`
   passed (1/1, 38.80 seconds), including this float-row assertion. This is a
-  renderer contract, not a matched Blender float-UDIM render comparison; an
-  equivalent float-image Blender fixture remains open.
+  renderer contract. A matched Blender float-UDIM render comparison is
+  recorded below.
+
+### Matched scene-linear float UDIM comparison (2026-10-14)
+
+- Added an opt-in Blender 5.2.2 reference that writes two 32-bit scene-linear
+  EXR tiles (1001 and 1011), loads them as one tiled Image Texture, and renders
+  the same planar two-triangle mesh with V UVs spanning `[0.05, 1.95]`. The
+  classiCAD capture uses the same one-pixel-per-tile RGBA32F payloads in both
+  GPU and QPainter Texture paths. Blender's pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60)
+  samples the selected UDIM layer with its normal image sampling path.
+- The 640×480 scene-linear GPU comparison has foreground-mask IoU `0.999937`
+  (2 XOR pixels) and per-channel MAE `(blue, green, red)` of
+  `(0.00000126, 0.0000305, 0.0000302)`. QPainter has mask IoU `1.0` (0 XOR)
+  and channel MAE `(0.00000036, 0.0000125, 0.0000125)`. Both display PNGs have
+  zero channel error in the reference interior; the remaining errors are
+  concentrated at raster edges. This validates the two vertical tiles for
+  one mesh, camera, and Linear filter, not the full float image/alpha matrix.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  38.91 seconds); Blender reported 5.2.2 LTS; and
+  `workbench_pfm_compare.py` / `workbench_image_compare.py` completed for GPU
+  and QPainter output. The reference writes each tile's source pixels as
+  Non-Color before saving, preserving the intended linear EXR values.
 
 ### Workbench Image Texture extension-mode comparison (2026-10-14)
 

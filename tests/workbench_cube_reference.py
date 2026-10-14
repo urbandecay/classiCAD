@@ -191,6 +191,16 @@ def arguments():
         help="load a 1001/1011 UDIM set and span both V tiles in a texture fixture",
     )
     parser.add_argument(
+        "--texture-float-udim-vertical",
+        action="store_true",
+        help="use scene-linear float EXR tiles 1001 and 1011 in MESH_TEXTURE",
+    )
+    parser.add_argument(
+        "--texture-udim-vertical-interior",
+        action="store_true",
+        help="map vertical UDIM fixture UVs to [0.05, 1.95]",
+    )
+    parser.add_argument(
         "--texture-udim-parameter-uvs",
         action="store_true",
         help=(
@@ -314,6 +324,12 @@ def arguments():
         parser.error("choose only one UDIM mode")
     if args.texture_udim_parameter_uvs and args.scene != "NURBS_TEXTURE":
         parser.error("--texture-udim-parameter-uvs requires NURBS_TEXTURE")
+    if args.texture_float_udim_vertical and args.scene != "MESH_TEXTURE":
+        parser.error("--texture-float-udim-vertical requires MESH_TEXTURE")
+    if args.texture_float_udim_vertical and not args.texture_udim_vertical:
+        parser.error("--texture-float-udim-vertical requires --texture-udim-vertical")
+    if args.texture_udim_vertical_interior and not args.texture_udim_vertical:
+        parser.error("--texture-udim-vertical-interior requires --texture-udim-vertical")
     return args
 
 
@@ -352,6 +368,40 @@ def make_linear_output(scene, output_path):
     scene.compositing_node_group = composite
     scene.render.use_compositing = True
     return file_output
+
+
+def make_float_udim_vertical_image(output_path):
+    """Create a two-tile, scene-linear 32-bit EXR Image Texture for tests."""
+    directory = os.path.dirname(os.path.abspath(output_path))
+    stem = os.path.splitext(os.path.basename(output_path))[0]
+    template = os.path.join(directory, stem + ".<UDIM>.exr")
+    for tile_number, color in (
+        (1001, (0.7, 0.02, 0.01, 1.0)),
+        (1011, (0.01, 0.7, 0.02, 1.0)),
+    ):
+        tile_image = bpy.data.images.new(
+            "WorkbenchFloatUDIM" + str(tile_number),
+            width=1,
+            height=1,
+            alpha=True,
+            float_buffer=True,
+        )
+        tile_image.colorspace_settings.name = "Non-Color"
+        tile_image.pixels.foreach_set(color)
+        tile_image.file_format = "OPEN_EXR"
+        tile_image.filepath_raw = template.replace(
+            "<UDIM>", str(tile_number)
+        )
+        tile_image.save()
+        bpy.data.images.remove(tile_image)
+    image = bpy.data.images.load(
+        template.replace("<UDIM>", "1001"), check_existing=False
+    )
+    image.source = "TILED"
+    image.filepath = template
+    image.reload()
+    image.colorspace_settings.name = "Non-Color"
+    return image
 
 
 def main():
@@ -636,7 +686,11 @@ def main():
         if args.texture_udim or args.texture_udim_vertical:
             for loop in uv_layer.data:
                 if args.texture_udim_vertical:
-                    loop.uv.y *= 2.0
+                    loop.uv.y = (
+                        0.05 + loop.uv.y * 1.90
+                        if args.texture_udim_vertical_interior
+                        else loop.uv.y * 2.0
+                    )
                 else:
                     loop.uv.x *= 2.0
         material = bpy.data.materials.new("NurbsTextureMaterial")
@@ -662,7 +716,9 @@ def main():
         material.node_tree.nodes.active = image_node
         mesh.materials.append(material)
     elif args.scene == "MESH_TEXTURE":
-        if args.color_source != "TEXTURE" or not args.texture_image:
+        if args.color_source != "TEXTURE" or (
+            not args.texture_image and not args.texture_float_udim_vertical
+        ):
             raise ValueError("MESH_TEXTURE requires TEXTURE color source and --texture-image")
         # Match classiCAD's explicit two-triangle planar mesh fixture so the
         # full-frame comparison uses the same diagonal and per-corner UVs.
@@ -685,17 +741,26 @@ def main():
         if args.texture_udim or args.texture_udim_vertical:
             for loop in uv_layer.data:
                 if args.texture_udim_vertical:
-                    loop.uv.y *= 2.0
+                    loop.uv.y = (
+                        0.05 + loop.uv.y * 1.90
+                        if args.texture_udim_vertical_interior
+                        else loop.uv.y * 2.0
+                    )
                 else:
                     loop.uv.x *= 2.0
         material = bpy.data.materials.new("MeshTextureMaterial")
         material.diffuse_color = (0.8, 0.8, 0.8, args.material_alpha)
         material.use_nodes = True
         image_node = material.node_tree.nodes.new("ShaderNodeTexImage")
-        image_node.image = bpy.data.images.load(
-            os.path.abspath(args.texture_image), check_existing=True
+        image_node.image = (
+            make_float_udim_vertical_image(args.output)
+            if args.texture_float_udim_vertical
+            else bpy.data.images.load(
+                os.path.abspath(args.texture_image), check_existing=True
+            )
         )
-        if args.texture_udim or args.texture_udim_vertical:
+        if ((args.texture_udim or args.texture_udim_vertical) and
+                not args.texture_float_udim_vertical):
             image_node.image.source = "TILED"
             udim_tile = 1011 if args.texture_udim_vertical else 1002
             if image_node.image.tiles.get(udim_tile) is None:

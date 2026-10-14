@@ -4137,6 +4137,22 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     const qreal denominator=cw0+cw1+cw2;
                     if (denominator <= 1.0e-12) continue;
                     const QPointF uv = (triangle.uvs[0]*cw0 + triangle.uvs[1]*cw1 + triangle.uvs[2]*cw2) / denominator;
+                    QVector3D sampleNormal = triangle.normal;
+                    if (triangle.hasSmoothNormals) {
+                        sampleNormal =
+                            (triangle.vertexNormals[0] * static_cast<float>(cw0) +
+                             triangle.vertexNormals[1] * static_cast<float>(cw1) +
+                             triangle.vertexNormals[2] * static_cast<float>(cw2)) /
+                            static_cast<float>(denominator);
+                        const float normalLengthSquared =
+                            sampleNormal.lengthSquared();
+                        if (std::isfinite(normalLengthSquared) &&
+                            normalLengthSquared > 1.0e-12f) {
+                            sampleNormal.normalize();
+                        } else {
+                            sampleNormal = triangle.normal;
+                        }
+                    }
                     uchar rgba[4];
                     float linearRgb[3]{};
                     float floatRgba[4]{};
@@ -4206,7 +4222,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                              points[2].z * cw2) / denominator};
                     }
                     QVector3D texturedLinear;
-                    const QColor textured = shade(triangle.normal,
+                    const QColor textured = shade(sampleNormal,
                                                   shadingPosition,
                                                   textureColor,
                                                   frontFacing,
@@ -4226,7 +4242,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             fragmentSink, painter,
                             logicalFromCoverageDevice.map(QPointF(px, py)),
                             fragmentPosition,
-                            shadowReceiverNormal(triangle.normal, frontFacing,
+                            shadowReceiverNormal(sampleNormal, frontFacing,
                                                  textured.alphaF() * coverage),
                             cameraPosition, viewDirection,
                             texturedLinear, alpha * coverage, objectId, transform_);

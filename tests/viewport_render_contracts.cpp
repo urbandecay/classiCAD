@@ -3588,7 +3588,9 @@ int main(int argc, char *argv[])
                                      const ViewportShadingSettings &settings,
                                      bool selected = false,
                                      const ViewportDepthGeometry *preparedGeometry =
-                                         nullptr) {
+                                         nullptr,
+                                     std::optional<WorkbenchMaterialData> material =
+                                         std::nullopt) {
         QImage image(surfaceViewportSize,
                      QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
@@ -3596,7 +3598,8 @@ int main(int argc, char *argv[])
         QPainter painter(&image);
         surfaceRenderer.drawShape(painter, shape, surfaceViewportSize,
                                  false, selected, true, QColor(), QString(),
-                                 0.0, ObjectId::invalid(), 0, preparedGeometry);
+                                 0.0, ObjectId::invalid(), 0, preparedGeometry,
+                                 Point3D{}, std::nullopt, material);
         painter.end();
         int coveredPixels = 0;
         QVector3D summedColor;
@@ -3810,6 +3813,43 @@ int main(int argc, char *argv[])
             (smoothNurbsLeftRgb - smoothNurbsRightRgb).length() > 0.02f &&
             (flatNurbsLeftRgb - flatNurbsRightRgb).length() < 0.01f,
         "QPainter prepared untextured NURBS triangles must interpolate smooth corner normals per sample");
+
+    WorkbenchMaterialData smoothNurbsTextureMaterial;
+    smoothNurbsTextureMaterial.textureImageSceneLinearFloatWidth = 1;
+    smoothNurbsTextureMaterial.textureImageSceneLinearFloatHeight = 1;
+    const std::array<float, 4> smoothNurbsTexturePixel{0.72f, 0.72f, 0.72f,
+                                                       1.0f};
+    smoothNurbsTextureMaterial.textureImageSceneLinearFloatDataBase64 =
+        QString::fromLatin1(QByteArray(
+            reinterpret_cast<const char *>(smoothNurbsTexturePixel.data()),
+            qsizetype(sizeof(smoothNurbsTexturePixel))).toBase64());
+    smoothNurbsTextureMaterial.textureImageInterpolation =
+        QStringLiteral("Closest");
+    ViewportShadingSettings texturedSmoothNurbsSettings = smoothNurbsSettings;
+    texturedSmoothNurbsSettings.colorMode = ViewportColorMode::Texture;
+    const RenderedSurface texturedSmoothNurbsRender = renderedSurface(
+        surfaceShape, texturedSmoothNurbsSettings, false, &smoothNurbsGeometry,
+        smoothNurbsTextureMaterial);
+    const RenderedSurface texturedFlatNurbsRender = renderedSurface(
+        surfaceShape, texturedSmoothNurbsSettings, false, &flatNurbsGeometry,
+        smoothNurbsTextureMaterial);
+    passed &= check(
+        texturedSmoothNurbsRender.coveredPixels > 0 &&
+            (QVector3D(texturedSmoothNurbsRender.leftSample.redF(),
+                       texturedSmoothNurbsRender.leftSample.greenF(),
+                       texturedSmoothNurbsRender.leftSample.blueF()) -
+             QVector3D(texturedSmoothNurbsRender.rightSample.redF(),
+                       texturedSmoothNurbsRender.rightSample.greenF(),
+                       texturedSmoothNurbsRender.rightSample.blueF())).length() >
+                0.02f &&
+            (QVector3D(texturedFlatNurbsRender.leftSample.redF(),
+                       texturedFlatNurbsRender.leftSample.greenF(),
+                       texturedFlatNurbsRender.leftSample.blueF()) -
+             QVector3D(texturedFlatNurbsRender.rightSample.redF(),
+                       texturedFlatNurbsRender.rightSample.greenF(),
+                       texturedFlatNurbsRender.rightSample.blueF())).length() <
+                0.01f,
+        "QPainter textured prepared NURBS triangles must apply interpolated smooth corner normals in Studio shading");
 
     // Color-mode source contracts for the software renderer. The attribute
     // triangle has three deliberately distinct corner colors; the texture

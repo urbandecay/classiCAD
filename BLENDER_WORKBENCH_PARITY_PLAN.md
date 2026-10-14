@@ -1706,6 +1706,26 @@ texture extension/alpha modes, or perspective sampling. Capture files are
 --color-source TEXTURE --texture-interpolation Linear` and the same pattern
 image.
 
+**QPainter per-face mesh texture-slot comparison (2026-10-14):** The matched
+mesh capture now assigns different sRGB 2×2 images to the two explicit
+triangles through material slots 0 and 1, with identical per-corner UVs,
+Linear filtering, Flat lighting, AgX, and orthographic framing. The Blender
+5.2.2 fixture assigns the same images and material index to the same face.
+The foreground mask remains at IoU `0.987882` (390 XOR pixels). On 25,833
+shared foreground pixels after excluding a two-pixel silhouette border and a
+six-pixel band around the internal diagonal, display RGB MAE is `0.209` with
+maximum 3; scene-linear channel MAE is `0.00139`, p95 `0.00336`, and maximum
+`0.00738`. The large differences before excluding the diagonal came from the
+two renderers' different ownership of that shared edge. This verifies texture
+selection for two opaque regular-image slots on this planar mesh; it does not
+cover slot reassignment after topology edits, mixed alpha modes, or perspective.
+Blender 5.2.2 resolves each material slot's active image through
+[`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L542)
+and selects the texture pass for mesh draws in
+[`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1051-L1103).
+The secondary image is passed with `--texture-image-secondary` to
+`workbench_cube_reference.py --scene MESH_TEXTURE`.
+
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
 Blender node interpolation labels Linear, Cubic, and Smart. A production mesh

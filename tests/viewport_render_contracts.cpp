@@ -6653,6 +6653,23 @@ int main(int argc, char *argv[])
                                                        QColor(240, 208, 24));
                         const bool patternedTextureSaved =
                             patternedTexture.save(patternedTexturePath);
+                        const QString patternedTextureSecondaryPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-texture-pattern-secondary.png"));
+                        QImage patternedTextureSecondary(
+                            2, 2, QImage::Format_RGBA8888);
+                        patternedTextureSecondary.setPixelColor(
+                            0, 0, QColor(16, 224, 232));
+                        patternedTextureSecondary.setPixelColor(
+                            1, 0, QColor(232, 24, 200));
+                        patternedTextureSecondary.setPixelColor(
+                            0, 1, QColor(216, 208, 32));
+                        patternedTextureSecondary.setPixelColor(
+                            1, 1, QColor(32, 48, 216));
+                        const bool patternedTextureSecondarySaved =
+                            patternedTextureSecondary.save(
+                                patternedTextureSecondaryPath);
                         if (!patternedTextureObject.meshMaterials.isEmpty()) {
                             WorkbenchMaterialData &patternedMaterial =
                                 patternedTextureObject.meshMaterials[0];
@@ -6931,7 +6948,10 @@ int main(int argc, char *argv[])
                             {-1.0, -1.0, 0.0}, {1.0, -1.0, 0.0},
                             {1.0, 1.0, 0.0}, {-1.0, 1.0, 0.0}};
                         qpainterMeshTextureMesh.faces = {{0, 1, 2}, {0, 2, 3}};
-                        qpainterMeshTextureMesh.faceMaterialIndices = {0, 0};
+                        qpainterMeshTextureMesh.faceMaterialIndices = {0, 1};
+                        qpainterMeshTextureMesh.materialSlotIds = {
+                            QStringLiteral("TextureSlotA"),
+                            QStringLiteral("TextureSlotB")};
                         qpainterMeshTextureMesh.uvMaps = {
                             {QStringLiteral("UVMap"),
                              {QPointF(0.0, 0.0), QPointF(1.0, 0.0),
@@ -6954,9 +6974,24 @@ int main(int argc, char *argv[])
                                 QStringLiteral("Linear");
                         qpainterMeshTextureMaterial.textureImageExtension =
                             QStringLiteral("REPEAT");
+                        WorkbenchMaterialData qpainterMeshTextureSecondaryMaterial;
+                        qpainterMeshTextureSecondaryMaterial.baseColorSceneLinear =
+                            QVector3D(0.8f, 0.8f, 0.8f);
+                        qpainterMeshTextureSecondaryMaterial.textureImagePath =
+                            patternedTextureSecondaryPath;
+                        qpainterMeshTextureSecondaryMaterial.textureImageSrgb =
+                            true;
+                        qpainterMeshTextureSecondaryMaterial
+                            .textureImageAlphaMode = QStringLiteral("STRAIGHT");
+                        qpainterMeshTextureSecondaryMaterial
+                            .textureImageInterpolation =
+                                QStringLiteral("Linear");
+                        qpainterMeshTextureSecondaryMaterial
+                            .textureImageExtension = QStringLiteral("REPEAT");
                         const QVector<WorkbenchMaterialData>
                             qpainterMeshTextureMaterials{
-                                qpainterMeshTextureMaterial};
+                                qpainterMeshTextureMaterial,
+                                qpainterMeshTextureSecondaryMaterial};
                         qpainterMeshTextureObject.meshMaterials =
                             qpainterMeshTextureMaterials;
                         qpainterMeshTextureObject.objectId =
@@ -7037,6 +7072,7 @@ int main(int argc, char *argv[])
                                 qsizetype(sizeof(float));
                         const bool qpainterMeshTextureSaved =
                             patternedTextureSaved &&
+                            patternedTextureSecondarySaved &&
                             validatePolygonMesh(qpainterMeshTextureMesh) &&
                             qpainterMeshTextureLinearSaved &&
                             qpainterMeshTextureDisplay.save(

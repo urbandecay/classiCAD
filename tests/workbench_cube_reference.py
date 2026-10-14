@@ -110,6 +110,10 @@ def arguments():
         help="external image used by the active Image Texture node for TEXTURE color source",
     )
     parser.add_argument(
+        "--texture-image-secondary",
+        help="optional second image used by material slot 1 in MESH_TEXTURE",
+    )
+    parser.add_argument(
         "--texture-color-space",
         help="set the loaded Image Texture image color space before Workbench sampling",
     )
@@ -394,6 +398,30 @@ def main():
         image_node.show_texture = True
         material.node_tree.nodes.active = image_node
         mesh.materials.append(material)
+        if args.texture_image_secondary:
+            secondary_material = bpy.data.materials.new(
+                "MeshTextureSecondaryMaterial"
+            )
+            secondary_material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
+            secondary_material.use_nodes = True
+            secondary_node = secondary_material.node_tree.nodes.new(
+                "ShaderNodeTexImage"
+            )
+            secondary_node.image = bpy.data.images.load(
+                os.path.abspath(args.texture_image_secondary),
+                check_existing=True,
+            )
+            if args.texture_color_space:
+                secondary_node.image.colorspace_settings.name = (
+                    args.texture_color_space
+                )
+            if args.texture_alpha_mode:
+                secondary_node.image.alpha_mode = args.texture_alpha_mode
+            secondary_node.interpolation = args.texture_interpolation
+            secondary_node.show_texture = True
+            secondary_material.node_tree.nodes.active = secondary_node
+            mesh.materials.append(secondary_material)
+            mesh.polygons[1].material_index = 1
     elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):
         # Two camera-facing quads provide stable, known overlap regions without
         # perspective or surface-lighting changes between captures.

@@ -7138,6 +7138,41 @@ int main(int argc, char *argv[])
                                         bottomUp.size() *
                                             qsizetype(sizeof(float));
                             };
+                        const auto captureGpuColorSource =
+                            [&](const QString &stem,
+                                const ViewportRenderObject &object,
+                                const ViewportShadingSettings &shading) {
+                                QImage display;
+                                QVector<float> sceneLinear;
+                                const bool rendered = renderCoordinatedScene(
+                                    shading,
+                                    QByteArrayLiteral("color-source-gpu-") +
+                                        stem.toUtf8(),
+                                    &display, &object, nullptr, nullptr,
+                                    QString{}, &sceneLinear);
+                                constexpr qsizetype values = 640 * 480 * 3;
+                                const QString pngPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".png"));
+                                QFile pfmFile(QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".pfm")));
+                                const QByteArray header =
+                                    QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                                return rendered &&
+                                    display.size() == QSize(640, 480) &&
+                                    sceneLinear.size() == values &&
+                                    display.save(pngPath) &&
+                                    pfmFile.open(QIODevice::WriteOnly) &&
+                                    pfmFile.write(header) == header.size() &&
+                                    pfmFile.write(
+                                        reinterpret_cast<const char *>(
+                                            sceneLinear.constData()),
+                                        sceneLinear.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        sceneLinear.size() *
+                                            qsizetype(sizeof(float));
+                            };
                         struct LightingCaptureCase {
                             const char *name;
                             ViewportLightingMode mode;
@@ -7480,8 +7515,29 @@ int main(int argc, char *argv[])
                                     ViewportColorMode::Material ||
                                 captureQPainterColorSource(
                                     stem, colorSourceObject, colorShading);
+                            bool studioColorSourceCaptured = true;
+                            if (captureCase.colorMode !=
+                                ViewportColorMode::Material) {
+                                ViewportShadingSettings studioColorShading =
+                                    colorShading;
+                                studioColorShading.lightingMode =
+                                    ViewportLightingMode::Studio;
+                                studioColorShading.studioLightPreset =
+                                    QStringLiteral("Default");
+                                studioColorShading.specularLighting = true;
+                                const QString studioStem = stem +
+                                    QStringLiteral("_studio");
+                                studioColorSourceCaptured =
+                                    captureGpuColorSource(
+                                        studioStem, colorSourceObject,
+                                        studioColorShading) &&
+                                    captureQPainterColorSource(
+                                        studioStem, colorSourceObject,
+                                        studioColorShading);
+                            }
                             lightingCapturesSucceeded &= linearSaved &&
-                                displaySaved && qpainterColorSourceCaptured;
+                                displaySaved && qpainterColorSourceCaptured &&
+                                studioColorSourceCaptured;
                         }
 
                         ViewportRenderObject textureSourceObject =
@@ -7569,6 +7625,22 @@ int main(int argc, char *argv[])
                             captureQPainterColorSource(
                                 QStringLiteral("color_texture"),
                                 textureSourceObject, textureColorShading);
+                        ViewportShadingSettings studioTextureShading =
+                            textureColorShading;
+                        studioTextureShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        studioTextureShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        studioTextureShading.specularLighting = true;
+                        const QString studioTextureStem =
+                            QStringLiteral("color_texture_studio");
+                        lightingCapturesSucceeded &=
+                            captureGpuColorSource(
+                                studioTextureStem, textureSourceObject,
+                                studioTextureShading) &&
+                            captureQPainterColorSource(
+                                studioTextureStem, textureSourceObject,
+                                studioTextureShading);
 
                         ViewportRenderObject patternedTextureObject =
                             textureSourceObject;
@@ -7669,6 +7741,17 @@ int main(int argc, char *argv[])
                             patternedTextureSaved &&
                             patternedTextureLinearSaved &&
                             patternedTextureDisplaySaved;
+                        const QString studioPatternedTextureStem =
+                            QStringLiteral("color_texture_uv_studio");
+                        lightingCapturesSucceeded &=
+                            captureGpuColorSource(
+                                studioPatternedTextureStem,
+                                patternedTextureObject,
+                                studioTextureShading) &&
+                            captureQPainterColorSource(
+                                studioPatternedTextureStem,
+                                patternedTextureObject,
+                                studioTextureShading);
 
                         // Exercise Image Texture filtering through the
                         // production GPU path for a planar NURBS patch. Its

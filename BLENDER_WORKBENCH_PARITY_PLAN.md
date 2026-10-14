@@ -5110,3 +5110,35 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   specular-off PNG/PFM pairs. The classiCAD captures came from offscreen
   `viewport_render_contracts` runs; the specular-off run passed (1/1). This
   comparison-only update made no C++ changes and required no rebuild.
+
+### Matched Studio color-source captures (2026-10-14)
+
+- Extended the offscreen lighting capture contract to compare Studio Default,
+  specular-on output for Object, Random, Custom, Corner color attribute, Point
+  color attribute, constant Image Texture, and patterned UV Image Texture
+  sources. GPU and QPainter captures are paired with Blender 5.2.2 at
+  640×480, orthographic framing, AA Off, and the same neutral background. The
+  color-source selection and per-face Workbench material setup are implemented
+  in pinned [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2020-L2055);
+  active color-attribute selection is in pinned
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L1415-L1442).
+- Across the six constant-color/constant-UV cases, both renderers have the
+  same display mask delta as the existing AA-Off fixture: 224 XOR pixels and
+  IoU `0.997991`. The patterned UV case measures 564 XOR / IoU `0.994371`
+  for GPU and 473 XOR / IoU `0.995278` for QPainter. The scene-linear PFM
+  foreground masks measure 493 XOR / IoU `0.993817` for GPU in the ordinary
+  cases (449 / `0.994076` for color attributes) and 226 / `0.997164` for
+  QPainter (171 / `0.997742` for color attributes).
+- Per-channel scene-linear mean absolute error stays below `0.000361` for GPU
+  and `0.000286` for QPainter across the seven cases. Common-foreground display
+  MAE stays below `0.35/255` for GPU and `0.30/255` for QPainter. The patterned
+  UV comparison has greater perimeter coverage error than the constant-color
+  cases; this sweep does not establish parity for additional texture
+  projections, filtering/extension/alpha combinations, geometry, views, or
+  lighting presets.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed (1/1) while writing GPU and
+  QPainter PNG/PFM captures; all 14 PNG/PFM pairs passed through
+  `workbench_image_compare.py` and `workbench_pfm_compare.py`. Blender
+  reported version 5.2.2 LTS. These captures preserve the existing material
+  adapter and geometry contracts.

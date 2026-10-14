@@ -3594,9 +3594,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         case ViewportColorMode::Material:
         case ViewportColorMode::Attribute:
         case ViewportColorMode::Texture:
-            // Texture mode starts from the Blender material color. The
-            // raster path below multiplies a supported image sample into it;
-            // missing images or UVs retain this Material fallback.
+            // Texture mode replaces material RGB with the supported image
+            // sample. If the image or UVs are unavailable, retain this
+            // material fallback.
             if (workbenchMaterial) {
                 sourceColorLinear = material.baseColorSceneLinear;
                 sourceAlpha = material.alpha;
@@ -4207,7 +4207,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         unassociatedRgb[channel] = linear;
                     }
                     for (int channel = 0; channel < 3; ++channel)
-                        textureColor[channel] = baseColorVector[channel] * unassociatedRgb[channel];
+                        textureColor[channel] = unassociatedRgb[channel];
                     Point3D shadingPosition = center;
                     if (transform_.isPerspectiveEnabled()) {
                         // Match the GPU fragment shader's view direction by

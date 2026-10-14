@@ -4352,6 +4352,27 @@ int main(int argc, char *argv[])
             nurbsTextureUpperRight.green() > nurbsTextureUpperRight.blue() + 35,
         "QPainter NURBS Texture mode must map asymmetric image texels to U/V quadrants across non-unit knot domains");
 
+    const QVector3D originalNurbsTextureBaseColor =
+        nurbsTextureMaterial.baseColorSceneLinear;
+    nurbsTextureMaterial.baseColorSceneLinear = QVector3D(0.02f, 0.9f, 0.02f);
+    const QImage tintedNurbsSurfaceTextureImage = renderTexturedNurbsSurface();
+    nurbsTextureMaterial.baseColorSceneLinear = originalNurbsTextureBaseColor;
+    const auto sameNurbsTextureSamples = [&](const QPointF &point) {
+        const QColor baseline = nurbsSurfaceTextureImage.pixelColor(
+            qRound(point.x()), qRound(point.y()));
+        const QColor tinted = tintedNurbsSurfaceTextureImage.pixelColor(
+            qRound(point.x()), qRound(point.y()));
+        return std::abs(baseline.red() - tinted.red()) <= 1 &&
+               std::abs(baseline.green() - tinted.green()) <= 1 &&
+               std::abs(baseline.blue() - tinted.blue()) <= 1;
+    };
+    passed &= check(
+        sameNurbsTextureSamples(nurbsTextureLowerLeftPoint) &&
+            sameNurbsTextureSamples(nurbsTextureLowerRightPoint) &&
+            sameNurbsTextureSamples(nurbsTextureUpperLeftPoint) &&
+            sameNurbsTextureSamples(nurbsTextureUpperRightPoint),
+        "QPainter NURBS Texture mode must replace material RGB with the image sample");
+
     // A translucent, constant texture over a planar NURBS quad exercises the
     // production prepared-surface edge resolve. Shared tessellation edges must
     // contribute one shadow/compositor fragment per pixel, not one per face.
@@ -6801,6 +6822,105 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &=
                             nurbsTextureRendered && nurbsTextureLinearSaved &&
                             nurbsTextureDisplaySaved;
+
+                        CurveHitTester qpainterTextureHitTester;
+                        ViewportRenderer qpainterTextureRenderer(
+                            gpuTransform, qpainterTextureHitTester);
+                        qpainterTextureRenderer.setShadingSettings(
+                            textureColorShading);
+                        QImage qpainterNurbsTextureDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        qpainterNurbsTextureDisplay.fill(
+                            nurbsTextureDisplay.pixelColor(0, 0));
+                        RasterWorkbenchFragmentSink
+                            qpainterNurbsTextureFragments;
+                        QPainter qpainterTexturePainter(
+                            &qpainterNurbsTextureDisplay);
+                        qpainterTextureRenderer.drawShape(
+                            qpainterTexturePainter,
+                            nurbsTextureObject.shape, glSize, false, false,
+                            true, QColor(), QString(), 0.0,
+                            nurbsTextureObject.objectId,
+                            nurbsTextureObject.geometryRevision,
+                            nurbsTextureObject.preparedDepthGeometry.data(),
+                            {}, std::nullopt,
+                            nurbsTextureObject.workbenchMaterial,
+                            nurbsTextureObject.displayName, QString(), {}, {},
+                            &qpainterNurbsTextureFragments);
+                        qpainterTexturePainter.end();
+                        int qpainterNurbsTextureForegroundPixels = 0;
+                        for (int y = 0; y < glSize.height(); ++y) {
+                            for (int x = 0; x < glSize.width(); ++x) {
+                                if (QColor::fromRgba(
+                                        qpainterNurbsTextureDisplay.pixel(x, y)) !=
+                                    nurbsTextureDisplay.pixelColor(0, 0)) {
+                                    ++qpainterNurbsTextureForegroundPixels;
+                                }
+                            }
+                        }
+                        const QString qpainterNurbsTextureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_qpainter.png"));
+                        QVector<float> qpainterNurbsTextureSceneLinear(
+                            textureExpectedValues);
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < qpainterNurbsTextureSceneLinear.size();
+                             pixel += 3) {
+                            qpainterNurbsTextureSceneLinear[pixel] =
+                                textureBackground.x();
+                            qpainterNurbsTextureSceneLinear[pixel + 1] =
+                                textureBackground.y();
+                            qpainterNurbsTextureSceneLinear[pixel + 2] =
+                                textureBackground.z();
+                        }
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             qpainterNurbsTextureFragments) {
+                            if (fragment.x < 0 || fragment.x >= glSize.width() ||
+                                fragment.y < 0 || fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype pixel =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            qpainterNurbsTextureSceneLinear[pixel] =
+                                fragment.sceneLinearRgb[0];
+                            qpainterNurbsTextureSceneLinear[pixel + 1] =
+                                fragment.sceneLinearRgb[1];
+                            qpainterNurbsTextureSceneLinear[pixel + 2] =
+                                fragment.sceneLinearRgb[2];
+                        }
+                        const QString qpainterNurbsTextureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_qpainter.pfm"));
+                        QFile qpainterNurbsTextureLinearFile(
+                            qpainterNurbsTextureLinearPath);
+                        const bool qpainterNurbsTextureLinearSaved =
+                            qpainterNurbsTextureFragments.size() > 5000 &&
+                            qpainterNurbsTextureLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            qpainterNurbsTextureLinearFile.write(
+                                texturePfmHeader) == texturePfmHeader.size() &&
+                            qpainterNurbsTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    qpainterNurbsTextureSceneLinear.constData()),
+                                qpainterNurbsTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                qpainterNurbsTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool qpainterNurbsTextureSaved =
+                            nurbsTextureRendered &&
+                            qpainterNurbsTextureForegroundPixels > 5000 &&
+                            qpainterNurbsTextureDisplay.size() == glSize &&
+                            qpainterNurbsTextureLinearSaved &&
+                            qpainterNurbsTextureDisplay.save(
+                                qpainterNurbsTextureDisplayPath);
+                        passed &= check(
+                            qpainterNurbsTextureSaved,
+                            "QPainter NURBS Image Texture capture must render a nonblank full-frame patch");
+                        lightingCapturesSucceeded &=
+                            qpainterNurbsTextureSaved;
 
                         QImage alphaCutoutTexture(2, 2,
                                                   QImage::Format_RGBA8888);

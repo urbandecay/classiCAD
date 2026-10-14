@@ -49,8 +49,9 @@ config = ocio.GetCurrentConfig()
 scene_linear = config.getRoleColorSpace(ocio.ROLE_SCENE_LINEAR)
 processor = config.getProcessor("ACEScg", scene_linear).getDefaultCPUProcessor()
 expected = list(source_pixels[:3])
-processor.applyRGB(expected)
+expected = processor.applyRGB(expected)
 assert max(abs(converted[index] - expected[index]) for index in range(3)) < 1.0e-5
+assert max(abs(converted[index] - source_pixels[index]) for index in range(3)) > 1.0e-3
 
 # Nonlinear OCIO source spaces use Blender's active processor before sampling.
 adobe_image = bpy.data.images.new("AdobeRGBTextureContract", width=1, height=1)
@@ -65,11 +66,11 @@ adobe_source = adobe_image.pixels[:]
 adobe_processor = config.getProcessor(
     adobe_image.colorspace_settings.name, scene_linear
 ).getDefaultCPUProcessor()
-adobe_expected = list(adobe_source[:3])
-adobe_processor.applyRGB(adobe_expected)
+adobe_expected = adobe_processor.applyRGB(list(adobe_source[:3]))
 adobe_expected = [component * adobe_source[3] for component in adobe_expected]
 assert max(abs(actual - expected) for actual, expected in
            zip(adobe_texel, (*adobe_expected, adobe_source[3]))) < 1.0e-5
+assert max(abs(adobe_texel[index] - adobe_source[index]) for index in range(3)) > 1.0e-3
 assert adobe["id"] != aces["id"]
 # This configured source includes a nonlinear transfer curve, so a matrix-only
 # approximation would not reproduce its processor output.

@@ -2890,8 +2890,14 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 const bool tiledImageAvailable = faceSlot >= 0 &&
                         faceSlot < object.meshMaterials.size() &&
                     !object.meshMaterials[faceSlot].textureImageTiles.isEmpty();
-                const bool textureAvailable = (!imagePath.isEmpty() || packedImageAvailable ||
-                                               tiledImageAvailable) &&
+                const bool floatImageAvailable = faceSlot >= 0 &&
+                        faceSlot < object.meshMaterials.size() &&
+                    !object.meshMaterials[faceSlot]
+                         .textureImageSceneLinearFloatDataBase64.isEmpty();
+                const bool textureAvailable = (!imagePath.isEmpty() ||
+                                               packedImageAvailable ||
+                                               tiledImageAvailable ||
+                                               floatImageAvailable) &&
                     activeUvMap != nullptr &&
                     faceFirstCorner + face.size() <= activeUvMap->cornerValues.size();
                 const int first = changed

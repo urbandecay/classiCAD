@@ -102,6 +102,10 @@ def arguments():
         help="external image used by the active Image Texture node for TEXTURE color source",
     )
     parser.add_argument(
+        "--texture-color-space",
+        help="set the loaded Image Texture image color space before Workbench sampling",
+    )
+    parser.add_argument(
         "--texture-interpolation",
         choices=("Closest", "Linear", "Cubic", "Smart"),
         default="Closest",
@@ -261,6 +265,8 @@ def main():
             image_node.image = bpy.data.images.load(
                 os.path.abspath(args.texture_image), check_existing=True
             )
+            if args.texture_color_space:
+                image_node.image.colorspace_settings.name = args.texture_color_space
             image_node.interpolation = args.texture_interpolation
             image_node.show_texture = True
             material.node_tree.nodes.active = image_node

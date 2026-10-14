@@ -197,7 +197,7 @@ def bake_image_source_transform(image, cache_key=""):
                    float(source_pixels[offset + 2])]
             alpha = float(source_pixels[offset + 3])
             if processor is not None:
-                processor.applyRGB(rgb)
+                rgb = processor.applyRGB(rgb)
             # Blender premultiplies float image buffers for PREMUL even though
             # that upload path does not run the OCIO processor.
             if premultiply:

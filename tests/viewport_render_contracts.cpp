@@ -4823,6 +4823,89 @@ int main(int argc, char *argv[])
                                 studioTextureDisplayPath);
                         lightingCapturesSucceeded &= studioTextureLinearSaved &&
                             studioTextureDisplaySaved;
+                        const QString nonlinearTexturePayloadPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_TEXTURE_RGBA32F_PATH");
+                        if (!nonlinearTexturePayloadPath.isEmpty()) {
+                            QFile nonlinearTexturePayloadFile(
+                                nonlinearTexturePayloadPath);
+                            const QByteArray nonlinearTexturePayload =
+                                nonlinearTexturePayloadFile.open(
+                                    QIODevice::ReadOnly)
+                                    ? nonlinearTexturePayloadFile.readAll()
+                                    : QByteArray{};
+                            ViewportRenderObject nonlinearTextureObject =
+                                textureSourceObject;
+                            bool nonlinearTexturePayloadValid =
+                                nonlinearTexturePayload.size() ==
+                                4 * qsizetype(sizeof(float));
+                            if (nonlinearTexturePayloadValid &&
+                                !nonlinearTextureObject.meshMaterials.isEmpty()) {
+                                WorkbenchMaterialData &nonlinearTextureMaterial =
+                                    nonlinearTextureObject.meshMaterials[0];
+                                nonlinearTextureMaterial
+                                    .textureImageSceneLinearFloatWidth = 1;
+                                nonlinearTextureMaterial
+                                    .textureImageSceneLinearFloatHeight = 1;
+                                nonlinearTextureMaterial
+                                    .textureImageSceneLinearFloatDataBase64 =
+                                    nonlinearTexturePayload.toBase64();
+                                nonlinearTextureMaterial.textureImagePath.clear();
+                                nonlinearTextureMaterial.textureImageSrgb = false;
+                                nonlinearTextureMaterial.textureImageAlphaMode =
+                                    QStringLiteral("STRAIGHT");
+                            } else {
+                                nonlinearTexturePayloadValid = false;
+                            }
+                            textureColorShading.lightingMode =
+                                ViewportLightingMode::Flat;
+                            QImage nonlinearTextureDisplay;
+                            QVector<float> nonlinearTextureSceneLinear;
+                            const bool nonlinearTextureRendered =
+                                nonlinearTexturePayloadValid &&
+                                renderCoordinatedScene(
+                                    textureColorShading,
+                                    QByteArrayLiteral(
+                                        "color-source-match-texture-adobe"),
+                                    &nonlinearTextureDisplay,
+                                    &nonlinearTextureObject, nullptr, nullptr,
+                                    QString{}, &nonlinearTextureSceneLinear);
+                            const QString nonlinearTextureDisplayPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    QStringLiteral(
+                                        "color_texture_adobe.png"));
+                            const QString nonlinearTextureLinearPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    QStringLiteral(
+                                        "color_texture_adobe.pfm"));
+                            QFile nonlinearTextureLinearFile(
+                                nonlinearTextureLinearPath);
+                            const bool nonlinearTextureLinearSaved =
+                                nonlinearTextureRendered &&
+                                nonlinearTextureSceneLinear.size() ==
+                                    textureExpectedValues &&
+                                nonlinearTextureLinearFile.open(
+                                    QIODevice::WriteOnly) &&
+                                nonlinearTextureLinearFile.write(
+                                    texturePfmHeader) ==
+                                    texturePfmHeader.size() &&
+                                nonlinearTextureLinearFile.write(
+                                    reinterpret_cast<const char *>(
+                                        nonlinearTextureSceneLinear.constData()),
+                                    nonlinearTextureSceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    nonlinearTextureSceneLinear.size() *
+                                        qsizetype(sizeof(float));
+                            const bool nonlinearTextureDisplaySaved =
+                                nonlinearTextureRendered &&
+                                nonlinearTextureDisplay.size() ==
+                                    QSize(640, 480) &&
+                                nonlinearTextureDisplay.save(
+                                    nonlinearTextureDisplayPath);
+                            lightingCapturesSucceeded &=
+                                nonlinearTextureLinearSaved &&
+                                nonlinearTextureDisplaySaved;
+                        }
                         const QVector3D matchedWorldColor(0.12f, 0.07f,
                                                           0.035f);
                         const QVector3D matchedViewportColorSceneLinear(

@@ -3172,6 +3172,18 @@ Status: in progress; the implementation and source reviews found the blockers li
   Blender resets Workbench TAA when shading state changes and clears each
   sample with the current background ([`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L25-L89),
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L145-L149)).
+- **AA history reset matrix (2026-10-14):** key contracts now isolate camera
+  zoom, logical-size change at fixed DPR, DPR change at fixed logical size,
+  specular-setting change, and AA-mode change. The offscreen renderer contract
+  then verifies that each changed key advances the history epoch and begins at
+  sample zero, while an unchanged key in a multisample mode advances to sample
+  one in the same epoch. Existing cases continue to cover mesh revision,
+  selection, object membership, material/texture data, visibility mode, and
+  active background color. `cmake --build build -j4` and the focused offscreen
+  `viewport_render_contracts` test pass. This validates the renderer key and
+  sample lifecycle; app-level playback remains unwired until classiCAD has a
+  playback owner. Blender source: [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L1303-L1382)
+  and [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L145-L149).
 - **Wheel zoom interactive AA state (2026-10-13):** wheel zoom now enters the
   same interactive one-sample mode used by other camera navigation while a
   200 ms single-shot settle timer is active. Each new wheel event restarts the
@@ -3248,7 +3260,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
-- Accumulation reset after camera movement, geometry edits, selection changes, setting changes, resize, and display-scale changes.
+- Accumulation reset after camera movement, geometry edits, selection changes, setting changes, resize, and display-scale changes. Renderer contracts now cover camera zoom, logical resize, DPR, a shading setting, and AA-mode changes, in addition to mesh/selection/material/background key checks.
 - Overlay Smooth Wires and Edit Mode Smooth Wires independently, including confirming the grid remains antialiased when overlay wire smoothing is off.
 - Save/reopen behavior for all persistent settings and any new material or color data.
 - GPU renderer and QPainter fallback behavior.

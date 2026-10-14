@@ -3765,6 +3765,25 @@ int main(int argc, char *argv[])
         return viewportAaHistoryKey(frame, settings, 8, 1.0, {}, worldColor);
     };
     const QByteArray aaBaselineKey = aaKey(aaHistoryFrame, aaHistoryShading);
+    ViewportRenderFrame changedCameraHistoryFrame = aaHistoryFrame;
+    changedCameraHistoryFrame.camera.zoom() *= 1.25;
+    const bool cameraMovementInvalidatesAa =
+        aaKey(changedCameraHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    ViewportRenderFrame resizedHistoryFrame = aaHistoryFrame;
+    resizedHistoryFrame.viewportSize.rwidth() += 1;
+    const bool logicalResizeInvalidatesAa =
+        aaKey(resizedHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    const bool displayScaleInvalidatesAa =
+        viewportAaHistoryKey(aaHistoryFrame, aaHistoryShading, 8, 1.25) !=
+        aaBaselineKey;
+    ViewportShadingSettings changedAaHistoryShading = aaHistoryShading;
+    changedAaHistoryShading.specularLighting =
+        !changedAaHistoryShading.specularLighting;
+    const bool shadingSettingInvalidatesAa =
+        aaKey(aaHistoryFrame, changedAaHistoryShading) != aaBaselineKey;
+    const bool aaModeInvalidatesAa =
+        viewportAaHistoryKey(aaHistoryFrame, aaHistoryShading, 16, 1.0) !=
+        aaBaselineKey;
     ViewportRenderFrame changedMeshHistoryFrame = aaHistoryFrame;
     changedMeshHistoryFrame.objects[0].geometryRevision++;
     const bool meshGeometryInvalidatesAa =
@@ -3839,6 +3858,12 @@ int main(int argc, char *argv[])
                         themeBackgroundInvalidatesAa &&
                         unusedThemeBackgroundDoesNotInvalidateAa,
                     "temporal AA history keys must change for mesh edits, selection, visibility mode, materials, textures, scene membership, and active background colors");
+    passed &= check(cameraMovementInvalidatesAa &&
+                        logicalResizeInvalidatesAa &&
+                        displayScaleInvalidatesAa &&
+                        shadingSettingInvalidatesAa &&
+                        aaModeInvalidatesAa,
+                    "temporal AA history keys must change for camera movement, logical resize, display scale, shading settings, and AA mode");
 
     NurbsSurface3D fillSurface;
     fillSurface.degreeU = 1;
@@ -5815,9 +5840,17 @@ int main(int argc, char *argv[])
                         ViewportAntiAliasingMode::Samples5));
                     historyResetRenderer.setDisplayTransform(gpuSolidShading,
                                                              true);
+                    ViewportRenderFrame rendererHistoryFrame = aaHistoryFrame;
+                    rendererHistoryFrame.camera = gpuTransform;
+                    rendererHistoryFrame.viewportSize = glSize;
+                    const QByteArray rendererBaselineKey =
+                        aaKey(rendererHistoryFrame, aaHistoryShading);
+                    ViewportRenderFrame rendererChangedMeshFrame =
+                        rendererHistoryFrame;
+                    rendererChangedMeshFrame.objects[0].geometryRevision++;
                     bool aaHistoryResetContract =
                         historyResetRenderer.beginSceneSample(
-                            glSize, 1.0, gpuTransform, aaBaselineKey,
+                            glSize, 1.0, gpuTransform, rendererBaselineKey,
                             false, true) &&
                         historyResetRenderer.targets().sampleIndex == 0;
                     const quint64 firstAaHistoryEpoch =
@@ -5826,7 +5859,8 @@ int main(int argc, char *argv[])
                         historyResetRenderer.finishSceneSample();
                         aaHistoryResetContract =
                             historyResetRenderer.beginSceneSample(
-                                glSize, 1.0, gpuTransform, aaBaselineKey,
+                                glSize, 1.0, gpuTransform,
+                                rendererBaselineKey,
                                 false, true) &&
                             historyResetRenderer.targets().sampleIndex == 1;
                     }
@@ -5835,7 +5869,7 @@ int main(int argc, char *argv[])
                         aaHistoryResetContract =
                             historyResetRenderer.beginSceneSample(
                                 glSize, 1.0, gpuTransform,
-                                aaKey(changedMeshHistoryFrame,
+                                aaKey(rendererChangedMeshFrame,
                                       aaHistoryShading),
                                 false, true) &&
                             historyResetRenderer.targets().sampleIndex == 0 &&
@@ -5847,6 +5881,70 @@ int main(int argc, char *argv[])
                     }
                     passed &= check(aaHistoryResetContract,
                                     "changing a visible mesh input must restart temporal AA accumulation at sample zero");
+                    quint64 lastAaHistoryEpoch =
+                        historyResetRenderer.targets().historyEpoch;
+                    const auto verifyAaHistoryRestart =
+                        [&](const ViewportRenderFrame &frame,
+                            const ViewportShadingSettings &settings,
+                            int mode, qreal dpr) {
+                            historyResetRenderer.setMode(mode);
+                            historyResetRenderer.setDisplayTransform(
+                                settings, true);
+                            const QByteArray key =
+                                viewportAaHistoryKey(frame, settings, mode,
+                                                     dpr);
+                            if (!historyResetRenderer.beginSceneSample(
+                                    frame.viewportSize, dpr, frame.camera, key,
+                                    false, true)) {
+                                return false;
+                            }
+                            const quint64 resetEpoch =
+                                historyResetRenderer.targets().historyEpoch;
+                            const bool resetToZero =
+                                historyResetRenderer.targets().sampleIndex == 0 &&
+                                resetEpoch > lastAaHistoryEpoch;
+                            historyResetRenderer.finishSceneSample();
+                            const bool advanced =
+                                historyResetRenderer.beginSceneSample(
+                                    frame.viewportSize, dpr, frame.camera, key,
+                                    false, true) &&
+                                historyResetRenderer.targets().sampleIndex == 1 &&
+                                historyResetRenderer.targets().historyEpoch ==
+                                    resetEpoch;
+                            if (historyResetRenderer.sceneSampleActive()) {
+                                historyResetRenderer.finishSceneSample();
+                            }
+                            if (resetToZero && advanced) {
+                                lastAaHistoryEpoch = resetEpoch;
+                                return true;
+                            }
+                            return false;
+                        };
+                    ViewportRenderFrame cameraMovedHistoryFrame =
+                        rendererChangedMeshFrame;
+                    cameraMovedHistoryFrame.camera.zoom() *= 1.25;
+                    ViewportRenderFrame resizedAaHistoryFrame =
+                        rendererChangedMeshFrame;
+                    resizedAaHistoryFrame.viewportSize.rwidth() += 1;
+                    ViewportShadingSettings changedRenderShading =
+                        aaHistoryShading;
+                    changedRenderShading.specularLighting =
+                        !changedRenderShading.specularLighting;
+                    aaHistoryResetContract =
+                        aaHistoryResetContract &&
+                        verifyAaHistoryRestart(cameraMovedHistoryFrame,
+                                               aaHistoryShading, 5, 1.0) &&
+                        verifyAaHistoryRestart(resizedAaHistoryFrame,
+                                               aaHistoryShading, 5, 1.0) &&
+                        verifyAaHistoryRestart(rendererChangedMeshFrame,
+                                               aaHistoryShading, 5, 1.25) &&
+                        verifyAaHistoryRestart(rendererChangedMeshFrame,
+                                               changedRenderShading, 5, 1.0) &&
+                        verifyAaHistoryRestart(rendererChangedMeshFrame,
+                                               aaHistoryShading, 8, 1.0);
+                    passed &= check(
+                        aaHistoryResetContract,
+                        "camera movement, logical resize, DPR, shading changes, and AA mode changes must restart at sample zero and stable history must advance to sample one");
                     functions.glClearColor(34.0f / 255.0f,
                                            34.0f / 255.0f,
                                            34.0f / 255.0f,

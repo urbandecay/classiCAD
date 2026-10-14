@@ -3443,6 +3443,25 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc)
   and [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc).
 
+### QPainter widget AA preference propagation (2026-10-14)
+
+- The viewport paint path now sets the shared `ViewportRenderer` raster AA
+  flag from `viewportAaMode_` on every frame. AA Off therefore selects one
+  physical-pixel-center sample in the production QPainter fallback; enabled
+  modes retain the existing bounded 4×4 edge estimate. Reapplying the setting
+  per frame also prevents a previous mode from persisting after a preference
+  change. No geometry, material, or compositor contract changed.
+- Blender 5.2.2 performs scene rasterization before its separate AA/TAA/SMAA
+  resolve, as pinned above. This wiring activates classiCAD's previously
+  implemented AA-Off coverage behavior in the normal widget fallback; it does
+  not make the CPU estimate equivalent to Blender's resolve.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed with the AA capture directory
+  enabled; and `workbench_raster_fragment_contracts` passed. The AA capture
+  contract manually configures its test renderer, so it validates the raster
+  modes rather than observing the widget preference itself. No new matched
+  Blender image metric is claimed for this wiring-only change.
+
 ### QPainter MatCap full-frame comparison (2026-10-14)
 
 - Compared a 640×480 QPainter AA-Off polygon cube using the `metal_bronze`

@@ -8851,6 +8851,12 @@ protected:
         viewportRenderer_.setGridAppearance(gridAppearance_);
         viewportRenderer_.setSmoothWirePreferences(
             smoothWiresOverlay_, smoothWiresEditMode_);
+        // The CPU Workbench fallback uses one pixel-center coverage sample
+        // for AA Off and its bounded 4x4 estimate for every enabled AA mode.
+        // Keep the scene rasterizer in step with the viewport preference on
+        // every paint, including transitions between modes.
+        viewportRenderer_.setWorkbenchRasterAntialiasingEnabled(
+            viewportAaMode_ != 0);
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
         ViewportShadingSettings renderShadingSettings =
             viewportShadingSettings_;

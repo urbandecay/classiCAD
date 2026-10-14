@@ -1,9 +1,12 @@
 """Blender 5.2.2 adapter for classiCAD's native .vignola and .blend projects."""
 
 import json
+import atexit
+import base64
 import math
 import os
 import sys
+import tempfile
 import traceback
 
 import bpy
@@ -15,6 +18,13 @@ PROJECT_FORMAT = "classiCAD.vignola"
 PROJECT_FORMAT_VERSION = 1
 DOCUMENT_TEXT_NAME = "classiCAD.DocumentData"
 ROOT_COLLECTION_NAME = "classiCAD"
+
+
+def _remove_temporary_image_file(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def require_pinned_blender():
@@ -541,8 +551,98 @@ def classiCAD_materials(document):
         material.diffuse_color = tuple(float(value) for value in color[:4])
         material.roughness = float(record.get("roughness", 0.5))
         material.metallic = float(record.get("metallic", 0.0))
+        _sync_classicad_image_texture(material, record)
         result[material_id] = material
     return result
+
+
+def _sync_classicad_image_texture(material, record):
+    """Mirror one supported active Image Texture without evaluating its graph."""
+    reference = next(iter(record.get("imageTextures", [])), None)
+    for node in list(material.node_tree.nodes) if material.use_nodes else []:
+        if node.get("classiCAD_proxy_image_node"):
+            node.show_texture = False
+            material.node_tree.nodes.remove(node)
+    if not isinstance(reference, dict):
+        return
+    if reference.get("nodeType", "TEX_IMAGE") != "TEX_IMAGE":
+        return
+    if reference.get("sourceTransformId", "identity") != "identity":
+        return
+    if reference.get("tiles") or reference.get("sceneLinearFloatDataBase64"):
+        return
+
+    image = None
+    packed_data = reference.get("packedDataBase64", "")
+    if packed_data:
+        try:
+            image_bytes = base64.b64decode(packed_data, validate=True)
+        except (ValueError, TypeError):
+            return
+        if not image_bytes or len(image_bytes) > 32 * 1024 * 1024:
+            return
+        suffix = os.path.splitext(reference.get("filepath", ""))[1]
+        if not suffix:
+            if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                suffix = ".png"
+            elif image_bytes.startswith(b"\xff\xd8"):
+                suffix = ".jpg"
+            else:
+                return
+        temporary_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+                temporary_path = handle.name
+                handle.write(image_bytes)
+            image = bpy.data.images.load(temporary_path, check_existing=False)
+            image.pack(data=image_bytes, data_len=len(image_bytes))
+        except (RuntimeError, OSError, ValueError):
+            if image is not None:
+                bpy.data.images.remove(image)
+            if temporary_path and os.path.exists(temporary_path):
+                os.remove(temporary_path)
+            return
+        atexit.register(_remove_temporary_image_file, temporary_path)
+    else:
+        filepath = reference.get("filepath", "")
+        if (not reference.get("sourceFileExists") or not filepath or
+                not os.path.isfile(filepath)):
+            return
+        try:
+            if os.path.getsize(filepath) > 32 * 1024 * 1024:
+                return
+            image = bpy.data.images.load(filepath, check_existing=True)
+        except (RuntimeError, OSError, ValueError):
+            return
+
+    try:
+        image.name = reference.get("imageName") or image.name
+        if packed_data:
+            image.filepath = ""
+            image.filepath_raw = ""
+        elif reference.get("filepath"):
+            image.filepath = reference["filepath"]
+            image.filepath_raw = reference["filepath"]
+        image.alpha_mode = reference.get("alphaMode", "STRAIGHT")
+        color_space = reference.get("colorSpace", "sRGB")
+        if color_space:
+            image.colorspace_settings.name = color_space
+    except (TypeError, ValueError):
+        if packed_data:
+            bpy.data.images.remove(image)
+        return
+
+    material.use_nodes = True
+    node = material.node_tree.nodes.new("ShaderNodeTexImage")
+    node.name = reference.get("nodeName") or "classiCAD Image Texture"
+    node.image = image
+    node.interpolation = reference.get("interpolation", "Linear")
+    node.extension = reference.get("extension", "REPEAT")
+    node.show_texture = True
+    node["classiCAD_proxy_image_node"] = True
+    for candidate in material.node_tree.nodes:
+        candidate.select = candidate == node
+    material.node_tree.nodes.active = node
 
 
 def attach_solid_face_metadata(mesh, polygon_face_refs, document):

@@ -68,6 +68,8 @@ struct WorkbenchMaterialData {
 // Shared imported material datablock. Mesh slots refer to this record by id.
 struct DocumentImageTextureReference {
     QString nodeName;
+    // Active Blender node type retained for .blend proxy reconstruction.
+    QString nodeType = QStringLiteral("TEX_IMAGE");
     QString imageName;
     QString imageLibraryPath;
     QString filepath;

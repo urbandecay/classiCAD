@@ -6,9 +6,14 @@ tests/blender_project_proxy_contract.py
 
 import importlib.util
 import copy
+import base64
+import binascii
 import math
 import pathlib
+import struct
 import sys
+import tempfile
+import zlib
 
 import bpy
 
@@ -121,5 +126,120 @@ adapter.merge_solid_proxy_materials(document)
 assert "base-41" not in records["41"]["nurbsSolidFaceMaterialIds"]
 assert all(record["geometry"] == exact_geometry_before[str(record["id"])]
            for record in document["objects"])
+
+
+def png_chunk(kind, payload):
+    return (struct.pack(">I", len(payload)) + kind + payload +
+            struct.pack(">I", binascii.crc32(kind + payload) & 0xFFFFFFFF))
+
+
+png_rows = (
+    b"\x00" + bytes((240, 20, 30, 255, 20, 230, 40, 255)),
+    b"\x00" + bytes((30, 40, 220, 255, 200, 180, 10, 64)),
+)
+png_data = (
+    b"\x89PNG\r\n\x1a\n" +
+    png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 6, 0, 0, 0)) +
+    png_chunk(b"IDAT", zlib.compress(b"".join(png_rows))) +
+    png_chunk(b"IEND", b"")
+)
+material_a_record = next(
+    record for record in document["materials"] if record["id"] == "material-a"
+)
+material_a_record["imageTextures"] = [{
+    "nodeName": "ProxyContract.ActiveTexture",
+    "nodeType": "TEX_IMAGE",
+    "imageName": "ProxyContract.Texture",
+    "imageLibraryPath": "",
+    "filepath": "ProxyContract.png",
+    "colorSpace": "sRGB",
+    "alphaMode": "STRAIGHT",
+    "interpolation": "Closest",
+    "extension": "MIRROR",
+    "sourceTransformId": "identity",
+    "sceneLinearFloatDataBase64": "",
+    "packedDataBase64": base64.b64encode(png_data).decode("ascii"),
+    "packed": True,
+    "sourceFileExists": True,
+    "tiles": [],
+}]
+adapter.classiCAD_materials(document)
+material_a = next(
+    material for material in bpy.data.materials
+    if material.get("classiCAD_material_id") == "material-a"
+)
+active_texture_node = next(
+    node for node in material_a.node_tree.nodes
+    if node.get("classiCAD_proxy_image_node")
+)
+assert active_texture_node.type == "TEX_IMAGE"
+assert active_texture_node.show_texture
+assert material_a.node_tree.nodes.active == active_texture_node
+assert active_texture_node.interpolation == "Closest"
+assert active_texture_node.extension == "MIRROR"
+assert active_texture_node.image.alpha_mode == "STRAIGHT"
+assert active_texture_node.image.colorspace_settings.name == "sRGB"
+assert active_texture_node.image.packed_file is not None
+assert bytes(active_texture_node.image.packed_file.data) == png_data
+
+with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as directory:
+    external_path = pathlib.Path(directory) / "external.png"
+    external_path.write_bytes(png_data)
+    material_b_record = next(
+        record for record in document["materials"] if record["id"] == "material-b"
+    )
+    material_b_record["imageTextures"] = [{
+        "nodeName": "ProxyContract.ExternalTexture",
+        "nodeType": "TEX_IMAGE",
+        "imageName": "ProxyContract.ExternalTextureImage",
+        "filepath": str(external_path),
+        "colorSpace": "sRGB",
+        "alphaMode": "STRAIGHT",
+        "interpolation": "Linear",
+        "extension": "REPEAT",
+        "sourceTransformId": "identity",
+        "packedDataBase64": "",
+        "packed": False,
+        "sourceFileExists": True,
+        "tiles": [],
+    }]
+    adapter.classiCAD_materials(document)
+    material_b = next(
+        material for material in bpy.data.materials
+        if material.get("classiCAD_material_id") == "material-b"
+    )
+    external_texture_node = next(
+        node for node in material_b.node_tree.nodes
+        if node.get("classiCAD_proxy_image_node")
+    )
+    assert external_texture_node.show_texture
+    assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
+
+    blend_path = pathlib.Path(directory) / "proxy.blend"
+    bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+    bpy.ops.wm.open_mainfile(filepath=str(blend_path))
+    material_a = next(
+        material for material in bpy.data.materials
+        if material.get("classiCAD_material_id") == "material-a"
+    )
+    active_texture_node = next(
+        node for node in material_a.node_tree.nodes
+        if node.get("classiCAD_proxy_image_node")
+    )
+    assert active_texture_node.show_texture
+    assert active_texture_node.interpolation == "Closest"
+    assert active_texture_node.extension == "MIRROR"
+    assert active_texture_node.image.packed_file is not None
+    assert bytes(active_texture_node.image.packed_file.data) == png_data
+    material_b = next(
+        material for material in bpy.data.materials
+        if material.get("classiCAD_material_id") == "material-b"
+    )
+    external_texture_node = next(
+        node for node in material_b.node_tree.nodes
+        if node.get("classiCAD_proxy_image_node")
+    )
+    assert external_texture_node.show_texture
+    assert bpy.path.abspath(external_texture_node.image.filepath) == str(external_path)
 
 print("Blender project solid proxy face-material contract passed")

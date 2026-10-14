@@ -319,6 +319,17 @@ bool persistedWorkbenchSettingsContracts()
         textureTile.sceneLinearFloatWidth = 1;
         textureTile.sceneLinearFloatHeight = 1;
         textureObject->workbenchMaterial.textureImageTiles.append(textureTile);
+        DocumentMaterial proxyMaterial;
+        proxyMaterial.id = QStringLiteral("material-texture-proxy-contract");
+        DocumentImageTextureReference activeImage;
+        activeImage.nodeName = QStringLiteral("ActiveImageTexture");
+        activeImage.nodeType = QStringLiteral("TEX_IMAGE");
+        activeImage.imageName = QStringLiteral("ActiveImage");
+        activeImage.colorSpace = QStringLiteral("sRGB");
+        activeImage.sourceFileExists = true;
+        activeImage.filepath = QStringLiteral("textures/active.png");
+        proxyMaterial.imageTextures.append(activeImage);
+        textureSnapshot.materials.append(proxyMaterial);
         textureDocument.restoreSnapshot(textureSnapshot);
         const QJsonObject textureJson = documentToJson(textureDocument);
         Document reopenedTextureDocument;
@@ -352,10 +363,14 @@ bool persistedWorkbenchSettingsContracts()
                 restoredMaterial.textureImageTiles.first()
                         .sceneLinearFloatWidth == 1 &&
                 restoredMaterial.textureImageTiles.first()
-                        .sceneLinearFloatHeight == 1;
+                        .sceneLinearFloatHeight == 1 &&
+                reopenedTextureDocument.materials().size() == 1 &&
+                reopenedTextureDocument.materials().first().imageTextures.size() == 1 &&
+                reopenedTextureDocument.materials().first().imageTextures.first().nodeType ==
+                    QStringLiteral("TEX_IMAGE");
         }
         passed &= check(textureRoundTrip,
-                        "object Workbench image path, packed bytes, PREMUL mode, UDIM tile, and float texels must survive native save/reopen");
+                        "object and material Workbench image references, including the active node type, must survive native save/reopen");
 
         const auto textureObjectJson = textureJson.value(QStringLiteral("objects"))
                                            .toArray().first().toObject();

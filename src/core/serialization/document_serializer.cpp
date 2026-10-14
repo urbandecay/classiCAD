@@ -402,6 +402,7 @@ QJsonObject documentToJson(const Document &document)
         for (const DocumentImageTextureReference &reference : material.imageTextures) {
             QJsonObject image;
             image.insert(QStringLiteral("nodeName"), reference.nodeName);
+            image.insert(QStringLiteral("nodeType"), reference.nodeType);
             image.insert(QStringLiteral("imageName"), reference.imageName);
             image.insert(QStringLiteral("imageLibraryPath"), reference.imageLibraryPath);
             image.insert(QStringLiteral("filepath"), reference.filepath);
@@ -735,13 +736,16 @@ bool documentFromJson(const QJsonValue &value,
                         return false;
                     }
                     const QJsonObject image = imageValue.toObject();
-                    const QStringList stringKeys{QStringLiteral("nodeName"), QStringLiteral("imageName"),
+                    const QStringList stringKeys{QStringLiteral("nodeName"),
+                        QStringLiteral("imageName"),
                         QStringLiteral("imageLibraryPath"), QStringLiteral("filepath"),
                         QStringLiteral("colorSpace")};
                     bool validImage = true;
                     for (const QString &key : stringKeys) validImage &= image.value(key).isString();
                     const QJsonValue packedDataValue = image.value(QStringLiteral("packedDataBase64"));
-                    if (!validImage || !image.value(QStringLiteral("packed")).isBool() ||
+                    if ((!image.value(QStringLiteral("nodeType")).isUndefined() &&
+                         !image.value(QStringLiteral("nodeType")).isString()) ||
+                        !validImage || !image.value(QStringLiteral("packed")).isBool() ||
                         !image.value(QStringLiteral("sourceFileExists")).isBool() ||
                         (!packedDataValue.isUndefined() && !packedDataValue.isString()) ||
                         image.value(QStringLiteral("imageName")).toString().isEmpty()) {
@@ -750,6 +754,8 @@ bool documentFromJson(const QJsonValue &value,
                     }
                     DocumentImageTextureReference reference;
                     reference.nodeName = image.value(QStringLiteral("nodeName")).toString();
+                    reference.nodeType = image.value(QStringLiteral("nodeType"))
+                                             .toString(QStringLiteral("TEX_IMAGE"));
                     reference.imageName = image.value(QStringLiteral("imageName")).toString();
                     reference.imageLibraryPath = image.value(QStringLiteral("imageLibraryPath")).toString();
                     reference.filepath = image.value(QStringLiteral("filepath")).toString();

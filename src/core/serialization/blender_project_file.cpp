@@ -691,6 +691,8 @@ bool parseBlenderMaterials(
                 const QJsonObject image = imageValue.toObject();
                 classiCAD::DocumentImageTextureReference reference;
                 reference.nodeName = image.value(QStringLiteral("node_name")).toString();
+                reference.nodeType = image.value(QStringLiteral("node_type"))
+                                         .toString(QStringLiteral("TEX_IMAGE"));
                 reference.imageName = image.value(QStringLiteral("image_name")).toString();
                 reference.imageLibraryPath = image.value(QStringLiteral("image_library_path")).toString();
                 reference.filepath = image.value(QStringLiteral("filepath")).toString();

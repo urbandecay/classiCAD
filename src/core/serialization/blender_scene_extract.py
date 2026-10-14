@@ -476,6 +476,7 @@ def image_references(material):
         references.append(
             {
                 "node_name": node.name,
+                "node_type": node_type,
                 "image_name": image.name_full,
                 "image_library_path": source_library_path(image),
                 "image_library_path_exists": source_library_exists(image),

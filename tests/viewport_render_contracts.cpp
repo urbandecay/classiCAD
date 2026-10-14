@@ -6007,6 +6007,104 @@ int main(int argc, char *argv[])
                             capturesSucceeded,
                             "QPainter fallback AA matrix must capture the production mesh raster at each configured supersampling scale");
                     }
+                    const QString qpainterMatcapCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_MATCAP_CAPTURE");
+                    if (!qpainterMatcapCapturePath.isEmpty()) {
+                        ViewportShadingSettings matcapCaptureShading =
+                            rawFaceShading;
+                        matcapCaptureShading.lightingMode =
+                            ViewportLightingMode::MatCap;
+                        matcapCaptureShading.matcapPreset =
+                            QStringLiteral("metal_bronze");
+                        matcapCaptureShading.outline = false;
+                        matcapCaptureShading.shadows = false;
+                        matcapCaptureShading.depthOfField = false;
+                        matcapCaptureShading.cavity = false;
+                        CurveHitTester qpainterMatcapHitTester;
+                        ViewportRenderer qpainterMatcapRenderer(
+                            gpuTransform, qpainterMatcapHitTester);
+                        qpainterMatcapRenderer
+                            .setWorkbenchRasterAntialiasingEnabled(false);
+                        qpainterMatcapRenderer.setShadingSettings(
+                            matcapCaptureShading);
+                        QImage matcapSurface(glSize,
+                                             QImage::Format_ARGB32_Premultiplied);
+                        matcapSurface.setDevicePixelRatio(1.0);
+                        matcapSurface.fill(Qt::transparent);
+                        const QVector<ViewportRenderObject> matcapObjects{
+                            polygonCubeObject};
+                        const QVector3D matcapBackground =
+                            workbenchSrgbToSceneLinear(QVector3D(
+                                34.0f / 255.0f, 34.0f / 255.0f,
+                                34.0f / 255.0f));
+                        RasterWorkbenchSurfaceLayers matcapSurfaceLayers;
+                        const bool matcapComposed =
+                            compositeRasterWorkbenchSurfaces(
+                                &matcapSurface, matcapObjects, gpuTransform,
+                                glSize, 1.0, false, true,
+                                matcapCaptureShading, matcapBackground,
+                                [&qpainterMatcapRenderer,
+                                 &polygonCubeObject, &glSize](
+                                    QPainter &surfacePainter,
+                                    const ViewportRenderObject &object,
+                                    RasterWorkbenchFragmentSink *sink) {
+                                    qpainterMatcapRenderer.drawShape(
+                                        surfacePainter, object.shape, glSize,
+                                        false, object.selected, true, QColor(),
+                                        QString(), 0.0, object.objectId,
+                                        object.geometryRevision,
+                                        object.preparedDepthGeometry.data(), {},
+                                        object.displayColorSceneLinear,
+                                        object.workbenchMaterial,
+                                        object.displayName, object.libraryPath,
+                                        object.meshObjectTransform,
+                                        object.meshMaterials, sink,
+                                        object.nurbsSolidFaceMaterials);
+                                },
+                                &matcapSurfaceLayers);
+                        bool matcapDirectFallbackRendered = false;
+                        if (matcapComposed) {
+                            applyRasterWorkbenchEffects(
+                                &matcapSurface, matcapObjects, gpuTransform,
+                                glSize, 1.0, matcapCaptureShading,
+                                &matcapSurfaceLayers);
+                        } else {
+                            matcapSurface.fill(Qt::transparent);
+                            QPainter matcapPainter(&matcapSurface);
+                            matcapPainter.setRenderHint(
+                                QPainter::Antialiasing, false);
+                            qpainterMatcapRenderer.drawShape(
+                                matcapPainter, polygonCubeObject.shape,
+                                glSize, false, false, true, QColor(),
+                                QString(), 0.0, polygonCubeObject.objectId,
+                                polygonCubeObject.geometryRevision,
+                                polygonCubeObject.preparedDepthGeometry.data(),
+                                {}, polygonCubeObject.displayColorSceneLinear,
+                                polygonCubeObject.workbenchMaterial,
+                                polygonCubeObject.displayName,
+                                polygonCubeObject.libraryPath,
+                                polygonCubeObject.meshObjectTransform,
+                                polygonCubeObject.meshMaterials);
+                            matcapPainter.end();
+                            matcapDirectFallbackRendered = true;
+                        }
+                        QImage matcapResolved(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        matcapResolved.fill(QColor(34, 34, 34));
+                        QPainter matcapResolvePainter(&matcapResolved);
+                        matcapResolvePainter.drawImage(QPoint(0, 0),
+                                                       matcapSurface);
+                        matcapResolvePainter.end();
+                        passed &= check(
+                            (matcapComposed || matcapDirectFallbackRendered) &&
+                                !matcapSurface.isNull() &&
+                                matcapResolved.pixelColor(
+                                    glSize.width() / 2,
+                                    glSize.height() / 2) != QColor(34, 34, 34) &&
+                                matcapResolved.save(qpainterMatcapCapturePath),
+                            "QPainter MatCap cube capture must render through the production compositor or direct fallback and save");
+                    }
                     functions.glClearColor(34.0f / 255.0f,
                                            34.0f / 255.0f,
                                            34.0f / 255.0f,

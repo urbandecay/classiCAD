@@ -4787,18 +4787,23 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   Off, no effects/outlines, and the matched 640×480 orthographic camera.
 - The offscreen C++ contract verifies each GPU and QPainter face-center probe
   resolves to its expected scene-linear color and captures a nonblank PNG/PFM.
-  Blender 5.2.2 PFM probes match the GPU's half-float values at all four
-  centers; QPainter's unquantized values have scene-linear mean absolute
-  channel error `0.000137` and max `0.000312`. Display probes differ by at most
-  `1/255` in one channel. This confirms slot ID 3 selection for this Flat
+  With the scene-linear world background matched to `0.0219421387`, Blender
+  5.2.2 and GPU have identical full-frame masks (IoU 1.0, zero XOR) and exact
+  full-frame PFM RGB. QPainter has the same mask and exact display RGB;
+  full-frame scene-linear channel MAE is at most `0.000036` with max
+  `0.000313`. GPU display differs by at most `1/255` in a channel, from
+  display rounding. This confirms slot ID 3 selection for this Flat
   Material-color mesh; missing/invalid indices, slots beyond ID 3, Studio or
   MatCap four-slot shading, textures/alpha, and broad geometry parity remain
   open. Blender's per-face slot selection and per-material batching remain
   pinned in [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067)
   and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
 - Validation: Blender reported 5.2.2 LTS and rendered nonblank 640×480 PNG,
-  EXR, and PFM output; `cmake --build build -j4` passed with the dependency
-  audit; and offscreen `viewport_render_contracts` passed (1/1).
+  EXR, and PFM output using `--world-color 0.0219421387 0.0219421387
+  0.0219421387`; `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed (1/1); and full-frame PNG/PFM
+  comparisons passed with `workbench_image_compare.py` and
+  `workbench_pfm_compare.py`.
 
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 

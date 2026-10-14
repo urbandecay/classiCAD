@@ -1948,6 +1948,50 @@ void ViewportRenderer::drawShape(QPainter &painter,
             meshViewLighting, shadingSettings_.studioLightRotationDegrees,
             shadingSettings_.worldSpaceLighting, meshViewRight,
             meshViewUpVector, meshViewFacing);
+        const auto trianglePixelCoverage = [](const std::array<QPointF, 3> &points,
+                                               qreal area, qreal px, qreal py,
+                                               qreal stepX, qreal stepY,
+                                               qreal *b0, qreal *b1, qreal *b2) {
+            const auto weightsAt = [&](qreal x, qreal y,
+                                       qreal *w0, qreal *w1, qreal *w2) {
+                *w1 = ((x - points[0].x()) * (points[2].y() - points[0].y()) -
+                       (y - points[0].y()) * (points[2].x() - points[0].x())) / area;
+                *w2 = ((points[1].x() - points[0].x()) * (y - points[0].y()) -
+                       (points[1].y() - points[0].y()) * (x - points[0].x())) / area;
+                *w0 = 1.0 - *w1 - *w2;
+            };
+            weightsAt(px, py, b0, b1, b2);
+            const qreal edge0 = std::hypot(points[2].x() - points[1].x(),
+                                           points[2].y() - points[1].y());
+            const qreal edge1 = std::hypot(points[0].x() - points[2].x(),
+                                           points[0].y() - points[2].y());
+            const qreal edge2 = std::hypot(points[1].x() - points[0].x(),
+                                           points[1].y() - points[0].y());
+            const qreal nearestEdge = std::min({std::abs(*b0) * std::abs(area) / edge0,
+                                                std::abs(*b1) * std::abs(area) / edge1,
+                                                std::abs(*b2) * std::abs(area) / edge2});
+            if (*b0 >= 0.0 && *b1 >= 0.0 && *b2 >= 0.0 &&
+                nearestEdge >= 0.75 * std::max(stepX, stepY)) {
+                return qreal(1.0);
+            }
+            qreal sum0 = 0.0, sum1 = 0.0, sum2 = 0.0;
+            int covered = 0;
+            for (int sy = 0; sy < 4; ++sy) {
+                for (int sx = 0; sx < 4; ++sx) {
+                    qreal w0, w1, w2;
+                    weightsAt(px + (sx - 1.5) * stepX / 4.0,
+                             py + (sy - 1.5) * stepY / 4.0, &w0, &w1, &w2);
+                    if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
+                    sum0 += w0; sum1 += w1; sum2 += w2;
+                    ++covered;
+                }
+            }
+            if (covered == 0) return qreal(0.0);
+            *b0 = sum0 / covered;
+            *b1 = sum1 / covered;
+            *b2 = sum2 / covered;
+            return covered / 16.0;
+        };
         const auto drawWorkbenchTriangle = [&](const MeshTriangle &triangle) {
             const QImage &texture = triangle.texture;
             const bool hasFloatTexture = triangle.floatTexture.isValid() ||
@@ -2001,16 +2045,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 const qreal py = top + (y + 0.5) / scaleY;
                 for (int x = 0; x < width; ++x) {
                     const qreal px = left + (x + 0.5) / scaleX;
-                    const qreal b1 = ((px - triangle.points[0].x()) *
-                                          (triangle.points[2].y() - triangle.points[0].y()) -
-                                      (py - triangle.points[0].y()) *
-                                          (triangle.points[2].x() - triangle.points[0].x())) / area;
-                    const qreal b2 = ((triangle.points[1].x() - triangle.points[0].x()) *
-                                          (py - triangle.points[0].y()) -
-                                      (triangle.points[1].y() - triangle.points[0].y()) *
-                                          (px - triangle.points[0].x())) / area;
-                    const qreal b0 = 1.0 - b1 - b2;
-                    if (b0 < 0.0 || b1 < 0.0 || b2 < 0.0) continue;
+                    qreal b0, b1, b2;
+                    const qreal coverage = trianglePixelCoverage(
+                        {triangle.points[0], triangle.points[1], triangle.points[2]},
+                        area, px, py, 1.0 / scaleX, 1.0 / scaleY,
+                        &b0, &b1, &b2);
+                    if (coverage <= 0.0) continue;
                     const qreal p0 = b0 * triangle.reciprocalDepths[0];
                     const qreal p1 = b1 * triangle.reciprocalDepths[1];
                     const qreal p2 = b2 * triangle.reciprocalDepths[2];
@@ -2145,6 +2185,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     if (shadingSettings_.xrayEnabled()) {
                         pixelAlpha *= shadingSettings_.xrayAlpha;
                     }
+                    pixelAlpha *= coverage;
                     if (fragmentSink != nullptr) {
                         const Point3D &point0 = triangle.worldPoints[0];
                         const Point3D &point1 = triangle.worldPoints[1];

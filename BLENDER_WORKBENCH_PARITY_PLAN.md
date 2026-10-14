@@ -2386,6 +2386,23 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   existing OpenGL-context requirement for the NURBS-solid display case; no
   GUI/OpenGL validation is claimed.
 
+## QPainter mesh triangle edge coverage (2026-10-13)
+
+- The QPainter Workbench mesh rasterizer now estimates coverage only near
+  triangle boundaries with a fixed 4x4 subpixel grid. Covered subpixels also
+  provide the edge pixel's perspective-correct interpolation weights, and
+  fractional coverage is applied to the final alpha. Interior pixels keep the
+  existing center-sample path. The grid follows the target device pixel scale,
+  including high-DPI painting.
+- This is a bounded edge-coverage approximation for the software fallback; it
+  does not reproduce Blender's TAA/SMAA filters or temporal accumulation.
+  Blender 5.2.2 performs AA after scene passes in
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc),
+  while opaque mesh geometry is depth-tested in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc).
+  Build and matched-image validation are recorded with this change; visual
+  comparison against Blender remains part of the acceptance checklist.
+
 ## Phase Two: imported scene materials and result contracts (2026-10-13)
 
 - **Render-result shading source:** an imported Blender scene's saved

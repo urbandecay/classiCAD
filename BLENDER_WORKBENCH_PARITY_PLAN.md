@@ -1429,6 +1429,21 @@ mistaken per-label cubic reconstruction or accidental filtering of `Closest`.
 They check QPainter production behavior only; matched Blender texture render
 probes remain open.
 
+**QPainter NURBS texture RGB contract (2026-10-14):** A production-path
+contract renders a bilinear NURBS patch with U domain `[2, 6]` and V domain
+`[-3, 5]` against an asymmetric 2×2 image, then checks four interior probes
+for the expected texel quadrant and V orientation. This protects active-domain
+normalization and UV transport through the separate QPainter NURBS raster
+path; the pinned Blender 5.2.2
+[`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433)
+samples the interpolated UV coordinate. The contract uses channel-dominance
+margins rather than exact display RGB, and does not establish matched Blender
+output, GPU sampling parity, or trim-boundary parity.
+Validation: `cmake --build build -j4` passed with the 314-file dependency
+audit, and `QT_QPA_PLATFORM=offscreen
+./build/classicad_viewport_render_contracts_test` passed. The existing
+`qfloat16`/`memcpy` compiler warning remains.
+
 **Active Image Texture rendered probe (2026-10-14):** The controlled cube
 fixture now supports Blender's `TEXTURE` color source with an active Image
 Texture node. Its offscreen classiCAD counterpart assigns the same external

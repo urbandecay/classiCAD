@@ -3655,6 +3655,81 @@ int main(int argc, char *argv[])
                         std::abs(sampledTexture.alpha() - 179) <= 2,
                     "QPainter Texture mode must replace material RGB with the image sample and retain material alpha");
 
+    QImage nurbsSurfaceTexture(2, 2, QImage::Format_RGBA8888);
+    nurbsSurfaceTexture.setPixelColor(0, 0, QColor(240, 20, 30, 255));
+    nurbsSurfaceTexture.setPixelColor(1, 0, QColor(20, 220, 40, 255));
+    nurbsSurfaceTexture.setPixelColor(0, 1, QColor(30, 40, 230, 255));
+    nurbsSurfaceTexture.setPixelColor(1, 1, QColor(230, 210, 20, 255));
+    const QString nurbsSurfaceTexturePath = colorTextureDirectory.filePath(
+        QStringLiteral("nurbs-surface-texture.png"));
+    const bool savedNurbsSurfaceTexture =
+        nurbsSurfaceTexture.save(nurbsSurfaceTexturePath);
+    NurbsSurface3D texturedNurbsSurface = fillSurface;
+    texturedNurbsSurface.knotsU = {2.0, 6.0};
+    texturedNurbsSurface.knotsV = {-3.0, 5.0};
+    Shape texturedNurbsShape;
+    texturedNurbsShape.geometryType = GeometryType::NurbsSurface;
+    texturedNurbsShape.nurbsSurface = texturedNurbsSurface;
+    WorkbenchMaterialData nurbsTextureMaterial;
+    nurbsTextureMaterial.textureImagePath = nurbsSurfaceTexturePath;
+    nurbsTextureMaterial.textureImageSrgb = false;
+    nurbsTextureMaterial.textureImageInterpolation = QStringLiteral("Closest");
+    nurbsTextureMaterial.textureImageExtension = QStringLiteral("CLIP");
+    const auto renderTexturedNurbsSurface = [&]() {
+        QImage image(surfaceViewportSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        surfaceRenderer.setShadingSettings(textureSettings);
+        QPainter painter(&image);
+        surfaceRenderer.drawShape(
+            painter, texturedNurbsShape, surfaceViewportSize, false, false,
+            true, QColor(), QString(), 0.0, ObjectId::invalid(), 0, nullptr,
+            {}, std::nullopt, nurbsTextureMaterial);
+        painter.end();
+        return image;
+    };
+    const QImage nurbsSurfaceTextureImage = renderTexturedNurbsSurface();
+    QPointF nurbsTextureLowerLeftPoint;
+    QPointF nurbsTextureLowerRightPoint;
+    QPointF nurbsTextureUpperLeftPoint;
+    QPointF nurbsTextureUpperRightPoint;
+    const bool projectedNurbsTextureSamples =
+        surfaceTransform.worldPointToScreen({-0.5, -0.5, 0.0},
+                                            surfaceViewportSize,
+                                            &nurbsTextureLowerLeftPoint) &&
+        surfaceTransform.worldPointToScreen({0.5, -0.5, 0.0},
+                                            surfaceViewportSize,
+                                            &nurbsTextureLowerRightPoint) &&
+        surfaceTransform.worldPointToScreen({-0.5, 0.5, 0.0},
+                                            surfaceViewportSize,
+                                            &nurbsTextureUpperLeftPoint) &&
+        surfaceTransform.worldPointToScreen({0.5, 0.5, 0.0},
+                                            surfaceViewportSize,
+                                            &nurbsTextureUpperRightPoint);
+    const auto nurbsTexturePixelAt = [&](const QPointF &point) {
+        return nurbsSurfaceTextureImage.pixelColor(qRound(point.x()),
+                                                   qRound(point.y()));
+    };
+    const QColor nurbsTextureLowerLeft =
+        nurbsTexturePixelAt(nurbsTextureLowerLeftPoint);
+    const QColor nurbsTextureLowerRight =
+        nurbsTexturePixelAt(nurbsTextureLowerRightPoint);
+    const QColor nurbsTextureUpperLeft =
+        nurbsTexturePixelAt(nurbsTextureUpperLeftPoint);
+    const QColor nurbsTextureUpperRight =
+        nurbsTexturePixelAt(nurbsTextureUpperRightPoint);
+    passed &= check(
+        savedNurbsSurfaceTexture && validateNurbsSurface(texturedNurbsSurface) &&
+            projectedNurbsTextureSamples &&
+            nurbsTextureLowerLeft.blue() > nurbsTextureLowerLeft.red() + 35 &&
+            nurbsTextureLowerLeft.blue() > nurbsTextureLowerLeft.green() + 35 &&
+            nurbsTextureLowerRight.red() > nurbsTextureLowerRight.blue() + 35 &&
+            nurbsTextureLowerRight.green() > nurbsTextureLowerRight.blue() + 35 &&
+            nurbsTextureUpperLeft.red() > nurbsTextureUpperLeft.green() + 35 &&
+            nurbsTextureUpperLeft.red() > nurbsTextureUpperLeft.blue() + 35 &&
+            nurbsTextureUpperRight.green() > nurbsTextureUpperRight.red() + 35 &&
+            nurbsTextureUpperRight.green() > nurbsTextureUpperRight.blue() + 35,
+        "QPainter NURBS Texture mode must map asymmetric image texels to U/V quadrants across non-unit knot domains");
+
     QImage interpolationTexture(2, 2, QImage::Format_RGBA8888);
     interpolationTexture.setPixelColor(0, 0, QColor(240, 20, 30, 255));
     interpolationTexture.setPixelColor(1, 0, QColor(20, 220, 40, 255));

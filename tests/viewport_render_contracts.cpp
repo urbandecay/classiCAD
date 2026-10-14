@@ -9837,11 +9837,19 @@ int main(int argc, char *argv[])
                             QVector3D(0.72f, 0.20f, 0.18f),
                             QVector3D(0.18f, 0.65f, 0.25f),
                             QVector3D(0.78f, 0.68f, 0.12f)};
+                        const std::array<float, 4> fourSlotRoughness{
+                            0.2f, 0.4f, 0.65f, 0.8f};
+                        const std::array<float, 4> fourSlotMetallic{
+                            0.0f, 0.25f, 0.5f, 1.0f};
                         fourSlotObject.meshMaterials =
                             QVector<WorkbenchMaterialData>(4);
                         for (int slot = 0; slot < 4; ++slot) {
                             fourSlotObject.meshMaterials[slot]
                                 .baseColorSceneLinear = fourSlotColors[slot];
+                            fourSlotObject.meshMaterials[slot].roughness =
+                                fourSlotRoughness[slot];
+                            fourSlotObject.meshMaterials[slot].metallic =
+                                fourSlotMetallic[slot];
                         }
                         fourSlotObject.preparedDepthGeometry =
                             QSharedPointer<ViewportDepthGeometry>::create(
@@ -10022,6 +10030,233 @@ int main(int argc, char *argv[])
                         passed &= check(
                             fourSlotQPainterMappingMatches,
                             "QPainter four-face material-slot fixture must resolve slot IDs zero through three at distinct face probes");
+
+                        ViewportShadingSettings fourSlotStudioShading =
+                            fourSlotShading;
+                        fourSlotStudioShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        fourSlotStudioShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        fourSlotStudioShading.specularLighting = true;
+                        QImage fourSlotStudioGpuDisplay;
+                        QVector<float> fourSlotStudioGpuLinear;
+                        const bool fourSlotStudioGpuRendered =
+                            renderCoordinatedScene(
+                                fourSlotStudioShading,
+                                QByteArrayLiteral("material-slots-four-studio"),
+                                &fourSlotStudioGpuDisplay, &fourSlotObject,
+                                nullptr, nullptr, QString{},
+                                &fourSlotStudioGpuLinear);
+                        const QString fourSlotStudioGpuStem =
+                            QStringLiteral("material_slots_four_studio");
+                        const QString fourSlotStudioGpuPng = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotStudioGpuStem + QStringLiteral(".png"));
+                        QFile fourSlotStudioGpuPfm(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotStudioGpuStem + QStringLiteral(".pfm")));
+                        const bool fourSlotStudioGpuSaved =
+                            fourSlotStudioGpuRendered &&
+                            fourSlotStudioGpuDisplay.size() == QSize(640, 480) &&
+                            fourSlotStudioGpuDisplay.save(fourSlotStudioGpuPng) &&
+                            fourSlotStudioGpuLinear.size() ==
+                                fourSlotExpectedValues &&
+                            fourSlotStudioGpuPfm.open(QIODevice::WriteOnly) &&
+                            fourSlotStudioGpuPfm.write(fourSlotPfmHeader) ==
+                                fourSlotPfmHeader.size() &&
+                            fourSlotStudioGpuPfm.write(
+                                reinterpret_cast<const char *>(
+                                    fourSlotStudioGpuLinear.constData()),
+                                fourSlotStudioGpuLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                fourSlotStudioGpuLinear.size() *
+                                    qsizetype(sizeof(float));
+                        WorkbenchStudioLighting fourSlotStudioLighting =
+                            workbenchStudioLightingPreset(
+                                fourSlotStudioShading.studioLightPreset);
+                        fourSlotStudioLighting.useSpecular =
+                            fourSlotStudioShading.specularLighting &&
+                            fourSlotStudioLighting.useSpecular;
+                        fourSlotStudioLighting =
+                            workbenchStudioLightingForView(
+                                fourSlotStudioLighting,
+                                fourSlotStudioShading
+                                    .studioLightRotationDegrees,
+                                fourSlotStudioShading.worldSpaceLighting,
+                                materialRight, materialUp, materialFacing);
+                        bool fourSlotStudioGpuLightingMatches = true;
+                        for (int slot = 0; slot < 4; ++slot) {
+                            WorkbenchPackedMaterialData packed =
+                                workbenchPackMaterialData(
+                                    fourSlotMetallic[slot],
+                                    fourSlotRoughness[slot], 1.0f);
+                            packed = workbenchQuantizeMaterialLighting(packed);
+                            const QVector3D viewNormal(
+                                QVector3D::dotProduct(fourSlotFacing,
+                                                      materialRight),
+                                QVector3D::dotProduct(fourSlotFacing,
+                                                      materialUp),
+                                QVector3D::dotProduct(fourSlotFacing,
+                                                      materialFacing));
+                            const QVector3D expected = workbenchStudioShade(
+                                fourSlotColors[slot], viewNormal,
+                                QVector3D(0.0f, 0.0f, 1.0f),
+                                packed.roughness, packed.metallic,
+                                fourSlotStudioLighting);
+                            const qsizetype offset =
+                                (qsizetype(glSize.height() - 1 -
+                                           fourSlotProbes[slot].y()) *
+                                     glSize.width() +
+                                 fourSlotProbes[slot].x()) * 3;
+                            const QVector3D actual(
+                                fourSlotStudioGpuLinear.value(offset),
+                                fourSlotStudioGpuLinear.value(offset + 1),
+                                fourSlotStudioGpuLinear.value(offset + 2));
+                            fourSlotStudioGpuLightingMatches &=
+                                fourSlotStudioGpuLinear.size() >= offset + 3 &&
+                                (expected - actual).length() < 0.001f;
+                        }
+
+                        CurveHitTester fourSlotStudioHitTester;
+                        ViewportRenderer fourSlotStudioRenderer(
+                            gpuTransform, fourSlotStudioHitTester);
+                        fourSlotStudioRenderer.setShadingSettings(
+                            fourSlotStudioShading);
+                        QImage fourSlotStudioQPainterDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        fourSlotStudioQPainterDisplay.fill(captureBackground);
+                        RasterWorkbenchFragmentSink fourSlotStudioFragments;
+                        QPainter fourSlotStudioPainter(
+                            &fourSlotStudioQPainterDisplay);
+                        fourSlotStudioPainter.setRenderHint(
+                            QPainter::Antialiasing, false);
+                        fourSlotStudioRenderer.drawShape(
+                            fourSlotStudioPainter, fourSlotObject.shape,
+                            glSize, false, false, true, QColor(), QString(),
+                            0.0, fourSlotObject.objectId,
+                            fourSlotObject.geometryRevision,
+                            fourSlotObject.preparedDepthGeometry.data(), {},
+                            fourSlotObject.displayColorSceneLinear,
+                            fourSlotObject.workbenchMaterial,
+                            fourSlotObject.displayName,
+                            fourSlotObject.libraryPath,
+                            identityMeshObjectTransform,
+                            fourSlotObject.meshMaterials,
+                            &fourSlotStudioFragments);
+                        fourSlotStudioPainter.end();
+                        QVector<float> fourSlotStudioQPainterLinear(
+                            fourSlotExpectedValues);
+                        for (qsizetype offset = 0;
+                             offset + 2 <
+                                 fourSlotStudioQPainterLinear.size();
+                             offset += 3) {
+                            fourSlotStudioQPainterLinear[offset] =
+                                materialSlotsBackgroundSceneLinear;
+                            fourSlotStudioQPainterLinear[offset + 1] =
+                                materialSlotsBackgroundSceneLinear;
+                            fourSlotStudioQPainterLinear[offset + 2] =
+                                materialSlotsBackgroundSceneLinear;
+                        }
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             fourSlotStudioFragments) {
+                            if (fragment.x < 0 ||
+                                fragment.x >= glSize.width() ||
+                                fragment.y < 0 ||
+                                fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype offset =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            fourSlotStudioQPainterLinear[offset] =
+                                fragment.sceneLinearRgb[0];
+                            fourSlotStudioQPainterLinear[offset + 1] =
+                                fragment.sceneLinearRgb[1];
+                            fourSlotStudioQPainterLinear[offset + 2] =
+                                fragment.sceneLinearRgb[2];
+                        }
+                        QVector<float> fourSlotStudioQPainterBottomUp(
+                            fourSlotExpectedValues);
+                        for (int y = 0; y < glSize.height(); ++y) {
+                            std::copy_n(
+                                fourSlotStudioQPainterLinear.constData() +
+                                    qsizetype(y) * fourSlotRowValues,
+                                fourSlotRowValues,
+                                fourSlotStudioQPainterBottomUp.data() +
+                                    qsizetype(glSize.height() - 1 - y) *
+                                        fourSlotRowValues);
+                        }
+                        const QString fourSlotStudioQPainterStem =
+                            QStringLiteral("material_slots_four_studio_qpainter");
+                        const QString fourSlotStudioQPainterPng = QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotStudioQPainterStem +
+                                QStringLiteral(".png"));
+                        QFile fourSlotStudioQPainterPfm(QDir(
+                            materialSlotsCaptureDirectory).filePath(
+                                fourSlotStudioQPainterStem +
+                                QStringLiteral(".pfm")));
+                        const bool fourSlotStudioQPainterSaved =
+                            fourSlotStudioFragments.size() > 1000 &&
+                            fourSlotStudioQPainterDisplay.save(
+                                fourSlotStudioQPainterPng) &&
+                            fourSlotStudioQPainterPfm.open(
+                                QIODevice::WriteOnly) &&
+                            fourSlotStudioQPainterPfm.write(
+                                fourSlotPfmHeader) ==
+                                fourSlotPfmHeader.size() &&
+                            fourSlotStudioQPainterPfm.write(
+                                reinterpret_cast<const char *>(
+                                    fourSlotStudioQPainterBottomUp.constData()),
+                                fourSlotStudioQPainterBottomUp.size() *
+                                    qsizetype(sizeof(float))) ==
+                                fourSlotStudioQPainterBottomUp.size() *
+                                    qsizetype(sizeof(float));
+                        bool fourSlotStudioQPainterLightingMatches = true;
+                        for (int slot = 0; slot < 4; ++slot) {
+                            WorkbenchPackedMaterialData packed =
+                                workbenchPackMaterialData(
+                                    fourSlotMetallic[slot],
+                                    fourSlotRoughness[slot], 1.0f);
+                            packed = workbenchQuantizeMaterialLighting(packed);
+                            const QVector3D viewNormal(
+                                QVector3D::dotProduct(fourSlotFacing,
+                                                      materialRight),
+                                QVector3D::dotProduct(fourSlotFacing,
+                                                      materialUp),
+                                QVector3D::dotProduct(fourSlotFacing,
+                                                      materialFacing));
+                            const QVector3D expected = workbenchStudioShade(
+                                fourSlotColors[slot], viewNormal,
+                                QVector3D(0.0f, 0.0f, 1.0f),
+                                packed.roughness, packed.metallic,
+                                fourSlotStudioLighting);
+                            const RasterWorkbenchLinearFragment *sample =
+                                nullptr;
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 fourSlotStudioFragments) {
+                                if (fragment.x == fourSlotProbes[slot].x() &&
+                                    fragment.y == fourSlotProbes[slot].y()) {
+                                    sample = &fragment;
+                                    break;
+                                }
+                            }
+                            fourSlotStudioQPainterLightingMatches &=
+                                sample != nullptr &&
+                                (expected - QVector3D(
+                                     sample->sceneLinearRgb[0],
+                                     sample->sceneLinearRgb[1],
+                                     sample->sceneLinearRgb[2]))
+                                        .length() < 0.00001f;
+                        }
+                        passed &= check(
+                            fourSlotStudioGpuSaved &&
+                                fourSlotStudioGpuLightingMatches,
+                            "GPU Studio four-face material slots must capture and shade all four packed material payloads");
+                        passed &= check(
+                            fourSlotStudioQPainterSaved &&
+                                fourSlotStudioQPainterLightingMatches,
+                            "QPainter Studio four-face material slots must capture and shade all four packed material payloads");
                     }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(

@@ -4777,7 +4777,7 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   version 5.2.2; and `workbench_display_probe_compare.py` passed for both GPU
   and QPainter PNG/PFM pairs.
 
-#### Flat Material color with four visible material slots
+#### Four visible material slots in Flat and Studio
 
 - Added a camera-facing 2×2 quad grid to the Blender 5.2.2 reference helper
   and the classiCAD GPU/QPainter contract captures. Each face selects its own
@@ -4793,14 +4793,24 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   full-frame scene-linear channel MAE is at most `0.000036` with max
   `0.000313`. GPU display differs by at most `1/255` in a channel, from
   display rounding. This confirms slot ID 3 selection for this Flat
-  Material-color mesh; missing/invalid indices, slots beyond ID 3, Studio or
-  MatCap four-slot shading, textures/alpha, and broad geometry parity remain
-  open. Blender's per-face slot selection and per-material batching remain
+  Material-color mesh.
+- Added Studio Default with specular enabled to the same four-face fixture.
+  The slots use roughness/metallic pairs `(0.2, 0.0)`, `(0.4, 0.25)`,
+  `(0.65, 0.5)`, and `(0.8, 1.0)`. GPU full-frame scene-linear RGB matches
+  Blender 5.2.2 within `0.0000611` maximum error and has an exact foreground
+  mask. QPainter maximum scene-linear error is `0.000545`; its full-frame
+  display RGB is exact, while GPU display differs by at most `1/255` from
+  rounding. Both backends match Blender's full-frame silhouette exactly.
+  This confirms slot ID 3 selection and distinct Studio material payloads for
+  this fixture; missing/invalid indices, slots beyond ID 3, MatCap four-slot
+  shading, textures/alpha, and broad geometry parity remain open. Blender's
+  per-face slot selection and per-material batching remain
   pinned in [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067)
   and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
 - Validation: Blender reported 5.2.2 LTS and rendered nonblank 640×480 PNG,
   EXR, and PFM output using `--world-color 0.0219421387 0.0219421387
-  0.0219421387`; `cmake --build build -j4` passed with the dependency audit;
+  0.0219421387` for both Flat and Studio references;
+  `cmake --build build -j4` passed with the dependency audit;
   offscreen `viewport_render_contracts` passed (1/1); and full-frame PNG/PFM
   comparisons passed with `workbench_image_compare.py` and
   `workbench_pfm_compare.py`.

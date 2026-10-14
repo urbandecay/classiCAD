@@ -425,9 +425,13 @@ def main():
             (0.18, 0.65, 0.25),
             (0.78, 0.68, 0.12),
         )
+        slot_roughness = (0.2, 0.4, 0.65, 0.8)
+        slot_metallic = (0.0, 0.25, 0.5, 1.0)
         for index, color in enumerate(slot_colors):
             material = bpy.data.materials.new(f"FourSlotMaterial{index}")
             material.diffuse_color = (*color, 1.0)
+            material.roughness = slot_roughness[index]
+            material.metallic = slot_metallic[index]
             grid.data.materials.append(material)
         for polygon, slot_index in zip(grid.data.polygons, range(4)):
             polygon.material_index = slot_index

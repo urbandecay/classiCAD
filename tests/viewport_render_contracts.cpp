@@ -9649,6 +9649,24 @@ int main(int argc, char *argv[])
                         const QString qpainterShadowBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_BASELINE_CAPTURE");
+                    const QString qpainterShadowLinearPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_LINEAR_CAPTURE");
+                    const QString qpainterShadowBaselineLinearPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_BASELINE_LINEAR_CAPTURE");
+                    const QString qpainterShadowReceiverOnlyCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_RECEIVER_ONLY_CAPTURE");
+                    const QString qpainterShadowReceiverOnlyBaselinePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_RECEIVER_ONLY_BASELINE_CAPTURE");
+                    const QString qpainterShadowReceiverOnlyLinearPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_RECEIVER_ONLY_LINEAR_CAPTURE");
+                    const QString qpainterShadowReceiverOnlyBaselineLinearPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_RECEIVER_ONLY_BASELINE_LINEAR_CAPTURE");
                         const QString qpainterOutlineBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_BASELINE_CAPTURE");
@@ -9695,8 +9713,15 @@ int main(int argc, char *argv[])
                         const auto captureQPainterCavity = [&] (
                             const ViewportShadingSettings &settings,
                             QImage *display,
-                            QVector<float> *linear) {
+                            QVector<float> *linear,
+                            const QVector<ViewportRenderObject> *objectsOverride =
+                                nullptr) {
                             if (display == nullptr) return false;
+                            const QVector<ViewportRenderObject> captureObjects =
+                                objectsOverride != nullptr
+                                    ? *objectsOverride
+                                    : QVector<ViewportRenderObject>{
+                                          qpainterCavityObject};
                             ViewportShadingSettings captureSettings = settings;
                             if (linear != nullptr) {
                                 // The weighted compositor retains its
@@ -9732,12 +9757,12 @@ int main(int argc, char *argv[])
                                                             0.035f);
                             const bool composed =
                                 compositeRasterWorkbenchSurfaces(
-                                    display, {qpainterCavityObject}, gpuTransform,
+                                    display, captureObjects, gpuTransform,
                                     glSize, 1.0, false, true, captureSettings,
                                     worldBackground, drawObject, &layers);
                             if (!composed) return false;
                             applyRasterWorkbenchEffects(
-                                display, {qpainterCavityObject}, gpuTransform,
+                                display, captureObjects, gpuTransform,
                                 glSize, 1.0, captureSettings, &layers);
                             if (linear != nullptr) {
                                 if (layers.sceneLinearSize != glSize ||
@@ -9827,24 +9852,140 @@ int main(int argc, char *argv[])
                         bool qpainterShadowCaptured = true;
                         bool qpainterShadowBaselineCaptured = true;
                         if (!qpainterShadowCapturePath.isEmpty()) {
+                            ViewportRenderObject shadowReceiver;
+                            shadowReceiver.shape.geometryType =
+                                GeometryType::PolygonMesh;
+                            shadowReceiver.shape.polygonMesh.vertices = {
+                                {-4.0, -4.0, -1.0},
+                                {4.0, -4.0, -1.0},
+                                {4.0, 4.0, -1.0},
+                                {-4.0, 4.0, -1.0}};
+                            shadowReceiver.shape.polygonMesh.faces = {
+                                {0, 1, 2, 3}};
+                            shadowReceiver.shape.polygonMesh
+                                .faceMaterialIndices = {0};
+                            shadowReceiver.objectId =
+                                ObjectId::fromValue(1902);
+                            shadowReceiver.geometryRevision = 1902;
+                            shadowReceiver.displayName =
+                                QStringLiteral("ShadowReceiver");
+                            shadowReceiver.displayColorSceneLinear =
+                                QVector4D(0.2f, 0.4f, 0.8f, 1.0f);
+                            shadowReceiver.meshMaterials = {
+                                WorkbenchMaterialData{}};
+                            auto receiverGeometry =
+                                QSharedPointer<ViewportDepthGeometry>::create();
+                            const QVector3D receiverA(-4.0f, -4.0f, -1.0f);
+                            const QVector3D receiverB(4.0f, -4.0f, -1.0f);
+                            const QVector3D receiverC(4.0f, 4.0f, -1.0f);
+                            const QVector3D receiverD(-4.0f, 4.0f, -1.0f);
+                            receiverGeometry->surfaceVertices = {
+                                receiverA, receiverB, receiverC,
+                                receiverA, receiverC, receiverD};
+                            receiverGeometry->surfaceNormals = QVector<QVector3D>(
+                                6, QVector3D(0.0f, 0.0f, 1.0f));
+                            shadowReceiver.preparedDepthGeometry =
+                                receiverGeometry;
+                            ViewportRenderObject shadowCaster =
+                                qpainterCavityObject;
+                            shadowCaster.objectId =
+                                ObjectId::fromValue(1903);
+                            shadowCaster.geometryRevision = 1903;
+                            shadowCaster.displayName =
+                                QStringLiteral("ShadowCaster");
+                            shadowCaster.displayColorSceneLinear =
+                                QVector4D(0.8f, 0.3f, 0.2f, 1.0f);
+                            const QVector<ViewportRenderObject>
+                                shadowScene{shadowReceiver, shadowCaster};
+                            const QVector<ViewportRenderObject>
+                                shadowReceiverOnlyScene{shadowReceiver};
                             ViewportShadingSettings qpainterShadowSettings =
                                 qpainterCavityBaselineSettings;
                             qpainterShadowSettings.shadows = true;
                             qpainterShadowSettings.shadowIntensity = 0.5;
+                            qpainterShadowSettings.shadowOffset = 0.1;
+                            qpainterShadowSettings.shadowFocus = 0.0;
+                            qpainterShadowSettings.colorMode =
+                                ViewportColorMode::Object;
+                            ViewportShadingSettings
+                                qpainterShadowBaselineSettings =
+                                    qpainterCavityBaselineSettings;
+                            qpainterShadowBaselineSettings.colorMode =
+                                ViewportColorMode::Object;
                             QImage qpainterShadowImage;
                             QImage qpainterShadowBaselineImage;
+                            QVector<float> qpainterShadowLinear;
+                            QVector<float> qpainterShadowBaselineLinear;
                             qpainterShadowCaptured = captureQPainterCavity(
                                 qpainterShadowSettings, &qpainterShadowImage,
-                                nullptr) &&
+                                qpainterShadowLinearPath.isEmpty()
+                                    ? nullptr : &qpainterShadowLinear,
+                                &shadowScene) &&
                                 qpainterShadowImage.save(
                                     qpainterShadowCapturePath);
                             qpainterShadowBaselineCaptured =
                                 qpainterShadowBaselinePath.isEmpty() ||
                                 (captureQPainterCavity(
-                                     qpainterCavityBaselineSettings,
-                                     &qpainterShadowBaselineImage, nullptr) &&
+                                     qpainterShadowBaselineSettings,
+                                     &qpainterShadowBaselineImage,
+                                     qpainterShadowBaselineLinearPath.isEmpty()
+                                         ? nullptr
+                                         : &qpainterShadowBaselineLinear,
+                                     &shadowScene) &&
                                  qpainterShadowBaselineImage.save(
                                      qpainterShadowBaselinePath));
+                            qpainterShadowCaptured &=
+                                saveQPainterLinearCapture(
+                                    qpainterShadowLinearPath,
+                                    qpainterShadowLinear);
+                            qpainterShadowBaselineCaptured &=
+                                saveQPainterLinearCapture(
+                                    qpainterShadowBaselineLinearPath,
+                                    qpainterShadowBaselineLinear);
+                            bool receiverOnlyEffectCaptured = true;
+                            bool receiverOnlyBaselineCaptured = true;
+                            if (!qpainterShadowReceiverOnlyCapturePath
+                                     .isEmpty()) {
+                                QImage receiverOnlyEffectImage;
+                                QImage receiverOnlyBaselineImage;
+                                QVector<float> receiverOnlyEffectLinear;
+                                QVector<float> receiverOnlyBaselineLinear;
+                                receiverOnlyEffectCaptured =
+                                    captureQPainterCavity(
+                                        qpainterShadowSettings,
+                                        &receiverOnlyEffectImage,
+                                        qpainterShadowReceiverOnlyLinearPath
+                                                .isEmpty()
+                                            ? nullptr
+                                            : &receiverOnlyEffectLinear,
+                                        &shadowReceiverOnlyScene) &&
+                                    receiverOnlyEffectImage.save(
+                                        qpainterShadowReceiverOnlyCapturePath);
+                                receiverOnlyBaselineCaptured =
+                                    !qpainterShadowReceiverOnlyBaselinePath
+                                         .isEmpty() &&
+                                    captureQPainterCavity(
+                                        qpainterShadowBaselineSettings,
+                                        &receiverOnlyBaselineImage,
+                                        qpainterShadowReceiverOnlyBaselineLinearPath
+                                                .isEmpty()
+                                            ? nullptr
+                                            : &receiverOnlyBaselineLinear,
+                                        &shadowReceiverOnlyScene) &&
+                                    receiverOnlyBaselineImage.save(
+                                        qpainterShadowReceiverOnlyBaselinePath);
+                                receiverOnlyEffectCaptured &=
+                                    saveQPainterLinearCapture(
+                                        qpainterShadowReceiverOnlyLinearPath,
+                                        receiverOnlyEffectLinear);
+                                receiverOnlyBaselineCaptured &=
+                                    saveQPainterLinearCapture(
+                                        qpainterShadowReceiverOnlyBaselineLinearPath,
+                                        receiverOnlyBaselineLinear);
+                            }
+                            qpainterShadowCaptured &= receiverOnlyEffectCaptured;
+                            qpainterShadowBaselineCaptured &=
+                                receiverOnlyBaselineCaptured;
                         }
                         bool qpainterOutlineCaptured = true;
                         bool qpainterOutlineBaselineCaptured = true;
@@ -9867,12 +10008,35 @@ int main(int argc, char *argv[])
                                  qpainterOutlineBaselineImage.save(
                                      qpainterOutlineBaselinePath));
                         }
+                        const QImage capturedShadowBaseline(
+                            qpainterShadowBaselinePath);
+                        const QColor shadowReceiverProbe =
+                            capturedShadowBaseline.pixelColor(320, 430);
+                        const QColor shadowCasterProbe =
+                            capturedShadowBaseline.pixelColor(320, 120);
+                        const QColor receiverOnlyProbe =
+                            qpainterShadowReceiverOnlyBaselinePath.isEmpty()
+                                ? QColor()
+                                : QImage(
+                                      qpainterShadowReceiverOnlyBaselinePath)
+                                      .pixelColor(320, 430);
+                        const bool shadowFixtureColorsMatch =
+                            qpainterShadowReceiverOnlyBaselinePath.isEmpty() ||
+                            (shadowReceiverProbe.blue() >
+                                 shadowReceiverProbe.red() * 1.35 &&
+                             shadowReceiverProbe.green() >
+                                 shadowReceiverProbe.red() * 1.15 &&
+                             shadowCasterProbe.red() >
+                                 shadowCasterProbe.blue() * 1.25 &&
+                             receiverOnlyProbe.blue() >
+                                 receiverOnlyProbe.red() * 1.35);
                         passed &= check(
                             qpainterCavityCaptured &&
                                 qpainterCavityBaselineCaptured &&
                                 qpainterLinearSaved &&
                                 qpainterShadowCaptured &&
                                 qpainterShadowBaselineCaptured &&
+                                shadowFixtureColorsMatch &&
                                 qpainterOutlineCaptured &&
                                 qpainterOutlineBaselineCaptured,
                             "opt-in QPainter cavity, shadow, and outline captures must render matched baseline and effect output");

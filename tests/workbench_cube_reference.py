@@ -21,9 +21,23 @@ def arguments():
     parser.add_argument("output", help="PNG output path")
     parser.add_argument(
         "--scene",
-        choices=("CUBE", "MATERIAL_SLOTS", "TWO_SIDED_MATCAP", "NURBS_TEXTURE", "MESH_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
+        choices=(
+            "CUBE",
+            "MATERIAL_SLOTS",
+            "SHADOW_RECEIVER",
+            "TWO_SIDED_MATCAP",
+            "NURBS_TEXTURE",
+            "MESH_TEXTURE",
+            "TRANSPARENT_OVERLAP",
+            "TRANSPARENT_IN_FRONT",
+        ),
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
+    )
+    parser.add_argument(
+        "--no-shadow-caster",
+        action="store_true",
+        help="leave only the receiver in the SHADOW_RECEIVER scene",
     )
     parser.add_argument(
         "--ortho-eye-distance",
@@ -456,6 +470,20 @@ def main():
                     polygon.material_index = 2
                 else:
                     polygon.material_index = 0
+    elif args.scene == "SHADOW_RECEIVER":
+        bpy.ops.mesh.primitive_plane_add(
+            size=8.0, location=(0.0, 0.0, -1.0)
+        )
+        receiver = bpy.context.object
+        receiver.name = "ShadowReceiver"
+        receiver.color = (0.2, 0.4, 0.8, 1.0)
+        if not args.no_shadow_caster:
+            bpy.ops.mesh.primitive_cube_add(
+                size=2.0, location=(0.0, 0.0, 0.0)
+            )
+            caster = bpy.context.object
+            caster.name = "ShadowCaster"
+            caster.color = (0.8, 0.3, 0.2, 1.0)
     elif args.scene == "TWO_SIDED_MATCAP":
         camera_rotation = camera.rotation_euler.to_quaternion()
         camera_right = camera_rotation @ Vector((1.0, 0.0, 0.0))

@@ -4622,3 +4622,45 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   offscreen `viewport_render_contracts` test passed with the opt-in capture,
   and `workbench_display_probe_compare.py` passed against the Blender 5.2.2
   reference.
+
+### Matched QPainter planar-receiver shadow comparison (2026-10-14)
+
+- Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2
+  reference helper and the QPainter capture harness. The 8×8 XY receiver is
+  blue, the size-2 cube caster is red and rests on it, and a receiver-only
+  scene provides a baseline/effect control. Both apps use Object color,
+  Blender Studio Default lighting, AA Off, a `(4, -6, 4)` view direction,
+  orthographic scale 5, scene-linear world background `(0.12, 0.07, 0.035)`,
+  zero dither, and shadow intensity 0.5. Blender 5.2.2 defaults for shadow
+  shift/focus are explicitly matched at 0.1/0.0.
+- Blender changes the light response across the receiver when shadows are
+  enabled, even without a caster. The new
+  `workbench_shadow_receiver_compare.py` subtracts that receiver-only delta
+  from each plane-and-caster delta before measuring the localized cast shadow.
+  The baseline receiver masks contain 145,090 Blender and 145,437 classiCAD
+  pixels (IoU 0.995419). At a 0.001 scene-linear threshold, the isolated cast
+  shadow masks contain 8,060 Blender and 4,405 classiCAD pixels (IoU
+  0.485697). Mean maximum-channel attenuation on each app's affected pixels
+  is 0.08130 for Blender and 0.07691 for classiCAD; mean RGB delta error on
+  the shared receiver is 0.001362.
+- Comparing the uncorrected display effect pairs alone reports identical
+  effect-mask coverage (IoU 1.0) but stronger whole-frame classiCAD darkening:
+  14.662/255 mean maximum-channel effect in Blender versus 29.266/255 in
+  classiCAD. The receiver-only control shows that this is not a direct measure
+  of cast-shadow strength. The remaining localized mask-shape difference is
+  consistent with classiCAD's single-resolution orthographic depth-map and
+  nearest-texel test, while Blender 5.2.2 builds stencil shadow volumes and
+  resolves their stencil mask. Blender's shadow source sets
+  `shadow_mul`/`shadow_add` from the intensity and emits silhouette sides in
+  pinned [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1620-L1636)
+  and [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L1023-L1038).
+- No production shadow-factor change is justified by this comparison: the
+  per-hit attenuation is close, while most residual error is in shadow mask
+  coverage and placement. The QPainter shadow map remains an approximation;
+  additional caster topology, light direction, receiver, and camera cases are
+  open.
+- Validation: full `cmake --build build -j4` passed with the dependency audit;
+  the offscreen `viewport_render_contracts` test passed with both capture
+  pairs; Blender reported version 5.2.2; and
+  `workbench_shadow_receiver_compare.py` plus
+  `workbench_effect_delta_compare.py` completed on the paired captures.

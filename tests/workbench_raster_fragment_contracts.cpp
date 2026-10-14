@@ -239,13 +239,17 @@ int main(int argc, char **argv)
     }
     const QVector3D halfTextureCenter = workbenchMatcapSampleLinearHalf(
         halfMatcap, 2, 2, 0, 0.5f, 0.5f);
-    const QVector3D halfTextureCorner = workbenchMatcapSampleLinearHalf(
+    const QVector3D halfTextureBottomRight = workbenchMatcapSampleLinearHalf(
+        halfMatcap, 2, 2, 1, 1.0f, 0.0f);
+    const QVector3D halfTextureTopRight = workbenchMatcapSampleLinearHalf(
         halfMatcap, 2, 2, 1, 1.0f, 1.0f);
     passed &= check((halfTextureCenter - QVector3D(1.5f, 1.5f, 1.5f))
                             .length() < 1.0e-5f &&
-                        (halfTextureCorner - QVector3D(13.0f, 13.0f, 13.0f))
+                        (halfTextureBottomRight -
+                         QVector3D(13.0f, 13.0f, 13.0f)).length() < 1.0e-5f &&
+                        (halfTextureTopRight - QVector3D(11.0f, 11.0f, 11.0f))
                                 .length() < 1.0e-5f,
-                    "half-float MatCap filtering must use normalized texel centers and clamp to edge texels");
+                    "half-float MatCap filtering must clamp edge texels and map normalized V to top-down source rows");
 
     constexpr quint64 meshId = 7201;
     constexpr quint64 surfaceId = 7202;

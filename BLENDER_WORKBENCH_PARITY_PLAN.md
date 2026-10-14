@@ -2440,7 +2440,7 @@ above is from scene-linear captures and remains the preferred color metric.
 - Viewport and Workbench render-result GPU paths share the same named scene passes and attachment contract.
 - Each newly ported pass has a pinned Blender 5.2.2 source reference, preserved attribution, and a comparison result; existing NURBS/surface contracts remain unchanged.
 - The future shader system can provide Workbench's supported material values through `WorkbenchMaterialData` and existing mesh/draw-range data without changing the render-pass API or creating a second material model; arbitrary node graphs are out of scope. Imported UDIM metadata and packed tile bytes survive native save/reopen; GPU and QPainter mesh/trimmed-NURBS/untrimmed-NURBS color and effect-alpha paths consume tiles. GPU depth-map shadow alpha uses texture data and UVs for meshes, trimmed/untrimmed `NurbsSurface` ranges, and object-textured `NurbsSolid` ranges; geometry without an available image/UV alpha source remains unmasked, while stencil shadow-volume casters do not sample texture alpha. Per-face seed materials on `NurbsSolid` resolve through stable semantic IDs and classiCAD `.blend` proxy assignments round-trip by face ID; materialized-face lineage remains unsupported. The QPainter Solid fallback has an approximate software shadow pass for triangulated geometry, including binary transparent-material casters without alpha scaling; several geometry cases remain unsupported, while retained transparent layers preserve shadows on opaque receivers and the nearest visible transparent receiver contribution receives an approximate factor; stacked transparent layers share that factor; parity with the GPU shadow path remains open (see [QPainter opaque shadow fallback](#qpainter-opaque-shadow-fallback-2026-10-13)). GPU per-tile extension modes are implemented. Cross-tile filter continuity is not part of Blender 5.2.2 behavior.
-- A bounded single-channel Blender `VOLUME` grid imports, survives native save/reopen, and renders through the GPU Volume pass after transparent depth; sampling, density scale, slice controls, and Blender's pass order are source-aligned. The QPainter fallback now renders slice mode for at most 16M dense voxels and 1M covered target samples, with closest/linear/cubic filtering and scene-linear extinction/scattering. Its ray-marched mode, multiple/vector grids, animation, and oversized dense bounds remain explicit limits.
+- A bounded single-channel Blender `VOLUME` grid imports, survives native save/reopen, and renders through the GPU Volume pass after transparent depth; sampling, density scale, slice controls, and Blender's pass order are source-aligned. The QPainter fallback renders slice mode for at most 16M dense voxels and 1M covered target samples, with closest/linear/cubic filtering and scene-linear extinction/scattering. Its ray-marched mode now has a bounded CPU approximation with closest/linear/cubic filtering, scene-depth clipping, front-coverage rejection, and density integration; dense reconstruction is capped at 16M voxels, candidate target pixels at 1M per volume, and total ray integration at 4M samples per composition. Multiple/vector grids, animation, larger bounds, and matched Blender image parity remain open.
 - QPainter differences remain separately described until that backend is explicitly brought into scope.
 
 ### Stage 5: Parity review
@@ -3311,5 +3311,33 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   verifies that a valid slice changes the scene image. Validation:
   `cmake --build build -j4` passed with the source dependency audit, and both
   offscreen `viewport_render_contracts` and
-  `workbench_raster_fragment_contracts` passed. Matched Blender output, depth
-  occlusion combinations, and QPainter ray marching remain open.
+  `workbench_raster_fragment_contracts` passed. Matched Blender output and
+  comprehensive depth/occlusion combinations remain open. The CPU ray marcher
+  is a bounded approximation with a 16M dense-voxel cap, 1M candidate pixels
+  per volume, and 4M aggregate integration samples per composition;
+  multiple/vector grids, animation, and larger bounds remain unsupported.
+
+### QPainter scalar-volume ray-marched fallback (2026-10-14)
+
+- The QPainter Solid compositor now integrates ray-marched scalar volumes in
+  scene-linear space. It reconstructs the active dense grid, transforms the
+  camera ray through the existing volume transforms, samples CLOSEST, LINEAR,
+  or CUBIC density, and applies density scale, extinction, transmittance, and
+  scattering. Rays stop at the nearest regular opaque/transparent scene depth;
+  pixels covered by in-front geometry are skipped.
+- This remains a bounded CPU approximation, not a replacement for Blender's
+  GPU volume pass. Limits are 16M reconstructed voxels, 1M candidate target
+  pixels per volume, and 4M aggregate ray integration samples per composition.
+  Multiple/vector grids, animation, and larger bounds remain unsupported.
+- Blender 5.2.2's pinned
+  [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh)
+  is the source for ray step, density, extinction, scattering, and early
+  transmittance behavior; [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc)
+  sets the volume sample count to five times each grid dimension and computes
+  the world-space step as the length of the per-axis spacing vector. The
+  production contract checks
+  visible output and increased contribution at higher density. Matched Blender
+  output and comprehensive depth/occlusion combinations remain open.
+- Validation: full `cmake --build build -j4` passed with the source dependency
+  audit. Offscreen `viewport_render_contracts` and
+  `workbench_raster_fragment_contracts` passed.

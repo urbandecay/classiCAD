@@ -48,6 +48,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdint>
+#include <tuple>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -1733,6 +1734,40 @@ int main(int argc, char *argv[])
         }
         passed &= check(volumeSliceRendered && volumeSliceChangedPixels > 0,
                         "QPainter Workbench fallback composites enabled scalar-volume slice samples in scene linear color");
+
+        const auto renderRayMarchVolume = [&](float density) {
+            ScalarVolume3D rayVolume = sliceVolume;
+            rayVolume.useSlice = false;
+            rayVolume.activeRecords[0].value = density;
+            ViewportRenderObject rayObject = sliceVolumeObject;
+            rayObject.shape.scalarVolume = rayVolume;
+            const QVector<ViewportRenderObject> rayVolumes{rayObject};
+            QImage rayImage(size, QImage::Format_ARGB32_Premultiplied);
+            rayImage.fill(Qt::black);
+            const bool rayRendered = compositeRasterWorkbenchSurfaces(
+                &rayImage, noSurfaceObjects, transform, size, 1.0, false, true,
+                volumeSliceSettings, QVector3D(0.0f, 0.0f, 0.0f), drawObject,
+                nullptr, {}, false, rayVolumes);
+            int changed = 0;
+            int maximumRed = 0;
+            for (int y = 0; y < rayImage.height(); ++y) {
+                for (int x = 0; x < rayImage.width(); ++x) {
+                    const QColor pixel = rayImage.pixelColor(x, y);
+                    changed += pixel.red() > 0 || pixel.green() > 0 ||
+                               pixel.blue() > 0;
+                    maximumRed = std::max(maximumRed, pixel.red());
+                }
+            }
+            return std::tuple<bool, int, int>{rayRendered, changed, maximumRed};
+        };
+        const auto [lowRayRendered, lowRayPixels, lowRayRed] =
+            renderRayMarchVolume(1.0f);
+        const auto [highRayRendered, highRayPixels, highRayRed] =
+            renderRayMarchVolume(2.0f);
+        passed &= check(lowRayRendered && highRayRendered &&
+                            lowRayPixels > 0 && highRayPixels > 0 &&
+                            highRayRed > lowRayRed,
+                        "QPainter scalar-volume ray marching integrates bounded scene-linear density and increases opacity with density");
 
         std::vector<QVector3D> failureThemeBackground;
         failureThemeBackground.reserve(

@@ -578,22 +578,21 @@ bool compositeRasterWorkbenchSurfaces(
     struct VolumeSlicePixel {
         float depth = 0.0f;
         RasterWorkbenchLinearPixel color;
+        bool depthPreClipped = false;
     };
-    std::vector<std::vector<VolumeSlicePixel>> volumeSlicePixels(
-        static_cast<std::size_t>(pixelCount));
-    constexpr std::size_t kMaximumVolumeSamples = 1'000'000;
-    std::size_t retainedVolumeSamples = 0;
-    for (const ViewportRenderObject &object : scalarVolumeObjects) {
-        QVector<RasterWorkbenchVolumeSliceSample> samples;
-        if (!rasterWorkbenchVolumeSliceSamples(
-                object, transform, viewportSize, devicePixelRatio, &samples)) {
-            continue;
-        }
-        const std::size_t sampleCount =
-            static_cast<std::size_t>(samples.size());
-        if (sampleCount > kMaximumVolumeSamples - retainedVolumeSamples)
-            return false;
-        retainedVolumeSamples += sampleCount;
+    std::vector<std::vector<VolumeSlicePixel>> volumeSlicePixels;
+    if (!scalarVolumeObjects.isEmpty())
+        volumeSlicePixels.resize(static_cast<std::size_t>(pixelCount));
+    static const std::vector<VolumeSlicePixel> noVolumePixels;
+    const auto volumePixelsAt = [&](int index)
+        -> const std::vector<VolumeSlicePixel> & {
+        return volumeSlicePixels.empty()
+            ? noVolumePixels
+            : volumeSlicePixels[static_cast<std::size_t>(index)];
+    };
+    QVector<ViewportRenderObject> rayMarchVolumes;
+    const auto volumeBaseColor = [&shadingSettings](
+        const ViewportRenderObject &object) {
         QVector3D baseColor = workbenchDefaultSolidMaterialDiffuseColor();
         switch (shadingSettings.colorMode) {
         case ViewportColorMode::Material:
@@ -607,8 +606,7 @@ bool compositeRasterWorkbenchSurfaces(
             break;
         case ViewportColorMode::Random: {
             const QColor randomColor = workbenchRandomColor(
-                object.objectId, object.displayName,
-                object.libraryPath);
+                object.objectId, object.displayName, object.libraryPath);
             baseColor = workbenchRec709ToSceneLinear(QVector3D(
                 randomColor.redF(), randomColor.greenF(), randomColor.blueF()));
             break;
@@ -620,6 +618,26 @@ bool compositeRasterWorkbenchSurfaces(
                 shadingSettings.customColor.blueF()));
             break;
         }
+        return baseColor;
+    };
+    constexpr std::size_t kMaximumVolumeSamples = 1'000'000;
+    std::size_t retainedVolumeSamples = 0;
+    for (const ViewportRenderObject &object : scalarVolumeObjects) {
+        if (!object.shape.scalarVolume.useSlice) {
+            rayMarchVolumes.append(object);
+            continue;
+        }
+        QVector<RasterWorkbenchVolumeSliceSample> samples;
+        if (!rasterWorkbenchVolumeSliceSamples(
+                object, transform, viewportSize, devicePixelRatio, &samples)) {
+            continue;
+        }
+        const std::size_t sampleCount =
+            static_cast<std::size_t>(samples.size());
+        if (sampleCount > kMaximumVolumeSamples - retainedVolumeSamples)
+            return false;
+        retainedVolumeSamples += sampleCount;
+        const QVector3D baseColor = volumeBaseColor(object);
         const float densityScale = std::max(
             0.0f, object.shape.scalarVolume.densityScale);
         for (const RasterWorkbenchVolumeSliceSample &sample : samples) {
@@ -656,7 +674,8 @@ bool compositeRasterWorkbenchSurfaces(
         if (inFrontCovered) return base;
         const float occlusionDepth = std::max(opaqueDepth, transparentDepth);
         for (const VolumeSlicePixel &slice : slices) {
-            if (slice.depth <= occlusionDepth) continue;
+            if (!slice.depthPreClipped && slice.depth <= occlusionDepth)
+                continue;
             const float remain = 1.0f - slice.color.alpha;
             base = {slice.color.red + base.red * remain,
                     slice.color.green + base.green * remain,
@@ -664,6 +683,53 @@ bool compositeRasterWorkbenchSurfaces(
                     slice.color.alpha + base.alpha * remain};
         }
         return base;
+    };
+    constexpr std::size_t kMaximumVolumeRayIntegrationSamples = 4'000'000;
+    const auto appendRayMarchSamples = [&](const QVector<float> &sceneDepth,
+                                           const QVector<bool> &frontCoverage) {
+        std::size_t remainingIntegrationSamples =
+            kMaximumVolumeRayIntegrationSamples;
+        for (const ViewportRenderObject &object : rayMarchVolumes) {
+            if (remainingIntegrationSamples == 0) break;
+            QVector<RasterWorkbenchVolumeRaySample> samples;
+            std::size_t integratedSampleCount = 0;
+            const bool sampled = rasterWorkbenchVolumeRaySamples(
+                object, transform, viewportSize, devicePixelRatio, sceneDepth,
+                frontCoverage, remainingIntegrationSamples,
+                &integratedSampleCount, &samples);
+            integratedSampleCount = std::min(integratedSampleCount,
+                                             remainingIntegrationSamples);
+            remainingIntegrationSamples -= integratedSampleCount;
+            if (!sampled) continue;
+            const std::size_t sampleCount =
+                static_cast<std::size_t>(samples.size());
+            if (sampleCount > kMaximumVolumeSamples - retainedVolumeSamples)
+                return false;
+            retainedVolumeSamples += sampleCount;
+            const QVector3D baseColor = volumeBaseColor(object);
+            for (const RasterWorkbenchVolumeRaySample &sample : samples) {
+                if (sample.x < 0 || sample.x >= width || sample.y < 0 ||
+                    sample.y >= height) continue;
+                VolumeSlicePixel pixel;
+                pixel.depth = sample.cameraDepth;
+                pixel.depthPreClipped = true;
+                pixel.color = {
+                    sample.premultipliedColor.red * baseColor.x(),
+                    sample.premultipliedColor.green * baseColor.y(),
+                    sample.premultipliedColor.blue * baseColor.z(),
+                    sample.premultipliedColor.alpha};
+                volumeSlicePixels[static_cast<std::size_t>(
+                    sample.y * width + sample.x)].push_back(pixel);
+            }
+        }
+        for (auto &pixelSamples : volumeSlicePixels) {
+            std::stable_sort(pixelSamples.begin(), pixelSamples.end(),
+                             [](const VolumeSlicePixel &left,
+                                const VolumeSlicePixel &right) {
+                                 return left.depth < right.depth;
+                             });
+        }
+        return true;
     };
     if (surfaceLayers != nullptr) {
         surfaceLayers->cavityAppliedBeforeTransparency = false;
@@ -1072,6 +1138,12 @@ bool compositeRasterWorkbenchSurfaces(
                 inFrontCovered[fragment.y * width + fragment.x] = true;
             }
         }
+        QVector<float> raySceneDepth(pixelCount, noDepth);
+        for (int index = 0; index < pixelCount; ++index) {
+            raySceneDepth[index] = std::max(
+                opaqueSceneDepth[index], nearestRegularTransparentDepth[index]);
+        }
+        if (!appendRayMarchSamples(raySceneDepth, inFrontCovered)) return false;
         for (int index = 0; index < pixelCount; ++index) {
             const QVector3D pixelBackground = hasPixelBackground
                 ? sceneLinearBackgroundPixels[static_cast<std::size_t>(index)]
@@ -1089,7 +1161,7 @@ bool compositeRasterWorkbenchSurfaces(
             base.blue = opaque.blue + base.blue * remain;
             base.alpha = opaque.alpha + base.alpha * remain;
             base = compositeVolumeSlices(
-                base, volumeSlicePixels[static_cast<std::size_t>(index)],
+                base, volumePixelsAt(index),
                 opaqueSceneDepth[index], nearestRegularTransparentDepth[index],
                 inFrontCovered[index]);
             basePixels[static_cast<std::size_t>(index)] = base;
@@ -1643,6 +1715,20 @@ bool compositeRasterWorkbenchSurfaces(
                 fragment.depth);
         }
     }
+    if (!useWeightedOit) {
+        QVector<float> raySceneDepth(pixelCount, noDepth);
+        QVector<bool> rayInFrontCoverage(pixelCount, false);
+        for (int index = 0; index < pixelCount; ++index) {
+            raySceneDepth[index] = std::max(
+                opaqueSceneDepth[index],
+                volumeRegularTransparentDepth[index]);
+            rayInFrontCoverage[index] =
+                frontOpaqueSceneDepth[index] != noDepth ||
+                volumeFrontTransparentDepth[index] != noDepth;
+        }
+        if (!appendRayMarchSamples(raySceneDepth, rayInFrontCoverage))
+            return false;
+    }
     if (canResolveSortedOutlineInSceneLinear) {
         sortedRegularTransparentObject.fill(0, pixelCount);
         sortedRegularTransparentDepth.fill(noDepth, pixelCount);
@@ -1782,7 +1868,7 @@ bool compositeRasterWorkbenchSurfaces(
             RasterWorkbenchLinearPixel regular = overLinear(regularOpaque,
                                                              background);
             regular = compositeVolumeSlices(
-                regular, volumeSlicePixels[static_cast<std::size_t>(index)],
+                regular, volumePixelsAt(index),
                 opaqueSceneDepth[index],
                 volumeRegularTransparentDepth[index],
                 frontOpaqueSceneDepth[index] != noDepth ||

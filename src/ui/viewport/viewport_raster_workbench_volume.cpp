@@ -3,6 +3,10 @@
 #include "viewport_raster_workbench_volume.h"
 
 #include "core/geometry/scalar_volume.h"
+#include "core/geometry/work_plane.h"
+
+#include <QMatrix4x4>
+#include <QVector4D>
 
 #include <algorithm>
 #include <array>
@@ -195,6 +199,289 @@ bool rasterWorkbenchVolumeSliceSamples(
     const std::array<Vertex,3> t0{vertices[0],vertices[1],vertices[3]}, t1{vertices[0],vertices[3],vertices[2]};
     if(!rasterTriangle(t0,devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,samples,&seen,step)||
        !rasterTriangle(t1,devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,samples,&seen,step)){samples->clear();return false;}
+    return !samples->isEmpty();
+}
+
+bool rasterWorkbenchVolumeRaySamples(
+    const ViewportRenderObject &object, const ViewportTransform &camera,
+    const QSize &viewportSize, qreal devicePixelRatio,
+    const QVector<float> &sceneDepth, const QVector<bool> &inFrontCoverage,
+    std::size_t maximumIntegrationSamples,
+    std::size_t *integratedSampleCount,
+    QVector<RasterWorkbenchVolumeRaySample> *samples)
+{
+    if (integratedSampleCount) *integratedSampleCount = 0;
+    if (samples) samples->clear();
+    if (!samples || !integratedSampleCount || maximumIntegrationSamples == 0 ||
+        object.shape.geometryType != GeometryType::ScalarVolume ||
+        object.shape.scalarVolume.useSlice || viewportSize.width() <= 0 ||
+        viewportSize.height() <= 0 || !std::isfinite(devicePixelRatio) ||
+        devicePixelRatio <= 0.0) return false;
+
+    const ScalarVolume3D &volume = object.shape.scalarVolume;
+    if (!validateScalarVolume(volume)) return false;
+    const int nx = volume.activeBounds[3] - volume.activeBounds[0] + 1;
+    const int ny = volume.activeBounds[4] - volume.activeBounds[1] + 1;
+    const int nz = volume.activeBounds[5] - volume.activeBounds[2] + 1;
+    const std::uint64_t voxelCount = std::uint64_t(nx) *
+                                     std::uint64_t(ny) *
+                                     std::uint64_t(nz);
+    constexpr std::uint64_t kMaximumDenseVoxels = 16ull * 1024ull * 1024ull;
+    constexpr std::size_t kMaximumRayPixels = 1'000'000;
+    constexpr std::size_t kMaximumIntegratedSamples = 4'000'000;
+    if (nx <= 0 || ny <= 0 || nz <= 0 ||
+        voxelCount > kMaximumDenseVoxels) return false;
+    QVector<float> dense(qsizetype(voxelCount), volume.background);
+    for (const ScalarVolumeActiveRecord &record : volume.activeRecords) {
+        for (int z = 0; z < record.extent; ++z) {
+            for (int y = 0; y < record.extent; ++y) {
+                for (int x = 0; x < record.extent; ++x) {
+                    dense[(qsizetype(record.z + z - volume.activeBounds[2]) * ny +
+                           record.y + y - volume.activeBounds[1]) * nx +
+                          record.x + x - volume.activeBounds[0]] = record.value;
+                }
+            }
+        }
+    }
+
+    const double widthPixels = viewportSize.width() * devicePixelRatio;
+    const double heightPixels = viewportSize.height() * devicePixelRatio;
+    constexpr qint64 kMaximumRasterPixels = 1'000'000;
+    if (!std::isfinite(widthPixels) || !std::isfinite(heightPixels) ||
+        widthPixels <= 0.0 || heightPixels <= 0.0 ||
+        widthPixels > kMaximumRasterPixels ||
+        heightPixels > kMaximumRasterPixels) return false;
+    const int width = qRound64(widthPixels);
+    const int height = qRound64(heightPixels);
+    const qsizetype pixelCount = qsizetype(width) * height;
+    if (width <= 0 || height <= 0 || pixelCount <= 0 ||
+        pixelCount > kMaximumRasterPixels || sceneDepth.size() != pixelCount ||
+        inFrontCoverage.size() != pixelCount) return false;
+
+    QMatrix4x4 gridToObject;
+    QMatrix4x4 objectToWorld;
+    for (int row = 0; row < 4; ++row) {
+        for (int column = 0; column < 4; ++column) {
+            const std::size_t index = std::size_t(row * 4 + column);
+            gridToObject(row, column) = float(volume.gridToObject[index]);
+            objectToWorld(row, column) = float(volume.objectToWorld[index]);
+        }
+    }
+    QMatrix4x4 placement;
+    placement.translate(float(object.placementTranslation.x),
+                        float(object.placementTranslation.y),
+                        float(object.placementTranslation.z));
+    const QMatrix4x4 gridToWorld = placement * objectToWorld * gridToObject;
+    bool invertible = false;
+    const QMatrix4x4 worldToGrid = gridToWorld.inverted(&invertible);
+    if (!invertible) return false;
+
+    const double gridMin[3] = {
+        double(volume.activeBounds[0]) - 0.5,
+        double(volume.activeBounds[1]) - 0.5,
+        double(volume.activeBounds[2]) - 0.5};
+    const double gridMax[3] = {
+        double(volume.activeBounds[3]) + 0.5,
+        double(volume.activeBounds[4]) + 0.5,
+        double(volume.activeBounds[5]) + 0.5};
+    QPointF projected[8];
+    qreal minScreenX = std::numeric_limits<qreal>::max();
+    qreal maxScreenX = std::numeric_limits<qreal>::lowest();
+    qreal minScreenY = std::numeric_limits<qreal>::max();
+    qreal maxScreenY = std::numeric_limits<qreal>::lowest();
+    for (int corner = 0; corner < 8; ++corner) {
+        const QVector3D gridPoint(
+            float((corner & 1) ? gridMax[0] : gridMin[0]),
+            float((corner & 2) ? gridMax[1] : gridMin[1]),
+            float((corner & 4) ? gridMax[2] : gridMin[2]));
+        const QVector3D worldPoint = gridToWorld.map(gridPoint);
+        if (!camera.worldPointToScreenUnclipped(
+                {worldPoint.x(), worldPoint.y(), worldPoint.z()},
+                viewportSize, &projected[corner])) return false;
+        minScreenX = std::min(minScreenX, projected[corner].x());
+        maxScreenX = std::max(maxScreenX, projected[corner].x());
+        minScreenY = std::min(minScreenY, projected[corner].y());
+        maxScreenY = std::max(maxScreenY, projected[corner].y());
+    }
+    const int minX = std::clamp(qFloor(minScreenX * devicePixelRatio),
+                                0, width - 1);
+    const int maxX = std::clamp(qCeil(maxScreenX * devicePixelRatio),
+                                0, width - 1);
+    const int minY = std::clamp(qFloor(minScreenY * devicePixelRatio),
+                                0, height - 1);
+    const int maxY = std::clamp(qCeil(maxScreenY * devicePixelRatio),
+                                0, height - 1);
+    if (maxX < minX || maxY < minY) return false;
+    const std::size_t candidatePixels = std::size_t(maxX - minX + 1) *
+                                        std::size_t(maxY - minY + 1);
+    if (candidatePixels > kMaximumRayPixels) return false;
+
+    const Point3D target = camera.viewTarget();
+    const Point3D viewDirection = camera.viewDirection();
+    const Point3D cameraPosition = camera.cameraPosition(viewportSize);
+    const WorkPlaneFrame viewPlane = makeWorkPlaneFrameFromNormal(
+        target, viewDirection);
+    if (!isValidWorkPlaneFrame(viewPlane)) return false;
+
+    const auto rayBoxInterval = [&](QVector3D origin, QVector3D direction,
+                                    double *nearT, double *farT) {
+        *nearT = 0.0;
+        *farT = std::numeric_limits<double>::infinity();
+        const double origins[3] = {origin.x(), origin.y(), origin.z()};
+        const double directions[3] = {
+            direction.x(), direction.y(), direction.z()};
+        for (int axis = 0; axis < 3; ++axis) {
+            if (std::abs(directions[axis]) <= 1.0e-12) {
+                if (origins[axis] < gridMin[axis] ||
+                    origins[axis] > gridMax[axis]) return false;
+                continue;
+            }
+            const double a = (gridMin[axis] - origins[axis]) /
+                             directions[axis];
+            const double b = (gridMax[axis] - origins[axis]) /
+                             directions[axis];
+            *nearT = std::max(*nearT, std::min(a, b));
+            *farT = std::min(*farT, std::max(a, b));
+        }
+        return *farT > *nearT;
+    };
+
+    const QVector3D worldSize(
+        gridToWorld.mapVector(QVector3D(float(nx), 0.0f, 0.0f)).length(),
+        gridToWorld.mapVector(QVector3D(0.0f, float(ny), 0.0f)).length(),
+        gridToWorld.mapVector(QVector3D(0.0f, 0.0f, float(nz))).length());
+    const QVector3D sampleSpacing(worldSize.x() / (float(nx) * 5.0f),
+                                  worldSize.y() / (float(ny) * 5.0f),
+                                  worldSize.z() / (float(nz) * 5.0f));
+    const float stepLength = std::max(1.0e-16f, sampleSpacing.length());
+    const int maxSteps = std::min(2560, std::max({nx, ny, nz}) * 5);
+    const float densityScale = std::max(0.0f, volume.densityScale);
+    const auto bayerNoise = [](int x, int y) {
+        static constexpr int matrix[16] = {
+            0, 8, 2, 10, 12, 4, 14, 6,
+            3, 11, 1, 9, 15, 7, 13, 5};
+        return (float(matrix[(x & 3) * 4 + (y & 3)]) + 0.5f) / 16.0f;
+    };
+    std::size_t integratedSamples = 0;
+    samples->reserve(qsizetype(std::min(candidatePixels, kMaximumRayPixels)));
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            const qsizetype pixelIndex = qsizetype(y) * width + x;
+            if (inFrontCoverage[pixelIndex]) continue;
+            QPointF viewPlanePosition;
+            const QPointF logicalPixel((x + 0.5) / devicePixelRatio,
+                                      (y + 0.5) / devicePixelRatio);
+            if (!camera.screenToWorkPlaneUnclipped(
+                    logicalPixel, viewportSize, viewPlane, &viewPlanePosition))
+                continue;
+            const Point3D planePoint = workPlaneFramePointToWorld(
+                viewPlanePosition, viewPlane);
+            QVector3D rayOrigin;
+            QVector3D rayDirection;
+            if (camera.isPerspectiveEnabled()) {
+                rayOrigin = QVector3D(float(cameraPosition.x),
+                                      float(cameraPosition.y),
+                                      float(cameraPosition.z));
+                rayDirection = QVector3D(float(planePoint.x - cameraPosition.x),
+                                         float(planePoint.y - cameraPosition.y),
+                                         float(planePoint.z - cameraPosition.z));
+                if (rayDirection.lengthSquared() <= 1.0e-20f) continue;
+                rayDirection.normalize();
+            } else {
+                rayOrigin = QVector3D(float(planePoint.x), float(planePoint.y),
+                                      float(planePoint.z));
+                rayDirection = QVector3D(float(-viewDirection.x),
+                                         float(-viewDirection.y),
+                                         float(-viewDirection.z));
+            }
+            const float viewCosine = std::max(
+                std::abs(QVector3D::dotProduct(
+                    rayDirection,
+                    QVector3D(float(viewDirection.x), float(viewDirection.y),
+                              float(viewDirection.z)))),
+                1.0e-6f);
+            const QVector3D gridOrigin = worldToGrid.map(rayOrigin);
+            const QVector3D gridDirection = worldToGrid.mapVector(rayDirection);
+            double nearT = 0.0;
+            double farT = 0.0;
+            if (!rayBoxInterval(gridOrigin, gridDirection, &nearT, &farT))
+                continue;
+            const float depthLimit = std::isfinite(sceneDepth[pixelIndex])
+                ? sceneDepth[pixelIndex]
+                : float(camera.cameraPreferences().clipEnd);
+            const float depthPerWorldT = std::max(
+                -QVector3D::dotProduct(
+                    rayDirection,
+                    QVector3D(float(viewDirection.x), float(viewDirection.y),
+                              float(viewDirection.z))),
+                1.0e-6f);
+            const double clipT = depthLimit / depthPerWorldT;
+            const double nearClipT = camera.cameraPreferences().clipStart /
+                                     depthPerWorldT;
+            nearT = std::max(nearT, nearClipT);
+            farT = std::min(farT, clipT);
+            if (farT <= nearT) continue;
+
+            const double worldChordLength = farT - nearT;
+            const float rayStepWorld = stepLength / viewCosine;
+            if (rayStepWorld <= 0.0f || !std::isfinite(rayStepWorld)) continue;
+            const float noise = bayerNoise(x, y);
+            float transmittance = 1.0f;
+            QVector3D radiance;
+            bool exhaustedWork = false;
+            for (int step = 0; step < maxSteps; ++step) {
+                const double rayOffset = (step + noise) * rayStepWorld;
+                if (rayOffset >= worldChordLength || transmittance <= 0.01f)
+                    break;
+                if (integratedSamples >= std::min(
+                        kMaximumIntegratedSamples,
+                        maximumIntegrationSamples)) {
+                    exhaustedWork = true;
+                    break;
+                }
+                ++integratedSamples;
+                *integratedSampleCount = integratedSamples;
+                const double rayT = nearT + rayOffset;
+                const QVector3D gridPoint = gridOrigin +
+                    gridDirection * float(rayT);
+                const float density = sampleDensity(
+                    dense, nx, ny, nz, volume.interpolationMethod,
+                    {gridPoint.x(), gridPoint.y(), gridPoint.z()}, volume) *
+                    densityScale;
+                const float extinction = std::max(density, 1.0e-4f);
+                const float stepTransmittance = std::exp(
+                    -extinction * rayStepWorld);
+                const float stepOpacity = 1.0f - stepTransmittance;
+                const float scatteringScale = density / extinction;
+                const float scattering = transmittance * stepOpacity *
+                                         scatteringScale * 0.25f;
+                radiance += QVector3D(scattering, scattering, scattering);
+                transmittance *= stepTransmittance;
+            }
+            if (exhaustedWork) {
+                samples->clear();
+                return false;
+            }
+            const float alpha = 1.0f - transmittance;
+            if (alpha <= 0.0f) continue;
+            const QVector3D worldFront = rayOrigin +
+                                         rayDirection * float(nearT);
+            const float cameraDepth = -QVector3D::dotProduct(
+                worldFront - QVector3D(float(cameraPosition.x),
+                                       float(cameraPosition.y),
+                                       float(cameraPosition.z)),
+                QVector3D(float(viewDirection.x), float(viewDirection.y),
+                          float(viewDirection.z)));
+            if (!std::isfinite(cameraDepth)) continue;
+            RasterWorkbenchVolumeRaySample sample;
+            sample.x = x;
+            sample.y = y;
+            sample.cameraDepth = cameraDepth;
+            sample.premultipliedColor = {
+                radiance.x(), radiance.y(), radiance.z(), alpha};
+            samples->append(sample);
+        }
+    }
     return !samples->isEmpty();
 }
 

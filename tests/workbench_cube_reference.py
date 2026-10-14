@@ -93,9 +93,17 @@ def arguments():
     )
     parser.add_argument(
         "--color-source",
-        choices=("MATERIAL", "OBJECT", "RANDOM", "TEXTURE"),
+        choices=("MATERIAL", "OBJECT", "RANDOM", "TEXTURE", "SINGLE"),
         default="MATERIAL",
         help="Workbench object color source (default: MATERIAL)",
+    )
+    parser.add_argument(
+        "--single-color",
+        nargs=3,
+        type=float,
+        metavar=("R", "G", "B"),
+        default=(0.8, 0.8, 0.8),
+        help="Workbench Single color in Blender scene-linear values",
     )
     parser.add_argument(
         "--texture-image",
@@ -380,6 +388,7 @@ def main():
     shading.use_world_space_lighting = args.world_space_lighting
     shading.studiolight_rotate_z = math.radians(args.rotation_degrees)
     shading.color_type = args.color_source
+    shading.single_color = tuple(args.single_color)
     shading.show_shadows = args.effect == "SHADOWS"
     shading.shadow_intensity = 0.5
     shading.show_cavity = args.effect == "CAVITY"

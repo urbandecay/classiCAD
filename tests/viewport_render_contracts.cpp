@@ -6421,7 +6421,8 @@ int main(int argc, char *argv[])
                         const ColorSourceCaptureCase colorSourceCases[] = {
                             {"color_material", ViewportColorMode::Material},
                             {"color_object", ViewportColorMode::Object},
-                            {"color_random", ViewportColorMode::Random}};
+                            {"color_random", ViewportColorMode::Random},
+                            {"color_custom", ViewportColorMode::Custom}};
                         for (const ColorSourceCaptureCase &captureCase :
                              colorSourceCases) {
                             ViewportRenderObject colorSourceObject =
@@ -6435,6 +6436,16 @@ int main(int argc, char *argv[])
                             ViewportShadingSettings colorShading = rawFaceShading;
                             colorShading.lightingMode = ViewportLightingMode::Flat;
                             colorShading.colorMode = captureCase.colorMode;
+                            if (captureCase.colorMode ==
+                                ViewportColorMode::Custom) {
+                                const QVector3D customLinear(0.31f, 0.18f,
+                                                             0.72f);
+                                const QVector3D customSrgb =
+                                    workbenchSceneLinearToSrgb(customLinear);
+                                colorShading.customColor = QColor::fromRgbF(
+                                    customSrgb.x(), customSrgb.y(),
+                                    customSrgb.z());
+                            }
                             const QString stem = QString::fromLatin1(
                                 captureCase.name);
                             QImage display;

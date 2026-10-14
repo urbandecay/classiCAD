@@ -1360,6 +1360,22 @@ verifies the default orthographic fixture at those two rotations; other
 presets and camera orientations remain open. The earlier 90-degree mismatch
 metrics above describe the pre-fix baseline.
 
+**QPainter planar NURBS coverage resolve (2026-10-13):** The fallback used to
+source-over each tessellation triangle after applying its own 4×4 subpixel
+coverage alpha. A split-quad test showed that this made translucent output
+depend on which diagonal the tessellator used. For untextured, orthographic,
+coplanar NURBS surfaces, the fallback now sums premultiplied display samples
+and scene-linear fragment contributions across the surface and composites one
+resolved image/fragment per pixel. The bounded accumulation runs only up to
+1,000,000 viewport pixels; perspective, textured, and non-coplanar surfaces
+retain the existing path. A planar split-quad test passes with opaque output
+identical, translucent display output within one 8-bit code value, and
+scene-linear fragment probes identical for both diagonals. The focused raster
+fragment contract passes. This does not reproduce Blender's multisample depth
+resolve for general curved, textured, or perspective surfaces. Blender 5.2.2
+resolves its Workbench antialiasing as a later scene effect in
+[`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L1196-L1288).
+
 Phase Two Category 8 source audit: the GPU TAA/SMAA weights, log-space accumulation, SMAA edge/area/search stages, temporal mix, and resolve follow Blender 5.2.2 closely, so no duplicate shader rewrite was made. QPainter still uses supersampling rather than Workbench temporal accumulation. Custom display LUTs carry their domain and shaper through extraction, import, native serialization, CPU rendering, GPU surface/transparency rendering, and AA presentation. A controlled PyOpenColorIO-to-trilinear-LUT comparison for Blender 5.2.2's AgX + Very High Contrast combination used 41,000 deterministic RGB probes over [0, 16]³: the 65³ log-shaped table measured 0.000116 mean absolute channel error, 0.000177 p95, 0.00241 p99, and 0.0546 maximum; the subset in [0, 1]³ measured 0.000194 mean and 0.000371 p95. A linear [0, 16]³ 65³ table measured 0.1758 mean error on [0, 1]³ probes, supporting the existing log shaper. This isolates interpolation error against OCIO and does not compare full Blender/classiCAD rendered output, GPU texture precision, or display quantization. Retain the QPainter and display-transform differences explicitly; worst-case LUT and matched-render comparisons remain open.
 
 ### Phase Two image source-space conversion category

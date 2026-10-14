@@ -36,6 +36,49 @@ bool sameImage(const QImage &a, const QImage &b)
     return true;
 }
 
+bool imagesWithinOneCodeValue(const QImage &a, const QImage &b)
+{
+    if (a.size() != b.size() || a.format() != b.format()) return false;
+    for (int y = 0; y < a.height(); ++y) {
+        const auto *left = reinterpret_cast<const QRgb *>(a.constScanLine(y));
+        const auto *right = reinterpret_cast<const QRgb *>(b.constScanLine(y));
+        for (int x = 0; x < a.width(); ++x) {
+            if (std::abs(qRed(left[x]) - qRed(right[x])) > 1 ||
+                std::abs(qGreen(left[x]) - qGreen(right[x])) > 1 ||
+                std::abs(qBlue(left[x]) - qBlue(right[x])) > 1 ||
+                std::abs(qAlpha(left[x]) - qAlpha(right[x])) > 1) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool sameFragmentProbes(const RasterWorkbenchFragmentSink &a,
+                        const RasterWorkbenchFragmentSink &b)
+{
+    if (a.size() != b.size()) return false;
+    for (size_t index = 0; index < a.size(); ++index) {
+        const auto &left = a[index];
+        const auto &right = b[index];
+        if (left.x != right.x || left.y != right.y ||
+            std::abs(left.cameraDepth - right.cameraDepth) > 1.0e-5f ||
+            std::abs(left.oitLinearDepth - right.oitLinearDepth) > 1.0e-5f ||
+            std::abs(left.alpha - right.alpha) > 1.0e-5f ||
+            left.sourceId != right.sourceId) {
+            return false;
+        }
+        for (int channel = 0; channel < 3; ++channel) {
+            if (std::abs(left.sceneLinearRgb[static_cast<size_t>(channel)] -
+                         right.sceneLinearRgb[static_cast<size_t>(channel)]) >
+                1.0e-5f) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 QImage render(ViewportRenderer &renderer, const Shape &shape,
               const QSize &size, ObjectId id,
               RasterWorkbenchFragmentSink *sink,
@@ -154,7 +197,6 @@ int main(int argc, char **argv)
                                      meshId, meshDepth,
                                      oitDepthOffset + meshDepth, materialAlpha),
                     "mesh fragments must retain coverage, linear HDR color, material alpha, source ID, camera depth, and Blender orthographic OIT depth");
-
     Shape surface;
     surface.geometryType = GeometryType::NurbsSurface;
     surface.nurbsSurface.degreeU = surface.nurbsSurface.degreeV = 1;
@@ -196,6 +238,43 @@ int main(int argc, char **argv)
                                      oitDepthOffset + surfaceDepth,
                                      materialAlpha),
                     "NURBS fragments must retain coverage, linear HDR color, material alpha, source ID, camera depth, and Blender orthographic OIT depth");
+    Shape alternateDiagonalSurface = surface;
+    std::swap(alternateDiagonalSurface.nurbsSurface.controlPoints[0],
+              alternateDiagonalSurface.nurbsSurface.controlPoints[2]);
+    std::swap(alternateDiagonalSurface.nurbsSurface.controlPoints[1],
+              alternateDiagonalSurface.nurbsSurface.controlPoints[3]);
+    const QImage firstDiagonalSurfaceImage = render(
+        renderer, surface, size, ObjectId::fromValue(surfaceId), nullptr,
+        surfaceMaterial);
+    const QImage alternateDiagonalSurfaceImage = render(
+        renderer, alternateDiagonalSurface, size,
+        ObjectId::fromValue(surfaceId), nullptr, surfaceMaterial);
+    passed &= check(
+        imagesWithinOneCodeValue(firstDiagonalSurfaceImage,
+                                 alternateDiagonalSurfaceImage),
+        "transparent planar NURBS tessellation must remain within one display code value when its triangulation diagonal changes");
+    WorkbenchMaterialData opaqueSurfaceMaterial = surfaceMaterial;
+    opaqueSurfaceMaterial.alpha = 1.0;
+    const QImage firstOpaqueDiagonalImage = render(
+        renderer, surface, size, ObjectId::fromValue(surfaceId), nullptr,
+        opaqueSurfaceMaterial);
+    const QImage alternateOpaqueDiagonalImage = render(
+        renderer, alternateDiagonalSurface, size,
+        ObjectId::fromValue(surfaceId), nullptr, opaqueSurfaceMaterial);
+    passed &= check(
+        sameImage(firstOpaqueDiagonalImage, alternateOpaqueDiagonalImage),
+        "opaque planar NURBS tessellation must not change when its triangulation diagonal changes");
+    RasterWorkbenchFragmentSink firstDiagonalFragments;
+    RasterWorkbenchFragmentSink alternateDiagonalFragments;
+    render(renderer, surface, size, ObjectId::fromValue(surfaceId),
+           &firstDiagonalFragments, surfaceMaterial);
+    render(renderer, alternateDiagonalSurface, size,
+           ObjectId::fromValue(surfaceId), &alternateDiagonalFragments,
+           surfaceMaterial);
+    passed &= check(
+        sameFragmentProbes(firstDiagonalFragments,
+                           alternateDiagonalFragments),
+        "scene-linear transparent fragments must be invariant under planar NURBS tessellation diagonal changes");
     passed &= check(std::abs(meshDepth - surfaceDepth) > 0.5f,
                     "camera depth must vary with surface position");
 

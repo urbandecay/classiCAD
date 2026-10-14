@@ -3373,6 +3373,17 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             bool hasUvs = false;
         };
         QVector<SurfaceFillTriangle> fillTriangles;
+        struct CoverageResolvePixel {
+            std::array<float, 4> premultipliedRgba{};
+            float coverage = 0.0f;
+        };
+        struct CoverageResolveFragment {
+            // Weighted scene-linear RGB, world XYZ, and effective alpha.
+            std::array<float, 7> values{};
+        };
+        std::vector<CoverageResolvePixel> coverageResolvePixels;
+        std::vector<CoverageResolveFragment> coverageResolveFragments;
+        bool coverageResolveActive = false;
         const auto appendTriangle = [&](const Point3D &a,
                                         const Point3D &b,
                                         const Point3D &c,
@@ -3515,29 +3526,71 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                                     baseColorVector,
                                                     frontFacing,
                                                     &sampleLinear);
-                        if (fragmentSink != nullptr) {
-                            const Point3D fragmentPosition{
-                                (points[0].x * cw0 + points[1].x * cw1 +
-                                 points[2].x * cw2) / denominator +
-                                    preparedOffset.x,
-                                (points[0].y * cw0 + points[1].y * cw1 +
-                                 points[2].y * cw2) / denominator +
-                                    preparedOffset.y,
-                                (points[0].z * cw0 + points[1].z * cw1 +
-                                 points[2].z * cw2) / denominator +
-                                    preparedOffset.z};
+                        const Point3D fragmentPosition{
+                            (points[0].x * cw0 + points[1].x * cw1 +
+                             points[2].x * cw2) / denominator +
+                                preparedOffset.x,
+                            (points[0].y * cw0 + points[1].y * cw1 +
+                             points[2].y * cw2) / denominator +
+                                preparedOffset.y,
+                            (points[0].z * cw0 + points[1].z * cw1 +
+                             points[2].z * cw2) / denominator +
+                                preparedOffset.z};
+                        if (fragmentSink != nullptr &&
+                            !coverageResolveActive) {
                             observeWorkbenchFragment(
                                 fragmentSink, painter, QPointF(px, py),
                                 fragmentPosition, cameraPosition, viewDirection,
                                 sampleLinear, sample.alphaF() * coverage, objectId,
                                 transform_);
                         }
-                        row[x] = qPremultiply(qRgba(sample.red(), sample.green(),
-                                                    sample.blue(),
-                                                    qRound(sample.alpha() * coverage)));
+                        if (coverageResolveActive) {
+                            CoverageResolvePixel &resolved =
+                                coverageResolvePixels[
+                                    static_cast<size_t>(top + y) *
+                                        static_cast<size_t>(viewportSize.width()) +
+                                    static_cast<size_t>(left + x)];
+                            const qreal sampleAlpha = sample.alphaF();
+                            resolved.premultipliedRgba[0] +=
+                                sample.redF() * sampleAlpha * coverage;
+                            resolved.premultipliedRgba[1] +=
+                                sample.greenF() * sampleAlpha * coverage;
+                            resolved.premultipliedRgba[2] +=
+                                sample.blueF() * sampleAlpha * coverage;
+                            resolved.premultipliedRgba[3] +=
+                                static_cast<float>(sampleAlpha * coverage);
+                            resolved.coverage += static_cast<float>(coverage);
+                            if (fragmentSink != nullptr) {
+                                CoverageResolveFragment &fragment =
+                                    coverageResolveFragments[
+                                        static_cast<size_t>(top + y) *
+                                            static_cast<size_t>(viewportSize.width()) +
+                                        static_cast<size_t>(left + x)];
+                                fragment.values[0] +=
+                                    sampleLinear.x() * static_cast<float>(coverage);
+                                fragment.values[1] +=
+                                    sampleLinear.y() * static_cast<float>(coverage);
+                                fragment.values[2] +=
+                                    sampleLinear.z() * static_cast<float>(coverage);
+                                fragment.values[3] +=
+                                    static_cast<float>(fragmentPosition.x * coverage);
+                                fragment.values[4] +=
+                                    static_cast<float>(fragmentPosition.y * coverage);
+                                fragment.values[5] +=
+                                    static_cast<float>(fragmentPosition.z * coverage);
+                                fragment.values[6] +=
+                                    static_cast<float>(sampleAlpha * coverage);
+                            }
+                        } else {
+                            row[x] = qPremultiply(qRgba(
+                                sample.red(), sample.green(), sample.blue(),
+                                qRound(sample.alpha() * coverage)));
+                        }
                     }
                 }
-                painter.drawImage(QPoint(left, top), raster);
+                if (!coverageResolveActive) {
+                    painter.drawImage(QPoint(left, top), raster);
+                }
                 return;
             }
             // QPainter has no perspective-correct textured-triangle primitive.
@@ -3764,8 +3817,103 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             const SurfaceFillTriangle &b) {
                              return a.depth < b.depth;
                          });
+        // A planar untextured NURBS surface's tessellation triangles are one
+        // surface, so resolve their subpixel coverage together before
+        // source-over blending. This prevents a transparent internal
+        // diagonal from being composited as two partially covered layers.
+        if (!transform_.isPerspectiveEnabled() &&
+            !nurbsTiledTexture && nurbsTexture.isNull() &&
+            !nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty() &&
+            !fillTriangles.isEmpty() &&
+            qint64(viewportSize.width()) * viewportSize.height() <= 1000000) {
+            const QVector3D referenceNormal =
+                workbenchNormalize(fillTriangles.first().normal);
+            qreal minimumDepth = fillTriangles.first().depth;
+            qreal maximumDepth = minimumDepth;
+            coverageResolveActive = true;
+            for (const SurfaceFillTriangle &triangle : fillTriangles) {
+                const QVector3D normal = workbenchNormalize(triangle.normal);
+                if (QVector3D::dotProduct(referenceNormal, normal) <
+                        1.0f - 1.0e-6f) {
+                    coverageResolveActive = false;
+                    break;
+                }
+                minimumDepth = std::min(minimumDepth, triangle.depth);
+                maximumDepth = std::max(maximumDepth, triangle.depth);
+            }
+            coverageResolveActive = coverageResolveActive &&
+                                    maximumDepth - minimumDepth < 1.0e-5;
+            if (coverageResolveActive) {
+                const size_t pixelCount =
+                    static_cast<size_t>(viewportSize.width()) *
+                    static_cast<size_t>(viewportSize.height());
+                coverageResolvePixels.resize(pixelCount);
+                if (fragmentSink != nullptr) {
+                    coverageResolveFragments.resize(pixelCount);
+                }
+            }
+        }
         for (const SurfaceFillTriangle &triangle : fillTriangles) {
             drawTriangle(triangle);
+        }
+        if (coverageResolveActive) {
+            QImage resolvedRaster(viewportSize,
+                                  QImage::Format_ARGB32_Premultiplied);
+            resolvedRaster.fill(Qt::transparent);
+            for (int y = 0; y < viewportSize.height(); ++y) {
+                auto *row = reinterpret_cast<QRgb *>(resolvedRaster.scanLine(y));
+                for (int x = 0; x < viewportSize.width(); ++x) {
+                    const CoverageResolvePixel &resolved =
+                        coverageResolvePixels[
+                            static_cast<size_t>(y) *
+                                static_cast<size_t>(viewportSize.width()) +
+                            static_cast<size_t>(x)];
+                    if (resolved.coverage <= 0.0) continue;
+                    const qreal scale = resolved.coverage > 1.0
+                        ? 1.0 / resolved.coverage
+                        : 1.0;
+                    row[x] = qRgba(
+                        qRound(std::clamp(resolved.premultipliedRgba[0] *
+                                             scale,
+                                         0.0, 1.0) * 255.0),
+                        qRound(std::clamp(resolved.premultipliedRgba[1] *
+                                             scale,
+                                         0.0, 1.0) * 255.0),
+                        qRound(std::clamp(resolved.premultipliedRgba[2] *
+                                             scale,
+                                         0.0, 1.0) * 255.0),
+                        qRound(std::clamp(resolved.premultipliedRgba[3] *
+                                             scale,
+                                         0.0, 1.0) * 255.0));
+                    if (fragmentSink != nullptr &&
+                            coverageResolveFragments[
+                                static_cast<size_t>(y) *
+                                    static_cast<size_t>(viewportSize.width()) +
+                                static_cast<size_t>(x)].values[6] > 0.0f) {
+                        const qreal inverseCoverage =
+                            1.0 / resolved.coverage;
+                        const CoverageResolveFragment &fragment =
+                            coverageResolveFragments[
+                                static_cast<size_t>(y) *
+                                    static_cast<size_t>(viewportSize.width()) +
+                                static_cast<size_t>(x)];
+                        const Point3D worldPosition{
+                            fragment.values[3] * inverseCoverage,
+                            fragment.values[4] * inverseCoverage,
+                            fragment.values[5] * inverseCoverage};
+                        observeWorkbenchFragment(
+                            fragmentSink, painter,
+                            QPointF(x + 0.5, y + 0.5), worldPosition,
+                            cameraPosition, viewDirection,
+                            QVector3D(fragment.values[0], fragment.values[1],
+                                      fragment.values[2]) /
+                                resolved.coverage,
+                            std::min<qreal>(fragment.values[6] * scale, 1.0),
+                            objectId, transform_);
+                    }
+                }
+            }
+            painter.drawImage(QPoint(0, 0), resolvedRaster);
         }
         painter.restore();
         return;

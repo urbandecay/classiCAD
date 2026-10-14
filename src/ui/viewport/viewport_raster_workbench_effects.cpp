@@ -622,6 +622,24 @@ float rasterWorkbenchShadowDepthBias(float minimumLightDepth,
     return std::max(depthRange * 1.0e-6f, floatStep * 2.0f);
 }
 
+QSize rasterWorkbenchShadowMapSize(const QSize &viewportSize) noexcept
+{
+    if (viewportSize.width() <= 0 || viewportSize.height() <= 0)
+        return {};
+
+    constexpr qint64 maximumShadowMapPixels = 16 * 1024 * 1024;
+    const qint64 doubledWidth = qint64(viewportSize.width()) * 2;
+    const qint64 doubledHeight = qint64(viewportSize.height()) * 2;
+    if (doubledWidth <= std::numeric_limits<int>::max() &&
+        doubledHeight <= std::numeric_limits<int>::max() &&
+        doubledHeight > 0 &&
+        doubledWidth <= maximumShadowMapPixels / doubledHeight) {
+        return QSize(static_cast<int>(doubledWidth),
+                     static_cast<int>(doubledHeight));
+    }
+    return viewportSize;
+}
+
 QRgb rasterWorkbenchDofMedian3x3(
     const std::array<QRgb, 9> &samples) noexcept
 {
@@ -2718,6 +2736,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // Transparent geometry can cast a binary shadow, while the receiver pass
     // retains separate opaque and nearest-visible transparent samples.
     QVector<float> lightDepth;
+    const QSize lightMapSize = rasterWorkbenchShadowMapSize(
+        QSize(width, height));
+    const int lightMapWidth = lightMapSize.width();
+    const int lightMapHeight = lightMapSize.height();
     QVector<QVector2D> receiverLightCoordinates;
     QVector<float> receiverLightDepth;
     QVector<QVector2D> transparentReceiverLightCoordinates;
@@ -2771,14 +2793,19 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         shadowLightMaxX = maxX + padX;
         shadowLightMinY = minY - padY;
         shadowLightMaxY = maxY + padY;
-        lightDepth.fill(std::numeric_limits<float>::infinity(), width * height);
+        const qsizetype lightMapPixelCount =
+            qsizetype(lightMapWidth) * lightMapHeight;
+        lightDepth.fill(std::numeric_limits<float>::infinity(),
+                        lightMapPixelCount);
         const auto lightScreen = [&](const QVector3D &point) {
             return QPointF((QVector3D::dotProduct(point, shadowLightRight) -
                             shadowLightMinX) /
-                               (shadowLightMaxX - shadowLightMinX) * width,
+                               (shadowLightMaxX - shadowLightMinX) *
+                               lightMapWidth,
                            (shadowLightMaxY -
                             QVector3D::dotProduct(point, shadowLightUp)) /
-                               (shadowLightMaxY - shadowLightMinY) * height);
+                               (shadowLightMaxY - shadowLightMinY) *
+                               lightMapHeight);
         };
         for (const ShadowTriangle &triangle : shadowTriangles) {
             const QPointF p[3] = {lightScreen(triangle.vertices[0]),
@@ -2790,17 +2817,31 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             const qreal area = (p[1].x() - p[0].x()) * (p[2].y() - p[0].y()) -
                                (p[1].y() - p[0].y()) * (p[2].x() - p[0].x());
             if (std::abs(area) < 1.0e-10) continue;
-            const int x0 = std::clamp(int(std::floor(std::min({p[0].x(), p[1].x(), p[2].x()}))), 0, width - 1);
-            const int x1 = std::clamp(int(std::ceil(std::max({p[0].x(), p[1].x(), p[2].x()}))), 0, width - 1);
-            const int y0 = std::clamp(int(std::floor(std::min({p[0].y(), p[1].y(), p[2].y()}))), 0, height - 1);
-            const int y1 = std::clamp(int(std::ceil(std::max({p[0].y(), p[1].y(), p[2].y()}))), 0, height - 1);
+            const int x0 = std::clamp(
+                int(std::floor(std::min(
+                    {p[0].x(), p[1].x(), p[2].x()}))),
+                0, lightMapWidth - 1);
+            const int x1 = std::clamp(
+                int(std::ceil(std::max(
+                    {p[0].x(), p[1].x(), p[2].x()}))),
+                0, lightMapWidth - 1);
+            const int y0 = std::clamp(
+                int(std::floor(std::min(
+                    {p[0].y(), p[1].y(), p[2].y()}))),
+                0, lightMapHeight - 1);
+            const int y1 = std::clamp(
+                int(std::ceil(std::max(
+                    {p[0].y(), p[1].y(), p[2].y()}))),
+                0, lightMapHeight - 1);
             for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x) {
                 const qreal px = x + 0.5, py = y + 0.5;
                 const qreal a = ((p[1].x()-px)*(p[2].y()-py)-(p[1].y()-py)*(p[2].x()-px))/area;
                 const qreal b = ((p[2].x()-px)*(p[0].y()-py)-(p[2].y()-py)*(p[0].x()-px))/area;
                 const qreal c = 1.0 - a - b;
                 if (a < -1e-6 || b < -1e-6 || c < -1e-6) continue;
-                float &depth = lightDepth[y * width + x];
+                const qsizetype mapIndex =
+                    qsizetype(y) * lightMapWidth + x;
+                float &depth = lightDepth[mapIndex];
                 depth = std::min(depth, float(a*z[0] + b*z[1] + c*z[2]));
             }
         }
@@ -3165,9 +3206,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const auto shadowFactorAt = [&](const QVector2D &lightPixel,
                                         float receiverDepth,
                                         const QVector3D &normal) {
-            const int lightX = std::clamp(qFloor(lightPixel.x()), 0, width - 1);
-            const int lightY = std::clamp(qFloor(lightPixel.y()), 0, height - 1);
-            const float casterDepth = lightDepth[lightY * width + lightX];
+            const int lightX = std::clamp(qFloor(lightPixel.x()), 0,
+                                          lightMapWidth - 1);
+            const int lightY = std::clamp(qFloor(lightPixel.y()), 0,
+                                          lightMapHeight - 1);
+            const qsizetype mapIndex = qsizetype(lightY) * lightMapWidth +
+                                       lightX;
+            const float casterDepth = lightDepth[mapIndex];
             const bool shadowed = std::isfinite(casterDepth) &&
                 casterDepth < receiverDepth - softwareDepthBias;
             return rasterWorkbenchShadowFactor(

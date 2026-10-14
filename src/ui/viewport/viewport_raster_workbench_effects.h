@@ -9,6 +9,7 @@
 
 #include <QImage>
 #include <QPainter>
+#include <QSize>
 #include <QVector3D>
 
 #include <array>
@@ -96,6 +97,10 @@ float rasterWorkbenchShadowFactor(const QVector3D &normal,
 // while retaining headroom for float depth quantization.
 float rasterWorkbenchShadowDepthBias(float minimumLightDepth,
                                      float maximumLightDepth) noexcept;
+
+// Supersample the QPainter light-depth map when a 2x-per-axis map stays under
+// its fixed pixel budget; otherwise retain the viewport-sized fallback.
+QSize rasterWorkbenchShadowMapSize(const QSize &viewportSize) noexcept;
 
 // Blender Workbench's DOF cleanup takes a component-wise median over a 3x3
 // neighborhood of gathered RGBA samples.

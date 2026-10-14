@@ -7048,6 +7048,96 @@ int main(int argc, char *argv[])
                         const bool directoryReady =
                             QDir().mkpath(lightingCaptureDirectory);
                         bool lightingCapturesSucceeded = directoryReady;
+                        const auto captureQPainterColorSource =
+                            [&](const QString &stem,
+                                const ViewportRenderObject &object,
+                                const ViewportShadingSettings &shading) {
+                                CurveHitTester hitTester;
+                                ViewportRenderer renderer(gpuTransform,
+                                                          hitTester);
+                                renderer.setWorkbenchRasterAntialiasingEnabled(
+                                    false);
+                                renderer.setShadingSettings(shading);
+                                QImage display(
+                                    glSize,
+                                    QImage::Format_ARGB32_Premultiplied);
+                                display.fill(QColor(34, 34, 34));
+                                RasterWorkbenchFragmentSink fragments;
+                                QPainter painter(&display);
+                                painter.setRenderHint(
+                                    QPainter::Antialiasing, false);
+                                renderer.drawShape(
+                                    painter, object.shape, glSize, false,
+                                    false, true, QColor(), QString(), 0.0,
+                                    object.objectId, object.geometryRevision,
+                                    object.preparedDepthGeometry.data(), {},
+                                    object.displayColorSceneLinear,
+                                    object.workbenchMaterial, object.displayName,
+                                    object.libraryPath,
+                                    identityMeshObjectTransform,
+                                    object.meshMaterials, &fragments);
+                                painter.end();
+                                constexpr qsizetype values = 640 * 480 * 3;
+                                QVector<float> linear(values);
+                                constexpr float background = 0.0219421387f;
+                                for (qsizetype offset = 0;
+                                     offset + 2 < linear.size(); offset += 3) {
+                                    linear[offset] = background;
+                                    linear[offset + 1] = background;
+                                    linear[offset + 2] = background;
+                                }
+                                for (const RasterWorkbenchLinearFragment &fragment :
+                                     fragments) {
+                                    if (fragment.x < 0 ||
+                                        fragment.x >= glSize.width() ||
+                                        fragment.y < 0 ||
+                                        fragment.y >= glSize.height()) {
+                                        continue;
+                                    }
+                                    const qsizetype offset =
+                                        (qsizetype(fragment.y) * glSize.width() +
+                                         fragment.x) * 3;
+                                    linear[offset] = fragment.sceneLinearRgb[0];
+                                    linear[offset + 1] =
+                                        fragment.sceneLinearRgb[1];
+                                    linear[offset + 2] =
+                                        fragment.sceneLinearRgb[2];
+                                }
+                                QVector<float> bottomUp(values);
+                                const qsizetype rowValues =
+                                    qsizetype(glSize.width()) * 3;
+                                for (int y = 0; y < glSize.height(); ++y) {
+                                    std::copy_n(
+                                        linear.constData() +
+                                            qsizetype(y) * rowValues,
+                                        rowValues,
+                                        bottomUp.data() +
+                                            qsizetype(glSize.height() - 1 - y) *
+                                                rowValues);
+                                }
+                                const QString outputStem = stem +
+                                    QStringLiteral("_qpainter");
+                                const QString pngPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        outputStem + QStringLiteral(".png"));
+                                QFile pfmFile(QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        outputStem + QStringLiteral(".pfm")));
+                                const QByteArray header =
+                                    QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                                return display.size() == QSize(640, 480) &&
+                                    fragments.size() > 1000 &&
+                                    display.save(pngPath) &&
+                                    pfmFile.open(QIODevice::WriteOnly) &&
+                                    pfmFile.write(header) == header.size() &&
+                                    pfmFile.write(
+                                        reinterpret_cast<const char *>(
+                                            bottomUp.constData()),
+                                        bottomUp.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        bottomUp.size() *
+                                            qsizetype(sizeof(float));
+                            };
                         struct LightingCaptureCase {
                             const char *name;
                             ViewportLightingMode mode;
@@ -7387,8 +7477,12 @@ int main(int argc, char *argv[])
                             const bool displaySaved = rendered &&
                                 display.size() == QSize(640, 480) &&
                                 display.save(displayPath);
+                            const bool qpainterColorSourceCaptured =
+                                captureCase.colorMode != ViewportColorMode::Object ||
+                                captureQPainterColorSource(
+                                    stem, colorSourceObject, colorShading);
                             lightingCapturesSucceeded &= linearSaved &&
-                                                         displaySaved;
+                                displaySaved && qpainterColorSourceCaptured;
                         }
 
                         ViewportRenderObject textureSourceObject =

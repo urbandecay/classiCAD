@@ -1754,6 +1754,20 @@ Reproduce with `--color-source VERTEX --attribute-domain POINT` in
 `color_attribute_point.png/.pfm` from the classiCAD lighting capture
 directory.
 
+**AA-Off QPainter Object-color cube comparison (2026-10-14):** Added a
+production `ViewportRenderer` QPainter capture for Flat/Object color using the
+same 640×480 cube, object RGB `(0.12, 0.62, 0.18)`, neutral scene-linear
+background, and AA-Off framing as the Blender 5.2.2 reference. All common
+foreground display pixels match exactly, including the four-pixel-eroded
+interior. The mask has IoU `0.997991` with 224 XOR pixels, the same silhouette
+coverage gap as the established AA-Off Material baseline. This isolates the
+remaining difference to edge coverage for this fixture; it does not establish
+Object-color parity for other lighting modes or geometry. Blender selects the
+object color in pinned [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2037).
+The classiCAD output is `color_object_qpainter.png/.pfm` under
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; compare the PNG and linear PFM with
+`workbench_image_compare.py` and `workbench_pfm_compare.py`.
+
 Blender 5.2.2 does not expose a `FLOAT_COLOR` attribute on the `FACE` domain
 as a color attribute: creating it leaves `Mesh.color_attributes.find(name)`
 at `-1`, and active/render color selection remains unset. The Workbench

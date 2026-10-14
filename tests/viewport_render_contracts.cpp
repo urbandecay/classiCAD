@@ -375,6 +375,20 @@ int main(int argc, char *argv[])
             dofPrefilter.colorWeights ==
                 std::array<float, 4>{0.0f, 0.0f, 1.0f, 0.0f},
         "QPainter Workbench DOF prefilter must retain separate near/far maxima, reject unmatched CoCs, and prioritize far color");
+    const RasterWorkbenchDofPrefilter zeroDofPrefilter =
+        rasterWorkbenchDofPrefilter2x2({0.0f, 0.0f, 0.0f, 0.0f});
+    const RasterWorkbenchDofPrefilter mixedZeroDofPrefilter =
+        rasterWorkbenchDofPrefilter2x2({0.0f, 1.0f, 0.0f, -1.0f});
+    passed &= check(
+        zeroDofPrefilter.nearCoc == 0.0f &&
+            zeroDofPrefilter.farCoc == 0.0f &&
+            zeroDofPrefilter.colorWeights ==
+                std::array<float, 4>{1.0f, 1.0f, 1.0f, 1.0f} &&
+            mixedZeroDofPrefilter.nearCoc == 1.0f &&
+            mixedZeroDofPrefilter.farCoc == 1.0f &&
+            mixedZeroDofPrefilter.colorWeights ==
+                std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f},
+        "QPainter Workbench DOF prefilter must include zero CoCs in both signed classes and keep far priority");
     passed &= check(
         std::abs(rasterWorkbenchDofGatherWeight(4.0f, 4.0f, 0.5f) - 4.0f) <
                 1.0e-6f &&

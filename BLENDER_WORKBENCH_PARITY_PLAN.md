@@ -1015,9 +1015,14 @@ in ordinary free views or orthographic views is superseded by this correction.
   `step(0, coc)` includes zero for both near and far; pinned downsample does
   the same for the separately encoded nonnegative near/far channels. The GPU
   shader now uses `c >= 0` / `c <= 0` in prepare and `channel >= 0` in
-  downsample. The existing focused offscreen capture exercises the focus
-  boundary and still checks edge blur, opacity, and camera-DOF gating; an
-  isolated zero-CoC pixel contract is not exposed by the current fixture.
+  downsample. Scalar contracts now cover an all-zero 2x2 block, where both
+  maxima stay zero and all four zero samples receive unit weight, plus a mixed
+  signed block that retains far-sample priority. The existing focused offscreen
+  capture still checks edge blur, opacity, and camera-DOF gating; it does not
+  independently read back the GPU zero-CoC channels. Blender 5.2.2's inclusive
+  sign behavior is visible in pinned
+  [`workbench_effect_dof_prepare_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_prepare_frag.glsl#L24-L58)
+  and [`workbench_effect_dof_downsample_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_downsample_frag.glsl#L24-L52).
 Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback uses Blender’s generated 49-tap aperture kernel and a CoC-gated component-wise 3x3 median. It now uses Blender's signed 100-pixel CoC bound, builds CoC-aware half-, quarter-, and eighth-resolution color/CoC levels, and selects trilinear mip samples with Blender's adaptive LOD expression. The scalar contracts cover LOD boundaries and signs; a production-path fixture verifies blur spill beyond 12 pixels. To keep dense software resolves practical, it retains all 49 taps for sparse candidate regions and evenly reduces the kernel so targets with up to 24 million candidate pixels stay within a 24-million-tap budget; exceptionally larger targets retain one tap per candidate. This is a documented QPainter quality/performance approximation. Its aperture shaping uses Blender's `blades > 1` condition and polygon/rotation/reciprocal-X-ratio mapping, including the two-blade slit. Its resolve blend uses Blender's `smoothstep(1, 3, abs(CoC))`; contracts cover blend boundaries and an orthographic subpixel scene. Pinned gather/LOD source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L39-L56); mip allocation/downsample source: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L98-L107) and [`workbench_effect_dof_downsample_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_downsample_frag.glsl#L24-L52). Matched image comparison remains open.
 
 - The matched capture exposed two source-level issues. CoC reconstruction was

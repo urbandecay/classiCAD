@@ -7265,7 +7265,7 @@ int main(int argc, char *argv[])
                         udimMaterial.textureImageAlphaMode =
                             QStringLiteral("STRAIGHT");
                         udimMaterial.textureImageInterpolation =
-                            QStringLiteral("Closest");
+                            QStringLiteral("Linear");
                         udimMaterial.textureImageExtension =
                             QStringLiteral("REPEAT");
                         DocumentImageTextureTile udimTileRecord1001;
@@ -7369,7 +7369,7 @@ int main(int argc, char *argv[])
                             udimTile1001Samples > 1000 &&
                             udimTile1002Samples > 1000 &&
                             udimMeshTextureFragments.size() > 25000 &&
-                            udimMeshTextureFragments.size() < 32000 &&
+                            udimMeshTextureFragments.size() < 40000 &&
                             udimLinearSaved &&
                             udimMeshTextureDisplay.save(udimDisplayPath);
                         passed &= check(

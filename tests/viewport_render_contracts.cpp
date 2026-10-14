@@ -339,6 +339,32 @@ int main(int argc, char *argv[])
             std::abs(rotatedFourBladeTap.y() - 0.5) < 1.0e-9,
         "QPainter Workbench polygon aperture must shape from the unrotated sector, then rotate the tap once");
 
+    const auto dofKernel = rasterWorkbenchDofKernel(0, 0.0, 1.0);
+    qreal dofKernelRadiusSum = 0.0;
+    for (const QPointF &tap : dofKernel)
+        dofKernelRadiusSum += std::hypot(tap.x(), tap.y());
+    passed &= check(
+        dofKernel.front() == QPointF(0.0, 0.0) &&
+            std::abs(std::hypot(dofKernel.back().x(),
+                                dofKernel.back().y()) - 1.0) < 1.0e-9 &&
+            std::abs(dofKernelRadiusSum - 112.0 / 3.0) < 1.0e-8,
+        "QPainter Workbench DOF kernel must preserve Blender's 49 square-ring perimeter samples and disk radii");
+    const auto hexagonalDofKernel = rasterWorkbenchDofKernel(
+        6, 0.2, 2.0);
+    constexpr qreal dofPi = 3.141592653589793;
+    const qreal expectedHexRadius =
+        (2.0 / 3.0) * std::cos(dofPi / 6.0) /
+        std::cos(dofPi / 12.0);
+    passed &= check(
+        hexagonalDofKernel.size() == 49 &&
+            std::abs(hexagonalDofKernel[9].x() -
+                     expectedHexRadius *
+                         std::cos(5.0 * dofPi / 4.0 + 0.2) / 2.0) < 1.0e-8 &&
+            std::abs(hexagonalDofKernel[9].y() -
+                     expectedHexRadius *
+                         std::sin(5.0 * dofPi / 4.0 + 0.2)) < 1.0e-8,
+        "QPainter Workbench DOF kernel must apply Blender's blade polygon, rotation, and reciprocal X ratio to all 49 taps");
+
     ViewportTransform orthographicDofTransform;
     orthographicDofTransform.setViewPreset(ViewportViewPreset::Top);
     orthographicDofTransform.setPerspectiveEnabled(false);
@@ -1366,8 +1392,8 @@ int main(int argc, char *argv[])
         largeCocDofTransform, orthographicDofSize, 1.0,
         orthographicDofSettings);
     passed &= check(largeCocDofOpticsSet &&
-                        largeCocImpulseImage.pixelColor(96, 64).red() < 5,
-                    "QPainter Workbench DOF must median-filter an isolated impulse after a large-CoC gather");
+                        largeCocImpulseImage.pixelColor(96, 64).red() <= 5,
+                    "QPainter Workbench DOF median cleanup must suppress an isolated impulse after a large-CoC 49-tap gather");
 
     const auto makeOutlineScaleObject = [&]() {
         ViewportRenderObject object;

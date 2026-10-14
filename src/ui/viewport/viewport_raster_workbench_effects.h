@@ -47,6 +47,12 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
                                   qreal apertureRotationRadians,
                                   qreal apertureRatio) noexcept;
 
+// Blender 5.2.2's radius-three square-ring sample pattern, mapped to a disk
+// and shaped by the active aperture settings.
+std::array<QPointF, 49> rasterWorkbenchDofKernel(
+    int apertureBlades, qreal apertureRotationRadians,
+    qreal apertureRatio) noexcept;
+
 // Blender Workbench's DOF resolve uses smoothstep(1, 3, abs(CoC)) to blend
 // its gathered bokeh image over the sharp source.
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept;

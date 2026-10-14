@@ -39,21 +39,6 @@ struct RasterSample {
     float sourceAlpha = 1.0f;
 };
 
-qreal rasterDofKernelRotation(int x, int y)
-{
-    static const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
-        detail::kWorkbenchCavityBlueNoiseRgBase64,
-        static_cast<qsizetype>(
-            sizeof(detail::kWorkbenchCavityBlueNoiseRgBase64) - 1)));
-    constexpr int size = 64;
-    constexpr int channels = 2;
-    constexpr qreal twoPi = 6.283185307179586;
-    if (blueNoiseRg.size() != size * size * channels) return 0.0;
-    const int index = ((y & (size - 1)) * size + (x & (size - 1))) * channels;
-    const qreal noise = static_cast<unsigned char>(blueNoiseRg.at(index)) / 256.0;
-    return noise * twoPi;
-}
-
 float rasterCavityNoise(int x, int y, int channel)
 {
     static const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
@@ -470,6 +455,68 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
     const qreal radius = std::hypot(tap.x(), tap.y());
     return QPointF(std::cos(angle) * radius / ratio,
                    std::sin(angle) * radius);
+}
+
+std::array<QPointF, 49> rasterWorkbenchDofKernel(
+    int apertureBlades, qreal apertureRotationRadians,
+    qreal apertureRatio) noexcept
+{
+    constexpr int kernelRadius = 3;
+    std::array<QPointF, 49> samples{};
+    std::size_t sampleIndex = 0;
+    for (int ring = 0; ring <= kernelRadius; ++ring) {
+        for (int x = -kernelRadius; x <= kernelRadius; ++x) {
+            for (int y = -kernelRadius; y <= kernelRadius; ++y) {
+                if (std::abs(x) > ring || std::abs(y) > ring ||
+                    (std::abs(x) < ring && std::abs(y) < ring)) {
+                    continue;
+                }
+
+                const qreal squareX = qreal(x) / kernelRadius;
+                const qreal squareY = qreal(y) / kernelRadius;
+                qreal radius = 0.0;
+                qreal angle = 0.0;
+                if (squareX > -squareY) {
+                    if (squareX > squareY) {
+                        radius = squareX;
+                        angle = 0.7853981633974483 * (squareY / squareX);
+                    } else {
+                        radius = squareY;
+                        angle = 0.7853981633974483 *
+                            (2.0 - squareX / squareY);
+                    }
+                } else if (squareX < squareY) {
+                    radius = -squareX;
+                    angle = 0.7853981633974483 *
+                        (4.0 + squareY / squareX);
+                } else {
+                    radius = -squareY;
+                    angle = squareY != 0.0
+                        ? 0.7853981633974483 *
+                            (6.0 - squareX / squareY)
+                        : 0.0;
+                }
+
+                qreal shapedRadius = radius;
+                if (apertureBlades > 1) {
+                    const qreal bladeAngle =
+                        6.283185307179586 / apertureBlades;
+                    const qreal denominator = angle - bladeAngle * std::floor(
+                        (apertureBlades * angle + 3.141592653589793) /
+                        6.283185307179586);
+                    shapedRadius *=
+                        std::cos(3.141592653589793 / apertureBlades) /
+                        std::cos(denominator);
+                }
+                angle += apertureRotationRadians;
+                const qreal ratio = std::max<qreal>(apertureRatio, 0.01);
+                samples[sampleIndex++] = QPointF(
+                    shapedRadius * std::cos(angle) / ratio,
+                    shapedRadius * std::sin(angle));
+            }
+        }
+    }
+    return samples;
 }
 
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept
@@ -3410,11 +3457,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             qsizetype(outputWidth) * outputHeight;
         QVector<float> dofMixes(outputPixelCount, 0.0f);
         QVector<float> medianRadii(outputPixelCount, 0.0f);
-        constexpr std::array<QPointF, 12> disk{{
-            {0.0, 0.0}, {0.527, 0.085}, {-0.040, 0.536},
-            {-0.670, -0.179}, {0.244, -0.647}, {0.765, 0.429},
-            {-0.315, 0.847}, {-0.897, 0.310}, {0.493, 0.749},
-            {0.901, -0.312}, {-0.527, -0.757}, {0.089, -0.956}}};
+        const auto dofKernel = rasterWorkbenchDofKernel(
+            cameraOptics.apertureBlades,
+            cameraOptics.apertureRotationRadians,
+            cameraOptics.apertureRatio);
         // Blender Workbench converts lens and sensor dimensions from mm to
         // the scene's meter-based coordinates; depth and focus stay in scene
         // coordinates (also the convention of the imported Blender geometry).
@@ -3527,20 +3573,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     int count = 0;
-                    // QPainter has no temporal AA sample sequence to rotate
-                    // this kernel between accumulated frames. Use the shared
-                    // Workbench blue-noise LUT for a stable per-pixel rotation.
-                    const qreal kernelAngle = rasterDofKernelRotation(x, y);
-                    const qreal kernelCos = std::cos(kernelAngle);
-                    const qreal kernelSin = std::sin(kernelAngle);
-                    for (const QPointF &diskTap : disk) {
-                        const QPointF rotatedTap(
-                            diskTap.x() * kernelCos - diskTap.y() * kernelSin,
-                            diskTap.x() * kernelSin + diskTap.y() * kernelCos);
-                        const QPointF tap = rasterWorkbenchApertureTap(
-                            rotatedTap, cameraOptics.apertureBlades,
-                            cameraOptics.apertureRotationRadians,
-                            cameraOptics.apertureRatio);
+                    for (const QPointF &tap : dofKernel) {
                         const int sx = std::clamp(qRound(x + tap.x() * radius),
                                                   0, outputWidth - 1);
                         const int sy = std::clamp(qRound(y + tap.y() * radius),

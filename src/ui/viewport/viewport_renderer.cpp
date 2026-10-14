@@ -432,9 +432,9 @@ quint32 blenderHashInt(quint32 value)
     return c;
 }
 
-QColor workbenchRandomColor(ObjectId objectId,
-                            const QString &displayName,
-                            const QString &libraryPath)
+QColor workbenchRandomColorInternal(ObjectId objectId,
+                                    const QString &displayName,
+                                    const QString &libraryPath)
 {
     quint32 hash = 0;
     qreal hue = 0.0;
@@ -732,6 +732,13 @@ void appendOrthographicGridLine(const ViewportTransform &transform,
 }
 
 } // namespace
+
+QColor workbenchRandomColor(ObjectId objectId,
+                            const QString &displayName,
+                            const QString &libraryPath)
+{
+    return workbenchRandomColorInternal(objectId, displayName, libraryPath);
+}
 
 namespace {
 

@@ -188,6 +188,7 @@ set(CLASSICAD_VIEWPORT_SHARED_SOURCES
     src/ui/viewport/viewport_geometry_cache.cpp
     src/ui/viewport/viewport_render_frame.cpp
     src/ui/viewport/viewport_raster_workbench_effects.cpp
+    src/ui/viewport/viewport_raster_workbench_volume.cpp
     src/ui/viewport/viewport_raster_workbench_linear.cpp
     src/ui/viewport/navigation_gizmo.cpp
     src/ui/viewport/viewport_arc_compass_renderer.cpp

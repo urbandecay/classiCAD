@@ -145,6 +145,7 @@ bool compositeRasterWorkbenchSurfaces(
                              RasterWorkbenchFragmentSink *)> &drawObject,
     RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
     const std::vector<QVector3D> &sceneLinearBackgroundPixels = {},
-    bool allowFragmentGeneratedDepth = false);
+    bool allowFragmentGeneratedDepth = false,
+    const QVector<ViewportRenderObject> &scalarVolumeObjects = {});
 
 } // namespace classiCAD

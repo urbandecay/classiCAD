@@ -20,6 +20,10 @@ namespace classiCAD {
 
 struct ViewportDepthGeometry;
 
+QColor workbenchRandomColor(ObjectId objectId,
+                            const QString &displayName,
+                            const QString &libraryPath);
+
 class ViewportRenderer {
 public:
     ViewportRenderer(const ViewportTransform &transform,

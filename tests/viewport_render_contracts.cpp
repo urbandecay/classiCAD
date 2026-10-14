@@ -1694,6 +1694,46 @@ int main(int argc, char *argv[])
                             generatedAgxImage == preparedAgxImage,
                         "fragment-derived fallback depth must preserve scene-linear transparency under AgX");
         renderer.setShadingSettings(shading);
+
+        ScalarVolume3D sliceVolume;
+        sliceVolume.name = QStringLiteral("qpaint slice density");
+        sliceVolume.activeBounds = {-1, -1, -1, 0, 0, 0};
+        sliceVolume.expandedVoxelCount = 8;
+        sliceVolume.denseVoxelCount = 8;
+        sliceVolume.activeRecords.append({-1, -1, -1, 2, true, 1.0f});
+        sliceVolume.useSlice = true;
+        sliceVolume.sliceAxis = QStringLiteral("Z");
+        sliceVolume.sliceDepth = 0.5f;
+        sliceVolume.interpolationMethod = QStringLiteral("LINEAR");
+        sliceVolume.densityScale = 1.0f;
+        ViewportRenderObject sliceVolumeObject;
+        sliceVolumeObject.shape.geometryType = GeometryType::ScalarVolume;
+        sliceVolumeObject.shape.scalarVolume = sliceVolume;
+        sliceVolumeObject.objectId = ObjectId::fromValue(9110);
+        sliceVolumeObject.displayColorSceneLinear =
+            QVector4D(0.8f, 0.12f, 0.03f, 1.0f);
+        ViewportShadingSettings volumeSliceSettings = shading;
+        volumeSliceSettings.colorMode = ViewportColorMode::Object;
+        QImage volumeSliceImage(size, QImage::Format_ARGB32_Premultiplied);
+        volumeSliceImage.fill(Qt::black);
+        const QVector<ViewportRenderObject> noSurfaceObjects;
+        const QVector<ViewportRenderObject> volumeObjects{sliceVolumeObject};
+        const bool volumeSliceRendered = compositeRasterWorkbenchSurfaces(
+            &volumeSliceImage, noSurfaceObjects, transform, size, 1.0,
+            false, true, volumeSliceSettings, QVector3D(0.0f, 0.0f, 0.0f),
+            drawObject, nullptr, {}, false, volumeObjects);
+        int volumeSliceChangedPixels = 0;
+        for (int y = 0; y < volumeSliceImage.height(); ++y) {
+            for (int x = 0; x < volumeSliceImage.width(); ++x) {
+                const QColor pixel = volumeSliceImage.pixelColor(x, y);
+                volumeSliceChangedPixels += pixel.red() > 0 ||
+                                            pixel.green() > 0 ||
+                                            pixel.blue() > 0;
+            }
+        }
+        passed &= check(volumeSliceRendered && volumeSliceChangedPixels > 0,
+                        "QPainter Workbench fallback composites enabled scalar-volume slice samples in scene linear color");
+
         std::vector<QVector3D> failureThemeBackground;
         failureThemeBackground.reserve(
             static_cast<std::size_t>(size.width()) * size.height());

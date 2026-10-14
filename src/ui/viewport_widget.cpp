@@ -9193,13 +9193,19 @@ protected:
                        type == GeometryType::PolygonMesh;
             };
             QVector<ViewportRenderObject> surfaceDrawObjects;
+            QVector<ViewportRenderObject> scalarVolumeDrawObjects;
             QVector<int> surfaceDrawSlots;
             surfaceDrawObjects.reserve(sceneDrawObjects.size());
+            scalarVolumeDrawObjects.reserve(sceneDrawObjects.size());
             surfaceDrawSlots.reserve(sceneDrawObjects.size());
             for (int objectIndex = 0; objectIndex < sceneDrawObjects.size();
                  ++objectIndex) {
-                if (hasSurfaceGeometry(sceneDrawObjects.at(objectIndex))) {
-                    surfaceDrawObjects.append(sceneDrawObjects.at(objectIndex));
+                const ViewportRenderObject &object =
+                    sceneDrawObjects.at(objectIndex);
+                if (object.shape.geometryType == GeometryType::ScalarVolume) {
+                    scalarVolumeDrawObjects.append(object);
+                } else if (hasSurfaceGeometry(object)) {
+                    surfaceDrawObjects.append(object);
                     surfaceDrawSlots.append(objectIndex);
                 }
             }
@@ -9239,7 +9245,8 @@ protected:
                     surfaceDrawObjects.at(surfaceIndex);
             }
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
-                !surfaceDrawObjects.isEmpty()) {
+                (!surfaceDrawObjects.isEmpty() ||
+                 !scalarVolumeDrawObjects.isEmpty())) {
                 std::optional<QVector3D> rasterSceneLinearBackground;
                 if (viewportShadingSettings_.backgroundMode ==
                     ViewportBackgroundMode::World) {
@@ -9281,7 +9288,8 @@ protected:
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
-                    }, &rasterSurfaceLayers, rasterThemeBackgroundPixels);
+                    }, &rasterSurfaceLayers, rasterThemeBackgroundPixels,
+                    false, scalarVolumeDrawObjects);
                 if (rasterSurfaceBatchRendered &&
                     renderShadingSettings.outline &&
                     (renderShadingSettings.shadows ||
@@ -9317,6 +9325,10 @@ protected:
             const bool scalePreview = renderObject.scalePreview;
             const bool rotatePreview = renderObject.rotatePreview;
             const GeometryType geometryType = visibleShape.geometryType;
+            if (rasterSurfaceBatchRendered &&
+                geometryType == GeometryType::ScalarVolume) {
+                continue;
+            }
             const QSet<int> &objectComponentSelection =
                 componentSelectionForObject(objectId);
             QSet<int> objectVertexSelection = objectComponentSelection;
@@ -11102,7 +11114,12 @@ protected:
                        type == GeometryType::NurbsSolid ||
                        type == GeometryType::PolygonMesh;
             };
+            QVector<ViewportRenderObject> fallbackVolumeObjects;
             for (ViewportRenderObject object : fallbackDrawObjects) {
+                if (object.shape.geometryType == GeometryType::ScalarVolume) {
+                    fallbackVolumeObjects.append(std::move(object));
+                    continue;
+                }
                 if (!isSurfaceObject(object)) {
                     continue;
                 }
@@ -11128,7 +11145,8 @@ protected:
             // retain the legacy average-depth painter path.
             bool fallbackSurfaceBatchRendered = false;
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
-                !fallbackSurfaceObjects.isEmpty()) {
+                (!fallbackSurfaceObjects.isEmpty() ||
+                 !fallbackVolumeObjects.isEmpty())) {
                 const qreal fallbackDpr =
                     std::max<qreal>(devicePixelRatioF(), 1.0);
                 QImage fallbackSurfaceLayer(
@@ -11176,7 +11194,8 @@ protected:
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
-                    }, nullptr, fallbackThemeBackgroundPixels, true);
+                    }, nullptr, fallbackThemeBackgroundPixels, true,
+                    fallbackVolumeObjects);
                 if (fallbackSurfaceBatchRendered) {
                     painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
                 }

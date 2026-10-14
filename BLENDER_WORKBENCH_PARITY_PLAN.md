@@ -3344,18 +3344,25 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   slice samples. This slice rasterizer is separate from the bounded QPainter
   ray-march path documented below. The scalar volume data model and
   `WorkbenchMaterialData` adapter are unchanged.
+- Perspective slice triangles are now clipped against the viewport camera's
+  near plane before projection. The clipped vertices retain interpolated grid
+  coordinates, so perspective-correct density sampling remains continuous
+  across the clipped edge. The regression contract verifies a slice that
+  straddles the configured near plane still produces its visible samples.
 - Blender 5.2.2's pinned
   [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh)
   defines the transformed slice plane, depth/stencil rejection, and volume
   sampling modes. Its [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc)
-  derives slice step from the selected axis of object dimensions; shadow
-  sampling remains a shader TODO.
+  builds the selected slice face and derives its step from the selected axis of
+  object dimensions; the shader applies the depth/stencil checks per fragment.
+  Shadow sampling remains a shader TODO.
 - The production viewport contract exercises a volume-only QPainter scene and
   verifies that a valid slice changes the scene image. Validation:
   `cmake --build build -j4` passed with the source dependency audit, and both
   offscreen `viewport_render_contracts` and
   `workbench_raster_fragment_contracts` passed. Matched Blender output and
-  comprehensive depth/occlusion combinations remain open. The CPU ray marcher
+  opaque/transparent depth and in-front coverage combinations beyond existing
+  slice checks remain open. The CPU ray marcher
   is a bounded approximation with a 16M dense-voxel cap, 1M candidate pixels
   per volume, and 4M aggregate integration samples per composition;
   multiple/vector grids, animation, and larger bounds remain unsupported.

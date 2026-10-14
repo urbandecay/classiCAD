@@ -22,6 +22,7 @@ constexpr qsizetype kMaxSamples = 1'000'000;
 
 struct Vec3 { double x, y, z; };
 struct Vertex { QPointF screen; Vec3 grid; double cameraDepth; double projectionDepth; };
+struct SliceVertex { Vec3 world; Vec3 grid; double cameraDepth; };
 
 Vec3 mapPoint(const ScalarVolumeMatrix &m, Vec3 p)
 {
@@ -181,9 +182,9 @@ bool rasterWorkbenchVolumeSliceSamples(
     for(int i=0;i<8;++i){Vec3 g{(i&1)?maxs[0]:mins[0],(i&2)?maxs[1]:mins[1],(i&4)?maxs[2]:mins[2]};Vec3 w=worldFor(g);if(!finite(w))return false;low.x=std::min(low.x,w.x);low.y=std::min(low.y,w.y);low.z=std::min(low.z,w.z);high.x=std::max(high.x,w.x);high.y=std::max(high.y,w.y);high.z=std::max(high.z,w.z);}
     const double ext[3]={high.x-low.x,high.y-low.y,high.z-low.z};
     const float step=float(std::max(1e-16,ext[axis]*0.05));
-    std::array<Vertex,4> vertices;
+    std::array<SliceVertex,4> vertices;
     const Point3D eye=camera.cameraPosition(viewportSize), forward=camera.viewDirection();
-    for(int i=0;i<4;++i){Vec3 w=worldFor(grid[i]);if(!finite(w))return false;QPointF s;if(!camera.worldPointToScreenUnclipped({w.x,w.y,w.z},viewportSize,&s))return false;double d=-((w.x-eye.x)*forward.x+(w.y-eye.y)*forward.y+(w.z-eye.z)*forward.z);double projectionDepth=camera.isPerspectiveEnabled()?d:1.0;if(!std::isfinite(d)||projectionDepth<=1e-15)return false;vertices[i]={s,grid[i],d,projectionDepth};}
+    for(int i=0;i<4;++i){Vec3 w=worldFor(grid[i]);if(!finite(w))return false;double d=-((w.x-eye.x)*forward.x+(w.y-eye.y)*forward.y+(w.z-eye.z)*forward.z);if(!std::isfinite(d))return false;vertices[i]={w,grid[i],d};}
     const double widthPixels = viewportSize.width() * devicePixelRatio;
     const double heightPixels = viewportSize.height() * devicePixelRatio;
     constexpr qint64 kMaximumRasterPixels = 64ll * 1024ll * 1024ll;
@@ -196,9 +197,48 @@ bool rasterWorkbenchVolumeSliceSamples(
     if (width <= 0 || height <= 0 ||
         width > kMaximumRasterPixels / height) return false;
     std::unordered_set<std::uint64_t> seen;
-    const std::array<Vertex,3> t0{vertices[0],vertices[1],vertices[3]}, t1{vertices[0],vertices[3],vertices[2]};
-    if(!rasterTriangle(t0,devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,samples,&seen,step)||
-       !rasterTriangle(t1,devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,samples,&seen,step)){samples->clear();return false;}
+    const double nearDepth=std::max(1.0e-9,camera.cameraPreferences().clipStart);
+    const auto rasterClippedTriangle=[&](const std::array<SliceVertex,3> &triangle) {
+        std::array<SliceVertex,4> clipped{};
+        int clippedCount=0;
+        SliceVertex previous=triangle.back();
+        bool previousInside=previous.cameraDepth>=nearDepth;
+        for(const SliceVertex &current:triangle){
+            const bool currentInside=current.cameraDepth>=nearDepth;
+            if(currentInside!=previousInside){
+                const double denominator=current.cameraDepth-previous.cameraDepth;
+                if(std::abs(denominator)<=1.0e-15)return true;
+                const double t=std::clamp((nearDepth-previous.cameraDepth)/denominator,0.0,1.0);
+                clipped[clippedCount++]={{previous.world.x+(current.world.x-previous.world.x)*t,
+                                           previous.world.y+(current.world.y-previous.world.y)*t,
+                                           previous.world.z+(current.world.z-previous.world.z)*t},
+                                          {previous.grid.x+(current.grid.x-previous.grid.x)*t,
+                                           previous.grid.y+(current.grid.y-previous.grid.y)*t,
+                                           previous.grid.z+(current.grid.z-previous.grid.z)*t},nearDepth};
+            }
+            if(currentInside)clipped[clippedCount++]=current;
+            previous=current;
+            previousInside=currentInside;
+        }
+        if(clippedCount<3)return true;
+        std::array<Vertex,4> projectedVertices{};
+        for(int i=0;i<clippedCount;++i){
+            const SliceVertex &source=clipped[i];
+            QPointF screen;
+            if(!camera.worldPointToScreenUnclipped(
+                   {source.world.x,source.world.y,source.world.z},viewportSize,&screen))return false;
+            const double projectionDepth=camera.isPerspectiveEnabled()?source.cameraDepth:1.0;
+            if(projectionDepth<=1.0e-15)return false;
+            projectedVertices[i]={screen,source.grid,source.cameraDepth,projectionDepth};
+        }
+        for(int i=1;i+1<clippedCount;++i){
+            if(!rasterTriangle({projectedVertices[0],projectedVertices[i],projectedVertices[i+1]},
+                               devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,samples,&seen,step))return false;
+        }
+        return true;
+    };
+    const std::array<SliceVertex,3> t0{vertices[0],vertices[1],vertices[3]}, t1{vertices[0],vertices[3],vertices[2]};
+    if(!rasterClippedTriangle(t0)||!rasterClippedTriangle(t1)){samples->clear();return false;}
     return !samples->isEmpty();
 }
 

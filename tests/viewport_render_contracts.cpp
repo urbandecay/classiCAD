@@ -1737,6 +1737,37 @@ int main(int argc, char *argv[])
         passed &= check(volumeSliceRendered && volumeSliceChangedPixels > 0,
                         "QPainter Workbench fallback composites enabled scalar-volume slice samples in scene linear color");
 
+        ViewportTransform nearPlaneSliceCamera;
+        nearPlaneSliceCamera.setViewPreset(ViewportViewPreset::Perspective);
+        nearPlaneSliceCamera.zoom() = 120.0;
+        const Point3D nearPlaneEye =
+            nearPlaneSliceCamera.cameraPosition(size);
+        const Point3D nearPlaneForward =
+            nearPlaneSliceCamera.viewDirection();
+        double minimumSliceDepth = std::numeric_limits<double>::infinity();
+        double maximumSliceDepth = -std::numeric_limits<double>::infinity();
+        for (double x : {-1.5, 0.5}) {
+            for (double y : {-1.5, 0.5}) {
+                const double depth = -(
+                    (x - nearPlaneEye.x) * nearPlaneForward.x +
+                    (y - nearPlaneEye.y) * nearPlaneForward.y +
+                    (-0.5 - nearPlaneEye.z) * nearPlaneForward.z);
+                minimumSliceDepth = std::min(minimumSliceDepth, depth);
+                maximumSliceDepth = std::max(maximumSliceDepth, depth);
+            }
+        }
+        QVector<RasterWorkbenchVolumeSliceSample> nearPlaneSliceSamples;
+        const bool nearPlaneSliceSampled = rasterWorkbenchVolumeSliceSamples(
+            sliceVolumeObject, nearPlaneSliceCamera, size, 1.0,
+            &nearPlaneSliceSamples);
+        passed &= check(
+            minimumSliceDepth < nearPlaneSliceCamera.cameraPreferences().clipStart &&
+                maximumSliceDepth > nearPlaneSliceCamera.cameraPreferences().clipStart,
+            "QPainter scalar-volume near-plane fixture must cross the configured perspective clip plane");
+        passed &= check(
+            nearPlaneSliceSampled && !nearPlaneSliceSamples.isEmpty(),
+            "QPainter scalar-volume slice must retain the visible clipped portion when its plane crosses the perspective near plane");
+
         const auto renderRayMarchVolume = [&](float density) {
             ScalarVolume3D rayVolume = sliceVolume;
             rayVolume.useSlice = false;

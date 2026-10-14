@@ -3500,8 +3500,11 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L280-L300)
   and [`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh#L677-L689).
   Contracts check focus response, fully shadowed and zero-intensity limits,
-  and a rendered QPainter focus change. The CPU light-depth caster and
-  receiver coverage remain approximations; matched Blender comparison is open.
+  and a rendered QPainter focus change. Matched planar-receiver comparisons
+  cover Blender 5.2.2 defaults (`shadow_shift=0.1`, `shadow_focus=0.0`) and a
+  joint alternate (`0.25`, `0.4`), with measurements recorded below. Separate
+  one-variable sweeps and wider values remain open. The CPU light-depth caster
+  and receiver coverage remain approximations.
 
 ## QPainter shadow beneath transparency (2026-10-14)
 
@@ -4632,7 +4635,10 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   Blender Studio Default lighting, AA Off, a `(4, -6, 4)` view direction,
   orthographic scale 5, scene-linear world background `(0.12, 0.07, 0.035)`,
   zero dither, and shadow intensity 0.5. Blender 5.2.2 defaults for shadow
-  shift/focus are explicitly matched at 0.1/0.0.
+  shift/focus are explicitly matched at 0.1/0.0. A second paired case sets
+  `shadow_shift=0.25` and `shadow_focus=0.4` in both renderers; the Blender
+  helper exposes these values as command-line parameters and the QPainter
+  harness captures both caster and receiver-only scenes for each case.
 - Blender changes the light response across the receiver when shadows are
   enabled, even without a caster. The new
   `workbench_shadow_receiver_compare.py` subtracts that receiver-only delta
@@ -4643,6 +4649,14 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   0.485697). Mean maximum-channel attenuation on each app's affected pixels
   is 0.08130 for Blender and 0.07691 for classiCAD; mean RGB delta error on
   the shared receiver is 0.001362.
+- At shift/focus 0.25/0.4, the isolated cast-shadow mask remains 8,060 Blender
+  and 4,405 classiCAD pixels (IoU 0.485697). Mean maximum-channel attenuation
+  rises to 0.12195 and 0.11514, respectively, close to the same 50% increase
+  in both renderers. Mean RGB delta error on the shared receiver rises from
+  0.001362 to 0.002042. This supports the matched joint shift/focus response
+  while showing the unchanged mask-shape gap is independent of those two
+  values in this fixture; it does not establish either parameter's independent
+  response.
 - Comparing the uncorrected display effect pairs alone reports identical
   effect-mask coverage (IoU 1.0) but stronger whole-frame classiCAD darkening:
   14.662/255 mean maximum-channel effect in Blender versus 29.266/255 in
@@ -4654,13 +4668,13 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `shadow_mul`/`shadow_add` from the intensity and emits silhouette sides in
   pinned [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1620-L1636)
   and [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L1023-L1038).
-- No production shadow-factor change is justified by this comparison: the
+- No production shadow-factor change is justified by these comparisons: the
   per-hit attenuation is close, while most residual error is in shadow mask
   coverage and placement. The QPainter shadow map remains an approximation;
   additional caster topology, light direction, receiver, and camera cases are
   open.
 - Validation: full `cmake --build build -j4` passed with the dependency audit;
-  the offscreen `viewport_render_contracts` test passed with both capture
-  pairs; Blender reported version 5.2.2; and
+  the offscreen `viewport_render_contracts` test passed with default and
+  alternate shift/focus captures; Blender reported version 5.2.2; and
   `workbench_shadow_receiver_compare.py` plus
   `workbench_effect_delta_compare.py` completed on the paired captures.

@@ -104,6 +104,18 @@ def arguments():
         default="BASELINE",
     )
     parser.add_argument(
+        "--shadow-shift",
+        type=float,
+        default=0.1,
+        help="Workbench shadow shift (default: Blender 5.2.2 default, 0.1)",
+    )
+    parser.add_argument(
+        "--shadow-focus",
+        type=float,
+        default=0.0,
+        help="Workbench shadow focus (default: Blender 5.2.2 default, 0.0)",
+    )
+    parser.add_argument(
         "--outline-color",
         nargs=3,
         type=float,
@@ -732,6 +744,8 @@ def main():
     shading.single_color = tuple(args.single_color)
     shading.show_shadows = args.effect == "SHADOWS"
     shading.shadow_intensity = 0.5
+    scene.display.shadow_shift = args.shadow_shift
+    scene.display.shadow_focus = args.shadow_focus
     shading.show_cavity = args.effect == "CAVITY"
     if args.effect == "CAVITY":
         shading.cavity_type = "WORLD"

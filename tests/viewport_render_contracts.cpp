@@ -9631,11 +9631,15 @@ int main(int argc, char *argv[])
                     const QString qpainterShadowCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_CAPTURE");
+                    const QString qpainterShadowShiftFocusCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_CAPTURE");
                     const QString qpainterOutlineCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_CAPTURE");
                     if (!qpainterCavityCapturePath.isEmpty() ||
                         !qpainterShadowCapturePath.isEmpty() ||
+                        !qpainterShadowShiftFocusCapturePath.isEmpty() ||
                         !qpainterOutlineCapturePath.isEmpty()) {
                         const QString qpainterCavityBaselinePath =
                             qEnvironmentVariable(
@@ -9667,6 +9671,27 @@ int main(int argc, char *argv[])
                     const QString qpainterShadowReceiverOnlyBaselineLinearPath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_RECEIVER_ONLY_BASELINE_LINEAR_CAPTURE");
+                        const QString qpainterShadowShiftFocusBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_BASELINE_CAPTURE");
+                        const QString qpainterShadowShiftFocusLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_LINEAR_CAPTURE");
+                        const QString qpainterShadowShiftFocusBaselineLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_BASELINE_LINEAR_CAPTURE");
+                        const QString qpainterShadowShiftFocusReceiverOnlyPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_RECEIVER_ONLY_CAPTURE");
+                        const QString qpainterShadowShiftFocusReceiverOnlyBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_RECEIVER_ONLY_BASELINE_CAPTURE");
+                        const QString qpainterShadowShiftFocusReceiverOnlyLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_RECEIVER_ONLY_LINEAR_CAPTURE");
+                        const QString qpainterShadowShiftFocusReceiverOnlyBaselineLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_SHIFT_FOCUS_RECEIVER_ONLY_BASELINE_LINEAR_CAPTURE");
                         const QString qpainterOutlineBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_BASELINE_CAPTURE");
@@ -9986,6 +10011,95 @@ int main(int argc, char *argv[])
                             qpainterShadowCaptured &= receiverOnlyEffectCaptured;
                             qpainterShadowBaselineCaptured &=
                                 receiverOnlyBaselineCaptured;
+
+                            if (!qpainterShadowShiftFocusCapturePath.isEmpty()) {
+                                ViewportShadingSettings shiftedShadowSettings =
+                                    qpainterShadowSettings;
+                                shiftedShadowSettings.shadowOffset = 0.25;
+                                shiftedShadowSettings.shadowFocus = 0.4;
+                                ViewportShadingSettings
+                                    shiftedShadowBaselineSettings =
+                                        qpainterShadowBaselineSettings;
+                                QImage shiftedEffectImage;
+                                QImage shiftedBaselineImage;
+                                QVector<float> shiftedEffectLinear;
+                                QVector<float> shiftedBaselineLinear;
+                                bool shiftedEffectCaptured =
+                                    captureQPainterCavity(
+                                        shiftedShadowSettings,
+                                        &shiftedEffectImage,
+                                        qpainterShadowShiftFocusLinearPath
+                                                .isEmpty()
+                                            ? nullptr
+                                            : &shiftedEffectLinear,
+                                        &shadowScene) &&
+                                    shiftedEffectImage.save(
+                                        qpainterShadowShiftFocusCapturePath);
+                                bool shiftedBaselineCaptured =
+                                    !qpainterShadowShiftFocusBaselinePath
+                                         .isEmpty() &&
+                                    captureQPainterCavity(
+                                        shiftedShadowBaselineSettings,
+                                        &shiftedBaselineImage,
+                                        qpainterShadowShiftFocusBaselineLinearPath
+                                                .isEmpty()
+                                            ? nullptr
+                                            : &shiftedBaselineLinear,
+                                        &shadowScene) &&
+                                    shiftedBaselineImage.save(
+                                        qpainterShadowShiftFocusBaselinePath);
+                                shiftedEffectCaptured &=
+                                    saveQPainterLinearCapture(
+                                        qpainterShadowShiftFocusLinearPath,
+                                        shiftedEffectLinear);
+                                shiftedBaselineCaptured &=
+                                    saveQPainterLinearCapture(
+                                        qpainterShadowShiftFocusBaselineLinearPath,
+                                        shiftedBaselineLinear);
+
+                                QImage shiftedReceiverOnlyEffectImage;
+                                QImage shiftedReceiverOnlyBaselineImage;
+                                QVector<float> shiftedReceiverOnlyEffectLinear;
+                                QVector<float> shiftedReceiverOnlyBaselineLinear;
+                                const bool shiftedReceiverOnlyEffectCaptured =
+                                    !qpainterShadowShiftFocusReceiverOnlyPath
+                                         .isEmpty() &&
+                                    captureQPainterCavity(
+                                        shiftedShadowSettings,
+                                        &shiftedReceiverOnlyEffectImage,
+                                        qpainterShadowShiftFocusReceiverOnlyLinearPath
+                                                .isEmpty()
+                                            ? nullptr
+                                            : &shiftedReceiverOnlyEffectLinear,
+                                        &shadowReceiverOnlyScene) &&
+                                    shiftedReceiverOnlyEffectImage.save(
+                                        qpainterShadowShiftFocusReceiverOnlyPath) &&
+                                    saveQPainterLinearCapture(
+                                        qpainterShadowShiftFocusReceiverOnlyLinearPath,
+                                        shiftedReceiverOnlyEffectLinear);
+                                const bool shiftedReceiverOnlyBaselineCaptured =
+                                    !qpainterShadowShiftFocusReceiverOnlyBaselinePath
+                                         .isEmpty() &&
+                                    captureQPainterCavity(
+                                        shiftedShadowBaselineSettings,
+                                        &shiftedReceiverOnlyBaselineImage,
+                                        qpainterShadowShiftFocusReceiverOnlyBaselineLinearPath
+                                                .isEmpty()
+                                            ? nullptr
+                                            : &shiftedReceiverOnlyBaselineLinear,
+                                        &shadowReceiverOnlyScene) &&
+                                    shiftedReceiverOnlyBaselineImage.save(
+                                        qpainterShadowShiftFocusReceiverOnlyBaselinePath) &&
+                                    saveQPainterLinearCapture(
+                                        qpainterShadowShiftFocusReceiverOnlyBaselineLinearPath,
+                                        shiftedReceiverOnlyBaselineLinear);
+                                qpainterShadowCaptured &=
+                                    shiftedEffectCaptured &&
+                                    shiftedReceiverOnlyEffectCaptured;
+                                qpainterShadowBaselineCaptured &=
+                                    shiftedBaselineCaptured &&
+                                    shiftedReceiverOnlyBaselineCaptured;
+                            }
                         }
                         bool qpainterOutlineCaptured = true;
                         bool qpainterOutlineBaselineCaptured = true;

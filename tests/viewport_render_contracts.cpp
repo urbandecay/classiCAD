@@ -1526,6 +1526,103 @@ int main(int argc, char *argv[])
                 transparentOutlineLayers.sceneLinearSize == size &&
                 transparentOutlineEffectReplay == transparentOutlineImage,
             "QPainter transparent-material outlines must use the retained scene-linear resolve and avoid a duplicate display-space pass");
+
+        bool standardShadowRendered = false;
+        bool standardShadowChangedLinearScene = false;
+        bool standardShadowDisplayMatched = false;
+        bool agxShadowRendered = false;
+        bool agxShadowChangedLinearScene = false;
+        bool agxShadowDisplayMatched = false;
+        const auto renderShadowOutline = [&](int colorTransform,
+                                             bool *renderedResult,
+                                             bool *shadowChangedResult,
+                                             bool *displayMatchedResult) {
+            ViewportShadingSettings settings = standardOutlineSettings;
+            settings.colorTransform = colorTransform;
+            settings.shadows = true;
+            settings.shadowIntensity = 0.8;
+            settings.shadowFocus = 0.9;
+            settings.depthOfField = false;
+            settings.cavity = false;
+            ViewportRenderObject shadowReceiver = opaqueOutlineObject;
+            shadowReceiver.workbenchMaterial.alpha = 1.0f;
+            shadowReceiver.meshMaterials = {shadowReceiver.workbenchMaterial};
+            ViewportRenderObject shadowCaster = objects[1];
+            shadowCaster.workbenchMaterial.alpha = 1.0f;
+            shadowCaster.meshMaterials = {shadowCaster.workbenchMaterial};
+            shadowCaster.preparedGeometryOffset.z += 2.0;
+            const QVector<ViewportRenderObject> shadowOutlineObjects{
+                shadowReceiver, shadowCaster};
+            QImage image(size,
+                         QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            RasterWorkbenchSurfaceLayers layers;
+            renderer.setShadingSettings(settings);
+            const bool rendered = compositeRasterWorkbenchSurfaces(
+                &image, shadowOutlineObjects, transform, size, 1.0, false,
+                true, settings, backgroundLinear, drawObject, &layers);
+            *renderedResult = rendered && layers.sceneLinearOutlinePending &&
+                              !layers.outlineAppliedBeforeDisplay;
+            const std::vector<RasterWorkbenchLinearPixel> beforeEffects =
+                layers.sceneLinearColor;
+            applyRasterWorkbenchEffects(
+                &image, shadowOutlineObjects, transform, size, 1.0, settings,
+                &layers);
+            bool shadowChangedLinearScene = false;
+            bool matchesFinalLinearTransform = true;
+            for (int y = 0; y < size.height(); ++y) {
+                for (int x = 0; x < size.width(); ++x) {
+                    const std::size_t index =
+                        static_cast<std::size_t>(y) *
+                            size.width() + x;
+                    const RasterWorkbenchLinearPixel &pixel =
+                        layers.sceneLinearColor[index];
+                    if (std::abs(pixel.red - beforeEffects[index].red) > 1.0e-5f ||
+                        std::abs(pixel.green - beforeEffects[index].green) > 1.0e-5f ||
+                        std::abs(pixel.blue - beforeEffects[index].blue) > 1.0e-5f) {
+                        shadowChangedLinearScene = true;
+                    }
+                    const QVector3D display = pixel.alpha > 0.0f
+                        ? workbenchSceneLinearToDisplaySrgb(
+                              QVector3D(pixel.red / pixel.alpha,
+                                        pixel.green / pixel.alpha,
+                                        pixel.blue / pixel.alpha),
+                              settings.colorTransform, settings.colorExposure,
+                              settings.colorGamma, settings.colorLutData,
+                              settings.colorLutMetadata)
+                        : QVector3D();
+                    const QRgb expectedPixel = qPremultiply(qRgba(
+                        std::clamp(qRound(display.x() * 255.0f), 0, 255),
+                        std::clamp(qRound(display.y() * 255.0f), 0, 255),
+                        std::clamp(qRound(display.z() * 255.0f), 0, 255),
+                        qRound(pixel.alpha * 255.0f)));
+                    const bool pixelMatches = image.pixel(x, y) == expectedPixel;
+                    matchesFinalLinearTransform &= pixelMatches;
+                }
+            }
+            *shadowChangedResult = shadowChangedLinearScene;
+            *displayMatchedResult = matchesFinalLinearTransform &&
+                layers.outlineAppliedBeforeDisplay &&
+                !layers.sceneLinearOutlinePending;
+            return rendered && layers.outlineAppliedBeforeDisplay &&
+                   !layers.sceneLinearOutlinePending &&
+                   shadowChangedLinearScene && matchesFinalLinearTransform;
+        };
+        const bool standardShadowOutline = renderShadowOutline(
+            1, &standardShadowRendered, &standardShadowChangedLinearScene,
+            &standardShadowDisplayMatched);
+        const bool agxShadowOutline = renderShadowOutline(
+            0, &agxShadowRendered, &agxShadowChangedLinearScene,
+            &agxShadowDisplayMatched);
+        passed &= check(standardShadowRendered && agxShadowRendered,
+            "shadow-plus-outline weighted scenes must retain the scene-linear outline mask");
+        passed &= check(standardShadowChangedLinearScene &&
+                            agxShadowChangedLinearScene,
+            "QPainter shadows must modify the retained opaque scene-linear contribution beneath outlines");
+        passed &= check(standardShadowDisplayMatched &&
+                            agxShadowDisplayMatched &&
+                            standardShadowOutline && agxShadowOutline,
+            "weighted QPainter shadow-plus-outline resolve must display-transform the final linear result once under Standard and AgX");
         renderer.setShadingSettings(shading);
 
         ViewportRenderObject cavityReceiver = objects[0];

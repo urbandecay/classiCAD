@@ -2564,23 +2564,28 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   alpha-premultiplied blending before display color management. The GPU path
   also converts the outline color to scene-linear before drawing. QPainter's
   weighted compositor now retains its pre-outline scene-linear result and
-  applies outlines there when shadows, DOF, and X-Ray are disabled. Its
-  outline ID selects the nearest visible fragment, including partial-alpha
-  surface samples; the later effect pass skips a duplicate outline.
+  applies outlines there when DOF and X-Ray are disabled. Its outline ID
+  selects the nearest visible fragment, including partial-alpha surface
+  samples. With shadows enabled, the compositor retains the opaque and
+  transparent linear contributions plus the outline coverage mask; the later
+  effect pass shades the opaque contribution beneath transparency, applies the
+  outline, then display-transforms the result once. The viewport separates this
+  surface effect target from later QPainter wires and previews so they remain
+  crisp and are not erased by the scene resolve.
 - The production-path contract compares fractional outline edges over a
   nonuniform scene-linear background under Standard and AgX, verifies the
   pre-display result, exercises a partial-alpha surface, and confirms the
-  effect pass does not apply the outline twice. The C++ build and focused
-  viewport contract pass.
-- Transparent-material scenes, shadow or DOF combinations, X-Ray, and legacy
-  display-space fallbacks still apply the QPainter outline after display
-  conversion, so their color can differ under nonlinear view transforms.
+  effect pass does not apply the outline twice. A combined shadow-plus-outline
+  production contract verifies the retained linear resolve under Standard and
+  AgX. The C++ build and focused viewport contract pass.
+- DOF combinations, X-Ray, and legacy display-space fallbacks still apply the
+  QPainter outline after display conversion, so their color can differ under
+  nonlinear view transforms.
 - The remaining combinations cannot be corrected by decoding only the
   outline color: the destination has already passed through AgX, Filmic, or a
   custom LUT, and those transforms are not generally invertible. Full parity
-  needs a float scene-linear target retained through the complete effect
-  stack, including shadow and DOF order, plus equivalent handling in fallback
-  paths.
+  needs the float scene-linear target retained through DOF, X-Ray, and legacy
+  fallback paths.
 - Blender 5.2.2 reference: [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L368)
   binds the scene color target, and
   [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L252-L271)

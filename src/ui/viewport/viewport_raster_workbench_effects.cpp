@@ -548,7 +548,11 @@ bool compositeRasterWorkbenchSurfaces(
     if (surfaceLayers != nullptr) {
         surfaceLayers->cavityAppliedBeforeTransparency = false;
         surfaceLayers->outlineAppliedBeforeDisplay = false;
+        surfaceLayers->sceneLinearOutlinePending = false;
         surfaceLayers->sceneLinearColor.clear();
+        surfaceLayers->sceneLinearOpaqueColor.clear();
+        surfaceLayers->sceneLinearTransparentColor.clear();
+        surfaceLayers->sceneLinearOutlineCoverage.clear();
         surfaceLayers->sceneLinearSize = QSize();
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
@@ -988,11 +992,11 @@ bool compositeRasterWorkbenchSurfaces(
                 frontTransparent.blue + transparent.blue * remainOpaque * remainFrontTransparent,
                 frontTransparent.alpha + transparent.alpha * remainOpaque * remainFrontTransparent};
         }
-        const bool canResolveOpaqueOutlineInSceneLinear =
+        const bool canResolveOutlineInSceneLinear =
             surfaceLayers != nullptr && shadingSettings.outline &&
-            !shadingSettings.shadows && !shadingSettings.depthOfField &&
+            !shadingSettings.depthOfField &&
             !shadingSettings.xrayEnabled();
-        if (canResolveOpaqueOutlineInSceneLinear) {
+        if (canResolveOutlineInSceneLinear) {
             std::vector<quint64> regularObjectIds(
                 static_cast<std::size_t>(pixelCount), 0);
             std::vector<quint64> frontObjectIds(
@@ -1053,6 +1057,15 @@ bool compositeRasterWorkbenchSurfaces(
             const int sampleOffset = workbenchEffectUiScale(dpr);
             surfaceLayers->sceneLinearColor = resolved;
             surfaceLayers->sceneLinearSize = QSize(width, height);
+            const bool deferOutlineUntilAfterShadow =
+                shadingSettings.shadows;
+            if (deferOutlineUntilAfterShadow) {
+                surfaceLayers->sceneLinearOpaqueColor = opaqueScenePixels;
+                surfaceLayers->sceneLinearTransparentColor = transparentResolved;
+                surfaceLayers->sceneLinearOutlineCoverage.assign(
+                    static_cast<std::size_t>(pixelCount), 0.0f);
+                surfaceLayers->sceneLinearOutlinePending = true;
+            }
             for (int y = 0; y < height; ++y) {
                 for (int x = 0; x < width; ++x) {
                     const int index = y * width + x;
@@ -1072,6 +1085,11 @@ bool compositeRasterWorkbenchSurfaces(
                     const float alpha = outlineAlpha *
                         (static_cast<float>(differentNeighbors) / 4.0f);
                     if (alpha <= 0.0f) continue;
+                    if (deferOutlineUntilAfterShadow) {
+                        surfaceLayers->sceneLinearOutlineCoverage[
+                            static_cast<std::size_t>(index)] = alpha;
+                        continue;
+                    }
                     RasterWorkbenchLinearPixel &pixel = resolved[
                         static_cast<std::size_t>(index)];
                     const float remain = 1.0f - alpha;
@@ -1081,7 +1099,8 @@ bool compositeRasterWorkbenchSurfaces(
                     pixel.alpha = alpha + pixel.alpha * remain;
                 }
             }
-            surfaceLayers->outlineAppliedBeforeDisplay = true;
+            surfaceLayers->outlineAppliedBeforeDisplay =
+                !deferOutlineUntilAfterShadow;
         }
         for (int y = 0; y < height; ++y) {
             auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
@@ -1453,7 +1472,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QSize &viewportSize,
                                  qreal devicePixelRatio,
                                  const ViewportShadingSettings &settings,
-                                 const RasterWorkbenchSurfaceLayers *surfaceLayers,
+                                 RasterWorkbenchSurfaceLayers *surfaceLayers,
                                  std::vector<float> *cavityFactors)
 {
     const bool xrayEnabled = settings.xrayEnabled();
@@ -2465,6 +2484,29 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<float>(settings.shadowIntensity),
                     static_cast<float>(settings.shadowOffset),
                     static_cast<float>(settings.shadowFocus), shadowed);
+                if (surfaceLayers != nullptr &&
+                    surfaceLayers->sceneLinearOutlinePending &&
+                    surfaceLayers->sceneLinearSize == QSize(width, height) &&
+                    surfaceLayers->sceneLinearColor.size() ==
+                        static_cast<std::size_t>(width) * height &&
+                    surfaceLayers->sceneLinearOpaqueColor.size() ==
+                        static_cast<std::size_t>(width) * height &&
+                    surfaceLayers->sceneLinearTransparentColor.size() ==
+                        static_cast<std::size_t>(width) * height &&
+                    factor < 1.0f) {
+                    const std::size_t linearIndex =
+                        static_cast<std::size_t>(index);
+                    RasterWorkbenchLinearPixel &linear =
+                        surfaceLayers->sceneLinearColor[linearIndex];
+                    const RasterWorkbenchLinearPixel &opaque =
+                        surfaceLayers->sceneLinearOpaqueColor[linearIndex];
+                    const RasterWorkbenchLinearPixel &transparent =
+                        surfaceLayers->sceneLinearTransparentColor[linearIndex];
+                    const float remain = 1.0f - transparent.alpha;
+                    linear.red += opaque.red * (factor - 1.0f) * remain;
+                    linear.green += opaque.green * (factor - 1.0f) * remain;
+                    linear.blue += opaque.blue * (factor - 1.0f) * remain;
+                }
                 if (factor >= 1.0f) continue;
                 const QRgb pixel = source.pixel(x, y);
                 if (hasTransparentTop) {
@@ -2493,6 +2535,57 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
         }
         *colorImage = result.convertToFormat(colorImage->format());
+    }
+
+    if (surfaceLayers != nullptr &&
+        surfaceLayers->sceneLinearOutlinePending &&
+        surfaceLayers->sceneLinearSize == QSize(outputWidth, outputHeight) &&
+        surfaceLayers->sceneLinearColor.size() ==
+            static_cast<std::size_t>(outputWidth) * outputHeight &&
+        surfaceLayers->sceneLinearOutlineCoverage.size() ==
+            static_cast<std::size_t>(outputWidth) * outputHeight) {
+        const QColor outline = settings.outlineColor;
+        const QVector3D outlineColor = workbenchSrgbToSceneLinear(
+            QVector3D(outline.redF(), outline.greenF(), outline.blueF()));
+        QImage resolvedImage(outputWidth, outputHeight,
+                             QImage::Format_ARGB32_Premultiplied);
+        resolvedImage.setDevicePixelRatio(colorImage->devicePixelRatioF());
+        for (int y = 0; y < outputHeight; ++y) {
+            auto *row = reinterpret_cast<QRgb *>(resolvedImage.scanLine(y));
+            for (int x = 0; x < outputWidth; ++x) {
+                const std::size_t index =
+                    static_cast<std::size_t>(y) * outputWidth + x;
+                RasterWorkbenchLinearPixel &pixel =
+                    surfaceLayers->sceneLinearColor[index];
+                const float outlineAlpha = std::clamp(
+                    surfaceLayers->sceneLinearOutlineCoverage[index],
+                    0.0f, 1.0f);
+                const float remain = 1.0f - outlineAlpha;
+                pixel.red = outlineColor.x() * outlineAlpha + pixel.red * remain;
+                pixel.green = outlineColor.y() * outlineAlpha + pixel.green * remain;
+                pixel.blue = outlineColor.z() * outlineAlpha + pixel.blue * remain;
+                pixel.alpha = outlineAlpha + pixel.alpha * remain;
+                if (pixel.alpha <= 0.0f) {
+                    row[x] = qRgba(0, 0, 0, 0);
+                    continue;
+                }
+                const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+                    QVector3D(pixel.red / pixel.alpha,
+                              pixel.green / pixel.alpha,
+                              pixel.blue / pixel.alpha),
+                    settings.colorTransform, settings.colorExposure,
+                    settings.colorGamma, settings.colorLutData,
+                    settings.colorLutMetadata);
+                row[x] = qPremultiply(qRgba(
+                    std::clamp(qRound(display.x() * 255.0f), 0, 255),
+                    std::clamp(qRound(display.y() * 255.0f), 0, 255),
+                    std::clamp(qRound(display.z() * 255.0f), 0, 255),
+                    std::clamp(qRound(pixel.alpha * 255.0f), 0, 255)));
+            }
+        }
+        *colorImage = resolvedImage.convertToFormat(colorImage->format());
+        surfaceLayers->outlineAppliedBeforeDisplay = true;
+        surfaceLayers->sceneLinearOutlinePending = false;
     }
 
     applyOutline();

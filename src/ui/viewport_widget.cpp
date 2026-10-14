@@ -9094,6 +9094,8 @@ protected:
                 document_.settings().activeViewLayerKey);
         QImage gpuViewportBackground;
         QImage committedSceneLayer;
+        QImage rasterWorkbenchEffectLayer;
+        bool rasterWorkbenchEffectsLayered = false;
         RasterWorkbenchSurfaceLayers rasterSurfaceLayers;
         QPainter rasterScenePainter;
         if (nativeRenderer == nullptr) {
@@ -9256,6 +9258,23 @@ protected:
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels);
+                if (rasterSurfaceBatchRendered &&
+                    renderShadingSettings.shadows &&
+                    renderShadingSettings.outline &&
+                    !renderShadingSettings.depthOfField &&
+                    !renderShadingSettings.xrayEnabled()) {
+                    // Workbench resolves scene effects before editor wires,
+                    // previews, and other QPainter overlays. Keep the surface
+                    // target separate so the later scene-linear shadow and
+                    // outline resolve cannot erase or blur those overlays.
+                    rasterScenePainter.end();
+                    rasterWorkbenchEffectLayer = committedSceneLayer.copy();
+                    committedSceneLayer.fill(Qt::transparent);
+                    rasterScenePainter.begin(&committedSceneLayer);
+                    rasterScenePainter.setRenderHint(
+                        QPainter::Antialiasing, viewportAaMode_ != 0);
+                    rasterWorkbenchEffectsLayered = true;
+                }
             }
         }
         for (const ViewportRenderObject &renderObject : sceneDrawObjects) {
@@ -11703,8 +11722,10 @@ protected:
             }
         } else {
             rasterScenePainter.end();
+            QImage &effectTarget = rasterWorkbenchEffectsLayered
+                ? rasterWorkbenchEffectLayer : committedSceneLayer;
             applyRasterWorkbenchEffects(
-                &committedSceneLayer, visibleShapes, viewportTransform_,
+                &effectTarget, visibleShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
@@ -11715,7 +11736,10 @@ protected:
                 drawGrid(painter);
                 drawOrigin(painter);
             }
-            painter.drawImage(QPoint(0, 0), committedSceneLayer);
+            painter.drawImage(QPoint(0, 0), effectTarget);
+            if (rasterWorkbenchEffectsLayered) {
+                painter.drawImage(QPoint(0, 0), committedSceneLayer);
+            }
             if (!gpuViewportBackground.isNull()) {
                 painter.drawImage(QPoint(0, 0), gpuViewportBackground);
             }

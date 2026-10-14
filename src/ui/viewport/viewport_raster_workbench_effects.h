@@ -78,9 +78,14 @@ float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,
 struct RasterWorkbenchSurfaceLayers {
     QImage opaqueColor;
     QImage transparentColor;
-    // Optional pre-display resolved scene for the bounded opaque-only
+    // Optional pre-display resolved scene for the bounded weighted-compositor
     // outline path. Pixels are row-major physical-target samples.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearColor;
+    // Opaque and transparent contributions used to apply the QPainter shadow
+    // factor before a deferred scene-linear outline.
+    std::vector<RasterWorkbenchLinearPixel> sceneLinearOpaqueColor;
+    std::vector<RasterWorkbenchLinearPixel> sceneLinearTransparentColor;
+    std::vector<float> sceneLinearOutlineCoverage;
     QSize sceneLinearSize;
     // True when cavity was folded into the opaque contribution before
     // transparency composition. The later effects pass then skips cavity.
@@ -88,6 +93,9 @@ struct RasterWorkbenchSurfaceLayers {
     // True when outline color was composed into the scene-linear target
     // before its display transform.
     bool outlineAppliedBeforeDisplay = false;
+    // True when a shadow-enabled scene-linear outline mask awaits the shadow
+    // resolve, after which the combined result is display-transformed once.
+    bool sceneLinearOutlinePending = false;
 };
 
 // Software Workbench screen-space effects for the QPainter fallback. The color
@@ -99,7 +107,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QSize &viewportSize,
                                  qreal devicePixelRatio,
                                  const ViewportShadingSettings &settings,
-                                 const RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
+                                 RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
                                  std::vector<float> *cavityFactors = nullptr);
 
 // Render surface objects into temporary color layers, use their display

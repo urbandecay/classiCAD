@@ -5142,3 +5142,36 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `workbench_image_compare.py` and `workbench_pfm_compare.py`. Blender
   reported version 5.2.2 LTS. These captures preserve the existing material
   adapter and geometry contracts.
+
+### Matched Workbench texture interpolation modes (2026-10-14)
+
+- Blender 5.2.2 Workbench maps Closest to nearest texture sampling and maps
+  Linear, Cubic, and Smart to the same linear GPU sampler in pinned
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L39-L73);
+  its Workbench shader samples that prepared texture directly in
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L37-L64).
+  A matched 640×480 Studio Default cube capture uses the same 2×2 patterned
+  image and UVs, AA Off, zero dither, and neutral World background. Blender's
+  Linear/Cubic/Smart scene-linear PFM files are byte-identical; their display
+  PNG pixels also compare exactly. classiCAD GPU and QPainter likewise produce
+  byte-identical PNG/PFM output for those three modes. Closest visibly differs
+  in each renderer, as expected.
+- The matched Closest comparison exposed a QPainter nearest-row discrepancy
+  at exact V texel boundaries. Its byte-image sampler now uses the lower
+  top-down row at the boundary, corresponding to Blender's bottom-up texture
+  upload and nearest GPU sample; the GPU sampler and interpolation selection
+  were unchanged. After this correction, QPainter Closest has 224 display-mask
+  XOR pixels / IoU `0.997991`, common-foreground display MAE `0.146/255`
+  (p95 `1/255`), and scene-linear channel MAE `(0.000137, 0.0000644,
+  0.000129)` for blue/green/red. Its PFM mask has 226 XOR pixels / IoU
+  `0.997164`. GPU Closest has 224 display-mask XOR / IoU `0.997991`, display
+  MAE `0.290/255`, and PFM mask 493 XOR / IoU `0.993817`; its scene-linear
+  channel MAE is `(0.000114, 0.000217, 0.000261)`. The remaining mask
+  differences are raster coverage, not texture filtering.
+- This verifies one patterned opaque cube and one camera for all four
+  interpolation settings. Alpha filtering, additional texture sizes, geometry,
+  extension modes, and views remain open. Validation: `cmake --build build
+  -j4` passed with the dependency audit; offscreen `viewport_render_contracts`
+  passed (1/1); Blender reported 5.2.2 LTS; and the eight matched GPU/QPainter
+  PNG/PFM mode pairs completed with `workbench_image_compare.py` and
+  `workbench_pfm_compare.py`.

@@ -210,7 +210,11 @@ void sampleWorkbenchImage(const QImage &image,
                                                Qt::CaseInsensitive) == 0;
     if (closest) {
         const int x = qFloor(uv.x() * image.width());
-        const int y = qFloor(uv.y() * image.height());
+        // The QPainter UV adapter flips V from Blender's bottom-up texture
+        // convention to QImage's top-down rows. At exact texel boundaries,
+        // choose the row below that boundary to match GL_NEAREST after the
+        // GPU upload's vertical image flip.
+        const int y = qCeil(uv.y() * image.height()) - 1;
         for (int c = 0; c < 4; ++c) {
             rgba[c] = static_cast<uchar>(qRound(texel(x, y, c)));
             if (linearRgb != nullptr && c < 3) {

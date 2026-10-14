@@ -7752,6 +7752,30 @@ int main(int argc, char *argv[])
                                 studioPatternedTextureStem,
                                 patternedTextureObject,
                                 studioTextureShading);
+                        const QStringList textureInterpolationModes{
+                            QStringLiteral("Closest"),
+                            QStringLiteral("Linear"),
+                            QStringLiteral("Cubic"),
+                            QStringLiteral("Smart")};
+                        for (const QString &interpolation :
+                             textureInterpolationModes) {
+                            if (!patternedTextureObject.meshMaterials.isEmpty()) {
+                                patternedTextureObject.meshMaterials[0]
+                                    .textureImageInterpolation = interpolation;
+                            }
+                            const QString interpolationStem =
+                                QStringLiteral("color_texture_uv_studio_%1")
+                                    .arg(interpolation.toLower());
+                            lightingCapturesSucceeded &=
+                                captureGpuColorSource(
+                                    interpolationStem,
+                                    patternedTextureObject,
+                                    studioTextureShading) &&
+                                captureQPainterColorSource(
+                                    interpolationStem,
+                                    patternedTextureObject,
+                                    studioTextureShading);
+                        }
 
                         // Exercise Image Texture filtering through the
                         // production GPU path for a planar NURBS patch. Its

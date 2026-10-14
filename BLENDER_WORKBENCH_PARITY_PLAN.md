@@ -3674,3 +3674,21 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - Validation: `cmake --build build -j4` passed with the dependency audit, and
   offscreen `viewport_render_contracts` plus
   `workbench_raster_fragment_contracts` passed.
+
+### Matched GPU object-outline comparison (2026-10-14)
+
+- Fresh 640×480 background captures from Blender 5.2.2 and classiCAD use the
+  same nonselected polygon cube, matched orthographic framing and view
+  direction, AA Off, and outline-free baseline/effect pairs. The existing
+  `workbench_effect_delta_compare.py` compares only the effect deltas, which
+  avoids treating small base-render edge differences as outline changes.
+- At RGB threshold 2/255, Blender changes 2,312 pixels and classiCAD changes
+  2,316; their outline masks have IoU 0.823483 with 448 XOR pixels. Signed
+  RGB-delta error is 0.04164/255 whole-image MAE and 5.04058/255 over the
+  effect-mask union (p95 16/255, max 30/255). The near-equal mask sizes but
+  residual edge mismatch show the configured outline pass is active, while
+  this fixture does not establish full edge parity.
+- This comparison covers one unselected default cube only. Selected outlines,
+  multiple or overlapping objects, smoothing, UI scaling, camera variation,
+  and QPainter comparisons remain open. No implementation change was made;
+  this is a measured validation result, not a parity sign-off.

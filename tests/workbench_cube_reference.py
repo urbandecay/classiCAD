@@ -93,7 +93,7 @@ def arguments():
     )
     parser.add_argument(
         "--color-source",
-        choices=("MATERIAL", "OBJECT", "RANDOM", "TEXTURE", "SINGLE"),
+        choices=("MATERIAL", "OBJECT", "RANDOM", "TEXTURE", "SINGLE", "VERTEX"),
         default="MATERIAL",
         help="Workbench object color source (default: MATERIAL)",
     )
@@ -280,6 +280,24 @@ def main():
             material.node_tree.nodes.active = image_node
             for loop in cube.data.uv_layers.active.data:
                 loop.uv = (0.5, 0.5)
+        if args.color_source == "VERTEX":
+            color_attribute = cube.data.color_attributes.new(
+                name="Color", type="FLOAT_COLOR", domain="CORNER"
+            )
+            for polygon in cube.data.polygons:
+                for loop_index in polygon.loop_indices:
+                    vertex = cube.data.vertices[
+                        cube.data.loops[loop_index].vertex_index
+                    ].co
+                    color_attribute.data[loop_index].color = (
+                        0.1 + 0.35 * (vertex.x + 1.0),
+                        0.1 + 0.35 * (vertex.y + 1.0),
+                        0.1 + 0.35 * (vertex.z + 1.0),
+                        1.0,
+                    )
+            color_index = cube.data.color_attributes.find(color_attribute.name)
+            cube.data.color_attributes.active_color_index = color_index
+            cube.data.color_attributes.render_color_index = color_index
         if args.object_color is not None:
             cube.color = (*args.object_color, 1.0)
     elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):

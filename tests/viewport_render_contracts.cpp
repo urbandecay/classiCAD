@@ -6422,7 +6422,8 @@ int main(int argc, char *argv[])
                             {"color_material", ViewportColorMode::Material},
                             {"color_object", ViewportColorMode::Object},
                             {"color_random", ViewportColorMode::Random},
-                            {"color_custom", ViewportColorMode::Custom}};
+                            {"color_custom", ViewportColorMode::Custom},
+                            {"color_attribute", ViewportColorMode::Attribute}};
                         for (const ColorSourceCaptureCase &captureCase :
                              colorSourceCases) {
                             ViewportRenderObject colorSourceObject =
@@ -6445,6 +6446,41 @@ int main(int argc, char *argv[])
                                 colorShading.customColor = QColor::fromRgbF(
                                     customSrgb.x(), customSrgb.y(),
                                     customSrgb.z());
+                            }
+                            if (captureCase.colorMode ==
+                                ViewportColorMode::Attribute) {
+                                MeshColorAttribute attribute;
+                                attribute.name = QStringLiteral("Color");
+                                attribute.domain = MeshAttributeDomain::Corner;
+                                attribute.dataType =
+                                    QStringLiteral("FLOAT_COLOR");
+                                attribute.colorSpace =
+                                    QStringLiteral("scene_linear");
+                                attribute.componentCount = 4;
+                                const PolygonMesh3D &mesh =
+                                    colorSourceObject.shape.polygonMesh;
+                                for (const QVector<int> &face : mesh.faces) {
+                                    for (int vertexIndex : face) {
+                                        const Point3D &point =
+                                            mesh.vertices[vertexIndex];
+                                        const auto channel = [](double value) {
+                                            return float(0.1 +
+                                                0.35 * (value + 1.0));
+                                        };
+                                        attribute.values.append(
+                                            channel(point.x));
+                                        attribute.values.append(
+                                            channel(point.y));
+                                        attribute.values.append(
+                                            channel(point.z));
+                                        attribute.values.append(1.0f);
+                                    }
+                                }
+                                colorSourceObject.shape.polygonMesh
+                                    .colorAttributes = {attribute};
+                                colorSourceObject.shape.polygonMesh
+                                    .activeColorAttributeName =
+                                        attribute.name;
                             }
                             const QString stem = QString::fromLatin1(
                                 captureCase.name);

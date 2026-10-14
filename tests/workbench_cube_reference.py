@@ -1,6 +1,6 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
-Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho]
+Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho] [--no-specular]
 AA accepts OFF, FXAA, or 8 (default: FXAA).
 Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
@@ -75,6 +75,11 @@ def arguments():
         "--world-space-lighting",
         action="store_true",
         help="use world-space Studio Light orientation",
+    )
+    parser.add_argument(
+        "--no-specular",
+        action="store_true",
+        help="disable Workbench specular highlights for a controlled comparison",
     )
     parser.add_argument(
         "--rotation-degrees",
@@ -336,6 +341,7 @@ def main():
     elif args.lighting == "STUDIO" and light_preset.lower() != "default" and not light_preset.lower().endswith(".sl"):
         light_preset = light_preset.lower() + ".sl"
     shading.studio_light = light_preset
+    shading.show_specular_highlight = not args.no_specular
     shading.use_world_space_lighting = args.world_space_lighting
     shading.studiolight_rotate_z = math.radians(args.rotation_degrees)
     shading.color_type = args.color_source

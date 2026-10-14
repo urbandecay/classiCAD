@@ -3584,6 +3584,9 @@ int main(int argc, char *argv[])
                     const QString lightingCaptureDirectory = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR");
                     if (!lightingCaptureDirectory.isEmpty()) {
+                        const bool captureSpecular =
+                            qEnvironmentVariableIntValue(
+                                "CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_NO_SPECULAR") == 0;
                         const bool directoryReady =
                             QDir().mkpath(lightingCaptureDirectory);
                         bool lightingCapturesSucceeded = directoryReady;
@@ -3621,8 +3624,11 @@ int main(int argc, char *argv[])
                                 captureCase.worldSpaceLighting;
                             lightingShading.studioLightRotationDegrees =
                                 captureCase.rotationDegrees;
-                            const QString stem = QString::fromLatin1(
-                                captureCase.name);
+                            lightingShading.specularLighting = captureSpecular;
+                            QString stem = QString::fromLatin1(captureCase.name);
+                            if (!captureSpecular) {
+                                stem += QStringLiteral("_no_specular");
+                            }
                             QImage display;
                             QVector<float> sceneLinear;
                             const bool rendered = renderCoordinatedScene(

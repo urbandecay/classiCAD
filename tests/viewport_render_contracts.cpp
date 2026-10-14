@@ -3037,6 +3037,44 @@ int main(int argc, char *argv[])
                     const QImage solidAlphaIgnoredShadow =
                         renderSolidAlphaScene(
                             {alphaReceiver, ignoredAlphaCaster}, true, false);
+                    const auto renderXrayAlphaCenterDepth = [&] (
+                        const ViewportRenderObject &caster) {
+                        if (!depthOnlyFramebuffer.isValid()) {
+                            return std::numeric_limits<float>::quiet_NaN();
+                        }
+                        depthOnlyFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glDisable(GL_SCISSOR_TEST);
+                        functions.glDepthMask(GL_TRUE);
+                        functions.glClearDepth(1.0);
+                        functions.glClear(GL_DEPTH_BUFFER_BIT);
+                        ViewportShadingSettings settings;
+                        settings.mode = ViewportShadingMode::Solid;
+                        settings.lightingMode = ViewportLightingMode::Flat;
+                        settings.colorMode = ViewportColorMode::Texture;
+                        settings.xray = true;
+                        settings.xrayAlpha = 0.5;
+                        settings.outline = false;
+                        settings.shadows = false;
+                        if (!gpuSurfaceRenderer.draw(
+                                {caster}, gpuTransform, glSize, 1.0,
+                                settings)) {
+                            return std::numeric_limits<float>::quiet_NaN();
+                        }
+                        functions.glFinish();
+                        QVector<float> depthValues(glSize.width() *
+                                                   glSize.height());
+                        functions.glReadPixels(
+                            0, 0, glSize.width(), glSize.height(),
+                            GL_DEPTH_COMPONENT, GL_FLOAT, depthValues.data());
+                        return *std::min_element(depthValues.cbegin(),
+                                                 depthValues.cend());
+                    };
+                    const float xrayTransparentCutoutDepth =
+                        renderXrayAlphaCenterDepth(alphaCaster);
+                    const float xrayIgnoredAlphaDepth =
+                        renderXrayAlphaCenterDepth(ignoredAlphaCaster);
                     passed &= check(
                         packedTextureReady && raisedCasterValid &&
                             depthOnlyFramebuffer.isValid() &&
@@ -3049,8 +3087,12 @@ int main(int argc, char *argv[])
                             solidAlphaIgnoredTexture !=
                                 solidAlphaReceiverOnly &&
                             solidAlphaIgnoredShadow !=
-                                solidAlphaReceiverShadow,
-                        "NurbsSolid texture alpha must mask color, object-ID outlines, and depth-map shadows consistently, while NONE bypasses the cutoff");
+                                solidAlphaReceiverShadow &&
+                            std::isfinite(xrayTransparentCutoutDepth) &&
+                            std::isfinite(xrayIgnoredAlphaDepth) &&
+                            xrayTransparentCutoutDepth > 0.999f &&
+                            xrayIgnoredAlphaDepth < 0.999f,
+                        "NurbsSolid texture alpha must mask color, object-ID outlines, depth-map shadows, and X-Ray depth consistently, while NONE bypasses the cutoff");
 
                     framebuffer.bind();
                     functions.glViewport(0, 0, glSize.width(), glSize.height());

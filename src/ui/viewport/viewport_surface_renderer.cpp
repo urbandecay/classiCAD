@@ -6104,7 +6104,9 @@ bool ViewportSurfaceRenderer::draw(
         shadowProgram_.setUniformValue(
             "uShadowViewProjection",
             viewportViewProjection(transform, viewportSize));
-        shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
+        shadowProgram_.setUniformValue("uShadowAlphaTexture", 0);
+        shadowProgram_.setUniformValue("uShadowUdimImage", 1);
+        shadowProgram_.setUniformValue("uShadowUdimLookup", 2);
         for (const DrawRange &range : ranges_) {
             if (range.count <= 0) {
                 continue;
@@ -6114,6 +6116,56 @@ bool ViewportSurfaceRenderer::draw(
                 QVector3D(static_cast<float>(range.offset.x),
                           static_cast<float>(range.offset.y),
                           static_cast<float>(range.offset.z)));
+            const QString alphaMode =
+                range.workbenchMaterial.textureImageAlphaMode;
+            const bool ignoreTextureAlpha =
+                alphaMode.compare(QStringLiteral("NONE"),
+                                  Qt::CaseInsensitive) == 0 ||
+                alphaMode.compare(QStringLiteral("IGNORE"),
+                                  Qt::CaseInsensitive) == 0 ||
+                alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                                  Qt::CaseInsensitive) == 0;
+            const GLuint alphaTexture = range.shadowTextureAlphaMask &&
+                    settings.colorMode == ViewportColorMode::Texture &&
+                    !ignoreTextureAlpha
+                ? ensureImageTexture(
+                      range.textureImagePath,
+                      range.workbenchMaterial.textureImagePackedDataBase64,
+                      range.textureImageSrgb,
+                      range.workbenchMaterial
+                          .textureImageSceneLinearFloatDataBase64,
+                      range.workbenchMaterial
+                          .textureImageSceneLinearFloatWidth,
+                      range.workbenchMaterial
+                          .textureImageSceneLinearFloatHeight)
+                : 0;
+            const UdimTextureSet udimTexture = range.shadowTextureAlphaMask &&
+                    settings.colorMode == ViewportColorMode::Texture &&
+                    !ignoreTextureAlpha
+                ? ensureUdimTexture(range.textureImageTiles,
+                                    range.textureImageSrgb)
+                : UdimTextureSet{};
+            shadowProgram_.setUniformValue(
+                "uTextureInterpolation", workbenchTextureInterpolation(
+                    range.workbenchMaterial.textureImageInterpolation));
+            shadowProgram_.setUniformValue(
+                "uTextureExtension", workbenchTextureExtension(
+                    range.workbenchMaterial.textureImageExtension));
+            configureWorkbenchImageTexture(alphaTexture,
+                                           range.workbenchMaterial);
+            configureWorkbenchUdimTexture(udimTexture.imageArray,
+                                          range.workbenchMaterial);
+            shadowProgram_.setUniformValue(
+                "uUseShadowAlphaMask",
+                alphaTexture != 0 || udimTexture.imageArray != 0);
+            shadowProgram_.setUniformValue(
+                "uUseShadowUdimImage", udimTexture.imageArray != 0);
+            glBindTexture(GL_TEXTURE_2D, alphaTexture);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, udimTexture.imageArray);
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
+            glActiveTexture(GL_TEXTURE0);
             glDrawArrays(GL_TRIANGLES, range.first, range.count);
         }
         shadowProgram_.release();

@@ -253,6 +253,18 @@ and saved-file comparison remain open.
   targets are unavailable too, the sorted fallback still cannot provide that
   coverage. X-Ray color, outline, and allocation-failure behavior still need
   matched visual comparison.
+- The Solid X-Ray depth-only pass now applies the same texture-alpha cutoff to
+  meshes and NURBS ranges as the GPU shadow-alpha path, including packed images
+  and UDIMs; `NONE`, `IGNORE`, and `CHANNEL_PACKED` continue to bypass alpha
+  masking. Blender 5.2.2's `TransparentDepthPass` creates opaque material
+  subpasses in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1438-L1478),
+  which use the shared texture cutoff setup from `MeshPass` in the same file's
+  [`init_subpasses` and texture subpass setup](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L999-L1102).
+  The GPU viewport render contract verifies a fully transparent packed image
+  leaves X-Ray depth clear while alpha mode `NONE` writes depth. A matched
+  Blender image comparison and a direct CAD-stroke-through-cutout image check
+  remain open.
 
 ### GPU Workbench orthographic-view depth of field (2026-10-12)
 

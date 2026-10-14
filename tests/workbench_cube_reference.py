@@ -25,6 +25,7 @@ def arguments():
             "CUBE",
             "MATERIAL_SLOTS",
             "FOUR_MATERIAL_SLOTS",
+            "FIVE_MATERIAL_SLOTS",
             "SHADOW_RECEIVER",
             "TWO_SIDED_MATCAP",
             "NURBS_TEXTURE",
@@ -396,44 +397,57 @@ def main():
     camera.rotation_euler = (
         (target - camera.location).to_track_quat("-Z", "Y").to_euler()
     )
-    if args.scene == "FOUR_MATERIAL_SLOTS":
-        # Four visible coplanar quads make each material slot independently
+    if args.scene in ("FOUR_MATERIAL_SLOTS", "FIVE_MATERIAL_SLOTS"):
+        # Visible coplanar quads make each material slot independently
         # probeable while keeping the camera and Workbench setup shared with
         # the other controlled mesh references.
         camera_rotation = camera.rotation_euler.to_quaternion()
         camera_right = camera_rotation @ Vector((1.0, 0.0, 0.0))
         camera_up = camera_rotation @ Vector((0.0, 1.0, 0.0))
-        vertices = tuple(
-            target + camera_right * x + camera_up * y
-            for y in (-1.0, 0.0, 1.0)
-            for x in (-1.0, 0.0, 1.0)
-        )
-        faces = (
-            (0, 1, 4, 3),
-            (1, 2, 5, 4),
-            (3, 4, 7, 6),
-            (4, 5, 8, 7),
-        )
-        mesh = bpy.data.meshes.new("FourMaterialSlotsMesh")
+        if args.scene == "FOUR_MATERIAL_SLOTS":
+            grid_x = (-1.0, 0.0, 1.0)
+            grid_y = (-1.0, 0.0, 1.0)
+            material_count = 4
+            fixture_name = "FourMaterialSlots"
+        else:
+            grid_x = (-2.25, -0.75, 0.75, 2.25)
+            grid_y = (-1.5, 0.0, 1.5)
+            material_count = 5
+            fixture_name = "FiveMaterialSlots"
+        vertices = tuple(target + camera_right * x + camera_up * y
+                         for y in grid_y for x in grid_x)
+        faces = []
+        for row in range(len(grid_y) - 1):
+            for column in range(len(grid_x) - 1):
+                slot_index = row * (len(grid_x) - 1) + column
+                if slot_index >= material_count:
+                    continue
+                bottom_left = row * len(grid_x) + column
+                faces.append((bottom_left, bottom_left + 1,
+                              bottom_left + len(grid_x) + 1,
+                              bottom_left + len(grid_x)))
+        mesh = bpy.data.meshes.new(f"{fixture_name}Mesh")
         mesh.from_pydata(vertices, (), faces)
         mesh.update()
-        grid = bpy.data.objects.new("FourMaterialSlots", mesh)
+        grid = bpy.data.objects.new(fixture_name, mesh)
         bpy.context.collection.objects.link(grid)
         slot_colors = (
             (0.18, 0.28, 0.72),
             (0.72, 0.20, 0.18),
             (0.18, 0.65, 0.25),
             (0.78, 0.68, 0.12),
+            (0.18, 0.62, 0.72),
         )
-        slot_roughness = (0.2, 0.4, 0.65, 0.8)
-        slot_metallic = (0.0, 0.25, 0.5, 1.0)
-        for index, color in enumerate(slot_colors):
-            material = bpy.data.materials.new(f"FourSlotMaterial{index}")
+        slot_roughness = (0.2, 0.4, 0.65, 0.8, 0.35)
+        slot_metallic = (0.0, 0.25, 0.5, 1.0, 0.15)
+        for index, color in enumerate(slot_colors[:material_count]):
+            material = bpy.data.materials.new(f"{fixture_name}Material{index}")
             material.diffuse_color = (*color, 1.0)
             material.roughness = slot_roughness[index]
             material.metallic = slot_metallic[index]
             grid.data.materials.append(material)
-        for polygon, slot_index in zip(grid.data.polygons, range(4)):
+        for polygon, slot_index in zip(grid.data.polygons,
+                                       range(material_count)):
             polygon.material_index = slot_index
     elif args.scene in ("CUBE", "MATERIAL_SLOTS"):
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))

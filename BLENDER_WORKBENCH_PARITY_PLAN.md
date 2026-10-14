@@ -4858,6 +4858,29 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   5.2.2 LTS; and the full-frame PNG/PFM comparisons passed for GPU and
   QPainter captures.
 
+#### Fifth visible material slot (index 4)
+
+- Added a five-material Flat/Material fixture with five coplanar faces and a
+  unique fifth color at slot index 4. The Blender 5.2.2 helper and classiCAD
+  GPU/QPainter captures use matching 640×480 orthographic framing, AA Off,
+  and the same neutral scene-linear world background. The offscreen C++
+  contract checks all five face-center mappings in both backends.
+- Blender and GPU have an exact full-frame foreground mask and scene-linear
+  PFM RGB. GPU display differs by at most `1/255`; QPainter display RGB and
+  silhouette are exact. QPainter scene-linear PFM maximum channel error is
+  `0.0003711`, with exact edge-coverage classification and zero mask XOR.
+- This confirms index 4 works without a production renderer change and that
+  the current material adapter has no four-slot limit. Slot counts above five,
+  invalid indices, per-face texture combinations, and broader geometry parity
+  remain open. Blender's per-face slot selection remains pinned in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2067)
+  and its material batching in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2281-L2329).
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed; Blender reported version
+  5.2.2 LTS; and `workbench_image_compare.py` plus
+  `workbench_pfm_compare.py` passed for GPU and QPainter captures.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

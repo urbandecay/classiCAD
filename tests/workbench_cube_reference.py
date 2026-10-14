@@ -190,6 +190,16 @@ def arguments():
         help="set the cube material display RGB in Blender scene-linear values",
     )
     parser.add_argument(
+        "--material-roughness",
+        type=float,
+        help="set cube material roughness in [0, 1]",
+    )
+    parser.add_argument(
+        "--material-metallic",
+        type=float,
+        help="set cube material metallic value in [0, 1]",
+    )
+    parser.add_argument(
         "--material-alpha",
         type=float,
         default=1.0,
@@ -294,6 +304,13 @@ def main():
     if (not math.isfinite(args.material_alpha) or
             not 0.0 <= args.material_alpha <= 1.0):
         raise ValueError("material alpha must be finite and in [0, 1]")
+    for name in ("material_roughness", "material_metallic"):
+        value = getattr(args, name)
+        if value is not None and (not math.isfinite(value) or
+                                  not 0.0 <= value <= 1.0):
+            raise ValueError(
+                f"{name.replace('_', ' ')} must be finite and in [0, 1]"
+            )
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
 
@@ -345,11 +362,18 @@ def main():
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object
         cube.name = "ReferenceCube"
-        if args.material_color is not None or args.color_source == "TEXTURE":
+        if (args.material_color is not None or
+                args.material_roughness is not None or
+                args.material_metallic is not None or
+                args.color_source == "TEXTURE"):
             material = bpy.data.materials.new("ReferenceCubeMaterial")
             material.diffuse_color = (
                 *(args.material_color or (0.8, 0.8, 0.8)), 1.0
             )
+            if args.material_roughness is not None:
+                material.roughness = args.material_roughness
+            if args.material_metallic is not None:
+                material.metallic = args.material_metallic
             cube.data.materials.append(material)
         if args.color_source == "TEXTURE":
             if not args.texture_image:

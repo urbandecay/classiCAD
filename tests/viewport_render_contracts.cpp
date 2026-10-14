@@ -8864,6 +8864,90 @@ int main(int argc, char *argv[])
                             lightingCapturesSucceeded,
                             "matched cube lighting, color-source, and background captures must write scene-linear PFM and display PNG outputs");
                     }
+                    const QString studioMaterialCaptureDirectory =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_STUDIO_MATERIAL_CAPTURE_DIR");
+                    if (!studioMaterialCaptureDirectory.isEmpty()) {
+                        const bool directoryReady =
+                            QDir().mkpath(studioMaterialCaptureDirectory);
+                        bool capturesSucceeded = directoryReady;
+                        struct StudioMaterialCapture {
+                            const char *name;
+                            float roughness;
+                            float metallic;
+                        };
+                        constexpr StudioMaterialCapture materialCases[] = {
+                            {"roughness_025", 0.25f, 0.0f},
+                            {"roughness_0255", 0.255f, 0.0f},
+                            {"roughness_027", 0.27f, 0.0f},
+                            {"metallic_010", 0.25f, 0.10f},
+                            {"metallic_014", 0.25f, 0.14f},
+                            {"metallic_015", 0.25f, 0.15f}};
+                        ViewportShadingSettings materialShading =
+                            rawFaceShading;
+                        materialShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        materialShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        materialShading.colorMode =
+                            ViewportColorMode::Material;
+                        materialShading.specularLighting = true;
+                        materialShading.outline = false;
+                        materialShading.shadows = false;
+                        materialShading.cavity = false;
+                        for (const StudioMaterialCapture &captureCase :
+                             materialCases) {
+                            ViewportRenderObject materialObject =
+                                polygonCubeObject;
+                            materialObject.displayName =
+                                QStringLiteral("MaterialPayloadCube");
+                            materialObject.meshMaterials[0]
+                                .baseColorSceneLinear =
+                                    QVector3D(0.42f, 0.42f, 0.42f);
+                            materialObject.meshMaterials[0].roughness =
+                                captureCase.roughness;
+                            materialObject.meshMaterials[0].metallic =
+                                captureCase.metallic;
+                            QImage display;
+                            QVector<float> sceneLinear;
+                            const bool rendered = renderCoordinatedScene(
+                                materialShading,
+                                QByteArrayLiteral("studio-material-") +
+                                    QByteArray(captureCase.name),
+                                &display, &materialObject, nullptr, nullptr,
+                                QString{}, &sceneLinear);
+                            const QString stem = QString::fromLatin1(
+                                captureCase.name);
+                            QFile linearFile(QDir(
+                                studioMaterialCaptureDirectory).filePath(
+                                stem + QStringLiteral(".pfm")));
+                            const QByteArray pfmHeader =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            constexpr qsizetype expectedValues =
+                                640 * 480 * 3;
+                            const bool linearSaved = rendered &&
+                                sceneLinear.size() == expectedValues &&
+                                linearFile.open(QIODevice::WriteOnly) &&
+                                linearFile.write(pfmHeader) ==
+                                    pfmHeader.size() &&
+                                linearFile.write(
+                                    reinterpret_cast<const char *>(
+                                        sceneLinear.constData()),
+                                    sceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    sceneLinear.size() *
+                                        qsizetype(sizeof(float));
+                            const bool displaySaved = rendered &&
+                                display.size() == QSize(640, 480) &&
+                                display.save(QDir(
+                                    studioMaterialCaptureDirectory).filePath(
+                                    stem + QStringLiteral(".png")));
+                            capturesSucceeded &= linearSaved && displaySaved;
+                        }
+                        passed &= check(
+                            capturesSucceeded,
+                            "Studio material-payload cases must capture GPU display and scene-linear output");
+                    }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_MATCAP_BACKFACE_CAPTURE_DIR");
@@ -10541,7 +10625,8 @@ int main(int argc, char *argv[])
                             metallicBucketA.metallic !=
                                 metallicBucketNext.metallic,
                         "Workbench material roughness and metallic must share their quantized buckets and change at the next boundary");
-                    const auto renderMaterialBucket = [&](float roughness) {
+                    const auto renderMaterialBucket = [&](float roughness,
+                                                           float metallic) {
                         ViewportRenderObject materialObject = surfaceObject;
                         materialObject.selected = false;
                         materialObject.outlineHandledBySceneStroke = false;
@@ -10550,7 +10635,7 @@ int main(int argc, char *argv[])
                             QVector3D(0.42f, 0.42f, 0.42f);
                         materialObject.workbenchMaterial.roughness =
                             roughness;
-                        materialObject.workbenchMaterial.metallic = 0.0;
+                        materialObject.workbenchMaterial.metallic = metallic;
                         ViewportShadingSettings materialShading =
                             gpuSolidShading;
                         materialShading.colorMode =
@@ -10568,15 +10653,26 @@ int main(int argc, char *argv[])
                         functions.glFinish();
                         return qMakePair(drawn, framebuffer.toImage());
                     };
-                    const auto roughnessBucketA = renderMaterialBucket(0.25f);
+                    const auto roughnessBucketA =
+                        renderMaterialBucket(0.25f, 0.0f);
                     const auto roughnessBucketSame =
-                        renderMaterialBucket(0.255f);
+                        renderMaterialBucket(0.255f, 0.0f);
                     const auto roughnessBucketNext =
-                        renderMaterialBucket(0.27f);
+                        renderMaterialBucket(0.27f, 0.0f);
+                    const auto metallicBucketRenderedA =
+                        renderMaterialBucket(0.25f, 0.10f);
+                    const auto metallicBucketRenderedSame =
+                        renderMaterialBucket(0.25f, 0.14f);
+                    const auto metallicBucketRenderedNext =
+                        renderMaterialBucket(0.25f, 0.15f);
                     int roughnessBoundaryPixels = 0;
+                    int metallicBoundaryPixels = 0;
                     bool sameBucketImage =
                         roughnessBucketA.second.size() ==
                         roughnessBucketSame.second.size();
+                    bool sameMetallicBucketImage =
+                        metallicBucketRenderedA.second.size() ==
+                        metallicBucketRenderedSame.second.size();
                     for (int y = 0; sameBucketImage &&
                                     y < roughnessBucketA.second.height(); ++y) {
                         for (int x = 0; x < roughnessBucketA.second.width();
@@ -10587,19 +10683,39 @@ int main(int argc, char *argv[])
                                                    x, y);
                         }
                     }
+                    for (int y = 0; sameMetallicBucketImage &&
+                                    y <
+                                        metallicBucketRenderedA.second.height();
+                         ++y) {
+                        for (int x = 0;
+                             x < metallicBucketRenderedA.second.width();
+                             ++x) {
+                            sameMetallicBucketImage &=
+                                metallicBucketRenderedA.second.pixel(x, y) ==
+                                metallicBucketRenderedSame.second.pixel(x, y);
+                        }
+                    }
                     for (int y = 0; y < roughnessBucketA.second.height(); ++y) {
                         for (int x = 0; x < roughnessBucketA.second.width();
                              ++x) {
                             roughnessBoundaryPixels +=
                                 roughnessBucketA.second.pixel(x, y) !=
                                 roughnessBucketNext.second.pixel(x, y);
+                            metallicBoundaryPixels +=
+                                metallicBucketRenderedA.second.pixel(x, y) !=
+                                metallicBucketRenderedNext.second.pixel(x, y);
                         }
                     }
                     passed &= check(
                         roughnessBucketA.first && roughnessBucketSame.first &&
-                            roughnessBucketNext.first && sameBucketImage &&
-                            roughnessBoundaryPixels > 0,
-                        "GPU Workbench material lighting must be identical within a 5-bit roughness bucket and change across its boundary");
+                            roughnessBucketNext.first &&
+                            metallicBucketRenderedA.first &&
+                            metallicBucketRenderedSame.first &&
+                            metallicBucketRenderedNext.first &&
+                            sameBucketImage && sameMetallicBucketImage &&
+                            roughnessBoundaryPixels > 0 &&
+                            metallicBoundaryPixels > 0,
+                        "GPU Workbench material lighting must be identical within its roughness and metallic buckets and change across both boundaries");
 
                     QVector<float> clearSceneDepth(glSize.width() *
                                                        glSize.height(),

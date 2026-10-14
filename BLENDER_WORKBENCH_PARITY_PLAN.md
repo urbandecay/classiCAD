@@ -5730,3 +5730,42 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   <dir>/color_texture_nurbs_curved_proxy.obj` with the same orthographic or
   perspective arguments in the preceding categories, plus `--linear-output`
   and `--linear-pfm-output`.
+
+### Matched textured trimmed NURBS surface with an interior hole (2026-10-14)
+
+- Added a curved degree-2 NURBS patch with an outer UV boundary and a square
+  interior hole, both represented by closed degree-1 NURBS trim loops. The
+  offscreen contract checks that the projected hole center remains the World
+  background and a projected annulus point remains textured in both GPU and
+  QPainter captures. It exports the production tessellator's exact triangles
+  and normalized UVs for the Blender 5.2.2 mesh proxy; the authoritative surface
+  and trim curves remain unchanged.
+- The Blender comparison uses the same 640×480 orthographic camera, Flat
+  Texture, sRGB Linear/Repeat image, AA Off, and neutral World background. GPU
+  mask IoU is `0.999580` (12 XOR pixels; 28,565 foreground pixels in each
+  image); QPainter mask IoU is `0.999755` (7 XOR pixels; 28,565 Blender and
+  28,568 QPainter foreground pixels). On the common foreground eroded by four
+  pixels, scene-linear RGB MAE is `0.0000575` GPU (max `0.00671`) and `0.00157`
+  QPainter (p95 `0.00375`, max `0.00771`). The tested hole and textured annulus
+  are correct; remaining mask differences are at the trim/raster boundary.
+  This does not establish arbitrary trim topology, finer boundary accuracy,
+  alternate texture modes, or broad QPainter parity.
+- Blender's Workbench prepass interpolates the proxy's UV varying in pinned
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
+  and samples texture RGB in pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433).
+  The paired capture measures classiCAD's tessellated trim result and texture
+  path; it does not claim Blender Workbench natively renders NURBS trims.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 45.58 seconds); Blender reported 5.2.2 LTS; GPU and QPainter PNG/PFM
+  comparisons completed. Reproduce captures and the OBJ with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir> QT_QPA_PLATFORM=offscreen
+  ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`,
+  then run Blender with `--scene NURBS_TEXTURE_CURVED --nurbs-proxy-obj
+  <dir>/color_texture_nurbs_trimmed_proxy.obj --match-classicad-ortho
+  --aa OFF --lighting FLAT --color-source TEXTURE --texture-interpolation
+  Linear --texture-extension REPEAT --texture-image
+  <dir>/workbench-texture-pattern.png --world-color 0.0219421387 0.0219421387
+  0.0219421387 --zero-dither`, plus `--linear-output` and
+  `--linear-pfm-output` for scene-linear output.

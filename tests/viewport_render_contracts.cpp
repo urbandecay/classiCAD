@@ -8329,7 +8329,11 @@ int main(int argc, char *argv[])
 
                         const auto captureCurvedQPainterTexture =
                             [&](const QString &stem,
-                                const ViewportTransform &camera) {
+                                const ViewportTransform &camera,
+                                const ViewportRenderObject &renderObject,
+                                std::optional<QPoint> clearSample = std::nullopt,
+                                std::optional<QPoint> coveredSample =
+                                    std::nullopt) {
                                 CurveHitTester hitTester;
                                 ViewportRenderer renderer(camera, hitTester);
                                 renderer.setWorkbenchRasterAntialiasingEnabled(
@@ -8345,15 +8349,14 @@ int main(int argc, char *argv[])
                                 QPainter painter(&display);
                                 renderer.drawShape(
                                     painter,
-                                    curvedNurbsTextureObject.shape, glSize,
+                                    renderObject.shape, glSize,
                                     false, false, true, QColor(), QString(),
-                                    0.0, curvedNurbsTextureObject.objectId,
-                                    curvedNurbsTextureObject.geometryRevision,
-                                    curvedNurbsTextureObject
-                                        .preparedDepthGeometry.data(), {},
+                                    0.0, renderObject.objectId,
+                                    renderObject.geometryRevision,
+                                    renderObject.preparedDepthGeometry.data(), {},
                                     std::nullopt,
-                                    curvedNurbsTextureObject.workbenchMaterial,
-                                    curvedNurbsTextureObject.displayName,
+                                    renderObject.workbenchMaterial,
+                                    renderObject.displayName,
                                     QString(), {}, {}, &fragments);
                                 painter.end();
                                 QVector<float> sceneLinear(
@@ -8397,6 +8400,13 @@ int main(int argc, char *argv[])
                                             background;
                                     }
                                 }
+                                const bool sampleCoverageMatches =
+                                    (!clearSample ||
+                                     display.pixelColor(*clearSample) ==
+                                         background) &&
+                                    (!coveredSample ||
+                                     display.pixelColor(*coveredSample) !=
+                                         background);
                                 const QString displayPath = QDir(
                                     lightingCaptureDirectory).filePath(
                                         stem + QStringLiteral(".png"));
@@ -8416,23 +8426,214 @@ int main(int argc, char *argv[])
                                             qsizetype(sizeof(float))) ==
                                         sceneLinear.size() *
                                             qsizetype(sizeof(float));
-                                return foregroundPixels > 5000 && linearSaved &&
+                                return foregroundPixels > 5000 &&
+                                       sampleCoverageMatches && linearSaved &&
                                        display.save(displayPath);
                             };
                         const bool curvedQPainterTextureCaptured =
                             captureCurvedQPainterTexture(
                                 QStringLiteral(
                                     "color_texture_nurbs_curved_qpainter"),
-                                gpuTransform) &&
+                                gpuTransform, curvedNurbsTextureObject) &&
                             captureCurvedQPainterTexture(
                                 QStringLiteral(
                                     "color_texture_nurbs_curved_perspective_qpainter"),
-                                curvedPerspectiveTransform);
+                                curvedPerspectiveTransform,
+                                curvedNurbsTextureObject);
                         passed &= check(
                             curvedQPainterTextureCaptured,
                             "QPainter curved NURBS Image Texture captures must render matched orthographic and perspective display proxies");
                         lightingCapturesSucceeded &=
                             curvedQPainterTextureCaptured;
+
+                        const auto makeClosedUvTrim = [](
+                            const QVector<QPointF> &points, bool isHole) {
+                            NurbsSurfaceTrimLoop loop;
+                            loop.isHole = isHole;
+                            loop.curve.degree = 1;
+                            loop.curve.order = 2;
+                            loop.curve.rational = false;
+                            loop.curve.controlPoints = points;
+                            loop.curve.weights.fill(1.0, points.size());
+                            loop.curve.knots = {0.0, 0.25, 0.5, 0.75, 1.0};
+                            return loop;
+                        };
+                        ViewportRenderObject trimmedTextureObject =
+                            curvedNurbsTextureObject;
+                        NurbsSurface3D trimmedTextureSurface =
+                            curvedTextureSurface;
+                        trimmedTextureSurface.trimLoops.append(
+                            makeClosedUvTrim(
+                                {{2.1, -2.85}, {5.9, -2.85}, {5.9, 4.85},
+                                 {2.1, 4.85}, {2.1, -2.85}},
+                                false));
+                        trimmedTextureSurface.trimLoops.append(
+                            makeClosedUvTrim(
+                                {{3.4, -0.2}, {4.6, -0.2}, {4.6, 2.2},
+                                 {3.4, 2.2}, {3.4, -0.2}},
+                                true));
+                        trimmedTextureObject.shape.nurbsSurface =
+                            trimmedTextureSurface;
+                        trimmedTextureObject.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                buildViewportDepthGeometry(
+                                    trimmedTextureObject.shape));
+                        trimmedTextureObject.objectId =
+                            ObjectId::fromValue(9103);
+                        trimmedTextureObject.displayName =
+                            QStringLiteral("TrimmedCurvedNurbsTexturePatch");
+                        const auto &trimmedDisplayVertices =
+                            trimmedTextureObject.preparedDepthGeometry
+                                ->surfaceVertices;
+                        const auto &trimmedDisplayUvs =
+                            trimmedTextureObject.preparedDepthGeometry
+                                ->surfaceTextureCoordinates;
+                        QByteArray trimmedNurbsProxyObj;
+                        const bool trimmedProxyMeshValid =
+                            validateNurbsSurface(trimmedTextureSurface) &&
+                            trimmedTextureSurface.trimLoops.size() == 2 &&
+                            trimmedDisplayVertices.size() > 5000 &&
+                            trimmedDisplayVertices.size() % 3 == 0 &&
+                            trimmedDisplayUvs.size() ==
+                                trimmedDisplayVertices.size();
+                        if (trimmedProxyMeshValid) {
+                            trimmedNurbsProxyObj.reserve(
+                                trimmedDisplayVertices.size() * 88);
+                            for (const QVector3D &vertex :
+                                 trimmedDisplayVertices) {
+                                trimmedNurbsProxyObj +=
+                                    QByteArrayLiteral("v ") +
+                                    QByteArray::number(vertex.x(), 'g', 9) +
+                                    ' ' + QByteArray::number(vertex.y(), 'g', 9) +
+                                    ' ' + QByteArray::number(vertex.z(), 'g', 9) +
+                                    '\n';
+                            }
+                            for (const QPointF &uv : trimmedDisplayUvs) {
+                                trimmedNurbsProxyObj +=
+                                    QByteArrayLiteral("vt ") +
+                                    QByteArray::number(uv.x(), 'g', 9) + ' ' +
+                                    QByteArray::number(uv.y(), 'g', 9) + '\n';
+                            }
+                            for (int vertex = 1;
+                                 vertex <= trimmedDisplayVertices.size();
+                                 vertex += 3) {
+                                trimmedNurbsProxyObj +=
+                                    QByteArrayLiteral("f ") +
+                                    QByteArray::number(vertex) + '/' +
+                                    QByteArray::number(vertex) + ' ' +
+                                    QByteArray::number(vertex + 1) + '/' +
+                                    QByteArray::number(vertex + 1) + ' ' +
+                                    QByteArray::number(vertex + 2) + '/' +
+                                    QByteArray::number(vertex + 2) + '\n';
+                            }
+                        }
+                        const QString trimmedProxyPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_trimmed_proxy.obj"));
+                        QFile trimmedProxyFile(trimmedProxyPath);
+                        const bool trimmedProxySaved =
+                            trimmedProxyMeshValid &&
+                            trimmedProxyFile.open(QIODevice::WriteOnly) &&
+                            trimmedProxyFile.write(trimmedNurbsProxyObj) ==
+                                trimmedNurbsProxyObj.size();
+                        QImage trimmedNurbsGpuDisplay;
+                        QVector<float> trimmedNurbsGpuSceneLinear;
+                        const bool trimmedNurbsGpuRendered =
+                            trimmedProxySaved && renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-nurbs-trimmed-texture-gpu"),
+                                &trimmedNurbsGpuDisplay,
+                                &trimmedTextureObject, nullptr, nullptr,
+                                QString{}, &trimmedNurbsGpuSceneLinear,
+                                &textureBackground);
+                        const QString trimmedNurbsStem =
+                            QStringLiteral("color_texture_nurbs_trimmed");
+                        const QString trimmedNurbsGpuDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                trimmedNurbsStem + QStringLiteral(".png"));
+                        QFile trimmedNurbsGpuLinearFile(QDir(
+                            lightingCaptureDirectory).filePath(
+                                trimmedNurbsStem + QStringLiteral(".pfm")));
+                        const bool trimmedNurbsGpuLinearSaved =
+                            trimmedNurbsGpuRendered &&
+                            trimmedNurbsGpuSceneLinear.size() ==
+                                textureExpectedValues &&
+                            trimmedNurbsGpuLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            trimmedNurbsGpuLinearFile.write(
+                                texturePfmHeader) == texturePfmHeader.size() &&
+                            trimmedNurbsGpuLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    trimmedNurbsGpuSceneLinear.constData()),
+                                trimmedNurbsGpuSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                trimmedNurbsGpuSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool trimmedNurbsGpuDisplaySaved =
+                            trimmedNurbsGpuRendered &&
+                            trimmedNurbsGpuDisplay.size() == QSize(640, 480) &&
+                            trimmedNurbsGpuDisplay.save(
+                                trimmedNurbsGpuDisplayPath);
+                        const auto projectedTrimParameter =
+                            [&](qreal u, qreal v, QPoint *pixel) {
+                                Point3D point;
+                                QPointF screen;
+                                if (!evaluateNurbsSurfacePoint(
+                                        trimmedTextureSurface, u, v, &point) ||
+                                    !gpuTransform.worldPointToScreen(
+                                        point, glSize, &screen) ||
+                                    pixel == nullptr) {
+                                    return false;
+                                }
+                                *pixel = QPoint(qFloor(screen.x()),
+                                                qFloor(screen.y()));
+                                return pixel->x() >= 0 &&
+                                       pixel->x() < glSize.width() &&
+                                       pixel->y() >= 0 &&
+                                       pixel->y() < glSize.height();
+                            };
+                        QPoint holeCenterPixel;
+                        QPoint annulusPixel;
+                        const QColor textureBackgroundDisplay =
+                            nurbsTextureDisplay.pixelColor(0, 0);
+                        const bool trimProbePixelsValid =
+                            projectedTrimParameter(4.0, 1.0,
+                                                   &holeCenterPixel) &&
+                            projectedTrimParameter(2.6, 1.0, &annulusPixel);
+                        const bool trimmedHoleCoverageValid =
+                            trimProbePixelsValid &&
+                            trimmedNurbsGpuDisplay.pixelColor(
+                                holeCenterPixel) == textureBackgroundDisplay &&
+                            trimmedNurbsGpuDisplay.pixelColor(annulusPixel) !=
+                                textureBackgroundDisplay;
+                        passed &= check(
+                            trimmedNurbsGpuRendered &&
+                                trimmedNurbsGpuLinearSaved &&
+                                trimmedNurbsGpuDisplaySaved &&
+                                trimmedHoleCoverageValid,
+                            "GPU trimmed NURBS Image Texture capture must preserve a clear hole and textured annulus");
+                        lightingCapturesSucceeded &=
+                            trimmedNurbsGpuRendered &&
+                            trimmedNurbsGpuLinearSaved &&
+                            trimmedNurbsGpuDisplaySaved;
+                        const bool trimmedQPainterCaptured =
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_trimmed_qpainter"),
+                                gpuTransform, trimmedTextureObject,
+                                trimProbePixelsValid
+                                    ? std::optional<QPoint>(holeCenterPixel)
+                                    : std::nullopt,
+                                trimProbePixelsValid
+                                    ? std::optional<QPoint>(annulusPixel)
+                                    : std::nullopt);
+                        passed &= check(
+                            trimmedQPainterCaptured,
+                            "QPainter trimmed NURBS Image Texture capture must preserve the textured annulus");
+                        lightingCapturesSucceeded &=
+                            trimmedQPainterCaptured;
 
                         CurveHitTester qpainterTextureHitTester;
                         ViewportRenderer qpainterTextureRenderer(

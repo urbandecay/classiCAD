@@ -2930,15 +2930,81 @@ int main(int argc, char *argv[])
                         borderCropResult.sceneLinearRgba[0] == 0.0f &&
                         borderCropResult.sceneLinearRgba[(2 * 8 + 3) * 4] == 0.25f,
                     "non-cropped Blender render borders must retain the full frame and clear pixels outside the selected region");
-    WorkbenchRenderResult fractionalBorderResult;
-    fractionalBorderResult.outputSize = QSize(8, 6);
-    fractionalBorderResult.combined = QImage(8, 6, QImage::Format_RGBA8888);
-    fractionalBorderResult.combined.fill(Qt::white);
+    const auto makeFractionalBorderResult = []() {
+        WorkbenchRenderResult result;
+        result.outputSize = QSize(8, 6);
+        result.combined = QImage(8, 6, QImage::Format_RGBA8888);
+        result.depth.resize(48);
+        result.sceneLinearSize = QSize(8, 6);
+        result.sceneLinearRgba.resize(48 * 4);
+        for (int y = 0; y < 6; ++y) {
+            for (int x = 0; x < 8; ++x) {
+                const int index = y * 8 + x;
+                result.combined.setPixel(
+                    x, y, qRgba(20 + x, 40 + y, 60 + index, 255));
+                result.depth[index] = static_cast<float>(index) + 0.5f;
+                result.sceneLinearRgba[index * 4] = index + 0.25f;
+                result.sceneLinearRgba[index * 4 + 1] = index + 0.5f;
+                result.sceneLinearRgba[index * 4 + 2] = index + 0.75f;
+                result.sceneLinearRgba[index * 4 + 3] = 1.0f;
+            }
+        }
+        return result;
+    };
+    WorkbenchRenderResult fractionalBorderResult = makeFractionalBorderResult();
+    WorkbenchRenderResult fractionalBorderCropResult = makeFractionalBorderResult();
+    constexpr qreal borderMinX = 0.21;
+    constexpr qreal borderMinY = 0.31;
+    constexpr qreal borderMaxX = 0.82;
+    constexpr qreal borderMaxY = 0.72;
     const bool fractionalBorderApplied = applyWorkbenchRenderBorder(
-        &fractionalBorderResult, true, true, 0.2, 0.2, 0.8, 0.8);
-    passed &= check(fractionalBorderApplied &&
-                        fractionalBorderResult.outputSize == QSize(5, 3),
-                    "Blender render-border endpoints must truncate in bottom-left frame coordinates before converting to image rows");
+        &fractionalBorderResult, true, false,
+        borderMinX, borderMinY, borderMaxX, borderMaxY);
+    const bool fractionalBorderCropApplied = applyWorkbenchRenderBorder(
+        &fractionalBorderCropResult, true, true,
+        borderMinX, borderMinY, borderMaxX, borderMaxY);
+    bool fractionalBorderPassesMatch = true;
+    for (int y = 0; y < 6; ++y) {
+        for (int x = 0; x < 8; ++x) {
+            const int fullIndex = y * 8 + x;
+            const bool inside = x >= 1 && x < 6 && y >= 2 && y < 5;
+            if (!inside) {
+                fractionalBorderPassesMatch &=
+                    fractionalBorderResult.combined.pixelColor(x, y).alpha() == 0 &&
+                    fractionalBorderResult.depth[fullIndex] == 1.0e10f;
+                for (int channel = 0; channel < 4; ++channel) {
+                    fractionalBorderPassesMatch &=
+                        fractionalBorderResult.sceneLinearRgba[fullIndex * 4 +
+                                                               channel] == 0.0f;
+                }
+                continue;
+            }
+            const int croppedX = x - 1;
+            const int croppedY = y - 2;
+            const int croppedIndex = croppedY * 5 + croppedX;
+            fractionalBorderPassesMatch &=
+                fractionalBorderCropResult.combined.pixel(x - 1, y - 2) ==
+                    fractionalBorderResult.combined.pixel(x, y) &&
+                fractionalBorderCropResult.depth[croppedIndex] ==
+                    fractionalBorderResult.depth[fullIndex];
+            for (int channel = 0; channel < 4; ++channel) {
+                fractionalBorderPassesMatch &=
+                    fractionalBorderCropResult.sceneLinearRgba[
+                        croppedIndex * 4 + channel] ==
+                    fractionalBorderResult.sceneLinearRgba[
+                        fullIndex * 4 + channel];
+            }
+        }
+    }
+    passed &= check(fractionalBorderApplied && fractionalBorderCropApplied &&
+                        fractionalBorderResult.outputSize == QSize(8, 6) &&
+                        fractionalBorderCropResult.outputSize == QSize(5, 3) &&
+                        fractionalBorderCropResult.combined.size() == QSize(5, 3) &&
+                        fractionalBorderCropResult.depth.size() == 15 &&
+                        fractionalBorderCropResult.sceneLinearSize == QSize(5, 3) &&
+                        fractionalBorderCropResult.sceneLinearRgba.size() == 60 &&
+                        fractionalBorderPassesMatch,
+                    "fractional Blender render borders must truncate asymmetric bottom-left bounds to x=[1,6), y=[2,5), clear exterior Combined/depth/linear data, and crop every pass to the same region");
     WorkbenchRenderResult croppedBorderResult;
     croppedBorderResult.outputSize = QSize(8, 6);
     croppedBorderResult.combined = QImage(8, 6, QImage::Format_RGBA8888);

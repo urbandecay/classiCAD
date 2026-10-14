@@ -1517,7 +1517,32 @@ Blender with `tests/workbench_cube_reference.py --lighting MATCAP
 using `--ortho-scale 5.0 --match-classicad-ortho --aa OFF --zero-dither` and
 the same background. Compare scene-linear PFM with
 `tests/workbench_pfm_compare.py`. Other presets, camera orientations, Studio
-rotation, and QPainter MatCap output remain open.
+rotation, and broader QPainter MatCap parity remain open.
+
+**Ceramic Lightbulb MatCap comparison (2026-10-14):** Added the Blender 5.2.2
+`ceramic_lightbulb` preset to the offscreen polygon-cube captures and compared
+GPU and production QPainter output with specular enabled at the same 640x480
+orthographic camera, AA Off, AgX, and neutral scene-linear background. GPU
+output matches all 27 scene-linear face probes exactly; display probe MAE is
+`0.1111/255` (max `1/255`). Its full-frame mask IoU is `0.997991` (224 XOR
+pixels), per-channel scene-linear MAEs are `0.000215`, `0.000218`, and
+`0.000245`, and whole-frame display MAE is `0.1136/255` (max `94/255`, at an
+edge pixel). QPainter face probes have scene-linear MAE `0.0003986` (max
+`0.0011610`) and display MAE `0.2222/255` (max `1/255`). Its full-frame mask
+IoU is `0.994440` (622 XOR pixels); edge coverage and color residuals are
+larger than GPU output, with whole-frame display MAE `0.6139/255` (max
+`96/255`). This validates one more asymmetric preset at the fixed camera and
+does not establish other MatCaps or camera orientations. Reproduce classiCAD
+with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=/tmp/classicad-ceramic-lightbulb
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -R
+'^viewport_render_contracts$' --output-on-failure`; render Blender with
+`tests/workbench_cube_reference.py --lighting MATCAP --light-preset
+ceramic_lightbulb --aa OFF --zero-dither --ortho-scale 5.0
+--match-classicad-ortho --world-color 0.0219421387 0.0219421387 0.0219421387
+--linear-output /tmp/blender-ceramic-lightbulb.exr --linear-pfm-output
+/tmp/blender-ceramic-lightbulb.pfm`. Compare probes with
+`tests/workbench_display_probe_compare.py` and full-frame linear output with
+`tests/workbench_pfm_compare.py`.
 
 **Full-frame world-space Studio rotation comparison (2026-10-14):** Compared
 Studio `Paint` at 90° world-space rotation on the same 640×480 cube with AA
@@ -1533,9 +1558,9 @@ cameras, and QPainter output remain open. The classiCAD offscreen
 `viewport_render_contracts` capture passed (1/1), and the Blender 5.2.2
 background render and PFM conversion completed.
 
-**GPU MatCap upload readback update (2026-10-13, corrected 2026-10-14):** The exact QMC half-float upload is shared by the production renderer and an offscreen OpenGL contract. With Mesa software GL, the contract samples two asymmetric texel centers and a four-texel midpoint in each layer for both `metal_bronze` and `check_normal+y`, comparing against the CPU sampler with the same top-down source-to-GL row mapping. Blender 5.2.2's [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L18-L42) passes the MatCap ImBuf float data to texture creation; however, the earlier contract's raw coordinate checks did not prove that the production renderer matched Blender's effective image-row orientation at its MatCap UVs. All 27 bundled `.qmc` files regenerate byte-for-byte from Blender 5.2.2's bundled MatCap EXRs, and a sampled Blender image pixel matches its QMC half-float RGB exactly. Controlled rendered comparisons now verify the full texture orientation for two presets; other presets, camera orientations, and image edges remain open.
+**GPU MatCap upload readback update (2026-10-13, corrected 2026-10-14):** The exact QMC half-float upload is shared by the production renderer and an offscreen OpenGL contract. With Mesa software GL, the contract samples two asymmetric texel centers and a four-texel midpoint in each layer for both `metal_bronze` and `check_normal+y`, comparing against the CPU sampler with the same top-down source-to-GL row mapping. Blender 5.2.2's [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L18-L42) passes the MatCap ImBuf float data to texture creation; however, the earlier contract's raw coordinate checks did not prove that the production renderer matched Blender's effective image-row orientation at its MatCap UVs. All 27 bundled `.qmc` files regenerate byte-for-byte from Blender 5.2.2's bundled MatCap EXRs, and a sampled Blender image pixel matches its QMC half-float RGB exactly. Controlled rendered comparisons now verify the full texture orientation for three presets; other presets, camera orientations, and image edges remain open.
 
-**CPU MatCap texture filtering update (2026-10-13, orientation corrected 2026-10-14):** Blender 5.2.2 evaluates MatCaps with `textureLod` on normalized textures (`source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh`). The CPU/QPainter samplers use normalized texel-center coordinates (`uv * dimension - 0.5`) with edge clamping, matching the OpenGL linear-filter footprint. QMC half-float rows are stored top-down, so the CPU sampler now converts normalized V to the corresponding source row; the sRGB image path keeps its equivalent image-to-GL orientation conversion. Focused contracts cover the center of a 2x2 texture, texel-center lookup, clamped edge lookups, both vertical endpoint mappings, and GPU sampling in both array layers. Matched rendered probes verify the corrected orientation for `check_normal+y` and `metal_bronze`; broader QPainter rendered parity remains open.
+**CPU MatCap texture filtering update (2026-10-13, orientation corrected 2026-10-14):** Blender 5.2.2 evaluates MatCaps with `textureLod` on normalized textures (`source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh`). The CPU/QPainter samplers use normalized texel-center coordinates (`uv * dimension - 0.5`) with edge clamping, matching the OpenGL linear-filter footprint. QMC half-float rows are stored top-down, so the CPU sampler now converts normalized V to the corresponding source row; the sRGB image path keeps its equivalent image-to-GL orientation conversion. Focused contracts cover the center of a 2x2 texture, texel-center lookup, clamped edge lookups, both vertical endpoint mappings, and GPU sampling in both array layers. Matched rendered probes verify the corrected orientation for `check_normal+y`, `metal_bronze`, and `ceramic_lightbulb`; broader QPainter rendered parity remains open.
 
 **QPainter MatCap horizontal flip (2026-10-14):** The CPU MatCap UV helper already accepts the Workbench horizontal-reflection control, and both the mesh-fragment and NURBS-surface shading call sites pass the viewport's persisted `matcapFlipX` setting. Headless production-path contracts render tilted NURBS and polygon-mesh fixtures with the asymmetric `metal_bronze` preset and verify that enabling Flip X changes each output. Blender 5.2.2 negates the computed MatCap UV X coordinate when flipped in [`workbench_matcap.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh#L11-L22). These contracts verify setting flow through both QPainter geometry paths, not matched Blender output; other presets, camera orientations, and full-frame parity remain open.
 
@@ -3194,8 +3219,9 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Studio Default, Flat, and selected Studio Paint rotations have 27-probe
   checks; full-frame GPU Paint comparison covers world-space 90° rotation.
   Full-frame GPU MatCap comparison covers `metal_bronze` with
-  specular and `check_normal+y` without specular. QPainter MatCap face-interior
-  probes cover those same two preset/specular combinations; full-frame QPainter
+  specular, `check_normal+y` without specular, and `ceramic_lightbulb` with
+  specular. QPainter MatCap face-interior probes cover those three
+  preset/specular combinations; full-frame QPainter
   MatCap edge coverage still differs from Blender's AA-Off output. Other presets,
   Studio rotations, camera orientations, and full-frame QPainter parity remain
   open.

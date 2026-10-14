@@ -2084,35 +2084,49 @@ int main(int argc, char *argv[])
     struct RenderedSurface {
         int coveredPixels = 0;
         QColor centerColor;
+        QVector3D meanColor;
     };
-    const auto renderedSurface = [&](const ViewportShadingSettings &settings,
+    const auto renderedSurface = [&](const Shape &shape,
+                                     const ViewportShadingSettings &settings,
                                      bool selected = false) {
         QImage image(surfaceViewportSize,
                      QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         surfaceRenderer.setShadingSettings(settings);
         QPainter painter(&image);
-        surfaceRenderer.drawShape(painter, surfaceShape, surfaceViewportSize,
+        surfaceRenderer.drawShape(painter, shape, surfaceViewportSize,
                                  false, selected);
         painter.end();
         int coveredPixels = 0;
+        QVector3D summedColor;
         for (int y = 0; y < image.height(); ++y) {
             for (int x = 0; x < image.width(); ++x) {
-                coveredPixels += image.pixelColor(x, y).alpha() > 0;
+                const QColor pixel = image.pixelColor(x, y);
+                if (pixel.alpha() > 0) {
+                    ++coveredPixels;
+                    summedColor += QVector3D(pixel.redF(), pixel.greenF(),
+                                             pixel.blueF());
+                }
             }
         }
-        return RenderedSurface{coveredPixels, image.pixelColor(80, 80)};
+        return RenderedSurface{
+            coveredPixels, image.pixelColor(80, 80),
+            coveredPixels > 0 ? summedColor / float(coveredPixels)
+                              : QVector3D{}};
     };
-    const RenderedSurface wireframeSurface = renderedSurface(shading);
+    const RenderedSurface wireframeSurface = renderedSurface(surfaceShape,
+                                                               shading);
     ViewportShadingSettings solidShading;
     solidShading.mode = ViewportShadingMode::Solid;
-    const RenderedSurface solidSurface = renderedSurface(solidShading);
-    const RenderedSurface selectedSolidSurface = renderedSurface(solidShading,
-                                                                  true);
+    const RenderedSurface solidSurface = renderedSurface(surfaceShape,
+                                                          solidShading);
+    const RenderedSurface selectedSolidSurface = renderedSurface(
+        surfaceShape, solidShading, true);
     ViewportShadingSettings matcapShading = solidShading;
     matcapShading.lightingMode = ViewportLightingMode::MatCap;
     matcapShading.matcapPreset = QStringLiteral("metal_bronze");
-    const RenderedSurface matcapSurface = renderedSurface(matcapShading);
+    const RenderedSurface matcapSurface = renderedSurface(surfaceShape,
+                                                            matcapShading);
     const QVector3D surfaceBaseLinear =
         workbenchDefaultSolidMaterialDiffuseColor();
     const QVector3D expectedCpuColor = workbenchSceneLinearToAgxSrgb(
@@ -2148,6 +2162,27 @@ int main(int argc, char *argv[])
                         std::abs(matcapSurface.centerColor.blueF() -
                                  expectedMatcapColor.z()) < 0.025f,
                     "solid viewport shading must render NURBS faces with Workbench Studio and two-layer MatCap colors");
+
+    NurbsSurface3D tiltedSurface = fillSurface;
+    for (Point3D &point : tiltedSurface.controlPoints) {
+        point.z = point.x * 0.7;
+    }
+    Shape tiltedNurbsShape;
+    tiltedNurbsShape.geometryType = GeometryType::NurbsSurface;
+    tiltedNurbsShape.nurbsSurface = tiltedSurface;
+    ViewportShadingSettings matcapFlipSettings = matcapShading;
+    matcapFlipSettings.matcapPreset = QStringLiteral("metal_bronze");
+    matcapFlipSettings.specularLighting = true;
+    const RenderedSurface tiltedNurbsNormal = renderedSurface(
+        tiltedNurbsShape, matcapFlipSettings);
+    matcapFlipSettings.matcapFlipX = true;
+    const RenderedSurface tiltedNurbsFlipped = renderedSurface(
+        tiltedNurbsShape, matcapFlipSettings);
+    passed &= check(tiltedNurbsNormal.coveredPixels > 0 &&
+                        tiltedNurbsFlipped.coveredPixels > 0 &&
+                        (tiltedNurbsNormal.meanColor -
+                         tiltedNurbsFlipped.meanColor).length() > 0.01,
+                    "QPainter MatCap Flip X must mirror asymmetric MatCap shading for NURBS surfaces");
 
     // Color-mode source contracts for the software renderer. The attribute
     // triangle has three deliberately distinct corner colors; the texture

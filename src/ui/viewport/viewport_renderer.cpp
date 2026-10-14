@@ -2188,7 +2188,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         shadedLinear = workbenchMatcapShade(
                             shadingSettings_.matcapPreset, textureColor,
                             normalView, incidentView,
-                            shadingSettings_.specularLighting);
+                            shadingSettings_.specularLighting,
+                            shadingSettings_.matcapFlipX);
                     }
                     if (shadingSettings_.xrayEnabled()) {
                         pixelAlpha *= shadingSettings_.xrayAlpha;
@@ -3354,7 +3355,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 shadedLinear = workbenchMatcapShade(
                     shadingSettings_.matcapPreset, surfaceBaseColor,
                     normalView, incidentView,
-                    shadingSettings_.specularLighting);
+                    shadingSettings_.specularLighting,
+                    shadingSettings_.matcapFlipX);
             }
             if (resolvedSceneLinear != nullptr) {
                 *resolvedSceneLinear = shadedLinear;

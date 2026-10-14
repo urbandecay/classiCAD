@@ -3237,11 +3237,13 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   checks; full-frame GPU Paint comparison covers world-space 90° rotation.
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular, `check_normal+y` without specular, and `ceramic_lightbulb` with
-  specular. QPainter MatCap face-interior probes cover those three
-  preset/specular combinations; full-frame QPainter
-  MatCap edge coverage still differs from Blender's AA-Off output. Other presets,
-  Studio rotations, camera orientations, and full-frame QPainter parity remain
-  open.
+  specular. QPainter face-interior probes cover those three preset/specular
+  combinations. A full-frame AA-Off QPainter comparison now covers
+  `metal_bronze` with specular: display MAE is `0.1292/255`, and mask IoU is
+  `0.997991` with 224 XOR pixels; an isolated shared-face-boundary outlier
+  reaches `105/255`. Exact edge parity remains open. Other presets, AA modes,
+  Studio rotations, camera orientations, and broader full-frame QPainter parity
+  remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, and a two-tile mesh UDIM Closest- and Linear-filter image comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.

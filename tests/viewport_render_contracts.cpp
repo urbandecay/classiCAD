@@ -6799,6 +6799,76 @@ int main(int argc, char *argv[])
                                         partiallyCoveredGridPixels > 0,
                                     "grid lines must retain multisample edge coverage independently from Smooth Wires preferences");
 
+                    const auto captureGridAndOverlayStroke = [&] (
+                        bool smoothOverlay, bool *drawSucceeded) {
+                        wireFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                        functions.glClearColor(128.0f / 255.0f,
+                                               128.0f / 255.0f,
+                                               128.0f / 255.0f, 1.0f);
+                        functions.glClearDepth(1.0);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        BlenderGridRenderer gridRenderer;
+                        const bool gridRendered =
+                            gridRenderer.renderToCurrentFramebuffer(
+                                wireTransform, glSize, 1.0, {}, 1.0,
+                                BlenderGridAppearance{});
+                        wireFramebuffer.bind();
+                        ViewportSceneStroke overlayStroke = editWire;
+                        overlayStroke.editModeWire = false;
+                        overlayStroke.smoothWireCategory =
+                            ViewportSmoothWireCategory::Overlay;
+                        const bool strokeRendered = gridRendered &&
+                            wireRenderer.draw(
+                                {overlayStroke}, wireTransform, glSize, 1.0,
+                                false, 1.0, smoothOverlay, true);
+                        functions.glFinish();
+                        *drawSucceeded = gridRendered && strokeRendered;
+                        return wireFramebuffer.toImage();
+                    };
+                    bool gridAndOverlayUnsmoothSucceeded = false;
+                    bool gridAndOverlaySmoothSucceeded = false;
+                    const QImage gridAndOverlayUnsmooth =
+                        captureGridAndOverlayStroke(
+                            false, &gridAndOverlayUnsmoothSucceeded);
+                    const QImage gridAndOverlaySmooth =
+                        captureGridAndOverlayStroke(
+                            true, &gridAndOverlaySmoothSucceeded);
+                    int partialGridPixelsOutsideStroke = 0;
+                    bool gridCoverageUnaffectedByWirePreference = true;
+                    if (!gridAndOverlayUnsmooth.isNull() &&
+                        !gridAndOverlaySmooth.isNull() &&
+                        gridAndOverlayUnsmooth.size() ==
+                            gridAndOverlaySmooth.size()) {
+                        for (int y = 0; y < gridAndOverlayUnsmooth.height(); ++y) {
+                            if (std::abs(y - 240) <= 6) continue;
+                            for (int x = 0;
+                                 x < gridAndOverlayUnsmooth.width(); ++x) {
+                                const QColor pixel =
+                                    gridImage.pixelColor(x, y);
+                                if (pixel.red() == pixel.green() &&
+                                    pixel.green() == pixel.blue() &&
+                                    pixel.red() > 105 && pixel.red() < 128) {
+                                    ++partialGridPixelsOutsideStroke;
+                                    gridCoverageUnaffectedByWirePreference &=
+                                        gridAndOverlayUnsmooth.pixel(x, y) ==
+                                        gridAndOverlaySmooth.pixel(x, y);
+                                }
+                            }
+                        }
+                    }
+                    passed &= check(
+                        gridAndOverlayUnsmoothSucceeded &&
+                            gridAndOverlaySmoothSucceeded &&
+                            imageDifferenceCount(gridAndOverlayUnsmooth,
+                                                 gridAndOverlaySmooth) > 0 &&
+                            partialGridPixelsOutsideStroke > 0 &&
+                            gridCoverageUnaffectedByWirePreference,
+                        "composed grid antialiasing must remain unchanged when Overlay Smooth Wires toggles, while the overlay stroke responds");
+
                     wireFramebuffer.release();
                 }
             }

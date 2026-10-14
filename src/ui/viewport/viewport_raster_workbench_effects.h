@@ -78,9 +78,16 @@ float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,
 struct RasterWorkbenchSurfaceLayers {
     QImage opaqueColor;
     QImage transparentColor;
+    // Optional pre-display resolved scene for the bounded opaque-only
+    // outline path. Pixels are row-major physical-target samples.
+    std::vector<RasterWorkbenchLinearPixel> sceneLinearColor;
+    QSize sceneLinearSize;
     // True when cavity was folded into the opaque contribution before
     // transparency composition. The later effects pass then skips cavity.
     bool cavityAppliedBeforeTransparency = false;
+    // True when outline color was composed into the scene-linear target
+    // before its display transform.
+    bool outlineAppliedBeforeDisplay = false;
 };
 
 // Software Workbench screen-space effects for the QPainter fallback. The color

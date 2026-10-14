@@ -547,6 +547,9 @@ bool compositeRasterWorkbenchSurfaces(
     const int pixelCount = static_cast<int>(pixelCount64);
     if (surfaceLayers != nullptr) {
         surfaceLayers->cavityAppliedBeforeTransparency = false;
+        surfaceLayers->outlineAppliedBeforeDisplay = false;
+        surfaceLayers->sceneLinearColor.clear();
+        surfaceLayers->sceneLinearSize = QSize();
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         surfaceLayers->opaqueColor.setDevicePixelRatio(
@@ -984,6 +987,73 @@ bool compositeRasterWorkbenchSurfaces(
                 frontTransparent.green + transparent.green * remainOpaque * remainFrontTransparent,
                 frontTransparent.blue + transparent.blue * remainOpaque * remainFrontTransparent,
                 frontTransparent.alpha + transparent.alpha * remainOpaque * remainFrontTransparent};
+        }
+        bool opaqueSourceMaterials = true;
+        for (const ViewportRenderObject &object : objects) {
+            opaqueSourceMaterials = opaqueSourceMaterials &&
+                isOpaqueWorkbenchAlpha(
+                    objectSourceAlpha(object, shadingSettings.colorMode));
+            for (const WorkbenchMaterialData &material : object.meshMaterials) {
+                opaqueSourceMaterials = opaqueSourceMaterials &&
+                    isOpaqueWorkbenchAlpha(material.alpha);
+            }
+            for (auto material = object.nurbsSolidFaceMaterials.cbegin();
+                 material != object.nurbsSolidFaceMaterials.cend(); ++material) {
+                opaqueSourceMaterials = opaqueSourceMaterials &&
+                    isOpaqueWorkbenchAlpha(material->alpha);
+            }
+        }
+        const bool canResolveOpaqueOutlineInSceneLinear =
+            surfaceLayers != nullptr && shadingSettings.outline &&
+            !shadingSettings.shadows && !shadingSettings.depthOfField &&
+            !shadingSettings.xrayEnabled() && opaqueSourceMaterials;
+        if (canResolveOpaqueOutlineInSceneLinear) {
+            std::vector<quint64> visibleObjectIds(
+                static_cast<std::size_t>(pixelCount), 0);
+            for (int index = 0; index < pixelCount; ++index) {
+                const int objectIndex = frontOpaqueObject[index] >= 0
+                    ? frontOpaqueObject[index] : opaqueObject[index];
+                if (objectIndex >= 0 && objectIndex < objects.size()) {
+                    visibleObjectIds[static_cast<std::size_t>(index)] =
+                        objects[objectIndex].objectId.value();
+                }
+            }
+            const QColor outline = shadingSettings.outlineColor;
+            const QVector3D outlineColor = workbenchSrgbToSceneLinear(
+                QVector3D(outline.redF(), outline.greenF(), outline.blueF()));
+            const float outlineAlpha = static_cast<float>(outline.alphaF());
+            const int sampleOffset = workbenchEffectUiScale(dpr);
+            surfaceLayers->sceneLinearColor = resolved;
+            surfaceLayers->sceneLinearSize = QSize(width, height);
+            for (int y = 0; y < height; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    const int index = y * width + x;
+                    const quint64 objectId = visibleObjectIds[
+                        static_cast<std::size_t>(index)];
+                    int differentNeighbors = 0;
+                    const std::array<QPoint, 4> offsets = {
+                        QPoint(sampleOffset, 0), QPoint(-sampleOffset, 0),
+                        QPoint(0, sampleOffset), QPoint(0, -sampleOffset)};
+                    for (const QPoint &offset : offsets) {
+                        const int sx = std::clamp(x + offset.x(), 0, width - 1);
+                        const int sy = std::clamp(y + offset.y(), 0, height - 1);
+                        differentNeighbors +=
+                            visibleObjectIds[static_cast<std::size_t>(
+                                sy * width + sx)] != objectId;
+                    }
+                    const float alpha = outlineAlpha *
+                        (static_cast<float>(differentNeighbors) / 4.0f);
+                    if (alpha <= 0.0f) continue;
+                    RasterWorkbenchLinearPixel &pixel = resolved[
+                        static_cast<std::size_t>(index)];
+                    const float remain = 1.0f - alpha;
+                    pixel.red = outlineColor.x() * alpha + pixel.red * remain;
+                    pixel.green = outlineColor.y() * alpha + pixel.green * remain;
+                    pixel.blue = outlineColor.z() * alpha + pixel.blue * remain;
+                    pixel.alpha = alpha + pixel.alpha * remain;
+                }
+            }
+            surfaceLayers->outlineAppliedBeforeDisplay = true;
         }
         for (int y = 0; y < height; ++y) {
             auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
@@ -1995,7 +2065,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     }
 
     const auto applyOutline = [&]() {
-        if (!settings.outline) return;
+        if (!settings.outline ||
+            (surfaceLayers != nullptr &&
+             surfaceLayers->outlineAppliedBeforeDisplay)) return;
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
         const QColor outline = settings.outlineColor;

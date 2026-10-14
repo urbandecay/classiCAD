@@ -1390,6 +1390,121 @@ int main(int argc, char *argv[])
                         "weighted QPainter OIT must accumulate both depth-separated transparent surfaces of one object");
         renderer.setShadingSettings(shading);
 
+        ViewportRenderObject opaqueOutlineObject = objects[0];
+        opaqueOutlineObject.workbenchMaterial.alpha = 1.0f;
+        opaqueOutlineObject.meshMaterials = {
+            opaqueOutlineObject.workbenchMaterial};
+        ViewportShadingSettings standardOutlineSettings = shading;
+        standardOutlineSettings.outline = true;
+        standardOutlineSettings.outlineColor = QColor(220, 70, 40);
+        standardOutlineSettings.colorTransform = 1;
+        QImage standardOutlineImage(size,
+                                    QImage::Format_ARGB32_Premultiplied);
+        standardOutlineImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers standardOutlineLayers;
+        renderer.setShadingSettings(standardOutlineSettings);
+        const bool standardOutlineRendered = compositeRasterWorkbenchSurfaces(
+            &standardOutlineImage, {opaqueOutlineObject}, transform, size,
+            1.0, false, true, standardOutlineSettings, backgroundLinear,
+            drawObject, &standardOutlineLayers);
+        ViewportShadingSettings agxOutlineSettings = standardOutlineSettings;
+        agxOutlineSettings.colorTransform = 0;
+        QImage agxOutlineImage(size, QImage::Format_ARGB32_Premultiplied);
+        agxOutlineImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers agxOutlineLayers;
+        renderer.setShadingSettings(agxOutlineSettings);
+        const bool agxOutlineRendered = compositeRasterWorkbenchSurfaces(
+            &agxOutlineImage, {opaqueOutlineObject}, transform, size, 1.0,
+            false, true, agxOutlineSettings, backgroundLinear, drawObject,
+            &agxOutlineLayers);
+        const QVector3D outlineLinear = workbenchSrgbToSceneLinear(
+            QVector3D(standardOutlineSettings.outlineColor.redF(),
+                      standardOutlineSettings.outlineColor.greenF(),
+                      standardOutlineSettings.outlineColor.blueF()));
+        bool outlineMatchesSceneLinearResolve = false;
+        if (standardOutlineLayers.sceneLinearSize == size &&
+            agxOutlineLayers.sceneLinearSize == size) {
+            for (int y = 0; y < size.height() &&
+                            !outlineMatchesSceneLinearResolve; ++y) {
+                for (int x = 0; x < size.width(); ++x) {
+                    const int index = y * size.width() + x;
+                    const RasterWorkbenchLinearPixel &base =
+                        standardOutlineLayers.sceneLinearColor[
+                            static_cast<std::size_t>(index)];
+                    const RasterWorkbenchLinearPixel &agxBase =
+                        agxOutlineLayers.sceneLinearColor[
+                            static_cast<std::size_t>(index)];
+                    if (std::abs(base.red - agxBase.red) > 1.0e-5f ||
+                        std::abs(base.green - agxBase.green) > 1.0e-5f ||
+                        std::abs(base.blue - agxBase.blue) > 1.0e-5f ||
+                        std::abs(base.alpha - agxBase.alpha) > 1.0e-5f) {
+                        continue;
+                    }
+                    const QColor standardActual =
+                        standardOutlineImage.pixelColor(x, y);
+                    const QColor agxActual = agxOutlineImage.pixelColor(x, y);
+                    for (int coverageStep = 1; coverageStep <= 4;
+                         ++coverageStep) {
+                        const float coverage = coverageStep / 4.0f;
+                        const QVector3D expectedLinear(
+                            outlineLinear.x() * coverage + base.red *
+                                (1.0f - coverage),
+                            outlineLinear.y() * coverage + base.green *
+                                (1.0f - coverage),
+                            outlineLinear.z() * coverage + base.blue *
+                                (1.0f - coverage));
+                        const QVector3D expectedStandard =
+                            workbenchSceneLinearToDisplaySrgb(
+                                expectedLinear,
+                                standardOutlineSettings.colorTransform,
+                                standardOutlineSettings.colorExposure,
+                                standardOutlineSettings.colorGamma,
+                                standardOutlineSettings.colorLutData,
+                                standardOutlineSettings.colorLutMetadata);
+                        const QVector3D expectedAgx =
+                            workbenchSceneLinearToDisplaySrgb(
+                                expectedLinear,
+                                agxOutlineSettings.colorTransform,
+                                agxOutlineSettings.colorExposure,
+                                agxOutlineSettings.colorGamma,
+                                agxOutlineSettings.colorLutData,
+                                agxOutlineSettings.colorLutMetadata);
+                        const auto withinTwoCodes = [](int actual,
+                                                       float expected) {
+                            return std::abs(actual -
+                                qRound(expected * 255.0f)) <= 2;
+                        };
+                        if (withinTwoCodes(standardActual.red(),
+                                           expectedStandard.x()) &&
+                            withinTwoCodes(standardActual.green(),
+                                           expectedStandard.y()) &&
+                            withinTwoCodes(standardActual.blue(),
+                                           expectedStandard.z()) &&
+                            withinTwoCodes(agxActual.red(), expectedAgx.x()) &&
+                            withinTwoCodes(agxActual.green(), expectedAgx.y()) &&
+                            withinTwoCodes(agxActual.blue(), expectedAgx.z()) &&
+                            standardActual.alpha() == agxActual.alpha()) {
+                            outlineMatchesSceneLinearResolve = true;
+                            break;
+                        }
+                    }
+                    if (outlineMatchesSceneLinearResolve) break;
+                }
+            }
+        }
+        QImage outlineEffectReplay = agxOutlineImage;
+        applyRasterWorkbenchEffects(
+            &outlineEffectReplay, {opaqueOutlineObject}, transform, size,
+            1.0, agxOutlineSettings, &agxOutlineLayers);
+        passed &= check(
+            standardOutlineRendered && agxOutlineRendered &&
+                standardOutlineLayers.outlineAppliedBeforeDisplay &&
+                agxOutlineLayers.outlineAppliedBeforeDisplay &&
+                outlineMatchesSceneLinearResolve &&
+                outlineEffectReplay == agxOutlineImage,
+            "opaque QPainter outlines must blend in scene-linear space before Standard or AgX display conversion");
+        renderer.setShadingSettings(shading);
+
         ViewportRenderObject cavityReceiver = objects[0];
         cavityReceiver.workbenchMaterial.alpha = 1.0f;
         cavityReceiver.meshMaterials = {cavityReceiver.workbenchMaterial};

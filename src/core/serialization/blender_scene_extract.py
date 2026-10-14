@@ -162,9 +162,6 @@ def bake_image_source_transform(image, cache_key=""):
     source = image.colorspace_settings.name
     if source in {"Non-Color", "Linear Rec.709", "sRGB"} and not image.is_float:
         return {"id": "identity", "payload": "", "width": 0, "height": 0, "error": ""}
-    if not image.is_float and source != "ACEScg":
-        return {"id": "", "payload": "", "width": 0, "height": 0,
-                "error": "image color space %r is unsupported; only ACEScg, Linear Rec.709, and Non-Color are supported" % source}
     try:
         processor = None
         if not image.is_float:
@@ -173,21 +170,13 @@ def bake_image_source_transform(image, cache_key=""):
             scene_linear = config.getRoleColorSpace(ocio.ROLE_SCENE_LINEAR)
             source_space = config.getColorSpace(source)
             if source_space is None:
-                raise ValueError("ACEScg is not present in Blender's active OCIO config")
+                raise ValueError("image color space %r is not present in Blender's active OCIO config" % source)
             processor = config.getProcessor(source, scene_linear).getDefaultCPUProcessor()
-            basis = [processor.applyRGB(axis[:]) for axis in
-                     ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0])]
-            probe = [0.3, 0.7, 0.2]
-            actual = processor.applyRGB(probe[:])
-            expected = [sum(probe[column] * basis[column][row]
-                            for column in range(3)) for row in range(3)]
-            if max(abs(actual[row] - expected[row]) for row in range(3)) > 1.0e-5:
-                raise ValueError("ACEScg processor is not a linear RGB matrix")
-            matrix = [finite_number(basis[column][row])
-                      for row in range(3) for column in range(3)]
             transform_id = hashlib.sha256(
-                b"ACEScg-to-scene-linear:" +
-                b"".join(struct.pack("<f", value) for value in matrix)).hexdigest()
+                b"OCIO-source-to-scene-linear:" +
+                config.getCacheID().encode("utf-8") + b"\0" +
+                source.encode("utf-8") + b"\0" +
+                scene_linear.encode("utf-8")).hexdigest()
         else:
             # Blender 5.2.2's float image-texture path copies float-buffer
             # texels into its GPU texture without an additional OCIO transform.

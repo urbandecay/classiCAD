@@ -52,8 +52,8 @@ struct WorkbenchMaterialData {
     QString textureImagePath;
     bool textureImageSrgb = true;
     // Identifies the source-space conversion used for the float texel payload.
-    // ACEScg byte images use a config-specific OCIO transform hash; float
-    // buffers use Blender's direct-upload semantics identifier.
+    // Byte images converted through OCIO use a config/source-specific hash;
+    // float buffers use Blender's direct-upload semantics identifier.
     QString textureImageColorTransformId = QStringLiteral("identity");
     QString textureImageSceneLinearFloatDataBase64;
     int textureImageSceneLinearFloatWidth = 0;

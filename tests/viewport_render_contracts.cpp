@@ -7251,6 +7251,159 @@ int main(int argc, char *argv[])
                                 alphaMeshCaptureSaved;
                         }
 
+                        const QString udimTile1001Path = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("workbench-udim.1001.png"));
+                        const QString udimTile1002Path = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("workbench-udim.1002.png"));
+                        QImage udimTile1001(2, 2, QImage::Format_RGBA8888);
+                        udimTile1001.fill(QColor(240, 48, 24, 255));
+                        QImage udimTile1002(2, 2, QImage::Format_RGBA8888);
+                        udimTile1002.fill(QColor(24, 216, 72, 255));
+                        udimTile1002.setPixelColor(0, 0,
+                                                  QColor(24, 216, 72, 0));
+                        const bool udimTilesSaved =
+                            udimTile1001.save(udimTile1001Path) &&
+                            udimTile1002.save(udimTile1002Path);
+                        ViewportRenderObject udimMeshTextureObject;
+                        udimMeshTextureObject.shape.geometryType =
+                            GeometryType::PolygonMesh;
+                        PolygonMesh3D &udimMesh =
+                            udimMeshTextureObject.shape.polygonMesh;
+                        udimMesh.vertices = {
+                            {-1.0, -1.0, 0.0}, {1.0, -1.0, 0.0},
+                            {1.0, 1.0, 0.0}, {-1.0, 1.0, 0.0}};
+                        udimMesh.faces = {{0, 1, 2}, {0, 2, 3}};
+                        udimMesh.faceMaterialIndices = {0, 0};
+                        udimMesh.materialSlotIds = {
+                            QStringLiteral("UdimTextureSlot")};
+                        udimMesh.uvMaps = {
+                            {QStringLiteral("UVMap"),
+                             {QPointF(0.0, 0.05), QPointF(2.0, 0.05),
+                              QPointF(2.0, 0.95), QPointF(0.0, 0.05),
+                              QPointF(2.0, 0.95), QPointF(0.0, 0.95)}}};
+                        udimMesh.activeUvMapName = QStringLiteral("UVMap");
+                        udimMesh.defaultUvMapName = QStringLiteral("UVMap");
+                        WorkbenchMaterialData udimMaterial;
+                        udimMaterial.baseColorSceneLinear =
+                            QVector3D(0.8f, 0.8f, 0.8f);
+                        udimMaterial.textureImageSrgb = true;
+                        udimMaterial.textureImageAlphaMode =
+                            QStringLiteral("STRAIGHT");
+                        udimMaterial.textureImageInterpolation =
+                            QStringLiteral("Closest");
+                        udimMaterial.textureImageExtension =
+                            QStringLiteral("REPEAT");
+                        DocumentImageTextureTile udimTileRecord1001;
+                        udimTileRecord1001.number = 1001;
+                        udimTileRecord1001.filepath = udimTile1001Path;
+                        udimTileRecord1001.sourceFileExists = true;
+                        DocumentImageTextureTile udimTileRecord1002;
+                        udimTileRecord1002.number = 1002;
+                        udimTileRecord1002.filepath = udimTile1002Path;
+                        udimTileRecord1002.sourceFileExists = true;
+                        udimMaterial.textureImageTiles = {
+                            udimTileRecord1001, udimTileRecord1002};
+                        const QVector<WorkbenchMaterialData> udimMaterials{
+                            udimMaterial};
+                        udimMeshTextureObject.meshMaterials = udimMaterials;
+                        udimMeshTextureObject.objectId =
+                            ObjectId::fromValue(9130);
+                        udimMeshTextureObject.displayName =
+                            QStringLiteral("UdimMeshTexturePatch");
+                        udimMeshTextureObject.geometryRevision = 1;
+                        QImage udimMeshTextureDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        udimMeshTextureDisplay.fill(
+                            nurbsTextureDisplay.pixelColor(0, 0));
+                        RasterWorkbenchFragmentSink udimMeshTextureFragments;
+                        QPainter udimMeshTexturePainter(
+                            &udimMeshTextureDisplay);
+                        qpainterTextureRenderer.drawShape(
+                            udimMeshTexturePainter,
+                            udimMeshTextureObject.shape, glSize, false,
+                            false, true, QColor(), QString(), 0.0,
+                            udimMeshTextureObject.objectId,
+                            udimMeshTextureObject.geometryRevision,
+                            nullptr, {}, std::nullopt, std::nullopt,
+                            udimMeshTextureObject.displayName, QString(),
+                            identityMeshObjectTransform, udimMaterials,
+                            &udimMeshTextureFragments);
+                        udimMeshTexturePainter.end();
+                        QVector<float> udimMeshTextureSceneLinear(
+                            textureExpectedValues);
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < udimMeshTextureSceneLinear.size();
+                             pixel += 3) {
+                            udimMeshTextureSceneLinear[pixel] =
+                                textureBackground.x();
+                            udimMeshTextureSceneLinear[pixel + 1] =
+                                textureBackground.y();
+                            udimMeshTextureSceneLinear[pixel + 2] =
+                                textureBackground.z();
+                        }
+                        int udimTile1001Samples = 0;
+                        int udimTile1002Samples = 0;
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             udimMeshTextureFragments) {
+                            if (fragment.x < 0 ||
+                                fragment.x >= glSize.width() ||
+                                fragment.y < 0 ||
+                                fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype pixel =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            udimMeshTextureSceneLinear[pixel] =
+                                fragment.sceneLinearRgb[0];
+                            udimMeshTextureSceneLinear[pixel + 1] =
+                                fragment.sceneLinearRgb[1];
+                            udimMeshTextureSceneLinear[pixel + 2] =
+                                fragment.sceneLinearRgb[2];
+                            if (fragment.sceneLinearRgb[0] >
+                                fragment.sceneLinearRgb[1] * 2.0f) {
+                                ++udimTile1001Samples;
+                            }
+                            if (fragment.sceneLinearRgb[1] >
+                                fragment.sceneLinearRgb[0] * 2.0f) {
+                                ++udimTile1002Samples;
+                            }
+                        }
+                        const QString udimDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_udim_qpainter.png"));
+                        const QString udimLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_udim_qpainter.pfm"));
+                        QFile udimLinearFile(udimLinearPath);
+                        const bool udimLinearSaved =
+                            udimLinearFile.open(QIODevice::WriteOnly) &&
+                            udimLinearFile.write(texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            udimLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    udimMeshTextureSceneLinear.constData()),
+                                udimMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                udimMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool udimMeshTextureSaved = udimTilesSaved &&
+                            validatePolygonMesh(udimMesh) &&
+                            udimTile1001Samples > 1000 &&
+                            udimTile1002Samples > 1000 &&
+                            udimMeshTextureFragments.size() > 25000 &&
+                            udimMeshTextureFragments.size() < 32000 &&
+                            udimLinearSaved &&
+                            udimMeshTextureDisplay.save(udimDisplayPath);
+                        passed &= check(
+                            udimMeshTextureSaved,
+                            "QPainter mesh UDIM capture must render both tiles and the transparent cutout");
+                        lightingCapturesSucceeded &= udimMeshTextureSaved;
+
                         ViewportTransform perspectiveTextureTransform;
                         perspectiveTextureTransform.zoom() = 17.28;
                         perspectiveTextureTransform.setViewDirection(

@@ -1755,6 +1755,29 @@ classiCAD's QPainter capture writes
 `--scene MESH_TEXTURE` and the same alpha-mode option. The fixture also writes
 equivalent straight and premultiplied image assets to the capture directory.
 
+**QPainter mesh UDIM texture comparison (2026-10-14):** A matched 640×480
+two-triangle mesh spans UV tiles 1001 and 1002 with Closest filtering. Tile
+1001 is opaque red; tile 1002 is green with one zero-alpha texel, using
+STRAIGHT alpha and Flat lighting. Blender 5.2.2 and QPainter both show the two
+tile colors and cutout. Foreground mask IoU is `0.986946` (368 XOR pixels;
+27,822 Blender and 28,190 QPainter foreground pixels). On the shared
+foreground eroded by two pixels, scene-linear channel MAE is `0.000197`, p95
+`0.000815`, and maximum `0.000815` over 25,272 pixels. Red and green interior
+probes match exactly in display RGB; their scene-linear MAEs are `0.000104` and
+`0.000325`. The color capture confirms QPainter selects both horizontal tiles;
+the mask comparison covers the single transparent texel. This is one external
+PNG, two-tile, Closest-filter mesh case; float tiles, vertical tile numbering,
+other filters/extensions, trimmed NURBS, and GPU parity remain open. Blender
+5.2.2 performs tile lookup and alpha cutoff in pinned
+[`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60)
+and lines 416–433. The offscreen production contract requires visible samples
+from both tiles and a bounded sample count with the cutout enabled. Capture
+files are `color_texture_mesh_udim_qpainter.png/.pfm` and
+`workbench-udim.1001.png`, `workbench-udim.1002.png` under
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; Blender uses
+`--scene MESH_TEXTURE --texture-udim --texture-alpha-mode STRAIGHT
+--texture-interpolation Closest` with the matching `<UDIM>` pattern.
+
 **QPainter perspective mesh texture comparison (2026-10-14):** The same
 two-triangle texture fixture was rendered with matched perspective framing:
 classiCAD zoom `17.28`, view direction `(4, -6, 4)`, and Blender's 25 mm lens
@@ -3034,7 +3057,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. Other presets, Studio
   rotations, camera orientations, and QPainter output remain open.
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. A matched full-frame QPainter NURBS Texture comparison found and fixed an extra material RGB multiplier, but residual image differences remain. Point/face domains, UDIM alpha, trimmed/nonplanar surface cases, and QPainter parity remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures now cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation) plus one two-tile mesh UDIM color/alpha case; residual silhouette and display-edge differences remain. Point/face domains, trimmed/nonplanar surface cases, broader QPainter parity, and UDIM filtering beyond the tested Closest case remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling, both idle and during navigation.

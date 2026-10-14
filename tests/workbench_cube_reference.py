@@ -122,6 +122,11 @@ def arguments():
         help="optional second image used by material slot 1 in MESH_TEXTURE",
     )
     parser.add_argument(
+        "--texture-udim",
+        action="store_true",
+        help="load a 1001/1002 UDIM set and span both tiles in a texture fixture",
+    )
+    parser.add_argument(
         "--texture-color-space",
         help="set the loaded Image Texture image color space before Workbench sampling",
     )
@@ -364,6 +369,9 @@ def main():
         for loop, uv in zip(uv_layer.data, ((0.0, 0.0), (1.0, 0.0),
                                             (1.0, 1.0), (0.0, 1.0))):
             loop.uv = uv
+        if args.texture_udim:
+            for loop in uv_layer.data:
+                loop.uv.x *= 2.0
         material = bpy.data.materials.new("NurbsTextureMaterial")
         material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
         material.use_nodes = True
@@ -371,6 +379,10 @@ def main():
         image_node.image = bpy.data.images.load(
             os.path.abspath(args.texture_image), check_existing=True
         )
+        if args.texture_udim:
+            image_node.image.source = "TILED"
+            if image_node.image.tiles.get(1002) is None:
+                image_node.image.tiles.new(1002)
         if args.texture_color_space:
             image_node.image.colorspace_settings.name = args.texture_color_space
         if args.texture_alpha_mode:
@@ -400,6 +412,9 @@ def main():
              (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
         ):
             loop.uv = uv
+        if args.texture_udim:
+            for loop in uv_layer.data:
+                loop.uv.x *= 2.0
         material = bpy.data.materials.new("MeshTextureMaterial")
         material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
         material.use_nodes = True
@@ -407,6 +422,10 @@ def main():
         image_node.image = bpy.data.images.load(
             os.path.abspath(args.texture_image), check_existing=True
         )
+        if args.texture_udim:
+            image_node.image.source = "TILED"
+            if image_node.image.tiles.get(1002) is None:
+                image_node.image.tiles.new(1002)
         if args.texture_color_space:
             image_node.image.colorspace_settings.name = args.texture_color_space
         if args.texture_alpha_mode:

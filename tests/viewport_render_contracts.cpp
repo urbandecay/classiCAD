@@ -8327,6 +8327,113 @@ int main(int argc, char *argv[])
                             curvedPerspectiveLinearSaved &&
                             curvedPerspectiveDisplaySaved;
 
+                        const auto captureCurvedQPainterTexture =
+                            [&](const QString &stem,
+                                const ViewportTransform &camera) {
+                                CurveHitTester hitTester;
+                                ViewportRenderer renderer(camera, hitTester);
+                                renderer.setWorkbenchRasterAntialiasingEnabled(
+                                    false);
+                                renderer.setShadingSettings(
+                                    textureColorShading);
+                                QImage display(
+                                    glSize,
+                                    QImage::Format_ARGB32_Premultiplied);
+                                display.fill(
+                                    nurbsTextureDisplay.pixelColor(0, 0));
+                                RasterWorkbenchFragmentSink fragments;
+                                QPainter painter(&display);
+                                renderer.drawShape(
+                                    painter,
+                                    curvedNurbsTextureObject.shape, glSize,
+                                    false, false, true, QColor(), QString(),
+                                    0.0, curvedNurbsTextureObject.objectId,
+                                    curvedNurbsTextureObject.geometryRevision,
+                                    curvedNurbsTextureObject
+                                        .preparedDepthGeometry.data(), {},
+                                    std::nullopt,
+                                    curvedNurbsTextureObject.workbenchMaterial,
+                                    curvedNurbsTextureObject.displayName,
+                                    QString(), {}, {}, &fragments);
+                                painter.end();
+                                QVector<float> sceneLinear(
+                                    textureExpectedValues);
+                                for (qsizetype pixel = 0;
+                                     pixel + 2 < sceneLinear.size();
+                                     pixel += 3) {
+                                    sceneLinear[pixel] =
+                                        textureBackground.x();
+                                    sceneLinear[pixel + 1] =
+                                        textureBackground.y();
+                                    sceneLinear[pixel + 2] =
+                                        textureBackground.z();
+                                }
+                                for (const RasterWorkbenchLinearFragment
+                                         &fragment : fragments) {
+                                    if (fragment.x < 0 ||
+                                        fragment.x >= glSize.width() ||
+                                        fragment.y < 0 ||
+                                        fragment.y >= glSize.height()) {
+                                        continue;
+                                    }
+                                    const qsizetype pixel =
+                                        (qsizetype(fragment.y) *
+                                             glSize.width() +
+                                         fragment.x) * 3;
+                                    sceneLinear[pixel] =
+                                        fragment.sceneLinearRgb[0];
+                                    sceneLinear[pixel + 1] =
+                                        fragment.sceneLinearRgb[1];
+                                    sceneLinear[pixel + 2] =
+                                        fragment.sceneLinearRgb[2];
+                                }
+                                int foregroundPixels = 0;
+                                const QColor background = display.pixelColor(
+                                    0, 0);
+                                for (int y = 0; y < display.height(); ++y) {
+                                    for (int x = 0; x < display.width(); ++x) {
+                                        foregroundPixels +=
+                                            display.pixelColor(x, y) !=
+                                            background;
+                                    }
+                                }
+                                const QString displayPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".png"));
+                                const QString linearPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".pfm"));
+                                QFile linearFile(linearPath);
+                                const bool linearSaved =
+                                    fragments.size() > 5000 &&
+                                    linearFile.open(QIODevice::WriteOnly) &&
+                                    linearFile.write(texturePfmHeader) ==
+                                        texturePfmHeader.size() &&
+                                    linearFile.write(
+                                        reinterpret_cast<const char *>(
+                                            sceneLinear.constData()),
+                                        sceneLinear.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        sceneLinear.size() *
+                                            qsizetype(sizeof(float));
+                                return foregroundPixels > 5000 && linearSaved &&
+                                       display.save(displayPath);
+                            };
+                        const bool curvedQPainterTextureCaptured =
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_qpainter"),
+                                gpuTransform) &&
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_qpainter"),
+                                curvedPerspectiveTransform);
+                        passed &= check(
+                            curvedQPainterTextureCaptured,
+                            "QPainter curved NURBS Image Texture captures must render matched orthographic and perspective display proxies");
+                        lightingCapturesSucceeded &=
+                            curvedQPainterTextureCaptured;
+
                         CurveHitTester qpainterTextureHitTester;
                         ViewportRenderer qpainterTextureRenderer(
                             gpuTransform, qpainterTextureHitTester);

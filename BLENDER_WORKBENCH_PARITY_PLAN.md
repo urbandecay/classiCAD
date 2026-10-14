@@ -5636,7 +5636,7 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   at display/raster coverage boundaries; these results validate this curved
   GPU texture/material path, not trimmed surfaces, alternate filters/extensions,
   perspective views beyond the matched configuration below, or the QPainter
-  curved-surface fallback.
+  curved-surface fallback (measured separately below).
 - Blender 5.2.2 interpolates the per-vertex UV varying in pinned
   [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
   and samples Image Texture color in
@@ -5693,3 +5693,40 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   --texture-extension REPEAT --texture-image <dir>/workbench-texture-pattern.png
   --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither`, plus
   `--linear-output` and `--linear-pfm-output` for scene-linear capture.
+
+### QPainter curved NURBS Image Texture comparison (2026-10-14)
+
+- Extended the same degree-2 curved surface fixture to the production QPainter
+  renderer in the matched orthographic and perspective camera setups. Both
+  captures use the exact exported Blender proxy triangles and normalized UVs,
+  Flat Texture shading, Linear/Repeat filtering, AA Off, and the same texture
+  and background. The QPainter capture records its scene-linear fragment
+  samples and final PNG for comparison.
+- Against Blender 5.2.2, the orthographic foreground mask has IoU `0.999971`
+  (one XOR pixel); perspective has IoU `0.999978` (one XOR pixel). Display
+  channel MAE on shared foreground is `0.3347/255` orthographic and
+  `0.3034/255` perspective, with p95 `1/255` in both. On the common foreground
+  eroded by four pixels, scene-linear fragment RGB MAE is `0.00156` (p95
+  `0.00373`, max `0.00771`) orthographic and `0.00154` (p95 `0.00371`, max
+  `0.00815`) perspective. Eight of nine interior probes are exact in each view;
+  the remaining probe differs by at most `0.00172` orthographic and `0.00148`
+  perspective. The one-pixel silhouette difference and small interior residual
+  do not identify a sampling or shading correction, so no production renderer
+  change was justified. This is one smooth curved patch, not general QPainter
+  parity for trims, other camera poses, filters, or alpha modes.
+- Blender's pinned
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
+  interpolates the UV varying, then
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433)
+  samples texture RGB. The QPainter path retains classiCAD's surface/material
+  contracts; this comparison uses the shared mesh solely to match display
+  tessellation.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 40.87 seconds); Blender reported 5.2.2 LTS; and matched PNG/PFM
+  comparisons completed in both views. For the classiCAD images and proxy run
+  the capture-enabled CTest described above; render the Blender references
+  using `--scene NURBS_TEXTURE_CURVED --nurbs-proxy-obj
+  <dir>/color_texture_nurbs_curved_proxy.obj` with the same orthographic or
+  perspective arguments in the preceding categories, plus `--linear-output`
+  and `--linear-pfm-output`.

@@ -476,6 +476,23 @@ float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept
     return t * t * (3.0f - 2.0f * t);
 }
 
+float rasterWorkbenchShadowFactor(const QVector3D &normal,
+                                  const QVector3D &lightDirection,
+                                  float intensity, float shift, float focus,
+                                  bool shadowed) noexcept
+{
+    intensity = std::clamp(intensity, 0.0f, 1.0f);
+    shift = std::clamp(shift, 0.0f, 1.0f);
+    focus = std::clamp(focus, 0.0001f, 0.99999f);
+    const float focusEdge = 1.0f - focus * (1.0f - shift);
+    const float lightFactor = -QVector3D::dotProduct(normal, lightDirection);
+    const float t = std::clamp((lightFactor - shift) /
+                                   std::max(focusEdge - shift, 1.0e-6f),
+                               0.0f, 1.0f);
+    const float shadowMix = t * t * (3.0f - 2.0f * t);
+    return shadowMix * (shadowed ? 0.0f : intensity) + (1.0f - intensity);
+}
+
 QRgb rasterWorkbenchDofMedian3x3(
     const std::array<QRgb, 9> &samples) noexcept
 {
@@ -2263,8 +2280,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         settings.shadowIntensity > 0.0) {
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
-        const float darkening = std::clamp(
-            static_cast<float>(settings.shadowIntensity), 0.0f, 1.0f);
+        QVector3D lightDirection(-settings.shadowDirection.x(),
+                                  settings.shadowDirection.z(),
+                                  -settings.shadowDirection.y());
+        if (lightDirection.lengthSquared() < 1.0e-10f)
+            lightDirection = QVector3D(-0.57735026f, 0.57735026f,
+                                       -0.57735026f);
+        lightDirection.normalize();
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -2288,13 +2310,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int lightX = std::clamp(qFloor(lightPixel.x()), 0, width - 1);
                 const int lightY = std::clamp(qFloor(lightPixel.y()), 0, height - 1);
                 const float casterDepth = lightDepth[lightY * width + lightX];
-                const float bias = std::max(0.001f,
-                    static_cast<float>(settings.shadowOffset) * 0.001f);
-                if (!std::isfinite(casterDepth) ||
-                    casterDepth >= receiverDepth - bias)
-                    continue;
+                constexpr float softwareDepthBias = 0.001f;
+                const bool shadowed = std::isfinite(casterDepth) &&
+                    casterDepth < receiverDepth - softwareDepthBias;
+                const float factor = rasterWorkbenchShadowFactor(
+                    receiver.normal, lightDirection,
+                    static_cast<float>(settings.shadowIntensity),
+                    static_cast<float>(settings.shadowOffset),
+                    static_cast<float>(settings.shadowFocus), shadowed);
+                if (factor >= 1.0f) continue;
                 const QRgb pixel = source.pixel(x, y);
-                const float factor = 1.0f - darkening;
                 out[x] = qRgba(qRound(qRed(pixel) * factor),
                                qRound(qGreen(pixel) * factor),
                                qRound(qBlue(pixel) * factor), qAlpha(pixel));

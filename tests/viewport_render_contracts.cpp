@@ -471,6 +471,7 @@ int main(int argc, char *argv[])
     ViewportShadingSettings shadowSettings;
     shadowSettings.shadows = true;
     shadowSettings.shadowIntensity = 0.8;
+    shadowSettings.shadowFocus = 0.9;
     const QImage shadowImage = renderCpuShadow(shadowSettings);
     ViewportShadingSettings noShadowSettings = shadowSettings;
     noShadowSettings.shadows = false;
@@ -487,6 +488,31 @@ int main(int argc, char *argv[])
     }
     passed &= check(shadowPixels > 0,
         "QPainter Workbench shadow setting must darken receiver pixels for opaque triangulated casters");
+    const QVector3D shadowFactorLight(0.83516467f, 0.0f, -0.55f);
+    const float lowFocusShadowFactor = rasterWorkbenchShadowFactor(
+        QVector3D(0.0f, 0.0f, 1.0f), shadowFactorLight,
+        1.0f, 0.1f, 0.0f, false);
+    const float highFocusShadowFactor = rasterWorkbenchShadowFactor(
+        QVector3D(0.0f, 0.0f, 1.0f), shadowFactorLight,
+        1.0f, 0.1f, 0.9f, false);
+    passed &= check(
+        highFocusShadowFactor > lowFocusShadowFactor &&
+            rasterWorkbenchShadowFactor(
+                QVector3D(0.0f, 0.0f, 1.0f),
+                shadowFactorLight, 1.0f, 0.1f, 0.9f, true) ==
+                0.0f &&
+            rasterWorkbenchShadowFactor(
+                QVector3D(0.0f, 0.0f, 1.0f),
+                shadowFactorLight, 0.0f, 0.1f, 0.9f, false) ==
+                1.0f,
+        "QPainter shadow focus must follow Blender's shift/focus smoothstep while shadowed and zero-intensity limits remain stable");
+    ViewportShadingSettings highShadowFocusSettings = shadowSettings;
+    highShadowFocusSettings.shadowFocus = 0.0;
+    const QImage highShadowFocusImage = renderCpuShadow(
+        highShadowFocusSettings);
+    passed &= check(
+        highShadowFocusImage != shadowImage,
+        "QPainter Workbench shadow focus must change lit receiver shading");
 
     const auto renderMaterialAlphaShadow = [&](float alpha) {
         QVector<ViewportRenderObject> objects = shadowObjects;

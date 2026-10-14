@@ -51,6 +51,13 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
 // its gathered bokeh image over the sharp source.
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept;
 
+// Blender Workbench's shadow focus/shift remap for one opaque receiver. The
+// software shadow map supplies the binary shadowed state.
+float rasterWorkbenchShadowFactor(const QVector3D &normal,
+                                 const QVector3D &lightDirection,
+                                 float intensity, float shift, float focus,
+                                 bool shadowed) noexcept;
+
 // Blender Workbench's DOF cleanup takes a component-wise median over a 3x3
 // neighborhood of gathered RGBA samples.
 QRgb rasterWorkbenchDofMedian3x3(

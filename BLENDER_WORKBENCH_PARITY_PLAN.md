@@ -3234,3 +3234,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   passed. The fallback still composites fractional coverage from adjacent
   triangles separately, which can differ from aggregating subpixel coverage
   before blending. No matched Blender frame comparison was run.
+
+### QPainter transparent mesh fractional edge resolve (2026-10-14)
+
+- The QPainter mesh fallback now collects fractional edge fragments by device
+  pixel and resolves same-depth triangles together when their exact 4x4 sample
+  masks are disjoint. It composites their coverage as one surface contribution
+  and emits one matching software fragment, avoiding a doubled transparent
+  seam along a triangulated surface. Overlapping masks and distinct depth
+  layers keep their independent source-over contributions. The resolve is
+  bounded by 16M target pixels, 8M triangle-bounds pixel tests, 250K distinct
+  fractional pixels, and 1M fractional triangle-pixel entries; exceeding a
+  bound disables the resolve for that object and uses the existing fallback.
+- Blender 5.2.2 accumulates transparent mesh fragments and revealage in its
+  transparent pass in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L474-L526)
+  and resolves those buffers in
+  [`workbench_transparent_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl#L265-L286).
+  This classiCAD change adapts aggregation to the CPU fallback's estimated
+  subpixel coverage; it does not reproduce Blender's GPU rasterization or
+  weighted blended transparency for intersecting surfaces.
+- Production-path contracts verify that the two halves of a transparent quad
+  resolve to one shared-edge fragment and composite over an opaque receiver
+  without a seam. Validation: `cmake --build build -j4` passed with the
+  dependency audit, and the offscreen
+  `classicad_workbench_raster_fragment_contracts_test` and
+  `classicad_viewport_render_contracts_test` passed. The existing `qfloat16`
+  memcpy warning remains; no matched Blender frame comparison was run.

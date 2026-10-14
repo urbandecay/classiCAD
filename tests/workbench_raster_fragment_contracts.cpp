@@ -330,6 +330,48 @@ int main(int argc, char **argv)
     passed &= check(
         std::abs(sharedEdgeCoverage - 1.0f) < 0.02f,
         "transparent QPainter mesh triangles must assign each shared diagonal subpixel to exactly one triangle");
+    Shape sharedEdgeCombined = mesh;
+    sharedEdgeCombined.polygonMesh.faces = {{0, 1, 2}, {0, 2, 3}};
+    sharedEdgeCombined.polygonMesh.faceMaterialIndices = {0, 0};
+    RasterWorkbenchFragmentSink sharedEdgeCombinedFragments;
+    const QImage sharedEdgeCombinedImage = render(
+        renderer, sharedEdgeCombined, size, ObjectId::fromValue(meshId),
+        &sharedEdgeCombinedFragments, std::nullopt, meshMaterials);
+    int sharedPixelFragmentCount = 0;
+    float sharedPixelFragmentAlpha = 0.0f;
+    for (const RasterWorkbenchLinearFragment &fragment :
+         sharedEdgeCombinedFragments) {
+        if (fragment.x == 64 && fragment.y == 64) {
+            ++sharedPixelFragmentCount;
+            sharedPixelFragmentAlpha = fragment.alpha;
+        }
+    }
+    const float packedMeshAlpha =
+        workbenchPackUnitFloatToUnorm8(materialAlpha);
+    passed &= check(
+        qAbs(qAlpha(sharedEdgeCombinedImage.pixel(64, 64)) -
+             qRound(packedMeshAlpha * 255.0f)) <= 1 &&
+            sharedPixelFragmentCount == 1 &&
+            std::abs(sharedPixelFragmentAlpha - packedMeshAlpha) < 1.0e-5f,
+        "a transparent QPainter quad must resolve its two shared-edge triangles to one coverage contribution");
+    QImage opaqueReceiver(size, QImage::Format_ARGB32_Premultiplied);
+    opaqueReceiver.fill(QColor(25, 55, 90));
+    {
+        QPainter receiverPainter(&opaqueReceiver);
+        renderer.drawShape(receiverPainter, sharedEdgeCombined, size, false,
+                           false, false, QColor(Qt::white), {}, 0.0,
+                           ObjectId::fromValue(meshId), 1, nullptr, {},
+                           std::nullopt, std::nullopt, {}, {},
+                           identityMeshObjectTransform, meshMaterials);
+    }
+    const QColor sharedReceiverPixel = opaqueReceiver.pixelColor(64, 64);
+    const QColor interiorReceiverPixel = opaqueReceiver.pixelColor(60, 64);
+    passed &= check(
+        sharedReceiverPixel.alpha() == 255 &&
+            std::abs(sharedReceiverPixel.red() - interiorReceiverPixel.red()) <= 1 &&
+            std::abs(sharedReceiverPixel.green() - interiorReceiverPixel.green()) <= 1 &&
+            std::abs(sharedReceiverPixel.blue() - interiorReceiverPixel.blue()) <= 1,
+        "transparent QPainter shared-edge coverage must composite once over an opaque receiver");
     const float alphaHalfByteBoundary = 115.5f / 255.0f;
     const std::array<float, 3> alphaBoundarySamples{
         std::nextafter(alphaHalfByteBoundary, 0.0f),

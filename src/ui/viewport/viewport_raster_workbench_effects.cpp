@@ -34,6 +34,7 @@ struct RasterSample {
     QVector3D position;
     QVector3D normal;
     quint64 objectId = 0;
+    float sourceAlpha = 1.0f;
 };
 
 qreal rasterDofKernelRotation(int x, int y)
@@ -2068,6 +2069,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         target.position = interpolatedPosition;
                         target.normal = interpolatedNormal;
                         target.objectId = id;
+                        target.sourceAlpha = triangleSourceAlpha;
                     };
                     writeNearest(sample);
                     const float sourceAlpha = triangleSourceAlpha;
@@ -2103,6 +2105,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<float> lightDepth;
     QVector<QVector2D> receiverLightCoordinates;
     QVector<float> receiverLightDepth;
+    QVector<QVector2D> transparentReceiverLightCoordinates;
+    QVector<float> transparentReceiverLightDepth;
     if (shadowEnabled && !shadowTriangles.isEmpty()) {
         QVector3D lightDirection(-settings.shadowDirection.x(),
                                   settings.shadowDirection.z(),
@@ -2174,13 +2178,25 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
         receiverLightDepth.resize(width * height);
         receiverLightCoordinates.resize(width * height);
-        for (int i = 0; i < opaqueSamples.size(); ++i)
+        transparentReceiverLightDepth.resize(width * height);
+        transparentReceiverLightCoordinates.resize(width * height);
+        for (int i = 0; i < opaqueSamples.size(); ++i) {
             if (opaqueSamples[i].objectId != 0) {
                 receiverLightDepth[i] = QVector3D::dotProduct(
                     opaqueSamples[i].position, lightDirection);
                 const QPointF p = lightScreen(opaqueSamples[i].position);
                 receiverLightCoordinates[i] = QVector2D(p.x(), p.y());
             }
+            const RasterSample &transparent = samples[i];
+            if (transparent.objectId != 0 && transparent.sourceAlpha > 0.0f &&
+                !isOpaqueWorkbenchAlpha(transparent.sourceAlpha)) {
+                transparentReceiverLightDepth[i] =
+                    QVector3D::dotProduct(transparent.position, lightDirection);
+                const QPointF p = lightScreen(transparent.position);
+                transparentReceiverLightCoordinates[i] =
+                    QVector2D(p.x(), p.y());
+            }
+        }
     }
 
     const auto applyOutline = [&]() {
@@ -2529,33 +2545,52 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int index = depthY * width + depthX;
                 const RasterSample &receiver = opaqueSamples[index];
                 const RasterSample &visible = samples[index];
-                if (receiver.objectId == 0 || visible.objectId == 0) continue;
+                const bool hasOpaqueReceiver = receiver.objectId != 0;
+                const bool hasTransparentReceiver = visible.objectId != 0 &&
+                    visible.sourceAlpha > 0.0f &&
+                    !isOpaqueWorkbenchAlpha(visible.sourceAlpha);
+                if ((!hasOpaqueReceiver && !hasTransparentReceiver) ||
+                    visible.objectId == 0) continue;
                 const bool hasTransparentTop =
-                    receiver.objectId != visible.objectId ||
-                    std::abs(receiver.depth - visible.depth) >
-                        std::max(1.0e-5f,
-                                 std::abs(receiver.depth) * 1.0e-6f);
+                    hasOpaqueReceiver &&
+                    (receiver.objectId != visible.objectId ||
+                     std::abs(receiver.depth - visible.depth) >
+                         std::max(1.0e-5f,
+                                  std::abs(receiver.depth) * 1.0e-6f));
                 const bool hasRetainedLayers = surfaceLayers != nullptr &&
                     !surfaceLayers->opaqueColor.isNull() &&
                     !surfaceLayers->transparentColor.isNull() &&
                     surfaceLayers->opaqueColor.size() == colorImage->size() &&
                     surfaceLayers->transparentColor.size() == colorImage->size();
-                if (hasTransparentTop && !hasRetainedLayers) continue;
-                // Depth is compared in the same light-space direction used
-                // when constructing the software caster map.
-                const float receiverDepth = receiverLightDepth[index];
-                const QVector2D lightPixel = receiverLightCoordinates[index];
-                const int lightX = std::clamp(qFloor(lightPixel.x()), 0, width - 1);
-                const int lightY = std::clamp(qFloor(lightPixel.y()), 0, height - 1);
-                const float casterDepth = lightDepth[lightY * width + lightX];
+                if ((hasTransparentTop || hasTransparentReceiver) &&
+                    !hasRetainedLayers) continue;
                 constexpr float softwareDepthBias = 0.001f;
-                const bool shadowed = std::isfinite(casterDepth) &&
-                    casterDepth < receiverDepth - softwareDepthBias;
-                const float factor = rasterWorkbenchShadowFactor(
-                    receiver.normal, lightDirection,
-                    static_cast<float>(settings.shadowIntensity),
-                    static_cast<float>(settings.shadowOffset),
-                    static_cast<float>(settings.shadowFocus), shadowed);
+                const auto shadowFactorAt = [&](const QVector2D &lightPixel,
+                                                float receiverDepth,
+                                                const QVector3D &normal) {
+                    const int lightX = std::clamp(
+                        qFloor(lightPixel.x()), 0, width - 1);
+                    const int lightY = std::clamp(
+                        qFloor(lightPixel.y()), 0, height - 1);
+                    const float casterDepth = lightDepth[lightY * width + lightX];
+                    const bool shadowed = std::isfinite(casterDepth) &&
+                        casterDepth < receiverDepth - softwareDepthBias;
+                    return rasterWorkbenchShadowFactor(
+                        normal, lightDirection,
+                        static_cast<float>(settings.shadowIntensity),
+                        static_cast<float>(settings.shadowOffset),
+                        static_cast<float>(settings.shadowFocus), shadowed);
+                };
+                const float opaqueFactor = hasOpaqueReceiver
+                    ? shadowFactorAt(receiverLightCoordinates[index],
+                                     receiverLightDepth[index], receiver.normal)
+                    : 1.0f;
+                const float transparentFactor = hasTransparentReceiver
+                    ? shadowFactorAt(
+                          transparentReceiverLightCoordinates[index],
+                          transparentReceiverLightDepth[index], visible.normal)
+                    : 1.0f;
+                if (opaqueFactor >= 1.0f && transparentFactor >= 1.0f) continue;
                 if (surfaceLayers != nullptr &&
                     surfaceLayers->sceneLinearOutlinePending &&
                     surfaceLayers->sceneLinearSize == QSize(width, height) &&
@@ -2565,7 +2600,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         static_cast<std::size_t>(width) * height &&
                     surfaceLayers->sceneLinearTransparentColor.size() ==
                         static_cast<std::size_t>(width) * height &&
-                    factor < 1.0f) {
+                    (opaqueFactor < 1.0f || transparentFactor < 1.0f)) {
                     const std::size_t linearIndex =
                         static_cast<std::size_t>(index);
                     RasterWorkbenchLinearPixel &linear =
@@ -2575,34 +2610,65 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const RasterWorkbenchLinearPixel &transparent =
                         surfaceLayers->sceneLinearTransparentColor[linearIndex];
                     const float remain = 1.0f - transparent.alpha;
-                    linear.red += opaque.red * (factor - 1.0f) * remain;
-                    linear.green += opaque.green * (factor - 1.0f) * remain;
-                    linear.blue += opaque.blue * (factor - 1.0f) * remain;
+                    linear.red += opaque.red * (opaqueFactor - 1.0f) * remain;
+                    linear.green += opaque.green * (opaqueFactor - 1.0f) * remain;
+                    linear.blue += opaque.blue * (opaqueFactor - 1.0f) * remain;
+                    if (hasTransparentReceiver) {
+                        linear.red += transparent.red *
+                                      (transparentFactor - 1.0f);
+                        linear.green += transparent.green *
+                                        (transparentFactor - 1.0f);
+                        linear.blue += transparent.blue *
+                                       (transparentFactor - 1.0f);
+                    }
                 }
-                if (factor >= 1.0f) continue;
                 const QRgb pixel = source.pixel(x, y);
+                QRgb transparent = 0;
                 if (hasTransparentTop) {
                     const QRgb opaque = surfaceLayers->opaqueColor.pixel(x, y);
-                    const QRgb transparent =
+                    transparent =
                         surfaceLayers->transparentColor.pixel(x, y);
                     const float remain =
                         1.0f - qAlpha(transparent) / 255.0f;
                     const auto shadeOpaqueContribution = [&](int channel,
                                                              int opaqueChannel) {
                         return std::clamp(
-                            channel + qRound(opaqueChannel * (factor - 1.0f) *
+                            channel + qRound(opaqueChannel *
+                                             (opaqueFactor - 1.0f) *
                                              remain),
                             0, 255);
                     };
-                    out[x] = qRgba(
-                        shadeOpaqueContribution(qRed(pixel), qRed(opaque)),
-                        shadeOpaqueContribution(qGreen(pixel), qGreen(opaque)),
-                        shadeOpaqueContribution(qBlue(pixel), qBlue(opaque)),
-                        qAlpha(pixel));
+                    out[x] = qRgba(shadeOpaqueContribution(qRed(pixel), qRed(opaque)),
+                                   shadeOpaqueContribution(qGreen(pixel), qGreen(opaque)),
+                                   shadeOpaqueContribution(qBlue(pixel), qBlue(opaque)),
+                                   qAlpha(pixel));
+                } else if (hasOpaqueReceiver && !hasTransparentReceiver) {
+                    out[x] = qRgba(qRound(qRed(pixel) * opaqueFactor),
+                                   qRound(qGreen(pixel) * opaqueFactor),
+                                   qRound(qBlue(pixel) * opaqueFactor),
+                                   qAlpha(pixel));
                 } else {
-                    out[x] = qRgba(qRound(qRed(pixel) * factor),
-                                   qRound(qGreen(pixel) * factor),
-                                   qRound(qBlue(pixel) * factor), qAlpha(pixel));
+                    out[x] = pixel;
+                }
+                if (hasTransparentReceiver && hasRetainedLayers) {
+                    if (!hasTransparentTop) {
+                        transparent = surfaceLayers->transparentColor.pixel(x, y);
+                    }
+                    const auto shadeTransparentContribution =
+                        [&](int channel, int transparentChannel) {
+                            return std::clamp(
+                                channel + qRound(transparentChannel *
+                                    (transparentFactor - 1.0f)),
+                                0, 255);
+                        };
+                    out[x] = qRgba(
+                        shadeTransparentContribution(qRed(out[x]),
+                                                      qRed(transparent)),
+                        shadeTransparentContribution(qGreen(out[x]),
+                                                      qGreen(transparent)),
+                        shadeTransparentContribution(qBlue(out[x]),
+                                                      qBlue(transparent)),
+                        qAlpha(out[x]));
                 }
             }
         }

@@ -3315,6 +3315,7 @@ int main(int argc, char *argv[])
         int coveredPixels = 0;
         QColor centerColor;
         QVector3D meanColor;
+        qreal meanAlpha = 0.0;
     };
     const auto renderedSurface = [&](const Shape &shape,
                                      const ViewportShadingSettings &settings,
@@ -3329,6 +3330,7 @@ int main(int argc, char *argv[])
         painter.end();
         int coveredPixels = 0;
         QVector3D summedColor;
+        qreal summedAlpha = 0.0;
         for (int y = 0; y < image.height(); ++y) {
             for (int x = 0; x < image.width(); ++x) {
                 const QColor pixel = image.pixelColor(x, y);
@@ -3336,13 +3338,15 @@ int main(int argc, char *argv[])
                     ++coveredPixels;
                     summedColor += QVector3D(pixel.redF(), pixel.greenF(),
                                              pixel.blueF());
+                    summedAlpha += pixel.alphaF();
                 }
             }
         }
         return RenderedSurface{
             coveredPixels, image.pixelColor(80, 80),
             coveredPixels > 0 ? summedColor / float(coveredPixels)
-                              : QVector3D{}};
+                              : QVector3D{},
+            coveredPixels > 0 ? summedAlpha / coveredPixels : 0.0};
     };
     const RenderedSurface wireframeSurface = renderedSurface(surfaceShape,
                                                                shading);
@@ -3431,6 +3435,63 @@ int main(int argc, char *argv[])
                         (tiltedMeshNormal.meanColor -
                          tiltedMeshFlipped.meanColor).length() > 0.01,
                     "QPainter MatCap Flip X must change asymmetric MatCap shading for polygon meshes");
+    const QVector3D tiltedMeshNormalWorld = QVector3D(-2.8f, 0.0f, 4.0f).normalized();
+    Shape opaqueFrontFacingMesh = tiltedMeshShape;
+    opaqueFrontFacingMesh.polygonMesh.cornerNormals.fill(
+        {tiltedMeshNormalWorld.x(), tiltedMeshNormalWorld.y(),
+         tiltedMeshNormalWorld.z()}, 4);
+    Shape opaqueBackFacingMesh = opaqueFrontFacingMesh;
+    opaqueBackFacingMesh.polygonMesh.faces = {{3, 2, 1, 0}};
+    opaqueBackFacingMesh.polygonMesh.cornerNormals.fill(
+        {-tiltedMeshNormalWorld.x(), -tiltedMeshNormalWorld.y(),
+         -tiltedMeshNormalWorld.z()}, 4);
+    ViewportShadingSettings meshBackfaceSettings = solidShading;
+    meshBackfaceSettings.lightingMode = ViewportLightingMode::Studio;
+    const RenderedSurface opaqueMeshFront = renderedSurface(
+        opaqueFrontFacingMesh, meshBackfaceSettings);
+    const RenderedSurface opaqueMeshBack = renderedSurface(
+        opaqueBackFacingMesh, meshBackfaceSettings);
+    opaqueFrontFacingMesh.polygonMesh.materialSlots = {
+        PolygonMeshMaterialSlot{}};
+    opaqueBackFacingMesh.polygonMesh.materialSlots = {
+        PolygonMeshMaterialSlot{}};
+    opaqueFrontFacingMesh.polygonMesh.materialSlots[0].alpha = 0.5f;
+    opaqueBackFacingMesh.polygonMesh.materialSlots[0].alpha = 0.5f;
+    const RenderedSurface transparentMeshFront = renderedSurface(
+        opaqueFrontFacingMesh, meshBackfaceSettings);
+    const RenderedSurface transparentMeshBack = renderedSurface(
+        opaqueBackFacingMesh, meshBackfaceSettings);
+    const QVector3D opaqueMeshFrontRgb(
+        opaqueMeshFront.centerColor.redF(), opaqueMeshFront.centerColor.greenF(),
+        opaqueMeshFront.centerColor.blueF());
+    const QVector3D opaqueMeshBackRgb(
+        opaqueMeshBack.centerColor.redF(), opaqueMeshBack.centerColor.greenF(),
+        opaqueMeshBack.centerColor.blueF());
+    const QVector3D transparentMeshFrontRgb(
+        transparentMeshFront.centerColor.redF(),
+        transparentMeshFront.centerColor.greenF(),
+        transparentMeshFront.centerColor.blueF());
+    const QVector3D transparentMeshBackRgb(
+        transparentMeshBack.centerColor.redF(),
+        transparentMeshBack.centerColor.greenF(),
+        transparentMeshBack.centerColor.blueF());
+    passed &= check(
+        opaqueMeshFront.coveredPixels > 0 && opaqueMeshBack.coveredPixels > 0,
+        "Opaque QPainter mesh backface fixture must be covered");
+    passed &= check(
+        (opaqueMeshFrontRgb - opaqueMeshBackRgb).length() < 0.01f,
+        "QPainter opaque mesh backface shading must flip the source normal");
+    passed &= check(
+        transparentMeshFront.coveredPixels > 0 &&
+            transparentMeshBack.coveredPixels > 0,
+        "Transparent QPainter mesh backface fixture must be covered");
+    passed &= check(
+        (transparentMeshFrontRgb - transparentMeshBackRgb).length() > 0.02f,
+        "QPainter transparent mesh shading must preserve the source normal");
+    passed &= check(
+        std::abs(transparentMeshFront.meanAlpha -
+                 transparentMeshBack.meanAlpha) < 0.01,
+        "QPainter mesh backface normal handling must preserve transparent opacity");
 
     // Color-mode source contracts for the software renderer. The attribute
     // triangle has three deliberately distinct corner colors; the texture

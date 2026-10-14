@@ -2039,6 +2039,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     (devicePoints[2].x() - devicePoints[0].x());
             if (std::abs(area) < 1.0e-12 ||
                 (!hasTexture && !triangle.useWorkbenchColor)) return;
+            bool frontFacing = area < 0.0;
+            if (reflectedMeshTransform) frontFacing = !frontFacing;
             const qreal minX = std::clamp(
                 std::min({devicePoints[0].x(), devicePoints[1].x(), devicePoints[2].x()}),
                 0.0, qreal(painter.device()->width()));
@@ -2170,6 +2172,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         normalView = triangle.normalView;
                     } else {
                         normalView.normalize();
+                    }
+                    // Blender's opaque prepass flips backface normals before
+                    // encoding them. Its transparent pass keeps interpolated
+                    // mesh normals unchanged.
+                    if (alpha >= 1.0 && !frontFacing) {
+                        normalView = -normalView;
                     }
                     QVector3D incidentView = triangle.incidentView;
                     if (transform_.isPerspectiveEnabled()) {

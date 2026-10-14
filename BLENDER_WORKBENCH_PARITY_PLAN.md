@@ -97,8 +97,27 @@ normal before computing MatCap UVs. This matches Blender 5.2.2's prepass
 facing payload and composite normal flip, while leaving the payload magnitude
 available for the selected marker. Cavity keeps the unflipped prepass normal,
 matching Blender's independent cavity normal input. The C++ build and offscreen
-`viewport_render_contracts` pass with an active OpenGL context; a two-sided
-GPU capture and matched Blender image comparison remain open.
+`viewport_render_contracts` pass with an active OpenGL context. A later
+two-sided GPU capture and matched Blender image comparison are recorded below.
+
+**Deferred MatCap back-face comparison (2026-10-14):** Added an opt-in paired
+GPU capture and Blender 5.2.2 `TWO_SIDED_MATCAP` fixture using two adjacent
+35-degree tilted faces with opposite winding, `check_normal+y`, no specular,
+cavity, outline, or shadows, and the same 640x480 orthographic camera. The
+contract now samples each panel and requires a visible green-channel response
+between the two orientations, so a fixture collapsed to the center MatCap
+sample cannot silently pass. `tests/workbench_matcap_backface_compare.py`
+compares 31x31 scene-linear interior probes at (190, 240) and (450, 240): the
+front-wound Blender/classiCAD RGB values are (0.171143, 0.026321, 0.649414)
+and (0.171631, 0.026321, 0.649902); the reversed-wound values are
+(0.172119, 0.466064, 0.650391) and (0.171631, 0.466064, 0.650391). Maximum
+per-probe channel error is 0.0004883 scene-linear, while the green separation
+is 0.439743 in both captures. This verifies the deferred orientation path for
+this preset and view; other MatCaps, camera directions, specular combinations,
+and full-frame edge parity remain open. Reproduce with
+`CLASSICAD_VIEWPORT_MATCAP_BACKFACE_CAPTURE_DIR=/tmp/classicad-two-sided-matcap QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`,
+the Blender fixture command used by `tests/workbench_cube_reference.py`, and
+`python3 tests/workbench_matcap_backface_compare.py /tmp/blender-two-sided-matcap.pfm /tmp/classicad-two-sided-matcap/two-sided-matcap.pfm`.
 
 **Opaque cavity resolve update (2026-10-13):** Eligible scene-linear opaque
 resolves now apply Workbench cavity and curvature from the shared depth,

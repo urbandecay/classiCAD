@@ -21,7 +21,7 @@ def arguments():
     parser.add_argument("output", help="PNG output path")
     parser.add_argument(
         "--scene",
-        choices=("CUBE", "NURBS_TEXTURE", "MESH_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
+        choices=("CUBE", "TWO_SIDED_MATCAP", "NURBS_TEXTURE", "MESH_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
     )
@@ -409,6 +409,30 @@ def main():
             cube.data.color_attributes.render_color_index = color_index
         if args.object_color is not None:
             cube.color = (*args.object_color, 1.0)
+    elif args.scene == "TWO_SIDED_MATCAP":
+        camera_rotation = camera.rotation_euler.to_quaternion()
+        camera_right = camera_rotation @ Vector((1.0, 0.0, 0.0))
+        camera_up = camera_rotation @ Vector((0.0, 1.0, 0.0))
+        camera_outward = (camera.location - target).normalized()
+        face_tilt = math.radians(35.0)
+        face_up = (camera_up * math.cos(face_tilt) +
+                   camera_outward * math.sin(face_tilt))
+        half_size = 0.65
+        center_offset = 0.78
+        vertices = []
+        for horizontal_offset in (-center_offset, center_offset):
+            center = target + camera_right * horizontal_offset
+            vertices.extend((
+                center - camera_right * half_size - face_up * half_size,
+                center + camera_right * half_size - face_up * half_size,
+                center + camera_right * half_size + face_up * half_size,
+                center - camera_right * half_size + face_up * half_size,
+            ))
+        mesh = bpy.data.meshes.new("TwoSidedMatcapMesh")
+        mesh.from_pydata(vertices, [], [(0, 1, 2, 3), (4, 7, 6, 5)])
+        mesh.update()
+        obj = bpy.data.objects.new("TwoSidedMatcap", mesh)
+        bpy.context.collection.objects.link(obj)
     elif args.scene == "NURBS_TEXTURE":
         if args.color_source != "TEXTURE" or not args.texture_image:
             raise ValueError("NURBS_TEXTURE requires TEXTURE color source and --texture-image")

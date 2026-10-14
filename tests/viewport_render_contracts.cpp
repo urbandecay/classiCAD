@@ -8864,6 +8864,164 @@ int main(int argc, char *argv[])
                             lightingCapturesSucceeded,
                             "matched cube lighting, color-source, and background captures must write scene-linear PFM and display PNG outputs");
                     }
+                    const QString matcapBackfaceCaptureDirectory =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_MATCAP_BACKFACE_CAPTURE_DIR");
+                    if (!matcapBackfaceCaptureDirectory.isEmpty()) {
+                        ViewportRenderObject twoSidedMatcapObject =
+                            polygonCubeObject;
+                        twoSidedMatcapObject.displayName =
+                            QStringLiteral("TwoSidedMatcap");
+                        twoSidedMatcapObject.shape = Shape{};
+                        twoSidedMatcapObject.shape.geometryType =
+                            GeometryType::PolygonMesh;
+                        const Point3D cameraOutward =
+                            gpuTransform.viewDirection();
+                        const Point3D cameraUp = gpuTransform.viewUp();
+                        const Point3D cameraTarget = gpuTransform.viewTarget();
+                        const QVector3D cameraRightVector =
+                            QVector3D::crossProduct(
+                                QVector3D(float(cameraUp.x),
+                                          float(cameraUp.y),
+                                          float(cameraUp.z)),
+                                QVector3D(float(cameraOutward.x),
+                                          float(cameraOutward.y),
+                                          float(cameraOutward.z)))
+                                .normalized();
+                        constexpr double matcapFaceTiltRadians =
+                            0.6108652381980153;
+                        const Point3D matcapFaceUp{
+                            cameraUp.x * std::cos(matcapFaceTiltRadians) +
+                                cameraOutward.x *
+                                    std::sin(matcapFaceTiltRadians),
+                            cameraUp.y * std::cos(matcapFaceTiltRadians) +
+                                cameraOutward.y *
+                                    std::sin(matcapFaceTiltRadians),
+                            cameraUp.z * std::cos(matcapFaceTiltRadians) +
+                                cameraOutward.z *
+                                    std::sin(matcapFaceTiltRadians)};
+                        constexpr double matcapFaceHalfSize = 0.65;
+                        constexpr double matcapFaceOffset = 0.78;
+                        const auto matcapFacePoint = [&] (
+                            double horizontal, double right, double up) {
+                            return Point3D{
+                                cameraTarget.x + cameraRightVector.x() * horizontal +
+                                    cameraRightVector.x() * right + matcapFaceUp.x * up,
+                                cameraTarget.y + cameraRightVector.y() * horizontal +
+                                    cameraRightVector.y() * right + matcapFaceUp.y * up,
+                                cameraTarget.z + cameraRightVector.z() * horizontal +
+                                    cameraRightVector.z() * right + matcapFaceUp.z * up};
+                        };
+                        for (double horizontal :
+                             {-matcapFaceOffset, matcapFaceOffset}) {
+                            twoSidedMatcapObject.shape.polygonMesh.vertices += {
+                                matcapFacePoint(horizontal,
+                                                -matcapFaceHalfSize,
+                                                -matcapFaceHalfSize),
+                                matcapFacePoint(horizontal,
+                                                matcapFaceHalfSize,
+                                                -matcapFaceHalfSize),
+                                matcapFacePoint(horizontal,
+                                                matcapFaceHalfSize,
+                                                matcapFaceHalfSize),
+                                matcapFacePoint(horizontal,
+                                                -matcapFaceHalfSize,
+                                                matcapFaceHalfSize)};
+                        }
+                        twoSidedMatcapObject.shape.polygonMesh.faces = {
+                            {0, 1, 2, 3}, {4, 7, 6, 5}};
+                        twoSidedMatcapObject.shape.polygonMesh
+                            .faceMaterialIndices = {0, 0};
+                        twoSidedMatcapObject.meshMaterials = {
+                            WorkbenchMaterialData{}};
+                        twoSidedMatcapObject.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                buildViewportDepthGeometry(
+                                    twoSidedMatcapObject.shape));
+                        ViewportShadingSettings matcapBackfaceShading =
+                            rawFaceShading;
+                        matcapBackfaceShading.lightingMode =
+                            ViewportLightingMode::MatCap;
+                        matcapBackfaceShading.matcapPreset =
+                            QStringLiteral("check_normal+y");
+                        matcapBackfaceShading.specularLighting = false;
+                        matcapBackfaceShading.cavity = false;
+                        matcapBackfaceShading.outline = false;
+                        matcapBackfaceShading.shadows = false;
+                        const QVector3D matcapBackfaceBackground(0.02f,
+                                                                 0.02f,
+                                                                 0.02f);
+                        QImage matcapBackfaceDisplay;
+                        QVector<float> matcapBackfaceLinear;
+                        const bool matcapBackfaceRendered =
+                            renderCoordinatedScene(
+                                matcapBackfaceShading,
+                                QByteArrayLiteral("two-sided-matcap-backface"),
+                                &matcapBackfaceDisplay,
+                                &twoSidedMatcapObject, nullptr, nullptr,
+                                QString{}, &matcapBackfaceLinear,
+                                &matcapBackfaceBackground);
+                        const QString matcapBackfaceDisplayPath =
+                            QDir(matcapBackfaceCaptureDirectory).filePath(
+                                QStringLiteral("two-sided-matcap.png"));
+                        const QString matcapBackfaceLinearPath =
+                            QDir(matcapBackfaceCaptureDirectory).filePath(
+                                QStringLiteral("two-sided-matcap.pfm"));
+                        const bool matcapBackfaceDirectoryReady =
+                            QDir().mkpath(matcapBackfaceCaptureDirectory);
+                        QFile matcapBackfaceLinearFile(
+                            matcapBackfaceLinearPath);
+                        const QByteArray matcapBackfacePfmHeader =
+                            QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                        const bool matcapBackfaceLinearSaved =
+                            matcapBackfaceRendered &&
+                            matcapBackfaceLinear.size() == 640 * 480 * 3 &&
+                            matcapBackfaceLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            matcapBackfaceLinearFile.write(
+                                matcapBackfacePfmHeader) ==
+                                matcapBackfacePfmHeader.size() &&
+                            matcapBackfaceLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    matcapBackfaceLinear.constData()),
+                                matcapBackfaceLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                matcapBackfaceLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool matcapBackfaceDisplaySaved =
+                            matcapBackfaceRendered &&
+                            matcapBackfaceDisplay.size() == QSize(640, 480) &&
+                            matcapBackfaceDisplay.save(
+                                matcapBackfaceDisplayPath);
+                        const QColor frontWoundProbe =
+                            matcapBackfaceDisplay.pixelColor(190, 240);
+                        const QColor reversedWoundProbe =
+                            matcapBackfaceDisplay.pixelColor(450, 240);
+                        int frontWoundPixels = 0;
+                        int reversedWoundPixels = 0;
+                        for (int y = 120; y < 360; ++y) {
+                            for (int x = 70; x < 300; ++x) {
+                                frontWoundPixels +=
+                                    matcapBackfaceDisplay.pixelColor(x, y) !=
+                                    QColor(34, 34, 34);
+                            }
+                            for (int x = 340; x < 570; ++x) {
+                                reversedWoundPixels +=
+                                    matcapBackfaceDisplay.pixelColor(x, y) !=
+                                    QColor(34, 34, 34);
+                            }
+                        }
+                        passed &= check(
+                            matcapBackfaceDirectoryReady &&
+                                matcapBackfaceRendered &&
+                                matcapBackfaceLinearSaved &&
+                                matcapBackfaceDisplaySaved &&
+                                frontWoundPixels > 0 &&
+                                reversedWoundPixels > 0 &&
+                                std::abs(frontWoundProbe.green() -
+                                         reversedWoundProbe.green()) > 50,
+                            "deferred check_normal+y MatCap must distinguish the tilted front-wound and reversed-wound faces");
+                    }
                     const QString cavityDiagnosticPrefix = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX");
                     if (!cavityDiagnosticPrefix.isEmpty()) {

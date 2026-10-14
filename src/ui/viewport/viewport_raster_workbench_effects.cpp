@@ -1441,10 +1441,12 @@ bool compositeRasterWorkbenchSurfaces(
         }
     }
     const bool retainSortedSceneLinear = surfaceLayers != nullptr &&
-        !shadingSettings.shadows && !shadingSettings.depthOfField &&
-        sceneLinearDestinationValid;
+        !shadingSettings.depthOfField && sceneLinearDestinationValid;
     const bool canResolveSortedOutlineInSceneLinear =
         retainSortedSceneLinear && shadingSettings.outline;
+    const bool deferSortedOutlineUntilEffects =
+        canResolveSortedOutlineInSceneLinear && shadingSettings.shadows &&
+        !shadingSettings.xrayEnabled();
     std::vector<quint64> sortedVisibleObjectIds;
     QVector<quint64> sortedRegularTransparentObject;
     QVector<float> sortedRegularTransparentDepth;
@@ -1533,6 +1535,18 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->sceneLinearSize = QSize(width, height);
         surfaceLayers->sceneLinearColor.assign(
             static_cast<std::size_t>(pixelCount), {});
+        if (shadingSettings.shadows &&
+            !shadingSettings.xrayEnabled()) {
+            surfaceLayers->sceneLinearOpaqueColor.assign(
+                static_cast<std::size_t>(pixelCount), {});
+            surfaceLayers->sceneLinearTransparentColor.assign(
+                static_cast<std::size_t>(pixelCount), {});
+        }
+        if (deferSortedOutlineUntilEffects) {
+            surfaceLayers->sceneLinearOutlineCoverage.assign(
+                static_cast<std::size_t>(pixelCount), 0.0f);
+            surfaceLayers->sceneLinearOutlinePending = true;
+        }
     }
     const QVector3D sortedOutlineColor = canResolveSortedOutlineInSceneLinear
         ? workbenchSrgbToSceneLinear(QVector3D(
@@ -1578,6 +1592,7 @@ bool compositeRasterWorkbenchSurfaces(
             regular = overLinear(regularTransparent, regular);
             RasterWorkbenchLinearPixel final = overLinear(frontOpaque, regular);
             final = overLinear(frontTransparent, final);
+            float sortedOutlineCoverage = 0.0f;
             if (canResolveSortedOutlineInSceneLinear) {
                 const quint64 objectId = sortedVisibleObjectIds[
                     static_cast<std::size_t>(index)];
@@ -1593,20 +1608,31 @@ bool compositeRasterWorkbenchSurfaces(
                     differentNeighbors += sortedVisibleObjectIds[
                         static_cast<std::size_t>(sy * width + sx)] != objectId;
                 }
-                const float alpha = sortedOutlineAlpha *
+                sortedOutlineCoverage = sortedOutlineAlpha *
                     (static_cast<float>(differentNeighbors) / 4.0f);
-                const float remain = 1.0f - alpha;
-                final.red = sortedOutlineColor.x() * alpha +
-                            final.red * remain;
-                final.green = sortedOutlineColor.y() * alpha +
-                              final.green * remain;
-                final.blue = sortedOutlineColor.z() * alpha +
-                             final.blue * remain;
-                final.alpha = alpha + final.alpha * remain;
+                if (!deferSortedOutlineUntilEffects) {
+                    const float remain = 1.0f - sortedOutlineCoverage;
+                    final.red = sortedOutlineColor.x() *
+                                    sortedOutlineCoverage +
+                                final.red * remain;
+                    final.green = sortedOutlineColor.y() *
+                                      sortedOutlineCoverage +
+                                  final.green * remain;
+                    final.blue = sortedOutlineColor.z() *
+                                     sortedOutlineCoverage +
+                                 final.blue * remain;
+                    final.alpha = sortedOutlineCoverage +
+                                  final.alpha * remain;
+                } else {
+                    surfaceLayers->sceneLinearOutlineCoverage[
+                        static_cast<std::size_t>(index)] =
+                        sortedOutlineCoverage;
+                }
             }
-            if (retainSortedSceneLinear)
+            if (retainSortedSceneLinear) {
                 surfaceLayers->sceneLinearColor[
                     static_cast<std::size_t>(index)] = final;
+            }
             RasterWorkbenchLinearPixel opaqueLayer = overLinear(
                 frontOpaque, regularOpaque);
             const QRgb opaqueDisplay = displayPremultiplied(opaqueLayer);
@@ -1620,6 +1646,16 @@ bool compositeRasterWorkbenchSurfaces(
                 frontTransparent, retainedRegularTransparent);
             const QRgb transparentDisplay = displayPremultiplied(
                 transparentLayer);
+            if (retainSortedSceneLinear &&
+                surfaceLayers->sceneLinearOpaqueColor.size() ==
+                    static_cast<std::size_t>(pixelCount)) {
+                const std::size_t linearIndex =
+                    static_cast<std::size_t>(index);
+                surfaceLayers->sceneLinearOpaqueColor[linearIndex] =
+                    opaqueLayer;
+                surfaceLayers->sceneLinearTransparentColor[linearIndex] =
+                    transparentLayer;
+            }
             if (opaqueRow != nullptr) opaqueRow[x] = opaqueDisplay;
             if (transparentRow != nullptr)
                 transparentRow[x] = transparentDisplay;
@@ -1629,7 +1665,8 @@ bool compositeRasterWorkbenchSurfaces(
         }
     }
     if (canResolveSortedOutlineInSceneLinear)
-        surfaceLayers->outlineAppliedBeforeDisplay = true;
+        surfaceLayers->outlineAppliedBeforeDisplay =
+            !deferSortedOutlineUntilEffects;
     return true;
 }
 

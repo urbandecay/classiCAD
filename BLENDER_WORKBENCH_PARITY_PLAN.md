@@ -2662,13 +2662,15 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   and AgX. The gather kernel, CoC approximation, and far-plane spill behavior
   remain the QPainter fallback's existing approximations.
 - The sorted fallback now retains its scene-linear result and resolves
-  four-cardinal object-ID outline coverage before display conversion when
-  shadows and DOF are inactive and the destination is transparent or its
-  background was supplied in scene-linear form. Its nearest visible ID
-  includes partial-alpha transparent fragments and in-front geometry. A
-  production-path CPU contract verifies the retained linear blend, Standard
-  and AgX output, and that the later effects call does not apply the outline a
-  second time. Sorted scenes with shadow or DOF enabled, plus legacy paths
+  four-cardinal object-ID outline coverage before display conversion when DOF
+  is inactive and the destination is transparent or its background was
+  supplied in scene-linear form. With shadows enabled, it retains the opaque
+  and transparent linear contributions, applies the software shadow, then
+  resolves the outline before display conversion. Its nearest visible ID
+  includes partial-alpha transparent fragments and in-front geometry.
+  Production-path CPU contracts verify the outline and shadow-plus-outline
+  resolves under Standard and AgX and confirm the later effects call does not
+  apply the outline twice. Sorted scenes with DOF enabled, plus legacy paths
   without a trustworthy scene-linear destination, still use the display-space
   outline fallback; already display-transformed pixels cannot generally be
   inverted under AgX, Filmic, or a custom LUT.

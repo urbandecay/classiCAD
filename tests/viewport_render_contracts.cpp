@@ -1995,10 +1995,17 @@ int main(int argc, char *argv[])
         bool agxShadowRendered = false;
         bool agxShadowChangedLinearScene = false;
         bool agxShadowDisplayMatched = false;
+        bool sortedStandardShadowRendered = false;
+        bool sortedStandardShadowChangedLinearScene = false;
+        bool sortedStandardShadowDisplayMatched = false;
+        bool sortedAgxShadowRendered = false;
+        bool sortedAgxShadowChangedLinearScene = false;
+        bool sortedAgxShadowDisplayMatched = false;
         const auto renderShadowOutline = [&](int colorTransform,
                                              bool *renderedResult,
                                              bool *shadowChangedResult,
-                                             bool *displayMatchedResult) {
+                                             bool *displayMatchedResult,
+                                             bool useWeightedOit = true) {
             ViewportShadingSettings settings = standardOutlineSettings;
             settings.colorTransform = colorTransform;
             settings.shadows = true;
@@ -2022,7 +2029,7 @@ int main(int argc, char *argv[])
             renderer.setShadingSettings(settings);
             const bool rendered = compositeRasterWorkbenchSurfaces(
                 &image, shadowOutlineObjects, transform, size, 1.0, false,
-                true, settings, backgroundLinear, drawObject, &layers);
+                useWeightedOit, settings, backgroundLinear, drawObject, &layers);
             *renderedResult = rendered && layers.sceneLinearOutlinePending &&
                               !layers.outlineAppliedBeforeDisplay;
             const std::vector<RasterWorkbenchLinearPixel> beforeEffects =
@@ -2076,6 +2083,13 @@ int main(int argc, char *argv[])
         const bool agxShadowOutline = renderShadowOutline(
             0, &agxShadowRendered, &agxShadowChangedLinearScene,
             &agxShadowDisplayMatched);
+        const bool sortedStandardShadowOutline = renderShadowOutline(
+            1, &sortedStandardShadowRendered,
+            &sortedStandardShadowChangedLinearScene,
+            &sortedStandardShadowDisplayMatched, false);
+        const bool sortedAgxShadowOutline = renderShadowOutline(
+            0, &sortedAgxShadowRendered, &sortedAgxShadowChangedLinearScene,
+            &sortedAgxShadowDisplayMatched, false);
         passed &= check(standardShadowRendered && agxShadowRendered,
             "shadow-plus-outline weighted scenes must retain the scene-linear outline mask");
         passed &= check(standardShadowChangedLinearScene &&
@@ -2085,6 +2099,15 @@ int main(int argc, char *argv[])
                             agxShadowDisplayMatched &&
                             standardShadowOutline && agxShadowOutline,
             "weighted QPainter shadow-plus-outline resolve must display-transform the final linear result once under Standard and AgX");
+        passed &= check(sortedStandardShadowRendered &&
+                            sortedAgxShadowRendered &&
+                            sortedStandardShadowChangedLinearScene &&
+                            sortedAgxShadowChangedLinearScene &&
+                            sortedStandardShadowDisplayMatched &&
+                            sortedAgxShadowDisplayMatched &&
+                            sortedStandardShadowOutline &&
+                            sortedAgxShadowOutline,
+            "sorted QPainter shadow-plus-outline resolve must retain, shadow, outline, and display-transform scene-linear color once under Standard and AgX");
         renderer.setShadingSettings(shading);
 
         ViewportRenderObject cavityReceiver = objects[0];

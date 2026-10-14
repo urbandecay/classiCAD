@@ -5889,6 +5889,113 @@ int main(int argc, char *argv[])
                     gpuUnselectedOutlineImage = framebuffer.toImage();
                     ViewportShadingSettings rawFaceShading = gpuSolidShading;
                     rawFaceShading.outline = false;
+                    const QString qpainterAaCaptureDirectory =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_AA_CAPTURE_DIR");
+                    if (!qpainterAaCaptureDirectory.isEmpty()) {
+                        const bool directoryReady = QDir().mkpath(
+                            qpainterAaCaptureDirectory);
+                        bool capturesSucceeded = directoryReady;
+                        struct QPainterAaCaptureCase {
+                            const char *name;
+                            int mode;
+                            int scale;
+                        };
+                        const QPainterAaCaptureCase captureCases[] = {
+                            {"off", 0, 1}, {"single_pass", 1, 2},
+                            {"samples5", 5, 2}, {"samples8", 8, 3},
+                            {"samples11", 11, 3}, {"samples16", 16, 4},
+                            {"samples32", 32, 6}};
+                        for (const QPainterAaCaptureCase &captureCase :
+                             captureCases) {
+                            const qreal scale = captureCase.scale;
+                            QImage supersampled(
+                                glSize * captureCase.scale,
+                                QImage::Format_ARGB32_Premultiplied);
+                            supersampled.setDevicePixelRatio(scale);
+                            supersampled.fill(Qt::transparent);
+                            CurveHitTester qpainterAaHitTester;
+                            ViewportRenderer qpainterAaRenderer(
+                                gpuTransform, qpainterAaHitTester);
+                            qpainterAaRenderer.setShadingSettings(
+                                rawFaceShading);
+                            const QVector<ViewportRenderObject> aaObjects{
+                                polygonCubeObject};
+                            const QVector3D backgroundSceneLinear =
+                                workbenchSrgbToSceneLinear(QVector3D(
+                                    34.0f / 255.0f, 34.0f / 255.0f,
+                                    34.0f / 255.0f));
+                            RasterWorkbenchSurfaceLayers surfaceLayers;
+                            const bool composed =
+                                compositeRasterWorkbenchSurfaces(
+                                    &supersampled, aaObjects, gpuTransform,
+                                    glSize, scale, captureCase.mode != 0,
+                                    true, rawFaceShading,
+                                    backgroundSceneLinear,
+                                    [&qpainterAaRenderer, &polygonCubeObject,
+                                     &glSize](
+                                        QPainter &surfacePainter,
+                                        const ViewportRenderObject &object,
+                                        RasterWorkbenchFragmentSink *sink) {
+                                        qpainterAaRenderer.drawShape(
+                                            surfacePainter, object.shape,
+                                            glSize, false, object.selected,
+                                            true, QColor(), QString(), 0.0,
+                                            object.objectId,
+                                            object.geometryRevision,
+                                            object.preparedDepthGeometry.data(),
+                                            {}, object.displayColorSceneLinear,
+                                            object.workbenchMaterial,
+                                            object.displayName,
+                                            object.libraryPath,
+                                            identityMeshObjectTransform,
+                                            object.meshMaterials, sink);
+                                    },
+                                    &surfaceLayers);
+                            if (!composed) {
+                                supersampled.fill(Qt::transparent);
+                                QPainter scenePainter(&supersampled);
+                                scenePainter.setRenderHint(
+                                    QPainter::Antialiasing,
+                                    captureCase.mode != 0);
+                                qpainterAaRenderer.drawShape(
+                                    scenePainter, polygonCubeObject.shape,
+                                    glSize, false, false, true, QColor(),
+                                    QString(), 0.0,
+                                    polygonCubeObject.objectId,
+                                    polygonCubeObject.geometryRevision,
+                                    polygonCubeObject.preparedDepthGeometry.data(),
+                                    {}, polygonCubeObject.displayColorSceneLinear,
+                                    std::nullopt,
+                                    polygonCubeObject.displayName, QString(),
+                                    identityMeshObjectTransform,
+                                    polygonCubeObject.meshMaterials);
+                                scenePainter.end();
+                            } else {
+                                applyRasterWorkbenchEffects(
+                                    &supersampled, aaObjects, gpuTransform,
+                                    glSize, scale, rawFaceShading,
+                                    &surfaceLayers);
+                            }
+
+                            QImage resolved(glSize,
+                                            QImage::Format_ARGB32_Premultiplied);
+                            resolved.fill(QColor(34, 34, 34));
+                            QPainter resolvePainter(&resolved);
+                            resolvePainter.drawImage(QPoint(0, 0),
+                                                     supersampled);
+                            resolvePainter.end();
+                            const QString path = QDir(
+                                qpainterAaCaptureDirectory).filePath(
+                                    QString::fromLatin1(captureCase.name) +
+                                    QStringLiteral(".png"));
+                            capturesSucceeded &= !resolved.isNull() &&
+                                                  resolved.save(path);
+                        }
+                        passed &= check(
+                            capturesSucceeded,
+                            "QPainter fallback AA matrix must capture the production mesh raster at each configured supersampling scale");
+                    }
                     functions.glClearColor(34.0f / 255.0f,
                                            34.0f / 255.0f,
                                            34.0f / 255.0f,

@@ -3241,11 +3241,34 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, and a two-tile mesh UDIM Closest- and Linear-filter image comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
-- No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; an interruption/resume state contract covers Samples8 during navigation. Other sample-count navigation and QPainter AA comparisons remain open.
+- No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; an interruption/resume state contract covers Samples8 during navigation. A matched fixed-cube QPainter supersampling matrix now covers all seven preference values using silhouette coverage; full QPainter color/effect comparisons and other sample-count navigation remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
 - Accumulation reset after camera movement, geometry edits, selection changes, setting changes, resize, and display-scale changes.
 - Overlay Smooth Wires and Edit Mode Smooth Wires independently, including confirming the grid remains antialiased when overlay wire smoothing is off.
 - Save/reopen behavior for all persistent settings and any new material or color data.
 - GPU renderer and QPainter fallback behavior.
+
+### QPainter fixed-cube AA comparison (2026-10-14)
+
+- Added opt-in production-path PNG captures to
+  `viewport_render_contracts` through
+  `CLASSICAD_VIEWPORT_QPAINTER_AA_CAPTURE_DIR`. The capture uses the same
+  640×480 polygon cube, camera, QPainter AA flag, supersampling factors
+  (1×/2×/3×/4×/6×), surface compositor/effect resolve, and DPR image
+  composition as the viewport. The compositor's existing one-million-pixel
+  work cap means 2× and larger captures follow the same direct-draw fallback
+  used by the widget when that cap is exceeded.
+- Compared non-background silhouette masks against Blender 5.2.2 at matching
+  640×480 framing, using each mode's own Blender reference and a 5/255
+  per-channel foreground threshold. Mask IoU / XOR pixels were: AA Off
+  `.994440 / 622`; QPainter Single Pass 2× vs Blender FXAA
+  `.997324 / 299`; 5 samples `.993457 / 734`; 8 samples `.994786 / 585`;
+  11 samples `.995221 / 536`; 16 samples `.992858 / 801`; and 32 samples
+  `.992405 / 852`. The captures confirm bounded edge smoothing, but the
+  supersampling results are not monotonic and do not reproduce Blender's
+  temporal TAA/SMAA resolve. RGB was not used as the parity metric because
+  this capture isolates coverage; QPainter full-frame material/color/effect
+  comparison remains open.
+- Blender reference: [Workbench state and AA selection](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc), [Workbench AA resolve](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc), and [Workbench TAA shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_fx_taa.bsl.hh). This is a measured fallback approximation, not a port of those GPU resolve passes.
 
 The port is complete when every enabled option has matching Blender 5.2.2 behavior, no enabled saved setting is inert, and the comparison checklist passes. Disabled unsupported features must remain clearly documented. Workbench shadows now use validated stencil volumes for closed `NurbsSolid` and imported `PolygonMesh3D` subsets, plus validated open surfaces; full parity still requires comparison and a matching path for the currently disclosed unsupported-geometry and transparency fallbacks.
 

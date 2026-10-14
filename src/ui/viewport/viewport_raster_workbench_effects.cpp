@@ -2044,17 +2044,29 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 // Blender's curvature pass samples four cardinal neighbors
                 // at ui_scale, rejects object-ID outline pixels, and takes
                 // signed differences of view-space normal components.
-                const int curvatureStep = workbenchEffectUiScale(dpr);
-                const auto sampleAt = [&](int sx, int sy)
+                const float curvatureStep =
+                    workbenchEffectFractionalUiScale(dpr);
+                const auto nearestSampleAt = [&](float sx, float sy)
                     -> const RasterSample & {
-                    sx = std::clamp(sx, 0, width - 1);
-                    sy = std::clamp(sy, 0, height - 1);
-                    return opaqueSamples[sy * width + sx];
+                    const int ix = std::clamp(
+                        static_cast<int>(std::floor(sx + 0.5f)), 0,
+                        width - 1);
+                    const int iy = std::clamp(
+                        static_cast<int>(std::floor(sy + 0.5f)), 0,
+                        height - 1);
+                    return opaqueSamples[iy * width + ix];
                 };
-                const RasterSample &up = sampleAt(x, y - curvatureStep);
-                const RasterSample &down = sampleAt(x, y + curvatureStep);
-                const RasterSample &right = sampleAt(x + curvatureStep, y);
-                const RasterSample &left = sampleAt(x - curvatureStep, y);
+                // Blender's integer and floating-point texture samplers both
+                // use nearest filtering here. Preserve the fractional UV
+                // offset before resolving each cardinal tap to its texel.
+                const RasterSample &up = nearestSampleAt(
+                    float(x), float(y) - curvatureStep);
+                const RasterSample &down = nearestSampleAt(
+                    float(x), float(y) + curvatureStep);
+                const RasterSample &right = nearestSampleAt(
+                    float(x) + curvatureStep, float(y));
+                const RasterSample &left = nearestSampleAt(
+                    float(x) - curvatureStep, float(y));
                 const float response = rasterWorkbenchCurvatureResponse(
                     up.objectId, down.objectId, right.objectId, left.objectId,
                     QVector3D::dotProduct(up.normal, viewUpVector),

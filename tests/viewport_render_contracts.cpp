@@ -742,6 +742,11 @@ int main(int argc, char *argv[])
             workbenchEffectUiScale(1.0) == 1 &&
             workbenchEffectUiScale(2.0) == 2,
         "Workbench GPU and QPainter cardinal ID taps must use the nearest integer UI scale (DPR 1.5 maps to 2)");
+    passed &= check(
+        std::abs(workbenchEffectFractionalUiScale(1.5) - 1.5f) < 1.0e-6f &&
+            std::abs(workbenchEffectFractionalUiScale(1.25) - 1.25f) <
+                1.0e-6f,
+        "QPainter curvature taps must preserve fractional DPR offsets");
 
     QImage outlineScaleDpr15(orthographicDofSize * 3 / 2,
                              QImage::Format_ARGB32_Premultiplied);

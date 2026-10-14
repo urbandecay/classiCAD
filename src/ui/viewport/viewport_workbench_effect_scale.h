@@ -20,4 +20,13 @@ inline int workbenchEffectUiScale(qreal devicePixelRatio) noexcept
     return std::max(1, qRound(devicePixelRatio));
 }
 
+// Blender's curvature shader offsets normalized texture coordinates by the
+// floating-point UI scale. Unlike integer outline taps, curvature samples
+// must retain fractional device-pixel ratios until texture lookup.
+inline float workbenchEffectFractionalUiScale(qreal devicePixelRatio) noexcept
+{
+    if (!std::isfinite(devicePixelRatio)) return 1.0f;
+    return std::max(1.0f, static_cast<float>(devicePixelRatio));
+}
+
 } // namespace classiCAD

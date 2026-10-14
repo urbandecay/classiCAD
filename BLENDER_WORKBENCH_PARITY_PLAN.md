@@ -2429,10 +2429,9 @@ Status: in progress; the implementation and source reviews found the blockers li
   and unselected object images and requires identical outline output. The GPU
   contract compares selected and unselected silhouette pixels against matching
   outline-free baselines. Broader effect pixel comparisons remain open.
-- **Workbench effect UI-scale sampling:** GPU outline, QPainter outline, and
-  QPainter curvature cardinal taps now share an integer scale adapter
-  (`max(1, qRound(DPR))`), matching Blender's integer `U.pixelsize` footprint
-  for the available Qt scale. Blender assigns `U.pixelsize` to Workbench's
+- **Workbench effect UI-scale sampling:** GPU outline and QPainter outline
+  cardinal taps use an integer scale adapter (`max(1, qRound(DPR))`). Blender
+  assigns `U.pixelsize` to Workbench's
   `world_data.ui_scale` in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L100-L109)
   and derives it from DPI and the user line-width adjustment in
   [`wm_window.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/windowmanager/intern/wm_window.cc#L682-L718).
@@ -2444,9 +2443,15 @@ Status: in progress; the implementation and source reviews found the blockers li
   differences, signed ridge/valley response, and soft clamp from
   [`workbench_curvature.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_curvature.bsl.hh#L9-L50).
   The focused contract checks ridge and valley signs, separate ridge-control
-  response, outline rejection, and background rejection. Its neighbor step
-  rounds Qt DPR, which can differ from Blender's DPI-derived `ui_scale`; the
-  retained QPainter surface layers also remain display RGB, so the sorted
+  response, outline rejection, and background rejection. CPU curvature now
+  retains fractional Qt DPR offsets until nearest-texel sampling for both the
+  object-ID and normal buffers, matching Blender's shared normalized offset
+  and default no-linear-filter sampler behavior. See
+  [`GPU_texture.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/GPU_texture.hh#L2660-L2677).
+  The DPR scale contract covers 1.25 and 1.5. The source sampler uses
+  Blender's DPI-derived `ui_scale`; classiCAD currently uses DPR as its
+  available approximation. The retained QPainter surface layers remain
+  display RGB, so the sorted
   fallback cavity/effect composition does not match Blender's scene-linear
   ordering.
   Opaque effect normals now also pass through the Blender prepass facing

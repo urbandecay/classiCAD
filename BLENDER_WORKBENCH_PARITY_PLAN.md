@@ -1493,6 +1493,27 @@ Phase Two Studio/MatCap/Flat comparison: the offscreen cube fixture selects the 
 
 **MatCap rendered row-orientation fix (2026-10-14):** The prior `check_normal+y` comparison still showed a scene-linear MAE/max of 0.1376717/0.6846046 after the no-specular isolation. Rechecking nonblank 640×480 Blender 5.2.2 and classiCAD captures showed that classiCAD's sampled diffuse and specular values corresponded to the opposite vertical QMC row: the QMC payload is top-down, the byte-image GL fallback reverses its rows, but the higher-precision QMC upload had not. The QMC GPU upload now reverses each layer's rows, and the CPU half-float sampler converts normalized GL V into the source's top-down row order. `check_normal+y` now matches Blender exactly across all 27 face probes in scene-linear and display RGB with specular disabled. `metal_bronze`, with specular enabled, also matches scene-linear exactly and has display MAE 0.0988/255 with 1/255 maximum rounding error. This corrects the previous row-order conclusion; the isolated texture readback had validated data and filtering but had not established rendered UV orientation. Other MatCap presets, cameras, and edge pixels still need comparison.
 
+**Full-frame GPU MatCap cube comparison (2026-10-14):** Compared nonblank
+640×480 polygon-cube output at the classiCAD lighting-capture camera, Blender
+orthographic scale 5.0, AA Off, AgX, and matched neutral scene-linear
+background (`0.021942` per channel). `metal_bronze` with specular enabled has
+scene-linear foreground-mask IoU 0.997396 (83 XOR pixels), per-channel whole
+frame scene-linear MAE below `0.000039`, and display whole-frame MAE
+`0.0793/255`. `check_normal+y` with specular disabled has mask IoU 0.997991
+(224 XOR pixels), per-channel scene-linear MAE `0.000505`, `0.000122`, and
+`0.000547`, and display whole-frame MAE `0.1043/255`. These include edge
+coverage; maximum display errors of 105/255 and 150/255 occur at a small number
+of edge pixels. Existing 27 face-interior probes remain exact for the two
+presets. Reproduce the classiCAD captures with
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=/tmp/classicad-matcap-spec QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`
+and again with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_NO_SPECULAR=1`; render
+Blender with `tests/workbench_cube_reference.py --lighting MATCAP
+--light-preset metal_bronze` or `--light-preset check_normal+y --no-specular`,
+using `--ortho-scale 5.0 --match-classicad-ortho --aa OFF --zero-dither` and
+the same background. Compare scene-linear PFM with
+`tests/workbench_pfm_compare.py`. Other presets, camera orientations, Studio
+rotation, and QPainter MatCap output remain open.
+
 **GPU MatCap upload readback update (2026-10-13, corrected 2026-10-14):** The exact QMC half-float upload is shared by the production renderer and an offscreen OpenGL contract. With Mesa software GL, the contract samples two asymmetric texel centers and a four-texel midpoint in each layer for both `metal_bronze` and `check_normal+y`, comparing against the CPU sampler with the same top-down source-to-GL row mapping. Blender 5.2.2's [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L18-L42) passes the MatCap ImBuf float data to texture creation; however, the earlier contract's raw coordinate checks did not prove that the production renderer matched Blender's effective image-row orientation at its MatCap UVs. All 27 bundled `.qmc` files regenerate byte-for-byte from Blender 5.2.2's bundled MatCap EXRs, and a sampled Blender image pixel matches its QMC half-float RGB exactly. Controlled rendered comparisons now verify the full texture orientation for two presets; other presets, camera orientations, and image edges remain open.
 
 **CPU MatCap texture filtering update (2026-10-13, orientation corrected 2026-10-14):** Blender 5.2.2 evaluates MatCaps with `textureLod` on normalized textures (`source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh`). The CPU/QPainter samplers use normalized texel-center coordinates (`uv * dimension - 0.5`) with edge clamping, matching the OpenGL linear-filter footprint. QMC half-float rows are stored top-down, so the CPU sampler now converts normalized V to the corresponding source row; the sRGB image path keeps its equivalent image-to-GL orientation conversion. Focused contracts cover the center of a 2x2 texture, texel-center lookup, clamped edge lookups, both vertical endpoint mappings, and GPU sampling in both array layers. Matched rendered probes verify the corrected orientation for `check_normal+y` and `metal_bronze`; broader QPainter rendered parity remains open.
@@ -2700,6 +2721,10 @@ Status: in progress; the implementation and source reviews found the blockers li
 Use the same machine and display where possible. Match viewport pixel dimensions, view and projection, clipping range, scene contents, selection/edit state, color management, and preference values. Compare Blender and classiCAD side by side or with aligned screenshots.
 
 - Studio, MatCap, and Flat modes, including light/MatCap choice and rotation.
+  Studio Default, Flat, and selected Studio Paint rotations have 27-probe
+  checks; full-frame GPU MatCap comparison now covers `metal_bronze` with
+  specular and `check_normal+y` without specular. Other presets, Studio
+  rotations, camera orientations, and QPainter output remain open.
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.

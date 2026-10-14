@@ -3533,6 +3533,95 @@ int main(int argc, char *argv[])
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    // Exercise the production scene-color target, float
+                    // texture readback, and HDR writer with a controlled
+                    // scene-linear background above display range.
+                    const QVector3D hdrBackgroundSceneLinear(4.0f, 0.75f,
+                                                              0.25f);
+                    QVector<float> hdrReadbackRgb;
+                    QImage hdrReadbackDisplay;
+                    const bool hdrSceneRendered = renderCoordinatedScene(
+                        rawFaceShading,
+                        QByteArrayLiteral("hdr-scene-linear-readback"),
+                        &hdrReadbackDisplay, &polygonCubeObject, nullptr,
+                        nullptr, QString{}, &hdrReadbackRgb,
+                        &hdrBackgroundSceneLinear);
+                    QVector3D hdrReadbackPixel;
+                    bool hdrReadbackPixelFound = false;
+                    if (hdrSceneRendered &&
+                        hdrReadbackRgb.size() == glSize.width() *
+                            glSize.height() * 3) {
+                        for (int pixel = 0;
+                             pixel < glSize.width() * glSize.height(); ++pixel) {
+                            const QVector3D candidate(
+                                hdrReadbackRgb[pixel * 3],
+                                hdrReadbackRgb[pixel * 3 + 1],
+                                hdrReadbackRgb[pixel * 3 + 2]);
+                            if (candidate.x() > 1.0f) {
+                                hdrReadbackPixel = candidate;
+                                hdrReadbackPixelFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    WorkbenchRenderResult hdrReadbackResult;
+                    hdrReadbackResult.combined =
+                        QImage(2, 2, QImage::Format_RGBA64);
+                    hdrReadbackResult.combined.fill(Qt::black);
+                    hdrReadbackResult.sceneLinearSize = QSize(2, 2);
+                    hdrReadbackResult.sceneLinearRgba.resize(16);
+                    for (int pixel = 0; pixel < 4; ++pixel) {
+                        hdrReadbackResult.sceneLinearRgba[pixel * 4] =
+                            hdrReadbackPixel.x();
+                        hdrReadbackResult.sceneLinearRgba[pixel * 4 + 1] =
+                            hdrReadbackPixel.y();
+                        hdrReadbackResult.sceneLinearRgba[pixel * 4 + 2] =
+                            hdrReadbackPixel.z();
+                        hdrReadbackResult.sceneLinearRgba[pixel * 4 + 3] = 1.0f;
+                    }
+                    hdrReadbackResult.blenderImageFormat =
+                        QStringLiteral("HDR");
+                    QTemporaryDir hdrReadbackDirectory;
+                    const QString hdrReadbackPath =
+                        hdrReadbackDirectory.filePath(
+                            QStringLiteral("gpu-readback.hdr"));
+                    QString hdrReadbackError;
+                    const bool hdrReadbackWritten =
+                        hdrReadbackPixelFound && hdrReadbackDirectory.isValid() &&
+                        hdrReadbackResult.saveCombinedImage(
+                            hdrReadbackPath, &hdrReadbackError);
+                    QFile hdrReadbackFile(hdrReadbackPath);
+                    bool hdrReadbackDecoded = hdrReadbackWritten &&
+                        hdrReadbackFile.open(QIODevice::ReadOnly);
+                    QByteArray hdrResolutionLine;
+                    while (hdrReadbackDecoded) {
+                        hdrResolutionLine = hdrReadbackFile.readLine();
+                        if (hdrResolutionLine.isEmpty() ||
+                            hdrResolutionLine.startsWith("-Y ")) {
+                            break;
+                        }
+                    }
+                    const QByteArray encodedHdrPixel =
+                        hdrReadbackDecoded && hdrResolutionLine.startsWith("-Y ")
+                        ? hdrReadbackFile.read(4) : QByteArray{};
+                    if (encodedHdrPixel.size() == 4 &&
+                        static_cast<unsigned char>(encodedHdrPixel[3]) != 0) {
+                        const int exponent =
+                            static_cast<unsigned char>(encodedHdrPixel[3]) - 128;
+                        const float scale = std::ldexp(1.0f, exponent) / 256.0f;
+                        const float decodedRed =
+                            static_cast<unsigned char>(encodedHdrPixel[0]) * scale;
+                        hdrReadbackDecoded = decodedRed > 1.0f &&
+                            std::abs(decodedRed - hdrReadbackPixel.x()) < 0.04f;
+                    } else {
+                        hdrReadbackDecoded = false;
+                    }
+                    passed &= check(
+                        hdrSceneRendered && hdrReadbackPixelFound &&
+                            hdrReadbackPixel.x() > 1.0f &&
+                            hdrReadbackResult.hasValidSceneLinearCombined() &&
+                            hdrReadbackWritten && hdrReadbackDecoded,
+                        "GPU RGBA16F scene resolve and float readback must preserve values above 1 through Radiance HDR output");
                     // Removing one cube face leaves a manifold sheet with one
                     // simple boundary loop. It must still contribute its
                     // boundary-closed forced-fail stencil volume.

@@ -477,8 +477,13 @@ in ordinary free views or orthographic views is superseded by this correction.
   configures a three-channel floating-point HDR image and sends it to its HDR
   encoder. classiCAD writes the equivalent RGB Radiance representation from
   scene-linear values; alpha is not represented by RGBE. The file writer builds
-  and the RGBE/RLE path has source review, but no decoder round-trip comparison
-  has been run.
+  and an offscreen GPU contract now renders a polygon scene over a controlled
+  above-one scene-linear background, reads the RGBA16F scene target as floats,
+  writes a temporary HDR image from that readback, decodes its RGBE pixel, and
+  confirms the above-one red value survives within 0.04. This checks scene
+  target readback and the HDR writer together without opening the application
+  window. Broader Blender render-result image comparison and HDR edge cases
+  remain open.
 
 - EXR output honors RGB and BW color modes for both HALF and FLOAT channel
   storage, writing only R/G/B and omitting A. RGB preserves the existing

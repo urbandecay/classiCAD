@@ -5618,3 +5618,40 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   --texture-extension <EXTEND|CLIP|MIRROR> --texture-image <fixture>
   --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither` plus
   `--linear-output` and `--linear-pfm-output`.
+
+### Matched GPU Image Texture on a nonplanar NURBS patch (2026-10-14)
+
+- Added a degree-2 by degree-2, non-rational 3×3 NURBS patch with asymmetric
+  control-net heights, shifted U/V knot domains, unit weights, and the existing
+  asymmetric sRGB texture. The production GPU capture remains Flat, Linear,
+  Repeat, AA Off, and 640×480. Its test export writes the renderer's exact
+  derived triangle positions and normalized parameter UVs as an OBJ proxy;
+  Blender consumes those same triangles so this comparison does not conflate
+  texture behavior with another surface tessellator.
+- The Blender 5.2.2 comparison has foreground-mask IoU `0.999971` (one XOR
+  pixel; 34,437 reference and 34,438 classiCAD foreground pixels). Scene-linear
+  RGB MAE on the shared foreground is `0.0000563`, with maximum `0.00671`;
+  nine fixed interior probes match exactly. Display-channel MAE is
+  `0.0423/255` with maximum `4/255`. The remaining mismatch is concentrated
+  at display/raster coverage boundaries; these results validate this curved
+  GPU texture/material path, not trimmed surfaces, alternate filters/extensions,
+  perspective views, or the QPainter curved-surface fallback.
+- Blender 5.2.2 interpolates the per-vertex UV varying in pinned
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
+  and samples Image Texture color in
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433).
+  classiCAD's material adapter and exact `NurbsSurface3D` source contract are
+  unchanged; the exported mesh is comparison/display data only.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 43.96 seconds); Blender reported 5.2.2 LTS; and paired PNG/PFM
+  comparison completed. Reproduce classiCAD captures and the proxy with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir> QT_QPA_PLATFORM=offscreen
+  ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`,
+  then render Blender with `--scene NURBS_TEXTURE_CURVED
+  --nurbs-proxy-obj <dir>/color_texture_nurbs_curved_proxy.obj
+  --match-classicad-ortho --aa OFF --lighting FLAT --color-source TEXTURE
+  --texture-interpolation Linear --texture-extension REPEAT
+  --texture-image <dir>/workbench-texture-pattern.png
+  --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither`,
+  plus `--linear-output` and `--linear-pfm-output` for scene-linear capture.

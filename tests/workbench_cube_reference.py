@@ -29,6 +29,7 @@ def arguments():
             "SHADOW_RECEIVER",
             "TWO_SIDED_MATCAP",
             "NURBS_TEXTURE",
+            "NURBS_TEXTURE_CURVED",
             "MESH_TEXTURE",
             "TRANSPARENT_OVERLAP",
             "TRANSPARENT_IN_FRONT",
@@ -181,6 +182,13 @@ def arguments():
         help="optional second image used by material slot 1 in MESH_TEXTURE",
     )
     parser.add_argument(
+        "--nurbs-proxy-obj",
+        help=(
+            "OBJ display mesh exported by classiCAD for the matched "
+            "NURBS_TEXTURE_CURVED fixture"
+        ),
+    )
+    parser.add_argument(
         "--texture-udim",
         action="store_true",
         help="load a 1001/1002 UDIM set and span both tiles in a texture fixture",
@@ -324,6 +332,10 @@ def arguments():
         parser.error("choose only one UDIM mode")
     if args.texture_udim_parameter_uvs and args.scene != "NURBS_TEXTURE":
         parser.error("--texture-udim-parameter-uvs requires NURBS_TEXTURE")
+    if args.scene == "NURBS_TEXTURE_CURVED" and not args.nurbs_proxy_obj:
+        parser.error("NURBS_TEXTURE_CURVED requires --nurbs-proxy-obj")
+    if args.nurbs_proxy_obj and args.scene != "NURBS_TEXTURE_CURVED":
+        parser.error("--nurbs-proxy-obj requires NURBS_TEXTURE_CURVED")
     if args.texture_float_udim_vertical and args.scene != "MESH_TEXTURE":
         parser.error("--texture-float-udim-vertical requires MESH_TEXTURE")
     if args.texture_float_udim_vertical and not args.texture_udim_vertical:
@@ -664,25 +676,67 @@ def main():
         mesh.update()
         obj = bpy.data.objects.new("TwoSidedMatcap", mesh)
         bpy.context.collection.objects.link(obj)
-    elif args.scene == "NURBS_TEXTURE":
+    elif args.scene in ("NURBS_TEXTURE", "NURBS_TEXTURE_CURVED"):
         if args.color_source != "TEXTURE" or not args.texture_image:
             raise ValueError("NURBS_TEXTURE requires TEXTURE color source and --texture-image")
-        # classiCAD's regular planar NURBS fixture is a degree-one patch over
-        # [-1, 1] in both directions. Render its equivalent display proxy with
-        # explicit corner UVs so this comparison isolates Workbench sampling.
-        mesh = bpy.data.meshes.new("NurbsTextureProxyMesh")
-        mesh.from_pydata(
-            [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
-             (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
-            [], [(0, 1, 2, 3)],
-        )
-        mesh.update()
-        proxy = bpy.data.objects.new("NurbsTextureProxy", mesh)
-        bpy.context.collection.objects.link(proxy)
-        uv_layer = mesh.uv_layers.new(name="UVMap")
-        for loop, uv in zip(uv_layer.data, ((0.0, 0.0), (1.0, 0.0),
-                                            (1.0, 1.0), (0.0, 1.0))):
-            loop.uv = uv
+        if args.scene == "NURBS_TEXTURE_CURVED":
+            # Use classiCAD's exact display triangles and normalized parameter
+            # UVs so this comparison isolates texture/shading behavior from
+            # differences between the applications' NURBS tessellators.
+            vertices = []
+            texture_coordinates = []
+            faces = []
+            face_uvs = []
+            with open(os.path.abspath(args.nurbs_proxy_obj), encoding="ascii") as proxy_file:
+                for line in proxy_file:
+                    fields = line.split()
+                    if not fields:
+                        continue
+                    if fields[0] == "v":
+                        vertices.append(tuple(float(value) for value in fields[1:4]))
+                    elif fields[0] == "vt":
+                        texture_coordinates.append(
+                            tuple(float(value) for value in fields[1:3])
+                        )
+                    elif fields[0] == "f":
+                        vertex_indices = []
+                        uv_indices = []
+                        for corner in fields[1:]:
+                            vertex_index, uv_index = corner.split("/")[:2]
+                            vertex_indices.append(int(vertex_index) - 1)
+                            uv_indices.append(int(uv_index) - 1)
+                        if len(vertex_indices) != 3:
+                            raise ValueError("curved NURBS proxy must contain only triangles")
+                        faces.append(tuple(vertex_indices))
+                        face_uvs.append(tuple(uv_indices))
+            if not vertices or not faces or len(vertices) != len(texture_coordinates):
+                raise ValueError("curved NURBS proxy OBJ is empty or has mismatched UVs")
+            mesh = bpy.data.meshes.new("NurbsTextureCurvedProxyMesh")
+            mesh.from_pydata(vertices, [], faces)
+            mesh.update()
+            uv_layer = mesh.uv_layers.new(name="UVMap")
+            for polygon, polygon_uvs in zip(mesh.polygons, face_uvs):
+                for loop_index, uv_index in zip(polygon.loop_indices, polygon_uvs):
+                    uv_layer.data[loop_index].uv = texture_coordinates[uv_index]
+        else:
+            # classiCAD's regular planar NURBS fixture is a degree-one patch
+            # over [-1, 1] in both directions. Render its equivalent proxy.
+            mesh = bpy.data.meshes.new("NurbsTextureProxyMesh")
+            mesh.from_pydata(
+                [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+                 (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
+                [], [(0, 1, 2, 3)],
+            )
+            mesh.update()
+            proxy = bpy.data.objects.new("NurbsTextureProxy", mesh)
+            bpy.context.collection.objects.link(proxy)
+            uv_layer = mesh.uv_layers.new(name="UVMap")
+            for loop, uv in zip(uv_layer.data, ((0.0, 0.0), (1.0, 0.0),
+                                                (1.0, 1.0), (0.0, 1.0))):
+                loop.uv = uv
+        if args.scene == "NURBS_TEXTURE_CURVED":
+            proxy = bpy.data.objects.new("NurbsTextureCurvedProxy", mesh)
+            bpy.context.collection.objects.link(proxy)
         if args.texture_udim or args.texture_udim_vertical:
             for loop in uv_layer.data:
                 if args.texture_udim_vertical:

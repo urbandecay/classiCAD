@@ -8068,6 +8068,195 @@ int main(int argc, char *argv[])
                             nurbsTextureRendered && nurbsTextureLinearSaved &&
                             nurbsTextureDisplaySaved;
 
+                        // Compare a genuinely curved NURBS material path
+                        // against Blender using the exact same derived
+                        // triangles and normalized parameter UVs.
+                        ViewportRenderObject curvedNurbsTextureObject =
+                            nurbsTextureObject;
+                        NurbsSurface3D curvedTextureSurface;
+                        curvedTextureSurface.degreeU = 2;
+                        curvedTextureSurface.degreeV = 2;
+                        curvedTextureSurface.orderU = 3;
+                        curvedTextureSurface.orderV = 3;
+                        curvedTextureSurface.controlVertexCountU = 3;
+                        curvedTextureSurface.controlVertexCountV = 3;
+                        for (int uIndex = 0; uIndex < 3; ++uIndex) {
+                            const double u = double(uIndex - 1);
+                            for (int vIndex = 0; vIndex < 3; ++vIndex) {
+                                const double v = double(vIndex - 1);
+                                curvedTextureSurface.controlPoints.append(
+                                    {-1.0 + u, -1.0 + v,
+                                     0.14 * u * v + 0.04 * u * u +
+                                         0.07 * v});
+                                curvedTextureSurface.weights.append(1.0);
+                            }
+                        }
+                        curvedTextureSurface.knotsU = {2.0, 2.0, 6.0, 6.0};
+                        curvedTextureSurface.knotsV =
+                            {-3.0, -3.0, 5.0, 5.0};
+                        curvedNurbsTextureObject.shape.geometryType =
+                            GeometryType::NurbsSurface;
+                        curvedNurbsTextureObject.shape.nurbsSurface =
+                            curvedTextureSurface;
+                        curvedNurbsTextureObject.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                buildViewportDepthGeometry(
+                                    curvedNurbsTextureObject.shape));
+                        curvedNurbsTextureObject.objectId =
+                            ObjectId::fromValue(9102);
+                        curvedNurbsTextureObject.displayName =
+                            QStringLiteral("CurvedNurbsTexturePatch");
+                        const auto &curvedDisplayVertices =
+                            curvedNurbsTextureObject.preparedDepthGeometry
+                                ->surfaceVertices;
+                        const auto &curvedDisplayUvs =
+                            curvedNurbsTextureObject.preparedDepthGeometry
+                                ->surfaceTextureCoordinates;
+                        QByteArray curvedNurbsProxyObj;
+                        const bool curvedProxyMeshValid =
+                            validateNurbsSurface(curvedTextureSurface) &&
+                            curvedDisplayVertices.size() > 1500 &&
+                            curvedDisplayVertices.size() % 3 == 0 &&
+                            curvedDisplayUvs.size() ==
+                                curvedDisplayVertices.size();
+                        if (curvedProxyMeshValid) {
+                            curvedNurbsProxyObj.reserve(
+                                curvedDisplayVertices.size() * 88);
+                            for (const QVector3D &vertex :
+                                 curvedDisplayVertices) {
+                                curvedNurbsProxyObj +=
+                                    QByteArrayLiteral("v ") +
+                                    QByteArray::number(vertex.x(), 'g', 9) +
+                                    ' ' + QByteArray::number(vertex.y(), 'g', 9) +
+                                    ' ' + QByteArray::number(vertex.z(), 'g', 9) +
+                                    '\n';
+                            }
+                            for (const QPointF &uv : curvedDisplayUvs) {
+                                curvedNurbsProxyObj +=
+                                    QByteArrayLiteral("vt ") +
+                                    QByteArray::number(uv.x(), 'g', 9) + ' ' +
+                                    QByteArray::number(uv.y(), 'g', 9) + '\n';
+                            }
+                            for (int vertex = 1;
+                                 vertex <= curvedDisplayVertices.size();
+                                 vertex += 3) {
+                                curvedNurbsProxyObj +=
+                                    QByteArrayLiteral("f ") +
+                                    QByteArray::number(vertex) + '/' +
+                                    QByteArray::number(vertex) + ' ' +
+                                    QByteArray::number(vertex + 1) + '/' +
+                                    QByteArray::number(vertex + 1) + ' ' +
+                                    QByteArray::number(vertex + 2) + '/' +
+                                    QByteArray::number(vertex + 2) + '\n';
+                            }
+                        }
+                        const QString curvedProxyPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_proxy.obj"));
+                        QFile curvedProxyFile(curvedProxyPath);
+                        const bool curvedProxySaved =
+                            curvedProxyMeshValid &&
+                            curvedProxyFile.open(QIODevice::WriteOnly) &&
+                            curvedProxyFile.write(curvedNurbsProxyObj) ==
+                                curvedNurbsProxyObj.size();
+                        QImage curvedNurbsTextureDisplay;
+                        QVector<float> curvedNurbsTextureSceneLinear;
+                        const bool curvedNurbsTextureRendered =
+                            curvedProxySaved && renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-nurbs-curved-texture"),
+                                &curvedNurbsTextureDisplay,
+                                &curvedNurbsTextureObject, nullptr, nullptr,
+                                QString{}, &curvedNurbsTextureSceneLinear,
+                                &textureBackground);
+                        int curvedNurbsForegroundPixels = 0;
+                        double curvedNurbsMinimumZ =
+                            std::numeric_limits<double>::max();
+                        double curvedNurbsMaximumZ =
+                            -std::numeric_limits<double>::max();
+                        for (const QVector3D &vertex : curvedDisplayVertices) {
+                            curvedNurbsMinimumZ = std::min(
+                                curvedNurbsMinimumZ, double(vertex.z()));
+                            curvedNurbsMaximumZ = std::max(
+                                curvedNurbsMaximumZ, double(vertex.z()));
+                        }
+                        QVector3D curvedNurbsMinimumColor(
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max());
+                        QVector3D curvedNurbsMaximumColor(
+                            -std::numeric_limits<float>::max(),
+                            -std::numeric_limits<float>::max(),
+                            -std::numeric_limits<float>::max());
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < curvedNurbsTextureSceneLinear.size();
+                             pixel += 3) {
+                            const QVector3D color(
+                                curvedNurbsTextureSceneLinear[pixel],
+                                curvedNurbsTextureSceneLinear[pixel + 1],
+                                curvedNurbsTextureSceneLinear[pixel + 2]);
+                            if ((color - textureBackground).lengthSquared() >
+                                1.0e-5f) {
+                                ++curvedNurbsForegroundPixels;
+                                curvedNurbsMinimumColor.setX(std::min(
+                                    curvedNurbsMinimumColor.x(), color.x()));
+                                curvedNurbsMinimumColor.setY(std::min(
+                                    curvedNurbsMinimumColor.y(), color.y()));
+                                curvedNurbsMinimumColor.setZ(std::min(
+                                    curvedNurbsMinimumColor.z(), color.z()));
+                                curvedNurbsMaximumColor.setX(std::max(
+                                    curvedNurbsMaximumColor.x(), color.x()));
+                                curvedNurbsMaximumColor.setY(std::max(
+                                    curvedNurbsMaximumColor.y(), color.y()));
+                                curvedNurbsMaximumColor.setZ(std::max(
+                                    curvedNurbsMaximumColor.z(), color.z()));
+                            }
+                        }
+                        const QString curvedNurbsLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved.pfm"));
+                        const QString curvedNurbsDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved.png"));
+                        QFile curvedNurbsLinearFile(curvedNurbsLinearPath);
+                        const bool curvedNurbsLinearSaved =
+                            curvedNurbsTextureRendered &&
+                            curvedNurbsTextureSceneLinear.size() ==
+                                textureExpectedValues &&
+                            curvedNurbsLinearFile.open(QIODevice::WriteOnly) &&
+                            curvedNurbsLinearFile.write(texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            curvedNurbsLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    curvedNurbsTextureSceneLinear.constData()),
+                                curvedNurbsTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                curvedNurbsTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool curvedNurbsDisplaySaved =
+                            curvedNurbsTextureRendered &&
+                            curvedNurbsTextureDisplay.size() == QSize(640, 480) &&
+                            curvedNurbsTextureDisplay.save(
+                                curvedNurbsDisplayPath);
+                        passed &= check(
+                            curvedNurbsTextureRendered &&
+                                curvedNurbsForegroundPixels > 5000 &&
+                                curvedNurbsMaximumZ - curvedNurbsMinimumZ >
+                                    0.05 &&
+                                (curvedNurbsMaximumColor -
+                                 curvedNurbsMinimumColor).length() > 0.25f &&
+                                curvedNurbsLinearSaved &&
+                                curvedNurbsDisplaySaved,
+                            "GPU curved NURBS Image Texture capture must render a nonplanar, nonblank, varying-color patch and exact display-proxy fixture");
+                        lightingCapturesSucceeded &=
+                            curvedNurbsTextureRendered &&
+                            curvedNurbsLinearSaved &&
+                            curvedNurbsDisplaySaved;
+
                         CurveHitTester qpainterTextureHitTester;
                         ViewportRenderer qpainterTextureRenderer(
                             gpuTransform, qpainterTextureHitTester);

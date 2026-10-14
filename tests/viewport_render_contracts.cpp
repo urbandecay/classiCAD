@@ -928,6 +928,47 @@ int main(int argc, char *argv[])
     }
     passed &= check(shadowPixels > 0,
         "QPainter Workbench shadow setting must darken receiver pixels for opaque triangulated casters");
+    ViewportRenderObject solidShadowCaster = shadowObjects[1];
+    solidShadowCaster.shape.geometryType = GeometryType::NurbsSolid;
+    Shape solidShadowShape;
+    solidShadowShape.geometryType = GeometryType::NurbsSolid;
+    const bool solidShadowShapeValid = makeNurbsExtrusionSolid(
+        solidShadowCaster.shape.nurbsSurface, {0.0, 0.0, 2.0},
+        &solidShadowShape.nurbsSolid);
+    solidShadowCaster.shape = solidShadowShape;
+    solidShadowCaster.preparedDepthGeometry =
+        QSharedPointer<ViewportDepthGeometry>::create(
+            buildViewportDepthGeometry(solidShadowShape));
+    const QVector<ViewportRenderObject> solidShadowObjects{
+        shadowObjects[0], solidShadowCaster};
+    const auto renderSolidCpuShadow = [&](bool enabled) {
+        QImage image(orthographicDofSize,
+                     QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        ViewportShadingSettings settings = shadowSettings;
+        settings.shadows = enabled;
+        applyRasterWorkbenchEffects(
+            &image, solidShadowObjects, orthographicDofTransform,
+            orthographicDofSize, 1.0, settings);
+        return image;
+    };
+    const QImage solidShadowImage = renderSolidCpuShadow(true);
+    const QImage solidLitImage = renderSolidCpuShadow(false);
+    int solidShadowPixelsOutsideCaster = 0;
+    for (int y = 4; y < solidShadowImage.height(); ++y) {
+        for (int x = 4; x < solidShadowImage.width(); ++x) {
+            if (x >= 40 && x < 88 && y >= 40 && y < 88) continue;
+            solidShadowPixelsOutsideCaster +=
+                solidShadowImage.pixelColor(x, y) !=
+                solidLitImage.pixelColor(x, y);
+        }
+    }
+    passed &= check(
+        solidShadowShapeValid &&
+            validateNurbsSolid(solidShadowCaster.shape.nurbsSolid) &&
+            solidShadowCaster.preparedDepthGeometry->surfaceVertices.size() >=
+                36 && solidShadowPixelsOutsideCaster > 0,
+        "QPainter software shadow pass must rasterize derived closed NurbsSolid faces and cast onto an opaque receiver");
     const QVector3D shadowFactorLight(0.83516467f, 0.0f, -0.55f);
     const float lowFocusShadowFactor = rasterWorkbenchShadowFactor(
         QVector3D(0.0f, 0.0f, 1.0f), shadowFactorLight,

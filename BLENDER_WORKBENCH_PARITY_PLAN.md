@@ -4422,6 +4422,28 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   one unselected default cube only; other casters, receivers, directions,
   focus/shift settings, and QPainter shadow configurations remain open.
 
+### QPainter closed-solid shadow caster contract (2026-10-14)
+
+- A source audit confirmed the software effect rasterizer already obtains
+  derived display triangles for `NurbsSolid` through
+  `buildViewportDepthGeometry` and appends those triangles to its binary
+  shadow-depth map. The missing coverage was a closed extrusion solid in the
+  QPainter shadow contracts; existing caster contracts used open surface
+  quads or polygon meshes.
+- Added a production-path contract that creates and validates a closed NURBS
+  extrusion solid, prepares its derived face geometry, and verifies that it
+  casts a software shadow onto an opaque receiver outside the caster's screen
+  footprint. Existing transparent-material and texture-alpha caster contracts
+  continue to verify Blender Workbench's binary geometric shadow-volume
+  semantics.
+- Blender 5.2.2's shadow-volume pass submits mesh geometry and resolves
+  nonzero stencil coverage in pinned
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1759-L1790).
+  The QPainter light-depth map remains a hard-shadow approximation; this
+  contract establishes supported solid coverage, not matched shadow quality.
+- Validation: `cmake --build build -j4` passed with the dependency audit and
+  the offscreen `viewport_render_contracts` test passed.
+
 ### Matched QPainter Linear UDIM texture comparison (2026-10-14)
 
 - Compared the existing QPainter two-tile polygon-mesh capture with a fresh

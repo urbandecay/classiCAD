@@ -382,6 +382,23 @@ int main(int argc, char *argv[])
                      0.75f) < 1.0e-6f &&
             rasterWorkbenchDofGatherWeight(0.0f, 4.0f, 0.0f) == 0.0f,
         "QPainter Workbench DOF gather weights must match Blender's radial CoC smoothstep");
+    passed &= check(
+        rasterWorkbenchDofMipLod(21.0f, 21.0f) == 0.0f &&
+            rasterWorkbenchDofMipLod(22.0f, 22.0f) == 0.0f &&
+            std::abs(rasterWorkbenchDofMipLod(29.0f, 29.0f) - 1.0f) < 1.0e-6f &&
+            rasterWorkbenchDofMipLod(37.0f, 37.0f) == 2.0f &&
+            rasterWorkbenchDofMipLod(100.0f, 100.0f) == 2.0f &&
+            std::abs(rasterWorkbenchDofMipLod(50.0f, 10.0f) -
+                     std::log2(2.25f)) < 1.0e-6f &&
+            rasterWorkbenchDofMipLod(-50.0f, -10.0f) ==
+                rasterWorkbenchDofMipLod(50.0f, 10.0f),
+        "QPainter Workbench DOF mip LOD must follow Blender's CoC formula and stay within its three-level pyramid");
+    passed &= check(
+        rasterWorkbenchDofTapCountForBudget(0) == 49 &&
+            rasterWorkbenchDofTapCountForBudget(100) == 49 &&
+            rasterWorkbenchDofTapCountForBudget(1'000'000) == 24 &&
+            rasterWorkbenchDofTapCountForBudget(24'000'001) == 1,
+        "QPainter Workbench DOF gather must preserve 49 taps for sparse regions and cap dense-region work at 24 million taps");
 
     ViewportTransform orthographicDofTransform;
     orthographicDofTransform.setViewPreset(ViewportViewPreset::Top);
@@ -1398,7 +1415,7 @@ int main(int argc, char *argv[])
         "orthographic scene-camera DOF must preserve an in-focus impulse, leave a 0.8-pixel-CoC image sharp, gather a defocused surface, and remain invariant when the view target and scene translate together");
     ViewportTransform largeCocDofTransform = orthographicDofTransform;
     ViewportCameraPreferences largeCocDofOptics = orthographicDofOptics;
-    largeCocDofOptics.opticalSensorSizeMillimeters = 10.0;
+    largeCocDofOptics.opticalSensorSizeMillimeters = 3.0;
     const bool largeCocDofOpticsSet =
         largeCocDofTransform.setCameraPreferences(largeCocDofOptics);
     QImage largeCocImpulseImage(orthographicDofSize,
@@ -1409,9 +1426,29 @@ int main(int argc, char *argv[])
         &largeCocImpulseImage, {orthographicDofObjects[1]},
         largeCocDofTransform, orthographicDofSize, 1.0,
         orthographicDofSettings);
+    QImage largeCocPatchImage(orthographicDofSize,
+                              QImage::Format_ARGB32_Premultiplied);
+    largeCocPatchImage.fill(Qt::black);
+    for (int y = 60; y < 68; ++y) {
+        for (int x = 92; x < 100; ++x)
+            largeCocPatchImage.setPixelColor(x, y, Qt::red);
+    }
+    applyRasterWorkbenchEffects(
+        &largeCocPatchImage, {orthographicDofObjects[1]},
+        largeCocDofTransform, orthographicDofSize, 1.0,
+        orthographicDofSettings);
+    bool largeCocMipGatherSpillsBeyondTwelvePixels = false;
+    for (int y = 48; y <= 80; ++y) {
+        for (int x = 109; x < largeCocPatchImage.width(); ++x) {
+            largeCocMipGatherSpillsBeyondTwelvePixels |=
+                largeCocPatchImage.pixelColor(x, y).red() > 0;
+        }
+    }
     passed &= check(largeCocDofOpticsSet &&
                         largeCocImpulseImage.pixelColor(96, 64).red() <= 5,
-                    "QPainter Workbench DOF median cleanup must suppress an isolated impulse after a large-CoC 49-tap gather");
+                    "QPainter Workbench DOF median cleanup must suppress an isolated impulse with a large CoC");
+    passed &= check(largeCocMipGatherSpillsBeyondTwelvePixels,
+                    "QPainter Workbench DOF mip gather must spill a large CoC beyond the former 12-pixel cap");
 
     const auto makeOutlineScaleObject = [&]() {
         ViewportRenderObject object;

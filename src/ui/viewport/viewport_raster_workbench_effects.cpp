@@ -562,6 +562,27 @@ float rasterWorkbenchDofGatherWeight(float sampleCoc, float maximumCoc,
     return sampleMagnitude * smooth;
 }
 
+float rasterWorkbenchDofMipLod(float sampleCoc, float centerCoc) noexcept
+{
+    const float coc = std::abs(sampleCoc);
+    const float maximumRadius = std::abs(centerCoc);
+    const float mipMetric = std::clamp(
+        (coc + std::min(coc, maximumRadius)) * 0.5f - 21.0f,
+        0.0f, 16.0f) * 0.25f;
+    if (mipMetric <= 0.0f) return 0.0f;
+    // The source texture has levels 0, 1, and 2. OpenGL clamps the shader's
+    // larger theoretical LODs to the available highest level.
+    return std::clamp(std::log2(mipMetric), 0.0f, 2.0f);
+}
+
+int rasterWorkbenchDofTapCountForBudget(quint64 candidatePixels) noexcept
+{
+    constexpr quint64 maximumGatherTaps = 24'000'000;
+    if (candidatePixels == 0) return 49;
+    return static_cast<int>(std::clamp<quint64>(
+        maximumGatherTaps / candidatePixels, 1, 49));
+}
+
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept
 {
     const float t = std::clamp((std::abs(cocPixels) - 1.0f) / 2.0f,
@@ -3536,9 +3557,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
             }
             const int dilationX = std::min(
-                qCeil(12.0 * colorDpr), outputWidth);
+                qCeil(100.0 * colorDpr), outputWidth);
             const int dilationY = std::min(
-                qCeil(12.0 * colorDpr), outputHeight);
+                qCeil(100.0 * colorDpr), outputHeight);
             for (int y = 0; y < outputHeight; ++y) {
                 int covered = 0;
                 for (int x = 0; x <= dilationX && x < outputWidth; ++x) {
@@ -3577,16 +3598,28 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         ++covered;
                 }
             }
+            quint64 dofCandidatePixels = 0;
+            for (quint8 candidate : dofCoverage)
+                dofCandidatePixels += candidate != 0;
+            const int dofTapCount = rasterWorkbenchDofTapCountForBudget(
+                dofCandidatePixels);
 
             struct FilteredDofPixel {
                 LinearGatherPixel color;
                 float nearCoc = 0.0f;
                 float farCoc = 0.0f;
             };
-            const int dofWidth = std::max(outputWidth / 2, 1);
-            const int dofHeight = std::max(outputHeight / 2, 1);
-            std::vector<FilteredDofPixel> dofPrefilter(
-                static_cast<std::size_t>(dofWidth) * dofHeight);
+            struct DofMipLevel {
+                int width = 1;
+                int height = 1;
+                std::vector<FilteredDofPixel> pixels;
+            };
+            std::array<DofMipLevel, 3> dofMips;
+            dofMips[0].width = std::max(outputWidth / 2, 1);
+            dofMips[0].height = std::max(outputHeight / 2, 1);
+            dofMips[0].pixels.resize(
+                static_cast<std::size_t>(dofMips[0].width) *
+                dofMips[0].height);
             const auto sourceColorAt = [&](int x, int y) {
                 if (sceneLinearDofActive) {
                     const RasterWorkbenchLinearPixel &pixel =
@@ -3622,10 +3655,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                      (fStop * std::abs(focus - focal))) *
                     ((focus - z) / std::max<qreal>(z, 1.0e-6)) *
                     outputWidth / sensorWidth;
-                return static_cast<float>(std::clamp(coc, -12.0, 12.0));
+                return static_cast<float>(std::clamp(coc, -100.0, 100.0));
             };
-            for (int y = 0; y < dofHeight; ++y) {
-                for (int x = 0; x < dofWidth; ++x) {
+            for (int y = 0; y < dofMips[0].height; ++y) {
+                for (int x = 0; x < dofMips[0].width; ++x) {
                     const int sourceX = std::min(x * 2, outputWidth - 1);
                     const int sourceY = std::min(y * 2, outputHeight - 1);
                     const std::array<QPoint, 4> offsets{{
@@ -3666,10 +3699,121 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         result.blue /= weightSum;
                         result.alpha /= weightSum;
                     }
-                    dofPrefilter[static_cast<std::size_t>(y) * dofWidth + x] = {
-                        result, filtered.nearCoc, filtered.farCoc};
+                    dofMips[0].pixels[
+                        static_cast<std::size_t>(y) * dofMips[0].width + x] = {
+                            result, filtered.nearCoc, filtered.farCoc};
                 }
             }
+
+            // Blender builds quarter- and eighth-resolution CoC-aware mip
+            // levels from the preceding level. Their dimensions and total
+            // storage remain bounded by the half-resolution source pyramid.
+            for (std::size_t level = 1; level < dofMips.size(); ++level) {
+                DofMipLevel &destination = dofMips[level];
+                const DofMipLevel &previous = dofMips[level - 1];
+                destination.width = std::max(previous.width / 2, 1);
+                destination.height = std::max(previous.height / 2, 1);
+                destination.pixels.resize(
+                    static_cast<std::size_t>(destination.width) *
+                    destination.height);
+                for (int y = 0; y < destination.height; ++y) {
+                    for (int x = 0; x < destination.width; ++x) {
+                        const int sourceX = x * 2;
+                        const int sourceY = y * 2;
+                        const std::array<const FilteredDofPixel *, 4> inputs{{
+                            &previous.pixels[static_cast<std::size_t>(sourceY) *
+                                                 previous.width + sourceX],
+                            &previous.pixels[static_cast<std::size_t>(sourceY) *
+                                                 previous.width + std::min(sourceX + 1, previous.width - 1)],
+                            &previous.pixels[static_cast<std::size_t>(std::min(sourceY + 1, previous.height - 1)) *
+                                                 previous.width + sourceX],
+                            &previous.pixels[static_cast<std::size_t>(std::min(sourceY + 1, previous.height - 1)) *
+                                                 previous.width + std::min(sourceX + 1, previous.width - 1)]}};
+                        const std::array<float, 4> cocs{{
+                            inputs[0]->nearCoc > inputs[0]->farCoc ? inputs[0]->nearCoc : -inputs[0]->farCoc,
+                            inputs[1]->nearCoc > inputs[1]->farCoc ? inputs[1]->nearCoc : -inputs[1]->farCoc,
+                            inputs[2]->nearCoc > inputs[2]->farCoc ? inputs[2]->nearCoc : -inputs[2]->farCoc,
+                            inputs[3]->nearCoc > inputs[3]->farCoc ? inputs[3]->nearCoc : -inputs[3]->farCoc}};
+                        const RasterWorkbenchDofPrefilter filtered =
+                            rasterWorkbenchDofPrefilter2x2(cocs);
+                        LinearGatherPixel color;
+                        qreal weightSum = 0.0;
+                        for (std::size_t i = 0; i < inputs.size(); ++i) {
+                            const qreal weight = filtered.colorWeights[i];
+                            color.red += inputs[i]->color.red * weight;
+                            color.green += inputs[i]->color.green * weight;
+                            color.blue += inputs[i]->color.blue * weight;
+                            color.alpha += inputs[i]->color.alpha * weight;
+                            weightSum += weight;
+                        }
+                        if (weightSum > 0.0) {
+                            color.red /= weightSum;
+                            color.green /= weightSum;
+                            color.blue /= weightSum;
+                            color.alpha /= weightSum;
+                        } else {
+                            for (const FilteredDofPixel *input : inputs) {
+                                color.red += input->color.red * 0.25f;
+                                color.green += input->color.green * 0.25f;
+                                color.blue += input->color.blue * 0.25f;
+                                color.alpha += input->color.alpha * 0.25f;
+                            }
+                        }
+                        destination.pixels[
+                            static_cast<std::size_t>(y) * destination.width + x] = {
+                                color, filtered.nearCoc, filtered.farCoc};
+                    }
+                }
+            }
+
+            const auto sampleDofMip = [&](qreal sampleX, qreal sampleY,
+                                          float lod) {
+                const int lowerLevel = std::clamp(
+                    static_cast<int>(std::floor(lod)), 0, 2);
+                const int upperLevel = std::min(lowerLevel + 1, 2);
+                const qreal blend = lod - lowerLevel;
+                const auto bilinear = [&](int level) {
+                    const DofMipLevel &mip = dofMips[static_cast<std::size_t>(level)];
+                    const qreal mipX = (sampleX + 0.5) * mip.width / outputWidth - 0.5;
+                    const qreal mipY = (sampleY + 0.5) * mip.height / outputHeight - 0.5;
+                    const int x0 = std::clamp(static_cast<int>(std::floor(mipX)), 0, mip.width - 1);
+                    const int y0 = std::clamp(static_cast<int>(std::floor(mipY)), 0, mip.height - 1);
+                    const int x1 = std::min(x0 + 1, mip.width - 1);
+                    const int y1 = std::min(y0 + 1, mip.height - 1);
+                    const qreal tx = std::clamp(mipX - std::floor(mipX), 0.0, 1.0);
+                    const qreal ty = std::clamp(mipY - std::floor(mipY), 0.0, 1.0);
+                    const auto at = [&](int px, int py) -> const FilteredDofPixel & {
+                        return mip.pixels[static_cast<std::size_t>(py) * mip.width + px];
+                    };
+                    const FilteredDofPixel &p00 = at(x0, y0);
+                    const FilteredDofPixel &p10 = at(x1, y0);
+                    const FilteredDofPixel &p01 = at(x0, y1);
+                    const FilteredDofPixel &p11 = at(x1, y1);
+                    const auto blendValue = [&](float a, float b, float c, float d) {
+                        return static_cast<float>((a * (1.0 - tx) + b * tx) * (1.0 - ty) +
+                                                   (c * (1.0 - tx) + d * tx) * ty);
+                    };
+                    FilteredDofPixel value;
+                    value.color = {
+                        blendValue(p00.color.red, p10.color.red, p01.color.red, p11.color.red),
+                        blendValue(p00.color.green, p10.color.green, p01.color.green, p11.color.green),
+                        blendValue(p00.color.blue, p10.color.blue, p01.color.blue, p11.color.blue),
+                        blendValue(p00.color.alpha, p10.color.alpha, p01.color.alpha, p11.color.alpha)};
+                    value.nearCoc = blendValue(p00.nearCoc, p10.nearCoc, p01.nearCoc, p11.nearCoc);
+                    value.farCoc = blendValue(p00.farCoc, p10.farCoc, p01.farCoc, p11.farCoc);
+                    return value;
+                };
+                const FilteredDofPixel a = bilinear(lowerLevel);
+                if (upperLevel == lowerLevel) return a;
+                const FilteredDofPixel b = bilinear(upperLevel);
+                const auto mix = [blend](float x, float y) {
+                    return static_cast<float>(x * (1.0 - blend) + y * blend);
+                };
+                return FilteredDofPixel{
+                    {mix(a.color.red, b.color.red), mix(a.color.green, b.color.green),
+                     mix(a.color.blue, b.color.blue), mix(a.color.alpha, b.color.alpha)},
+                    mix(a.nearCoc, b.nearCoc), mix(a.farCoc, b.farCoc)};
+            };
 
             for (int y = 0; y < outputHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(gatheredResult.scanLine(y));
@@ -3701,7 +3845,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                          (fStop * std::abs(focus - focal))) *
                         ((z - focus) / std::max<qreal>(z, 1.0e-6)));
                     const qreal radius = std::clamp(
-                        cocMm * outputWidth / sensorWidth, 0.0, 12.0) * colorDpr;
+                        cocMm * outputWidth / sensorWidth, 0.0, 100.0) * colorDpr;
                     const qreal mix = rasterWorkbenchDofResolveBlend(
                         static_cast<float>(radius / colorDpr));
                     if (mix <= 0.0) continue;
@@ -3710,18 +3854,26 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     qreal totalWeight = 0.0;
-                    for (const RasterWorkbenchDofTap &tap : dofKernel) {
+                    for (int tapIndex = 0; tapIndex < dofTapCount; ++tapIndex) {
+                        // Evenly subsample Blender's ordered kernel when a
+                        // dense software resolve would exceed its fixed work
+                        // budget. Sparse regions retain all 49 samples.
+                        const std::size_t kernelIndex = dofTapCount == 1
+                            ? 0
+                            : static_cast<std::size_t>(
+                                  tapIndex * (dofKernel.size() - 1) /
+                                  (dofTapCount - 1));
+                        const RasterWorkbenchDofTap &tap = dofKernel[kernelIndex];
                         const int sx = std::clamp(qRound(
                                                       x + tap.position.x() * radius),
                                                   0, outputWidth - 1);
                         const int sy = std::clamp(qRound(
                                                       y + tap.position.y() * radius),
                                                   0, outputHeight - 1);
-                        const FilteredDofPixel &sample = dofPrefilter[
-                            static_cast<std::size_t>(
-                                std::clamp(sy / 2, 0, dofHeight - 1)) *
-                                dofWidth +
-                            std::clamp(sx / 2, 0, dofWidth - 1)];
+                        const FilteredDofPixel sample = sampleDofMip(
+                            sx, sy, rasterWorkbenchDofMipLod(
+                                sourceCocAt(sx, sy),
+                                static_cast<float>(radius / colorDpr)));
                         const float signedCoc = sample.nearCoc > sample.farCoc
                             ? sample.nearCoc : -sample.farCoc;
                         const float weight = rasterWorkbenchDofGatherWeight(

@@ -74,6 +74,13 @@ RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
 float rasterWorkbenchDofGatherWeight(float sampleCoc, float maximumCoc,
                                      float sampleRadius) noexcept;
 
+// Blender Workbench's adaptive mip level for one DOF gather sample. The
+// returned level is clamped to the three-level half-resolution pyramid.
+float rasterWorkbenchDofMipLod(float sampleCoc, float centerCoc) noexcept;
+
+// Keep the QPainter fallback's 49-tap gather within a fixed total tap budget.
+int rasterWorkbenchDofTapCountForBudget(quint64 candidatePixels) noexcept;
+
 // Blender Workbench's DOF resolve uses smoothstep(1, 3, abs(CoC)) to blend
 // its gathered bokeh image over the sharp source.
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept;

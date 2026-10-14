@@ -7838,13 +7838,22 @@ bool ViewportSurfaceRenderer::draw(
         // Blender's TransparentDepthPass runs after transparent color has
         // been resolved. Reuse the shared scene depth and ID attachments so
         // DOF and Workbench outlines see the nearest transparent surface.
-        // Do not run this on the sorted fallback path: it has no compatible
-        // shared depth target to update.
-        if (weightedOitAvailable && sharedTargets != nullptr) {
+        // This pass is independent of color accumulation: keep it available
+        // on the sorted-color fallback whenever the shared attachments exist.
+        const bool sharedTransparentDepthTargetsReady =
+            sharedTargets != nullptr &&
+            sharedTargets->pixelSize == transparencyPixelSize &&
+            sharedTargets->depthTexture != 0 &&
+            sharedTargets->viewSpaceNormalTexture != 0 &&
+            sharedTargets->objectIdTexture != 0;
+        if (sharedTransparentDepthTargetsReady) {
             bool frontDepthMerged = false;
             bool regularDepthRendered = transparentRangeIndices.isEmpty();
-            if (frontWeightedOitAvailable &&
-                !frontTransparentRangeIndices.isEmpty()) {
+            if (!frontTransparentRangeIndices.isEmpty() &&
+                sharedTargets->frontDepthTexture != 0 &&
+                sharedTargets->frontViewSpaceNormalTexture != 0 &&
+                sharedTargets->frontObjectIdTexture != 0 &&
+                sharedTargets->frontOutlineIdTexture != 0) {
                 ViewportRenderTargets frontTargets = *sharedTargets;
                 frontTargets.depthTexture = sharedTargets->frontDepthTexture;
                 frontTargets.viewSpaceNormalTexture =
@@ -7893,7 +7902,7 @@ bool ViewportSurfaceRenderer::draw(
             }
             transparentDepthCoverageReady = regularDepthRendered &&
                 (!hasFrontTransparentRanges ||
-                 (frontWeightedOitAvailable && frontDepthMerged));
+                 frontDepthMerged);
         }
     }
 

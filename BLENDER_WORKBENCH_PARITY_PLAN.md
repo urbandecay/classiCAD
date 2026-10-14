@@ -240,9 +240,13 @@ and saved-file comparison remain open.
   and offscreen DOF while X-Ray is active, and allows object outlines through
   the private object-ID path. That path avoids relying on an opaque-only
   shared prepass for X-Ray objects. If weighted-OIT target creation fails,
-  color falls back to depth-disabled sorted blending; that fallback does not
-  produce the shared transparent-depth/object-ID coverage. X-Ray color,
-  outline, and fallback behavior still need matched visual comparison.
+  color falls back to depth-disabled sorted blending. The independent
+  transparent-depth/object-ID pass now still runs when its shared depth,
+  normal, and ID attachments are valid, so post effects retain nearest
+  transparent coverage even when color OIT is unavailable. If those shared
+  targets are unavailable too, the sorted fallback still cannot provide that
+  coverage. X-Ray color, outline, and allocation-failure behavior still need
+  matched visual comparison.
 
 ### GPU Workbench orthographic-view depth of field (2026-10-12)
 

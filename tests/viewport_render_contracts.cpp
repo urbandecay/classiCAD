@@ -3604,6 +3604,8 @@ int main(int argc, char *argv[])
                              ViewportLightingMode::Studio, "Paint", true, 0},
                             {"studio_paint_world_90",
                              ViewportLightingMode::Studio, "Paint", true, 90},
+                            {"studio_paint_world_37",
+                             ViewportLightingMode::Studio, "Paint", true, 37},
                             {"matcap_metal_bronze", ViewportLightingMode::MatCap,
                              "metal_bronze", false, 0},
                             {"matcap_check_normal_y",

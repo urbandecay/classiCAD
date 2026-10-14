@@ -313,6 +313,23 @@ int main(int argc, char **argv)
                                      workbenchPackUnitFloatToUnorm8(materialAlpha),
                                      true),
                     "mesh fragments must pack material alpha before multiplying 4x4 edge coverage while retaining color, source ID, camera depth, and Blender orthographic OIT depth");
+    Shape firstSharedEdgeTriangle = mesh;
+    firstSharedEdgeTriangle.polygonMesh.faces = {{0, 1, 2}};
+    Shape secondSharedEdgeTriangle = mesh;
+    secondSharedEdgeTriangle.polygonMesh.faces = {{0, 2, 3}};
+    const QImage firstSharedEdgeImage = render(
+        renderer, firstSharedEdgeTriangle, size, ObjectId::fromValue(meshId),
+        nullptr, std::nullopt, meshMaterials);
+    const QImage secondSharedEdgeImage = render(
+        renderer, secondSharedEdgeTriangle, size,
+        ObjectId::fromValue(meshId), nullptr, std::nullopt, meshMaterials);
+    const float sharedEdgeCoverage =
+        (qAlpha(firstSharedEdgeImage.pixel(64, 64)) +
+         qAlpha(secondSharedEdgeImage.pixel(64, 64))) /
+        (255.0f * workbenchPackUnitFloatToUnorm8(materialAlpha));
+    passed &= check(
+        std::abs(sharedEdgeCoverage - 1.0f) < 0.02f,
+        "transparent QPainter mesh triangles must assign each shared diagonal subpixel to exactly one triangle");
     const float alphaHalfByteBoundary = 115.5f / 255.0f;
     const std::array<float, 3> alphaBoundarySamples{
         std::nextafter(alphaHalfByteBoundary, 0.0f),

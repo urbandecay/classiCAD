@@ -69,6 +69,33 @@ qreal workbenchTrianglePixelCoverage(
                                    points[0].y() - points[2].y());
     const qreal edge2 = std::hypot(points[1].x() - points[0].x(),
                                    points[1].y() - points[0].y());
+    const qreal orientation = area > 0.0 ? 1.0 : -1.0;
+    const auto ownsTopLeftEdge = [orientation](QPointF a, QPointF b) {
+        if (orientation < 0.0) std::swap(a, b);
+        const qreal dx = b.x() - a.x();
+        const qreal dy = b.y() - a.y();
+        return dy < 0.0 || (dy == 0.0 && dx > 0.0);
+    };
+    const std::array<bool, 3> ownsEdge{
+        ownsTopLeftEdge(points[1], points[2]),
+        ownsTopLeftEdge(points[2], points[0]),
+        ownsTopLeftEdge(points[0], points[1])};
+    const qreal coordinateScale = std::max(
+        {1.0, std::abs(points[0].x()), std::abs(points[0].y()),
+         std::abs(points[1].x()), std::abs(points[1].y()),
+         std::abs(points[2].x()), std::abs(points[2].y())});
+    const qreal edgeTolerance = coordinateScale * 1.0e-12;
+    const auto sampleInside = [&](qreal w0, qreal w1, qreal w2) {
+        const std::array<qreal, 3> weights{w0, w1, w2};
+        const std::array<qreal, 3> edgeLengths{edge0, edge1, edge2};
+        for (size_t edge = 0; edge < weights.size(); ++edge) {
+            const qreal distance = std::abs(weights[edge]) *
+                                   std::abs(area) / edgeLengths[edge];
+            if (weights[edge] < 0.0 && distance > edgeTolerance) return false;
+            if (distance <= edgeTolerance && !ownsEdge[edge]) return false;
+        }
+        return true;
+    };
     const qreal nearestEdge = std::min({std::abs(*b0) * std::abs(area) / edge0,
                                         std::abs(*b1) * std::abs(area) / edge1,
                                         std::abs(*b2) * std::abs(area) / edge2});
@@ -83,7 +110,7 @@ qreal workbenchTrianglePixelCoverage(
             qreal w0, w1, w2;
             weightsAt(px + (sx - 1.5) * stepX / 4.0,
                       py + (sy - 1.5) * stepY / 4.0, &w0, &w1, &w2);
-            if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
+            if (!sampleInside(w0, w1, w2)) continue;
             sum0 += w0;
             sum1 += w1;
             sum2 += w2;

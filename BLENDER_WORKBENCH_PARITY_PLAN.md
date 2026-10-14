@@ -2716,11 +2716,16 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc),
   while opaque mesh geometry is depth-tested in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc).
+  Half-open top-left ownership now assigns exact shared-edge subpixel samples
+  to one mesh triangle. Its contract checks that isolated transparent
+  triangle renders account for exactly one total contribution on a shared
+  diagonal. This does not combine neighboring triangles' fractional pixel
+  coverage before source-over composition; that remains an approximation.
   A production-path CPU contract compares the exterior edge profile with a
   matching NURBS quad at DPR 1, 1.25, 1.5, and 2. The C++ build and focused
-  `workbench_raster_fragment_contracts` test pass. Mesh shared-edge and exact
-  vertex fill rules are outside that edge-profile assertion. No matched Blender
-  image comparison was run; that remains part of the acceptance checklist.
+  `workbench_raster_fragment_contracts` test pass. Exact vertex fill rules are
+  outside the current assertions. No matched Blender image comparison was
+  run; that remains part of the acceptance checklist.
 
 ## QPainter NURBS triangle edge coverage (2026-10-13)
 
@@ -3186,3 +3191,27 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`
   passed. The existing `qfloat16` memcpy compiler warning remains; no matched
   Blender frame comparison was run.
+
+### QPainter shared-edge subpixel ownership (2026-10-14)
+
+- The shared triangle coverage helper now uses a winding-normalized half-open
+  top-left edge rule for its 4x4 subpixel samples. Exact samples on an internal
+  edge are assigned to one triangle, preventing duplicate per-triangle color
+  and fragment coverage at that boundary. The helper serves mesh and NURBS
+  raster paths.
+- Blender 5.2.2 submits opaque and transparent mesh geometry through its GPU
+  mesh passes in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L109-L201)
+  and applies anti-aliasing afterward in
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc).
+  The half-open rule adapts shared-edge GPU raster ownership to classiCAD's
+  CPU fallback; it is not a Workbench-specific shader rule.
+- A production-path contract renders each half of a translucent quad
+  separately and verifies their shared-diagonal sample coverage sums to one.
+  Validation: `cmake --build build -j4` passed with the dependency audit;
+  `QT_QPA_PLATFORM=offscreen ./build/classicad_workbench_raster_fragment_contracts_test`
+  and
+  `QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`
+  passed. The fallback still composites fractional coverage from adjacent
+  triangles separately, which can differ from aggregating subpixel coverage
+  before blending. No matched Blender frame comparison was run.

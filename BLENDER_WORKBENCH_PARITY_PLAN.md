@@ -1632,11 +1632,36 @@ classiCAD foreground pixels. Per-channel full-frame scene-linear MAE is below
 `0.000010`; the shared foreground eroded by two pixels has channel MAE
 `0.0000492` and maximum `0.00342`. This verifies the enabled Blender
 `alpha_cutoff` behavior for a regular planar NURBS patch and its filtered
-boundary; PREMUL, IGNORE, CHANNEL_PACKED, UDIM alpha, trimmed surfaces, and
-QPainter remain open. Reproduce with the same capture environment and
+boundary. Reproduce with the same capture environment and
 `--texture-alpha-mode STRAIGHT`; the files are
 `color_texture_nurbs_alpha.png/.pfm` and
 `workbench-texture-alpha.png`.
+
+**Full-frame Image Texture PREMUL, CHANNEL_PACKED, and no-cutoff alpha on a
+NURBS patch (2026-10-14):** The same Blender 5.2.2 and classiCAD planar patch
+fixture checked the remaining regular-image alpha interpretations. Blender's
+image enum is `NONE` for the no-cutoff behavior; classiCAD's material adapter
+uses `IGNORE` for that equivalent mode. A 2×2 image with zero-alpha colored
+texels rendered as opaque coverage in both `CHANNEL_PACKED` and `NONE` modes;
+the two Blender renders match each other and the classiCAD `CHANNEL_PACKED`
+and `IGNORE` captures. Each mask has 31,794 Blender and 31,792 classiCAD
+foreground pixels (2 XOR pixels, IoU `0.999937`); the full-frame channel MAE
+is `0.0000073`, and the shared foreground eroded by two pixels has channel
+MAE `0.0000499`, maximum `0.00684`.
+
+A half-alpha PREMUL texel was compared with its equivalent straight-alpha
+color after sRGB-space unpremultiplication. The Blender/classiCAD mask has the
+same 2-pixel edge difference and IoU `0.999937`. On the shared foreground
+eroded by two pixels, channel MAE is `0.00126` and maximum `0.00379`; classiCAD
+also compares its PREMUL capture with a straight-alpha reference internally
+(channel MAE `0.0000548`, maximum `0.00123`). These results cover regular
+planar NURBS images for all four alpha interpretations. UDIM alpha, trimmed
+surfaces, and QPainter full-frame comparisons remain open. The test helper
+uses Blender's actual `--texture-alpha-mode NONE` enum while the classiCAD
+contract tests `IGNORE`; Blender's pinned
+[`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L536-L553)
+sets PREMUL handling and bypasses the 0.1 alpha cutoff only for `IGNORE` and
+`CHANNEL_PACKED`.
 
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
@@ -2893,7 +2918,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. Other presets, Studio
   rotations, camera orientations, and QPainter output remain open.
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and Straight-alpha cutoff. Point/face domains, other texture filters/alpha modes/UDIM, trimmed/nonplanar surface cases, and QPainter parity remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Point/face domains, UDIM alpha, trimmed/nonplanar surface cases, and QPainter parity remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling, both idle and during navigation.

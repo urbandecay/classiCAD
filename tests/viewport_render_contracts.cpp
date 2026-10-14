@@ -6885,6 +6885,157 @@ int main(int argc, char *argv[])
                             nurbsTextureAlphaLinearSaved &&
                             nurbsTextureAlphaDisplaySaved;
 
+                        const auto captureNurbsAlphaVariant =
+                            [&](const QImage &image, const QString &mode,
+                                const QString &stem,
+                                QVector<float> *linearOutput,
+                                bool expectCutout) {
+                                const QString imagePath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral("-source.png"));
+                                if (!image.save(imagePath)) return false;
+                                nurbsTextureObject.workbenchMaterial
+                                    .textureImagePath = imagePath;
+                                nurbsTextureObject.workbenchMaterial
+                                    .textureImageAlphaMode = mode;
+                                QImage display;
+                                QVector<float> linear;
+                                const bool rendered = renderCoordinatedScene(
+                                    textureColorShading,
+                                    QByteArrayLiteral(
+                                        "color-source-nurbs-alpha-") +
+                                        stem.toUtf8(),
+                                    &display, &nurbsTextureObject, nullptr,
+                                    nullptr, QString{}, &linear,
+                                    &textureBackground);
+                                int foregroundPixels = 0;
+                                for (qsizetype pixel = 0;
+                                     pixel + 2 < linear.size(); pixel += 3) {
+                                    const QVector3D color(
+                                        linear[pixel], linear[pixel + 1],
+                                        linear[pixel + 2]);
+                                    if ((color - textureBackground)
+                                            .lengthSquared() > 1.0e-5f) {
+                                        ++foregroundPixels;
+                                    }
+                                }
+                                const bool coverageValid = rendered &&
+                                    foregroundPixels > 5000 &&
+                                    (expectCutout
+                                         ? foregroundPixels <
+                                               nurbsTextureForegroundPixels
+                                         : std::abs(foregroundPixels -
+                                               nurbsTextureForegroundPixels) <
+                                               100);
+                                if (!coverageValid) return false;
+                                const QString linearPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".pfm"));
+                                const QString displayPath = QDir(
+                                    lightingCaptureDirectory).filePath(
+                                        stem + QStringLiteral(".png"));
+                                QFile linearFile(linearPath);
+                                const bool linearSaved =
+                                    linear.size() == textureExpectedValues &&
+                                    linearFile.open(QIODevice::WriteOnly) &&
+                                    linearFile.write(texturePfmHeader) ==
+                                        texturePfmHeader.size() &&
+                                    linearFile.write(
+                                        reinterpret_cast<const char *>(
+                                            linear.constData()),
+                                        linear.size() *
+                                            qsizetype(sizeof(float))) ==
+                                        linear.size() *
+                                            qsizetype(sizeof(float));
+                                if (linearOutput != nullptr) {
+                                    *linearOutput = std::move(linear);
+                                }
+                                return linearSaved &&
+                                    display.size() == QSize(640, 480) &&
+                                    display.save(displayPath);
+                            };
+                        QVector<float> packedAlphaSceneLinear;
+                        QVector<float> ignoredAlphaSceneLinear;
+                        const bool packedAlphaCaptured =
+                            captureNurbsAlphaVariant(
+                                alphaCutoutTexture,
+                                QStringLiteral("CHANNEL_PACKED"),
+                                QStringLiteral("color_texture_nurbs_channel_packed"),
+                                &packedAlphaSceneLinear, false);
+                        const bool ignoredAlphaCaptured =
+                            captureNurbsAlphaVariant(
+                                alphaCutoutTexture,
+                                QStringLiteral("IGNORE"),
+                                QStringLiteral("color_texture_nurbs_ignore"),
+                                &ignoredAlphaSceneLinear, false);
+                        bool ignoredAndPackedMatch =
+                            packedAlphaSceneLinear.size() ==
+                            ignoredAlphaSceneLinear.size();
+                        for (qsizetype index = 0;
+                             ignoredAndPackedMatch &&
+                             index < packedAlphaSceneLinear.size(); ++index) {
+                            ignoredAndPackedMatch &=
+                                std::abs(packedAlphaSceneLinear[index] -
+                                         ignoredAlphaSceneLinear[index]) <
+                                1.0e-6f;
+                        }
+                        QImage premultipliedTexture(
+                            1, 1, QImage::Format_RGBA8888);
+                        premultipliedTexture.setPixelColor(
+                            0, 0, QColor(100, 40, 20, 128));
+                        QVector<float> premultipliedAlphaSceneLinear;
+                        const bool premultipliedAlphaCaptured =
+                            captureNurbsAlphaVariant(
+                                premultipliedTexture,
+                                QStringLiteral("PREMUL"),
+                                QStringLiteral("color_texture_nurbs_premul"),
+                                &premultipliedAlphaSceneLinear, false);
+                        QImage straightEquivalentTexture(
+                            1, 1, QImage::Format_RGBA8888);
+                        straightEquivalentTexture.setPixelColor(
+                            0, 0, QColor(138, 58, 31, 128));
+                        QVector<float> straightEquivalentSceneLinear;
+                        const bool straightEquivalentCaptured =
+                            captureNurbsAlphaVariant(
+                                straightEquivalentTexture,
+                                QStringLiteral("STRAIGHT"),
+                                QStringLiteral(
+                                    "color_texture_nurbs_premul_straight_equivalent"),
+                                &straightEquivalentSceneLinear, false);
+                        bool premultipliedRgbMatches =
+                            premultipliedAlphaSceneLinear.size() ==
+                            straightEquivalentSceneLinear.size();
+                        double premultipliedRgbErrorSum = 0.0;
+                        float premultipliedRgbMaximumError = 0.0f;
+                        for (qsizetype index = 0;
+                             premultipliedRgbMatches &&
+                             index < premultipliedAlphaSceneLinear.size();
+                             ++index) {
+                            const float error = std::abs(
+                                premultipliedAlphaSceneLinear[index] -
+                                straightEquivalentSceneLinear[index]);
+                            premultipliedRgbErrorSum += error;
+                            premultipliedRgbMaximumError = std::max(
+                                premultipliedRgbMaximumError, error);
+                        }
+                        premultipliedRgbMatches &=
+                            premultipliedRgbErrorSum /
+                                    std::max<qsizetype>(
+                                        1, premultipliedAlphaSceneLinear.size()) <
+                                1.0e-4 &&
+                            premultipliedRgbMaximumError < 2.0e-3f;
+                        passed &= check(
+                            packedAlphaCaptured && ignoredAlphaCaptured &&
+                                premultipliedAlphaCaptured &&
+                                straightEquivalentCaptured &&
+                                ignoredAndPackedMatch &&
+                                premultipliedRgbMatches,
+                            "GPU NURBS Image Texture must preserve CHANNEL_PACKED/IGNORE RGB and unpremultiply PREMUL RGB");
+                        lightingCapturesSucceeded &= packedAlphaCaptured &&
+                            ignoredAlphaCaptured && premultipliedAlphaCaptured &&
+                            straightEquivalentCaptured && ignoredAndPackedMatch &&
+                            premultipliedRgbMatches;
+
                         textureColorShading.lightingMode =
                             ViewportLightingMode::Studio;
                         QImage studioTextureDisplay;

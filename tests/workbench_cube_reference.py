@@ -115,7 +115,7 @@ def arguments():
     )
     parser.add_argument(
         "--texture-alpha-mode",
-        choices=("STRAIGHT", "PREMUL", "CHANNEL_PACKED", "IGNORE"),
+        choices=("STRAIGHT", "PREMUL", "CHANNEL_PACKED", "NONE"),
         help="set the loaded image alpha interpretation for Workbench cutout tests",
     )
     parser.add_argument(

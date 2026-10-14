@@ -7567,7 +7567,10 @@ int main(int argc, char *argv[])
                             textureDisplay.size() == QSize(640, 480) &&
                             textureDisplay.save(textureDisplayPath);
                         lightingCapturesSucceeded &= textureAssetSaved &&
-                            textureLinearSaved && textureDisplaySaved;
+                            textureLinearSaved && textureDisplaySaved &&
+                            captureQPainterColorSource(
+                                QStringLiteral("color_texture"),
+                                textureSourceObject, textureColorShading);
 
                         ViewportRenderObject patternedTextureObject =
                             textureSourceObject;

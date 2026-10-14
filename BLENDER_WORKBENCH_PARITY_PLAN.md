@@ -1806,6 +1806,21 @@ The classiCAD outputs are `color_attribute_qpainter.png/.pfm` and
 `color_attribute_point_qpainter.png/.pfm` under
 `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`.
 
+**AA-Off QPainter Texture-color cube comparison (2026-10-14):** Added a
+matched Workbench Texture capture using the existing 1×1 sRGB image
+`(192, 128, 64)`, Closest filtering, and centered UVs across the cube's faces.
+Common-foreground display RGB matches exactly; common-foreground scene-linear
+channel max error is `0.0002286`, `0.0000402`, and below `0.0000001` for red,
+green, and blue. The mask has IoU `0.997991` with 224 XOR pixels, matching the
+AA-Off silhouette gap. This validates one constant-UV cube texture for the
+QPainter fallback, not patterned UVs or other geometry. Blender's texture
+material selection is pinned in
+[`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2047-L2055)
+and its image sampling in
+[`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60).
+The classiCAD output is `color_texture_qpainter.png/.pfm` under
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`.
+
 Blender 5.2.2 does not expose a `FLOAT_COLOR` attribute on the `FACE` domain
 as a color attribute: creating it leaves `Mesh.color_attributes.find(name)`
 at `-1`, and active/render color selection remains unset. The Workbench
@@ -3398,7 +3413,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   reaches `105/255`. Exact edge parity remains open. Other presets, AA modes,
   Studio rotations, camera orientations, and broader full-frame QPainter parity
   remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).

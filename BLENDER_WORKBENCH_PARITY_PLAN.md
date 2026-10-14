@@ -3247,7 +3247,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, and a two-tile mesh UDIM Closest- and Linear-filter image comparison. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
-- No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter supersampling matrix covers all seven preference values using silhouette coverage; full QPainter color/effect comparisons and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
+- No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
 - Accumulation reset after camera movement, geometry edits, selection changes, setting changes, resize, and display-scale changes.
 - Overlay Smooth Wires and Edit Mode Smooth Wires independently, including confirming the grid remains antialiased when overlay wire smoothing is off.
 - Save/reopen behavior for all persistent settings and any new material or color data.
@@ -3264,17 +3264,31 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   work cap means 2× and larger captures follow the same direct-draw fallback
   used by the widget when that cap is exceeded. Studio Default material
   shading is captured with outline, shadows, DOF, and cavity disabled.
-- Compared non-background silhouette masks against Blender 5.2.2 at matching
-  640×480 framing, using each mode's own Blender reference and a 5/255
-  per-channel foreground threshold. Mask IoU / XOR pixels were: AA Off
-  `.994440 / 622`; QPainter Single Pass 2× vs Blender FXAA
-  `.997324 / 299`; 5 samples `.993457 / 734`; 8 samples `.994786 / 585`;
-  11 samples `.995221 / 536`; 16 samples `.992858 / 801`; and 32 samples
-  `.992405 / 852`. The captures confirm bounded edge smoothing, but the
-  supersampling results are not monotonic and do not reproduce Blender's
-  temporal TAA/SMAA resolve. RGB was not used as the parity metric because
-  this capture isolates coverage; QPainter full-frame material/color/effect
-  comparison remains open.
+- Compared each QPainter output to its own Blender 5.2.2 reference at matching
+  640×480 framing. Blender's `--aa FXAA` fixture argument sets the stored enum
+  named FXAA, which Workbench consumes as one unjittered TAA sample, TAA color
+  filtering, and SMAA resolve; it does not run an FXAA shader. At a 5/255
+  foreground threshold, mask IoU / XOR pixels are: AA Off `.997991 / 224`,
+  Single Pass 2× `.996456 / 396`, 5 samples `.992654 / 824`, 8 samples
+  `.997266 / 306`, 11 samples `.996669 / 373`, 16 samples `.993762 / 699`, and
+  32 samples `.993557 / 722`. The fresh AA-Off mask includes the pixel-center
+  coverage change recorded below. QPainter supersampling remains approximate
+  and non-monotonic; it does not reproduce Blender's temporal TAA/SMAA resolve.
+- Full-frame display MAE / p95 per channel is: Off `.3699 / 1`, Single Pass
+  `.5255 / 1`, 5 samples `.6096 / 1`, 8 samples `.6079 / 1`, 11 samples
+  `.5270 / 1`, 16 samples `.4053 / 1`, and 32 samples `.4158 / 1` (values
+  expressed per 255). The 4-pixel silhouette-band MAE ranges from
+  `.8794/255` at Off to `8.2065/255` at 5 samples. Interior p95 is `2/255`
+  for each mode. These captures verify a useful color baseline for one
+  material/cube, not full color-source or effect parity.
+- Reproduce QPainter captures with
+  `QT_QPA_PLATFORM=offscreen CLASSICAD_VIEWPORT_QPAINTER_AA_CAPTURE_DIR=/tmp/classicad-qpainter-fullframe ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`.
+  Render each Blender reference through `tests/workbench_cube_reference.py`
+  with `--aa OFF`, `--aa FXAA`, and each supported sample count, keeping
+  `--lighting STUDIO --color-source MATERIAL --background-source WORLD
+  --world-color 0.0219421387 0.0219421387 0.0219421387
+  --match-classicad-ortho --zero-dither`; compare with
+  `tests/workbench_image_compare.py`.
 - Blender reference: [Workbench state and AA selection](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc), [Workbench AA resolve](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc), and [Workbench TAA shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_fx_taa.bsl.hh). This is a measured fallback approximation, not a port of those GPU resolve passes.
 
 ### QPainter full-frame cube baseline (2026-10-14)

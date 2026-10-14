@@ -1,7 +1,7 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
 Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho] [--no-specular]
-AA accepts OFF, FXAA, or 8 (default: FXAA).
+AA accepts OFF, FXAA (Workbench's one-sample TAA+SMAA enum), or 5/8/11/16/32.
 Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
 
@@ -69,6 +69,10 @@ def arguments():
         "--aa",
         choices=("OFF", "FXAA", "5", "8", "11", "16", "32"),
         default="FXAA",
+        help=(
+            "Workbench render_aa enum; FXAA selects the one-sample TAA filter "
+            "and SMAA resolve in Workbench (default: FXAA)"
+        ),
     )
     parser.add_argument(
         "--zero-dither",

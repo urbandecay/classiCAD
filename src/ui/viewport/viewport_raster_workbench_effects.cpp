@@ -672,9 +672,13 @@ bool compositeRasterWorkbenchSurfaces(
         const std::vector<VolumeSlicePixel> &slices, float opaqueDepth,
         float transparentDepth, bool inFrontCovered) {
         if (inFrontCovered) return base;
-        const float occlusionDepth = std::max(opaqueDepth, transparentDepth);
+        float occlusionDepth = std::numeric_limits<float>::infinity();
+        if (std::isfinite(opaqueDepth))
+            occlusionDepth = std::min(occlusionDepth, opaqueDepth);
+        if (std::isfinite(transparentDepth))
+            occlusionDepth = std::min(occlusionDepth, transparentDepth);
         for (const VolumeSlicePixel &slice : slices) {
-            if (!slice.depthPreClipped && slice.depth <= occlusionDepth)
+            if (!slice.depthPreClipped && slice.depth >= occlusionDepth)
                 continue;
             const float remain = 1.0f - slice.color.alpha;
             base = {slice.color.red + base.red * remain,
@@ -1126,8 +1130,11 @@ bool compositeRasterWorkbenchSurfaces(
             if (fragment.x < 0 || fragment.x >= width || fragment.y < 0 ||
                 fragment.y >= height || fragment.alpha <= 0.0f) continue;
             const int index = fragment.y * width + fragment.x;
-            nearestRegularTransparentDepth[index] = std::max(
-                nearestRegularTransparentDepth[index], fragment.cameraDepth);
+            float &nearestDepth = nearestRegularTransparentDepth[index];
+            if (nearestDepth == noDepth ||
+                fragment.cameraDepth < nearestDepth) {
+                nearestDepth = fragment.cameraDepth;
+            }
         }
         for (int index = 0; index < pixelCount; ++index) {
             inFrontCovered[index] = frontOpaqueSceneDepth[index] != noDepth;
@@ -1140,8 +1147,12 @@ bool compositeRasterWorkbenchSurfaces(
         }
         QVector<float> raySceneDepth(pixelCount, noDepth);
         for (int index = 0; index < pixelCount; ++index) {
-            raySceneDepth[index] = std::max(
-                opaqueSceneDepth[index], nearestRegularTransparentDepth[index]);
+            const float opaqueDepth = opaqueSceneDepth[index];
+            const float transparentDepth = nearestRegularTransparentDepth[index];
+            raySceneDepth[index] = opaqueDepth == noDepth
+                ? transparentDepth
+                : transparentDepth == noDepth
+                    ? opaqueDepth : std::min(opaqueDepth, transparentDepth);
         }
         if (!appendRayMarchSamples(raySceneDepth, inFrontCovered)) return false;
         for (int index = 0; index < pixelCount; ++index) {
@@ -1160,16 +1171,20 @@ bool compositeRasterWorkbenchSurfaces(
             base.green = opaque.green + base.green * remain;
             base.blue = opaque.blue + base.blue * remain;
             base.alpha = opaque.alpha + base.alpha * remain;
-            base = compositeVolumeSlices(
-                base, volumePixelsAt(index),
-                opaqueSceneDepth[index], nearestRegularTransparentDepth[index],
-                inFrontCovered[index]);
             basePixels[static_cast<std::size_t>(index)] = base;
         }
         std::vector<RasterWorkbenchLinearPixel> resolved;
         if (!resolveRasterWorkbenchWeightedOitFragments(
                 width, height, basePixels, fragments, &resolved)) {
             return false;
+        }
+        for (int index = 0; index < pixelCount; ++index) {
+            resolved[static_cast<std::size_t>(index)] =
+                compositeVolumeSlices(
+                    resolved[static_cast<std::size_t>(index)],
+                    volumePixelsAt(index), opaqueSceneDepth[index],
+                    nearestRegularTransparentDepth[index],
+                    inFrontCovered[index]);
         }
         std::vector<RasterWorkbenchLinearPixel> transparentResolved;
         if (!resolveRasterWorkbenchWeightedOitFragments(
@@ -1702,26 +1717,29 @@ bool compositeRasterWorkbenchSurfaces(
     for (const TransparentFragment &fragment : regularTransparentFragments) {
         if (fragment.pixelIndex >= 0 && fragment.pixelIndex < pixelCount &&
             fragment.alpha > 0.0f) {
-            volumeRegularTransparentDepth[fragment.pixelIndex] = std::max(
-                volumeRegularTransparentDepth[fragment.pixelIndex],
-                fragment.depth);
+            float &depth = volumeRegularTransparentDepth[fragment.pixelIndex];
+            if (depth == noDepth || fragment.depth < depth)
+                depth = fragment.depth;
         }
     }
     for (const TransparentFragment &fragment : frontTransparentFragments) {
         if (fragment.pixelIndex >= 0 && fragment.pixelIndex < pixelCount &&
             fragment.alpha > 0.0f) {
-            volumeFrontTransparentDepth[fragment.pixelIndex] = std::max(
-                volumeFrontTransparentDepth[fragment.pixelIndex],
-                fragment.depth);
+            float &depth = volumeFrontTransparentDepth[fragment.pixelIndex];
+            if (depth == noDepth || fragment.depth < depth)
+                depth = fragment.depth;
         }
     }
     if (!useWeightedOit) {
         QVector<float> raySceneDepth(pixelCount, noDepth);
         QVector<bool> rayInFrontCoverage(pixelCount, false);
         for (int index = 0; index < pixelCount; ++index) {
-            raySceneDepth[index] = std::max(
-                opaqueSceneDepth[index],
-                volumeRegularTransparentDepth[index]);
+            const float opaqueDepth = opaqueSceneDepth[index];
+            const float transparentDepth = volumeRegularTransparentDepth[index];
+            raySceneDepth[index] = opaqueDepth == noDepth
+                ? transparentDepth
+                : transparentDepth == noDepth
+                    ? opaqueDepth : std::min(opaqueDepth, transparentDepth);
             rayInFrontCoverage[index] =
                 frontOpaqueSceneDepth[index] != noDepth ||
                 volumeFrontTransparentDepth[index] != noDepth;
@@ -1867,13 +1885,13 @@ bool compositeRasterWorkbenchSurfaces(
             }
             RasterWorkbenchLinearPixel regular = overLinear(regularOpaque,
                                                              background);
+            regular = overLinear(regularTransparent, regular);
             regular = compositeVolumeSlices(
                 regular, volumePixelsAt(index),
                 opaqueSceneDepth[index],
                 volumeRegularTransparentDepth[index],
                 frontOpaqueSceneDepth[index] != noDepth ||
                     volumeFrontTransparentDepth[index] != noDepth);
-            regular = overLinear(regularTransparent, regular);
             RasterWorkbenchLinearPixel final = overLinear(frontOpaque, regular);
             final = overLinear(frontTransparent, final);
             float sortedOutlineCoverage = 0.0f;

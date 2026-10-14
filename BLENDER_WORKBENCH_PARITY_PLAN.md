@@ -3349,6 +3349,12 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   coordinates, so perspective-correct density sampling remains continuous
   across the clipped edge. The regression contract verifies a slice that
   straddles the configured near plane still produces its visible samples.
+- Slice composition now follows the pinned Workbench order: resolve regular
+  transparency and its depth, then composite the volume slice, then composite
+  `showInFront` geometry. Linear camera-depth comparisons reject samples at or
+  behind the regular opaque/transparent depth; in-front coverage rejects the
+  slice. Contracts cover slices in front of and behind a transparent surface,
+  plus rejection under `showInFront` coverage.
 - Blender 5.2.2's pinned
   [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh)
   defines the transformed slice plane, depth/stencil rejection, and volume
@@ -3361,8 +3367,8 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `cmake --build build -j4` passed with the source dependency audit, and both
   offscreen `viewport_render_contracts` and
   `workbench_raster_fragment_contracts` passed. Matched Blender output and
-  opaque/transparent depth and in-front coverage combinations beyond existing
-  slice checks remain open. The CPU ray marcher
+  matched Blender output, complex overlapping opaque-depth cases, and
+  transformed slice-plane coverage remain open. The CPU ray marcher
   is a bounded approximation with a 16M dense-voxel cap, 1M candidate pixels
   per volume, and 4M aggregate integration samples per composition;
   multiple/vector grids, animation, and larger bounds remain unsupported.

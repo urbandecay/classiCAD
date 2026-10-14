@@ -1737,6 +1737,73 @@ int main(int argc, char *argv[])
         passed &= check(volumeSliceRendered && volumeSliceChangedPixels > 0,
                         "QPainter Workbench fallback composites enabled scalar-volume slice samples in scene linear color");
 
+        ViewportRenderObject transparentSliceOccluder = makeQuad(
+            9111, 64, 48, 576, 432, -1.0,
+            QVector3D(0.05f, 0.1f, 0.9f), 0.65);
+        ScalarVolume3D frontTransparentSlice = sliceVolume;
+        frontTransparentSlice.sliceDepth = 0.5f;
+        frontTransparentSlice.displayDensity = 20.0f;
+        frontTransparentSlice.densityScale = 20.0f;
+        ViewportRenderObject frontTransparentSliceObject = sliceVolumeObject;
+        frontTransparentSliceObject.shape.scalarVolume = frontTransparentSlice;
+        QImage frontTransparentSliceImage(size,
+                                          QImage::Format_ARGB32_Premultiplied);
+        frontTransparentSliceImage.fill(Qt::transparent);
+        const bool frontTransparentSliceRendered =
+            compositeRasterWorkbenchSurfaces(
+                &frontTransparentSliceImage, {transparentSliceOccluder},
+                transform, size, 1.0, false, true, volumeSliceSettings,
+                QVector3D(0.0f, 0.0f, 0.0f), drawObject, nullptr, {}, false,
+                {frontTransparentSliceObject});
+        const QColor frontTransparentSlicePixel =
+            frontTransparentSliceImage.pixelColor(size.width() / 2,
+                                                  size.height() / 2);
+        passed &= check(
+            frontTransparentSliceRendered &&
+                frontTransparentSlicePixel.red() >
+                    frontTransparentSlicePixel.blue(),
+            "QPainter volume slices in front of transparent geometry must composite over that geometry");
+
+        ScalarVolume3D behindTransparentSlice = frontTransparentSlice;
+        behindTransparentSlice.sliceDepth = 0.1f;
+        ViewportRenderObject behindTransparentSliceObject =
+            frontTransparentSliceObject;
+        behindTransparentSliceObject.shape.scalarVolume =
+            behindTransparentSlice;
+        QImage behindTransparentSliceImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        behindTransparentSliceImage.fill(Qt::transparent);
+        const bool behindTransparentSliceRendered =
+            compositeRasterWorkbenchSurfaces(
+                &behindTransparentSliceImage, {transparentSliceOccluder},
+                transform, size, 1.0, false, true, volumeSliceSettings,
+                QVector3D(0.0f, 0.0f, 0.0f), drawObject, nullptr, {}, false,
+                {behindTransparentSliceObject});
+        const QColor behindTransparentSlicePixel =
+            behindTransparentSliceImage.pixelColor(size.width() / 2,
+                                                   size.height() / 2);
+        passed &= check(
+            behindTransparentSliceRendered &&
+                behindTransparentSlicePixel.blue() >
+                    behindTransparentSlicePixel.red(),
+            "QPainter transparent depth must hide scalar-volume slices behind the surface");
+
+        ViewportRenderObject inFrontSliceOccluder =
+            transparentSliceOccluder;
+        inFrontSliceOccluder.showInFront = true;
+        QImage inFrontSliceImage(size, QImage::Format_ARGB32_Premultiplied);
+        inFrontSliceImage.fill(Qt::transparent);
+        const bool inFrontSliceRendered = compositeRasterWorkbenchSurfaces(
+            &inFrontSliceImage, {inFrontSliceOccluder}, transform, size, 1.0,
+            false, true, volumeSliceSettings, QVector3D(0.0f, 0.0f, 0.0f),
+            drawObject, nullptr, {}, false, {frontTransparentSliceObject});
+        const QColor inFrontSlicePixel = inFrontSliceImage.pixelColor(
+            size.width() / 2, size.height() / 2);
+        passed &= check(
+            inFrontSliceRendered && inFrontSlicePixel.blue() >
+                                        inFrontSlicePixel.red(),
+            "QPainter showInFront coverage must reject scalar-volume slice samples");
+
         ViewportTransform nearPlaneSliceCamera;
         nearPlaneSliceCamera.setViewPreset(ViewportViewPreset::Perspective);
         nearPlaneSliceCamera.zoom() = 120.0;

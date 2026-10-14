@@ -1614,6 +1614,32 @@ then render the Blender `Paint` 37° case using
 files with `workbench_display_probe_compare.py`, `workbench_image_compare.py`,
 and `workbench_pfm_compare.py`.
 
+**QPainter Studio lighting matrix (2026-10-14):** Extended the opt-in
+production QPainter captures to cover Studio Default plus world-space Studio
+`Paint` rotations of 0°, 37°, and 90°. Each Blender 5.2.2 and classiCAD pair
+uses the same 640×480 cube, orthographic view, Material color, specular on,
+AA Off, AgX, zero dither, and neutral scene-linear background. All four
+thresholded display masks have IoU `0.994440` with 622 XOR pixels, the same
+AA-Off QPainter silhouette difference. Common-foreground display MAE/p95 are
+`1.399/255` and `1/255` for Studio Default, `0.922/255` and `0/255` for Paint
+0°, `1.436/255` and `0/255` for Paint 37°, and `1.292/255` and `1/255` for
+Paint 90°. Full-frame scene-linear channel MAE (blue, green, red) is
+`(0.001868, 0.001802, 0.001745)` for Default, `(0.004801, 0.004780,
+0.004667)` for Paint 0°, `(0.004464, 0.004418, 0.003995)` for Paint 37°, and
+`(0.002351, 0.002381, 0.001516)` for Paint 90°. The 4-pixel-eroded shared
+foreground scene-linear p95 stays below `0.000667` per channel in all four
+cases; the largest full-frame errors are candidate-only silhouette pixels.
+This adds full-frame coverage for three Studio rotations and one preset, not
+general Studio parity. Other lights, views, AA modes, effects, and QPainter
+silhouette coverage remain open. The Blender world-space light transform is
+pinned in
+[`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh).
+Validation: `cmake --build build -j4` passed with the dependency audit;
+offscreen `viewport_render_contracts` passed (1/1) with the lighting capture
+directory; Blender reported 5.2.2 LTS for all four references; and the
+full-frame `workbench_image_compare.py` and `workbench_pfm_compare.py`
+comparisons completed for each PNG/PFM pair.
+
 **GPU deferred lighting-resolve comparison (2026-10-14):** Fresh matched
 Blender 5.2.2 and classiCAD 640x480 captures exercised deferred-resolve-
 eligible scenes at AA Off with zero dither, the same orthographic camera,
@@ -3410,9 +3436,10 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   combinations. A full-frame AA-Off QPainter comparison now covers
   `metal_bronze` with specular: display MAE is `0.1292/255`, and mask IoU is
   `0.997991` with 224 XOR pixels; an isolated shared-face-boundary outlier
-  reaches `105/255`. Exact edge parity remains open. Other presets, AA modes,
-  Studio rotations, camera orientations, and broader full-frame QPainter parity
-  remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
+  reaches `105/255`. QPainter full-frame comparisons also cover Studio Default
+  and Paint world-space rotations 0°, 37°, and 90°. Exact edge parity remains
+  open. Other presets, AA modes, camera orientations, and broader full-frame
+  QPainter parity remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
 - Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.

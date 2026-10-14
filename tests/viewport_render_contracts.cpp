@@ -7215,15 +7215,13 @@ int main(int argc, char *argv[])
                             lightingCapturesSucceeded &= linearSaved &&
                                                          displaySaved;
                             const bool captureQPainterLighting =
-                                captureCase.mode ==
-                                    ViewportLightingMode::MatCap ||
-                                stem == QStringLiteral(
-                                    "studio_paint_world_37");
+                                captureCase.mode !=
+                                    ViewportLightingMode::Flat;
                             if (captureQPainterLighting) {
-                                CurveHitTester qpainterMatcapHitTester;
-                                ViewportRenderer qpainterMatcapRenderer(
-                                    gpuTransform, qpainterMatcapHitTester);
-                                qpainterMatcapRenderer.setShadingSettings(
+                                CurveHitTester qpainterLightingHitTester;
+                                ViewportRenderer qpainterLightingRenderer(
+                                    gpuTransform, qpainterLightingHitTester);
+                                qpainterLightingRenderer.setShadingSettings(
                                     lightingShading);
                                 QImage qpainterDisplay(
                                     glSize,
@@ -7237,21 +7235,21 @@ int main(int argc, char *argv[])
                                     qpainterBackgroundSceneLinear,
                                     qpainterBackgroundSceneLinear);
                                 const QVector<ViewportRenderObject>
-                                    qpainterMatcapObjects{
+                                    qpainterLightingObjects{
                                         polygonCubeObject};
-                                const bool qpainterMatcapComposed =
+                                const bool qpainterLightingComposed =
                                     compositeRasterWorkbenchSurfaces(
                                         &qpainterDisplay,
-                                        qpainterMatcapObjects, gpuTransform,
+                                        qpainterLightingObjects, gpuTransform,
                                         glSize, 1.0, false, true,
                                         lightingShading,
                                         qpainterBackgroundLinear,
-                                        [&qpainterMatcapRenderer,
+                                        [&qpainterLightingRenderer,
                                          &qpainterFragments, &glSize](
                                             QPainter &surfacePainter,
                                             const ViewportRenderObject &object,
                                             RasterWorkbenchFragmentSink *sink) {
-                                            qpainterMatcapRenderer.drawShape(
+                                            qpainterLightingRenderer.drawShape(
                                                 surfacePainter, object.shape,
                                                 glSize, false, object.selected,
                                                 true, QColor(), QString(), 0.0,
@@ -7268,17 +7266,17 @@ int main(int argc, char *argv[])
                                                 qpainterFragments = *sink;
                                             }
                                         });
-                                if (qpainterMatcapComposed) {
+                                if (qpainterLightingComposed) {
                                     applyRasterWorkbenchEffects(
                                         &qpainterDisplay,
-                                        qpainterMatcapObjects, gpuTransform,
+                                        qpainterLightingObjects, gpuTransform,
                                         glSize, 1.0, lightingShading);
                                 } else {
                                     // The widget uses this same direct draw
                                     // path when its bounded surface compositor
                                     // declines the scene.
                                     QPainter qpainter(&qpainterDisplay);
-                                    qpainterMatcapRenderer.drawShape(
+                                    qpainterLightingRenderer.drawShape(
                                         qpainter, polygonCubeObject.shape,
                                         glSize, false, false, true, QColor(),
                                         QString(), 0.0,

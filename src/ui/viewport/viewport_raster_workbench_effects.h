@@ -47,11 +47,32 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
                                   qreal apertureRotationRadians,
                                   qreal apertureRatio) noexcept;
 
+struct RasterWorkbenchDofTap {
+    QPointF position;
+    float radius = 0.0f;
+};
+
 // Blender 5.2.2's radius-three square-ring sample pattern, mapped to a disk
-// and shaped by the active aperture settings.
-std::array<QPointF, 49> rasterWorkbenchDofKernel(
+// and shaped by the active aperture settings. Radius remains unshaped, as in
+// the GPU sample buffer's z component.
+std::array<RasterWorkbenchDofTap, 49> rasterWorkbenchDofKernel(
     int apertureBlades, qreal apertureRotationRadians,
     qreal apertureRatio) noexcept;
+
+struct RasterWorkbenchDofPrefilter {
+    float nearCoc = 0.0f;
+    float farCoc = 0.0f;
+    std::array<float, 4> colorWeights{};
+};
+
+// Blender's 2x2 CoC-aware prefilter chooses far weights when available, else
+// near weights, and attenuates samples whose CoC differs by one pixel or more.
+RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
+    const std::array<float, 4> &signedCocs) noexcept;
+
+// Blender's gather kernel's radial CoC weight for one aperture tap.
+float rasterWorkbenchDofGatherWeight(float sampleCoc, float maximumCoc,
+                                     float sampleRadius) noexcept;
 
 // Blender Workbench's DOF resolve uses smoothstep(1, 3, abs(CoC)) to blend
 // its gathered bokeh image over the sharp source.

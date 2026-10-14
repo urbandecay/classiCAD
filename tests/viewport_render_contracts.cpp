@@ -341,12 +341,14 @@ int main(int argc, char *argv[])
 
     const auto dofKernel = rasterWorkbenchDofKernel(0, 0.0, 1.0);
     qreal dofKernelRadiusSum = 0.0;
-    for (const QPointF &tap : dofKernel)
-        dofKernelRadiusSum += std::hypot(tap.x(), tap.y());
+    for (const RasterWorkbenchDofTap &tap : dofKernel)
+        dofKernelRadiusSum += std::hypot(tap.position.x(), tap.position.y());
     passed &= check(
-        dofKernel.front() == QPointF(0.0, 0.0) &&
-            std::abs(std::hypot(dofKernel.back().x(),
-                                dofKernel.back().y()) - 1.0) < 1.0e-9 &&
+        dofKernel.front().position == QPointF(0.0, 0.0) &&
+            dofKernel.front().radius == 0.0f &&
+            std::abs(std::hypot(dofKernel.back().position.x(),
+                                dofKernel.back().position.y()) - 1.0) < 1.0e-9 &&
+            std::abs(dofKernel.back().radius - 1.0f) < 1.0e-7f &&
             std::abs(dofKernelRadiusSum - 112.0 / 3.0) < 1.0e-8,
         "QPainter Workbench DOF kernel must preserve Blender's 49 square-ring perimeter samples and disk radii");
     const auto hexagonalDofKernel = rasterWorkbenchDofKernel(
@@ -357,13 +359,29 @@ int main(int argc, char *argv[])
         std::cos(dofPi / 12.0);
     passed &= check(
         hexagonalDofKernel.size() == 49 &&
-            std::abs(hexagonalDofKernel[9].x() -
+            std::abs(hexagonalDofKernel[9].position.x() -
                      expectedHexRadius *
                          std::cos(5.0 * dofPi / 4.0 + 0.2) / 2.0) < 1.0e-8 &&
-            std::abs(hexagonalDofKernel[9].y() -
+            std::abs(hexagonalDofKernel[9].position.y() -
                      expectedHexRadius *
-                         std::sin(5.0 * dofPi / 4.0 + 0.2)) < 1.0e-8,
+                         std::sin(5.0 * dofPi / 4.0 + 0.2)) < 1.0e-8 &&
+            std::abs(hexagonalDofKernel[9].radius - 2.0f / 3.0f) < 1.0e-7f,
         "QPainter Workbench DOF kernel must apply Blender's blade polygon, rotation, and reciprocal X ratio to all 49 taps");
+
+    const RasterWorkbenchDofPrefilter dofPrefilter =
+        rasterWorkbenchDofPrefilter2x2({4.0f, 3.0f, -4.0f, -3.0f});
+    passed &= check(
+        dofPrefilter.nearCoc == 4.0f && dofPrefilter.farCoc == 4.0f &&
+            dofPrefilter.colorWeights ==
+                std::array<float, 4>{0.0f, 0.0f, 1.0f, 0.0f},
+        "QPainter Workbench DOF prefilter must retain separate near/far maxima, reject unmatched CoCs, and prioritize far color");
+    passed &= check(
+        std::abs(rasterWorkbenchDofGatherWeight(4.0f, 4.0f, 0.5f) - 4.0f) <
+                1.0e-6f &&
+            std::abs(rasterWorkbenchDofGatherWeight(1.5f, 4.0f, 0.375f) -
+                     0.75f) < 1.0e-6f &&
+            rasterWorkbenchDofGatherWeight(0.0f, 4.0f, 0.0f) == 0.0f,
+        "QPainter Workbench DOF gather weights must match Blender's radial CoC smoothstep");
 
     ViewportTransform orthographicDofTransform;
     orthographicDofTransform.setViewPreset(ViewportViewPreset::Top);

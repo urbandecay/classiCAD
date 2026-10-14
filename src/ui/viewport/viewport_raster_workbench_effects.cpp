@@ -457,12 +457,12 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
                    std::sin(angle) * radius);
 }
 
-std::array<QPointF, 49> rasterWorkbenchDofKernel(
+std::array<RasterWorkbenchDofTap, 49> rasterWorkbenchDofKernel(
     int apertureBlades, qreal apertureRotationRadians,
     qreal apertureRatio) noexcept
 {
     constexpr int kernelRadius = 3;
-    std::array<QPointF, 49> samples{};
+    std::array<RasterWorkbenchDofTap, 49> samples{};
     std::size_t sampleIndex = 0;
     for (int ring = 0; ring <= kernelRadius; ++ring) {
         for (int x = -kernelRadius; x <= kernelRadius; ++x) {
@@ -510,13 +510,56 @@ std::array<QPointF, 49> rasterWorkbenchDofKernel(
                 }
                 angle += apertureRotationRadians;
                 const qreal ratio = std::max<qreal>(apertureRatio, 0.01);
-                samples[sampleIndex++] = QPointF(
-                    shapedRadius * std::cos(angle) / ratio,
-                    shapedRadius * std::sin(angle));
+                samples[sampleIndex++] = {
+                    QPointF(shapedRadius * std::cos(angle) / ratio,
+                            shapedRadius * std::sin(angle)),
+                    static_cast<float>(radius)};
             }
         }
     }
     return samples;
+}
+
+RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
+    const std::array<float, 4> &signedCocs) noexcept
+{
+    RasterWorkbenchDofPrefilter result;
+    std::array<float, 4> nearCocs{};
+    std::array<float, 4> farCocs{};
+    for (std::size_t i = 0; i < signedCocs.size(); ++i) {
+        nearCocs[i] = std::max(signedCocs[i], 0.0f);
+        farCocs[i] = std::max(-signedCocs[i], 0.0f);
+        result.nearCoc = std::max(result.nearCoc, nearCocs[i]);
+        result.farCoc = std::max(result.farCoc, farCocs[i]);
+    }
+
+    std::array<float, 4> nearWeights{};
+    std::array<float, 4> farWeights{};
+    bool hasFarWeight = false;
+    for (std::size_t i = 0; i < signedCocs.size(); ++i) {
+        nearWeights[i] = signedCocs[i] >= 0.0f
+            ? std::clamp(1.0f - std::abs(result.nearCoc - nearCocs[i]),
+                         0.0f, 1.0f)
+            : 0.0f;
+        farWeights[i] = signedCocs[i] <= 0.0f
+            ? std::clamp(1.0f - std::abs(result.farCoc - farCocs[i]),
+                         0.0f, 1.0f)
+            : 0.0f;
+        hasFarWeight = hasFarWeight || farWeights[i] != 0.0f;
+    }
+    result.colorWeights = hasFarWeight ? farWeights : nearWeights;
+    return result;
+}
+
+float rasterWorkbenchDofGatherWeight(float sampleCoc, float maximumCoc,
+                                     float sampleRadius) noexcept
+{
+    const float sampleMagnitude = std::abs(sampleCoc);
+    const float radius = sampleRadius * std::abs(maximumCoc);
+    const float t = std::clamp(sampleMagnitude - (radius - 0.5f),
+                               0.0f, 1.0f);
+    const float smooth = t * t * (3.0f - 2.0f * t);
+    return sampleMagnitude * smooth;
 }
 
 float rasterWorkbenchDofResolveBlend(float cocPixels) noexcept
@@ -3419,8 +3462,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     applyOutline();
 
     // QPainter fallback approximation: use the software-resolved visible
-    // surface depth to estimate a physical circle of confusion, then gather
-    // a small disk of same-or-behind-depth colors. This is intentionally
+    // surface depth to estimate a physical circle of confusion, apply a
+    // CoC-aware near/far prefilter, and gather aperture samples. This remains
     // camera-gated and uses camera-relative depth for either projection.
     if (depthOfFieldEnabled) {
         struct LinearGatherPixel {
@@ -3474,7 +3517,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             std::isfinite(sensorWidth) && sensorWidth > 0.0 &&
             std::abs(focus - focal) > 1.0e-6) {
             // The full-screen resolve needs to consider clear-depth pixels
-            // near geometry, while avoiding a 12-tap gather across empty
+            // near geometry, while avoiding a 49-tap gather across empty
             // regions of a large software target. Dilate covered output
             // pixels by the maximum bounded CoC radius in linear time.
             QVector<quint8> dofCoverage(outputPixelCount, 0);
@@ -3534,6 +3577,100 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         ++covered;
                 }
             }
+
+            struct FilteredDofPixel {
+                LinearGatherPixel color;
+                float nearCoc = 0.0f;
+                float farCoc = 0.0f;
+            };
+            const int dofWidth = std::max(outputWidth / 2, 1);
+            const int dofHeight = std::max(outputHeight / 2, 1);
+            std::vector<FilteredDofPixel> dofPrefilter(
+                static_cast<std::size_t>(dofWidth) * dofHeight);
+            const auto sourceColorAt = [&](int x, int y) {
+                if (sceneLinearDofActive) {
+                    const RasterWorkbenchLinearPixel &pixel =
+                        surfaceLayers->sceneLinearColor[
+                            static_cast<std::size_t>(y) * outputWidth + x];
+                    if (pixel.alpha > 0.0f) {
+                        return LinearGatherPixel{
+                            pixel.red / pixel.alpha,
+                            pixel.green / pixel.alpha,
+                            pixel.blue / pixel.alpha,
+                            pixel.alpha};
+                    }
+                    return LinearGatherPixel{};
+                }
+                const QRgb pixel = source.pixel(x, y);
+                return LinearGatherPixel{
+                    float(qRed(pixel)), float(qGreen(pixel)),
+                    float(qBlue(pixel)), float(qAlpha(pixel)) / 255.0f};
+            };
+            const auto sourceCocAt = [&](int x, int y) {
+                const int depthX = std::clamp(
+                    static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                    0, width - 1);
+                const int depthY = std::clamp(
+                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                    0, height - 1);
+                const RasterSample &sample = samples[depthY * width + depthX];
+                const qreal z = sample.objectId != 0
+                    ? sample.depth : cameraOptics.clipEnd;
+                if (!std::isfinite(z) || z <= 0.0) return 0.0f;
+                const qreal coc = 0.5 *
+                    (focal * focal /
+                     (fStop * std::abs(focus - focal))) *
+                    ((focus - z) / std::max<qreal>(z, 1.0e-6)) *
+                    outputWidth / sensorWidth;
+                return static_cast<float>(std::clamp(coc, -12.0, 12.0));
+            };
+            for (int y = 0; y < dofHeight; ++y) {
+                for (int x = 0; x < dofWidth; ++x) {
+                    const int sourceX = std::min(x * 2, outputWidth - 1);
+                    const int sourceY = std::min(y * 2, outputHeight - 1);
+                    const std::array<QPoint, 4> offsets{{
+                        QPoint(0, 0), QPoint(1, 0),
+                        QPoint(0, 1), QPoint(1, 1)}};
+                    std::array<float, 4> cocs{};
+                    std::array<LinearGatherPixel, 4> colors{};
+                    for (std::size_t i = 0; i < offsets.size(); ++i) {
+                        const int px = std::min(
+                            sourceX + offsets[i].x(), outputWidth - 1);
+                        const int py = std::min(
+                            sourceY + offsets[i].y(), outputHeight - 1);
+                        cocs[i] = sourceCocAt(px, py);
+                        colors[i] = sourceColorAt(px, py);
+                    }
+                    const RasterWorkbenchDofPrefilter filtered =
+                        rasterWorkbenchDofPrefilter2x2(cocs);
+                    qreal weightSum = 0.0;
+                    LinearGatherPixel result;
+                    for (std::size_t i = 0; i < colors.size(); ++i) {
+                        const qreal weight = filtered.colorWeights[i];
+                        result.red += colors[i].red * weight;
+                        result.green += colors[i].green * weight;
+                        result.blue += colors[i].blue * weight;
+                        result.alpha += colors[i].alpha * weight;
+                        weightSum += weight;
+                    }
+                    if (weightSum <= 0.0) {
+                        for (const LinearGatherPixel &color : colors) {
+                            result.red += color.red * 0.25f;
+                            result.green += color.green * 0.25f;
+                            result.blue += color.blue * 0.25f;
+                            result.alpha += color.alpha * 0.25f;
+                        }
+                    } else {
+                        result.red /= weightSum;
+                        result.green /= weightSum;
+                        result.blue /= weightSum;
+                        result.alpha /= weightSum;
+                    }
+                    dofPrefilter[static_cast<std::size_t>(y) * dofWidth + x] = {
+                        result, filtered.nearCoc, filtered.farCoc};
+                }
+            }
+
             for (int y = 0; y < outputHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(gatheredResult.scanLine(y));
                 const int depthY = std::clamp(
@@ -3572,54 +3709,44 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     medianRadii[pixelIndex] = static_cast<float>(
                         std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
                     qreal red = 0.0, green = 0.0, blue = 0.0;
-                    int count = 0;
-                    for (const QPointF &tap : dofKernel) {
-                        const int sx = std::clamp(qRound(x + tap.x() * radius),
+                    qreal totalWeight = 0.0;
+                    for (const RasterWorkbenchDofTap &tap : dofKernel) {
+                        const int sx = std::clamp(qRound(
+                                                      x + tap.position.x() * radius),
                                                   0, outputWidth - 1);
-                        const int sy = std::clamp(qRound(y + tap.y() * radius),
+                        const int sy = std::clamp(qRound(
+                                                      y + tap.position.y() * radius),
                                                   0, outputHeight - 1);
-                        const int sampleX = std::clamp(
-                            static_cast<int>(std::floor((sx + 0.5) / colorDpr * dpr)),
-                            0, width - 1);
-                        const int sampleY = std::clamp(
-                            static_cast<int>(std::floor((sy + 0.5) / colorDpr * dpr)),
-                            0, height - 1);
-                        const RasterSample &neighbor = samples[sampleY * width + sampleX];
-                        if (!backgroundCenter && neighbor.objectId != 0 &&
-                            neighbor.depth < center.depth -
-                                std::max(1.0e-4f, std::abs(center.depth) * 0.002f))
-                            continue;
-                        if (sceneLinearDofActive) {
-                            const RasterWorkbenchLinearPixel &pixel =
-                                surfaceLayers->sceneLinearColor[
-                                    static_cast<std::size_t>(sy) *
-                                        outputWidth + sx];
-                            if (pixel.alpha > 0.0f) {
-                                red += pixel.red / pixel.alpha;
-                                green += pixel.green / pixel.alpha;
-                                blue += pixel.blue / pixel.alpha;
-                            }
-                        } else {
-                            const QRgb pixel = source.pixel(sx, sy);
-                            red += qRed(pixel);
-                            green += qGreen(pixel);
-                            blue += qBlue(pixel);
-                        }
-                        ++count;
+                        const FilteredDofPixel &sample = dofPrefilter[
+                            static_cast<std::size_t>(
+                                std::clamp(sy / 2, 0, dofHeight - 1)) *
+                                dofWidth +
+                            std::clamp(sx / 2, 0, dofWidth - 1)];
+                        const float signedCoc = sample.nearCoc > sample.farCoc
+                            ? sample.nearCoc : -sample.farCoc;
+                        const float weight = rasterWorkbenchDofGatherWeight(
+                            signedCoc,
+                            static_cast<float>(radius / colorDpr), tap.radius);
+                        red += sample.color.red * weight;
+                        green += sample.color.green * weight;
+                        blue += sample.color.blue * weight;
+                        totalWeight += weight;
                     }
-                    if (count == 0) continue;
+                    if (totalWeight <= 0.0) continue;
                     if (sceneLinearDofActive) {
                         const std::size_t pixelIndex =
                             static_cast<std::size_t>(y) * outputWidth + x;
                         gatheredLinear[pixelIndex] = {
-                            static_cast<float>(red / count),
-                            static_cast<float>(green / count),
-                            static_cast<float>(blue / count),
+                            static_cast<float>(red / totalWeight),
+                            static_cast<float>(green / totalWeight),
+                            static_cast<float>(blue / totalWeight),
                             surfaceLayers->sceneLinearColor[pixelIndex].alpha};
                     } else {
                         out[x] = qRgba(
-                            qRound(red / count), qRound(green / count),
-                            qRound(blue / count), qAlpha(source.pixel(x, y)));
+                            qRound(red / totalWeight),
+                            qRound(green / totalWeight),
+                            qRound(blue / totalWeight),
+                            qAlpha(source.pixel(x, y)));
                     }
                 }
             }

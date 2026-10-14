@@ -8197,13 +8197,24 @@ int main(int argc, char *argv[])
                         const QString polygonCubeOutlineBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_BASELINE_CAPTURE");
+                        const QString polygonCubeOutlineLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_LINEAR_CAPTURE");
+                        const QString polygonCubeOutlineBaselineLinearPath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_BASELINE_LINEAR_CAPTURE");
                         QImage polygonCubeOutlineImage;
                         QImage polygonCubeOutlineBaselineImage;
+                        QVector<float> outlineLinear;
+                        QVector<float> outlineBaselineLinear;
                         const bool outlineCaptured =
                             renderCoordinatedScene(
                                 outlinedSceneShading,
                                 QByteArrayLiteral("polygon-cube-outline"),
-                                &polygonCubeOutlineImage, &polygonCubeObject) &&
+                                &polygonCubeOutlineImage, &polygonCubeObject,
+                                nullptr, nullptr, QString{},
+                                polygonCubeOutlineLinearPath.isEmpty()
+                                    ? nullptr : &outlineLinear) &&
                             polygonCubeOutlineImage.save(
                                 polygonCubeOutlineCapturePath);
                         const bool baselineCaptured =
@@ -8212,11 +8223,35 @@ int main(int argc, char *argv[])
                                  rawFaceShading,
                                  QByteArrayLiteral("polygon-cube-outline-baseline"),
                                  &polygonCubeOutlineBaselineImage,
-                                 &polygonCubeObject) &&
+                                 &polygonCubeObject, nullptr, nullptr,
+                                 QString{},
+                                 polygonCubeOutlineBaselineLinearPath.isEmpty()
+                                     ? nullptr : &outlineBaselineLinear) &&
                              polygonCubeOutlineBaselineImage.save(
                                  polygonCubeOutlineBaselinePath));
+                        const auto saveLinearCapture = [&](const QString &path,
+                                                            const QVector<float> &pixels) {
+                            if (path.isEmpty()) return true;
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            return pixels.size() == 640 * 480 * 3 &&
+                                file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               pixels.constData()),
+                                           pixels.size() * qsizetype(sizeof(float))) ==
+                                    pixels.size() * qsizetype(sizeof(float));
+                        };
+                        const bool linearCapturesSaved =
+                            saveLinearCapture(polygonCubeOutlineLinearPath,
+                                              outlineLinear) &&
+                            saveLinearCapture(
+                                polygonCubeOutlineBaselineLinearPath,
+                                outlineBaselineLinear);
                         passed &= check(
-                            outlineCaptured && baselineCaptured,
+                            outlineCaptured && baselineCaptured &&
+                                linearCapturesSaved,
                             "matched polygon cube outline captures must render and save");
                     }
                     const bool gpuWorkbenchShadowDrawSucceeded =

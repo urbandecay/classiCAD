@@ -2591,13 +2591,13 @@ above is from scene-linear captures and remains the preferred color metric.
   pixels); medians are 0.14894 and 0.17647. The aggregate darkening-to-base
   ratios are nearly identical: 0.18491 and 0.18538. Thus the differing mean
   byte deltas track different baseline brightness/color distributions, not a
-  clear global opacity mismatch. The per-pixel ratio distributions still
-  differ, and display-space ratios are only a proxy because AgX is nonlinear;
-  a matched scene-linear baseline is needed to attribute that residual to
-  alpha versus shading.
-- These are display-PNG delta comparisons; classiCAD's opt-in polygon effect
-  capture currently exports PNG rather than scene-linear PFM. No production
-  renderer change is justified by these metrics alone. The classiCAD capture
+  clear global opacity mismatch. Display-space ratios cannot fully attribute
+  the residual because AgX is nonlinear; the later scene-linear comparison
+  below confirms the standalone effect opacity.
+- These initial metrics are display-PNG delta comparisons. The classiCAD
+  capture now also exports scene-linear outline baseline/effect PFM data, as
+  described below. No production renderer change is justified by these metrics
+  alone. The classiCAD capture
   command was `ctest --test-dir build -R '^viewport_render_contracts$'
   --output-on-failure` with `CLASSICAD_VIEWPORT_POLYGON_CUBE_CAVITY_CAPTURE`,
   `CLASSICAD_VIEWPORT_POLYGON_CUBE_CAVITY_BASELINE_CAPTURE`,
@@ -2650,9 +2650,28 @@ above is from scene-linear captures and remains the preferred color metric.
   `viewport_render_contracts` test and Blender's
   `tests/workbench_dof_reference.py --aperture-blades 2`; metrics came from
   `tests/workbench_dof_compare.py` at thresholds 2 and 3.
-- The expanded effect comparisons currently use final PNGs. A future capture
-  should expose scene-linear per-pass inputs and outputs to separate outline
-  opacity from differences in the underlying face color and display encoding.
+- **Scene-linear outline attribution (2026-10-14):** The controlled
+  polygon-cube capture now saves the pre-display Blender Combined and
+  classiCAD scene-color targets as RGB PFM alongside the existing PNG pair.
+  `tests/workbench_outline_linear_compare.py` compares the effect deltas and
+  estimates per-pixel outline opacity by projecting the baseline-to-effect
+  color change onto the baseline RGB. At a linear delta threshold of 0.001,
+  both 640×480 masks contain 2,316 pixels (XOR 0; IoU 1.0). Scene-linear
+  baseline RGB MAE is 0.033844, while outline-delta RGB MAE is 0.00007965.
+  Estimated mean opacity is 0.32477 for Blender and 0.32484 for classiCAD;
+  medians are 0.25018/0.25035 and p95 values are 0.5 for both. Both opacity
+  distributions lie close to the four-cardinal quarter steps. This attributes
+  the earlier 19.1788 versus 13.9650/255 mean display-delta magnitudes to the
+  different baseline shading/color under nonlinear AgX output; the measured
+  standalone GPU outline blend and opacity agree for this fixture, so no
+  production outline change is indicated. Broader geometry, cameras,
+  transparency, combined effects, and QPainter remain open. The classiCAD
+  capture uses `CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_LINEAR_CAPTURE` and
+  `CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_BASELINE_LINEAR_CAPTURE`; Blender
+  uses `--linear-output` and `--linear-pfm-output` with the controlled
+  `BASELINE` and `OUTLINE` fixtures. PNG mask attribution and linear PFM
+  metrics were both run after the full build and offscreen
+  `viewport_render_contracts` test passed.
 - World cavity's first measured mask mismatch was caused in part by the depth
   sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
   while Blender binds its Workbench depth texture with the default sampler,

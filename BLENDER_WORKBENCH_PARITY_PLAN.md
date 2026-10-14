@@ -5284,3 +5284,34 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   offscreen classiCAD capture contract passed; and
   `workbench_effect_delta_compare.py` completed at threshold 3/255. No source
   code changed, so no rebuild was required.
+
+### Matched QPainter cavity effect comparison (2026-10-14)
+
+- Repeated the same baseline-versus-World-cavity effect comparison through
+  classiCAD's QPainter fallback, using the shared 640×480 orthographic cube,
+  AA Off, zero dither, and matched cavity controls against Blender 5.2.2.
+  The offscreen `viewport_render_contracts` test passed with QPainter PNG and
+  PFM captures enabled.
+- At a 3/255 RGB threshold, Blender changes 27,109 pixels and QPainter
+  changes 15,732; the effect-mask IoU is `0.164347`. Across the mask union,
+  signed RGB-delta MAE is `5.38365/255`, p95 `13/255`, and maximum `33/255`.
+  The GPU path on this fixture measured IoU `0.959067` and union MAE
+  `0.25031/255`, so the CPU fallback remains a substantially weaker cavity
+  approximation.
+- This confirms an open QPainter parity gap, rather than a solved category.
+  The fallback evaluates a discrete software neighborhood against retained
+  raster samples, while Blender 5.2.2 uses its screen-space depth/normal
+  cavity shader and blue-noise sampling. Existing scene-linear captures and
+  source audits do not isolate one bounded formula correction; do not tune
+  the production equation from this output comparison alone. The next useful
+  step is a mismatch-pixel diagnostic of QPainter's sampled depth, normal,
+  cavity/edge amounts, and per-sample visibility against the already
+  instrumented GPU path. Blender references remain pinned to
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L100)
+  and
+  [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L52-L68).
+- Reproduce with the `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_*` capture variables,
+  Blender's `tests/workbench_cube_reference.py --effect BASELINE|CAVITY`,
+  and `tests/workbench_effect_delta_compare.py` at threshold 3. No C++ source
+  changed, so no rebuild was required. Full QPainter cavity parity remains
+  open.

@@ -1225,7 +1225,7 @@ int main(int argc, char *argv[])
                 sortedFrontTransparencyImage.pixelColor(320, 240) !=
                     sortedFrontOpaqueImage.pixelColor(320, 240) &&
                 sortedFrontTransparencyImage.pixelColor(320, 240).green() >
-                    sortedFrontTransparencyImage.pixelColor(320, 240).red() &&
+                    sortedFrontOpaqueImage.pixelColor(320, 240).green() &&
                 sortedFrontTransparencyImage.pixelColor(320, 240).alpha() > 0,
             "QPainter showInFront must use separate depth domains and compose regular transparent, front opaque, then front transparent in both resolvers");
 
@@ -1423,6 +1423,45 @@ int main(int argc, char *argv[])
                 sortedCavityOffImage != sortedCavityOnImage &&
                 sortedCavityPostEffectImage == sortedCavityOnImage,
             "QPainter sorted transparency must composite an AgX cavity-shaded opaque layer without tinting transparent color twice");
+        ViewportShadingSettings sortedCavityStandardSettings =
+            sortedCavitySettings;
+        sortedCavityStandardSettings.colorTransform = 1;
+        QImage sortedCavityStandardImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        sortedCavityStandardImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers sortedCavityStandardLayers;
+        renderer.setShadingSettings(sortedCavityStandardSettings);
+        const bool sortedCavityStandardRendered =
+            compositeRasterWorkbenchSurfaces(
+                &sortedCavityStandardImage, cavityObjects, transform, size,
+                1.0, true, false, sortedCavityStandardSettings,
+                backgroundLinear, drawObject, &sortedCavityStandardLayers);
+        int maximumSortedTransformError = 0;
+        for (int y = 0; y < size.height(); ++y) {
+            for (int x = 0; x < size.width(); ++x) {
+                const QColor standardPixel =
+                    sortedCavityStandardImage.pixelColor(x, y);
+                const QVector3D linear = workbenchSrgbToSceneLinear(
+                    QVector3D(standardPixel.redF(), standardPixel.greenF(),
+                              standardPixel.blueF()));
+                const QVector3D expectedAgx = workbenchSceneLinearToDisplaySrgb(
+                    linear, sortedCavitySettings.colorTransform,
+                    sortedCavitySettings.colorExposure,
+                    sortedCavitySettings.colorGamma,
+                    sortedCavitySettings.colorLutData,
+                    sortedCavitySettings.colorLutMetadata);
+                const QColor actualAgx = sortedCavityOnImage.pixelColor(x, y);
+                maximumSortedTransformError = std::max({
+                    maximumSortedTransformError,
+                    std::abs(actualAgx.red() - qRound(expectedAgx.x() * 255.0f)),
+                    std::abs(actualAgx.green() - qRound(expectedAgx.y() * 255.0f)),
+                    std::abs(actualAgx.blue() - qRound(expectedAgx.z() * 255.0f))});
+            }
+        }
+        // Both captures are quantized to 8-bit sRGB before this round trip.
+        passed &= check(
+            sortedCavityStandardRendered && maximumSortedTransformError <= 8,
+            "QPainter sorted cavity and transparency must resolve in scene-linear color before AgX display conversion");
         renderer.setShadingSettings(shading);
 
         const QVector3D themeHighSrgb(61.0f / 255.0f,

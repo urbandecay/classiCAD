@@ -575,8 +575,8 @@ bool compositeRasterWorkbenchSurfaces(
         int pixelIndex = 0;
         float depth = 0.0f;
         int objectOrder = 0;
-        bool inFront = false;
-        QRgb color = 0;
+        std::array<float, 3> sceneLinearRgb{};
+        float alpha = 0.0f;
     };
     // Bound storage independently from viewport size. If the visible layer
     // count exceeds this budget, let the caller use its existing sorted path.
@@ -743,7 +743,7 @@ bool compositeRasterWorkbenchSurfaces(
         QVector<float> &domainOpaqueSceneDepth = object.showInFront
             ? frontOpaqueSceneDepth : opaqueSceneDepth;
         RasterWorkbenchFragmentSink objectFragments;
-        renderObject(object, useWeightedOit ? &objectFragments : nullptr,
+        renderObject(object, &objectFragments,
                      [&](const QImage &layer) {
             for (int y = 0; y < height; ++y) {
                 const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
@@ -759,7 +759,7 @@ bool compositeRasterWorkbenchSurfaces(
                     }
                 }
             }
-            if (useWeightedOit) {
+            {
                 QVector<int> nearestOpaqueFragment(pixelCount, -1);
                 for (int fragmentIndex = 0;
                      fragmentIndex < static_cast<int>(objectFragments.size());
@@ -799,7 +799,7 @@ bool compositeRasterWorkbenchSurfaces(
                 }
             }
         });
-        if (useWeightedOit && objectFragments.size() >
+        if (objectFragments.size() >
                 static_cast<std::size_t>(kMaximumTransparentFragments)) {
             return false;
         }
@@ -1097,134 +1097,165 @@ bool compositeRasterWorkbenchSurfaces(
         return true;
     }
 
-    // The sorted fallback stores its opaque surface as a premultiplied
-    // QPainter layer. Fold cavity into that layer before transparent surfaces
-    // are alpha-composited so edge coverage and the transparent contribution
-    // remain independent. Unlike weighted OIT, this layer is display RGB; the
-    // scene-linear weighted path above remains the higher-fidelity resolve.
-    if (surfaceLayers != nullptr && shadingSettings.cavity) {
-        const bool haveRegularFactors =
-            regularCavityFactors.size() == static_cast<std::size_t>(pixelCount);
-        const bool haveFrontFactors =
-            inFrontCavityFactors.size() == static_cast<std::size_t>(pixelCount);
-        if (haveRegularFactors || haveFrontFactors) {
-            for (int index = 0; index < pixelCount; ++index) {
-                const auto applyFactor = [](QRgb *pixel, float factor) {
-                    if (pixel == nullptr || qAlpha(*pixel) == 0 || factor == 1.0f)
-                        return;
-                    *pixel = qRgba(
-                        std::clamp(qRound(qRed(*pixel) * factor), 0, 255),
-                        std::clamp(qRound(qGreen(*pixel) * factor), 0, 255),
-                        std::clamp(qRound(qBlue(*pixel) * factor), 0, 255),
-                        qAlpha(*pixel));
-                };
-                if (haveRegularFactors) {
-                    applyFactor(&opaqueColor[index], regularCavityFactors[
-                        static_cast<std::size_t>(index)]);
-                }
-                if (haveFrontFactors) {
-                    applyFactor(&frontOpaqueColor[index], inFrontCavityFactors[
-                        static_cast<std::size_t>(index)]);
-                }
+    const bool haveRegularFactors =
+        regularCavityFactors.size() == static_cast<std::size_t>(pixelCount);
+    const bool haveFrontFactors =
+        inFrontCavityFactors.size() == static_cast<std::size_t>(pixelCount);
+    if (haveRegularFactors || haveFrontFactors) {
+        for (int index = 0; index < pixelCount; ++index) {
+            RasterWorkbenchLinearPixel &regular =
+                opaqueScenePixels[static_cast<std::size_t>(index)];
+            RasterWorkbenchLinearPixel &front =
+                frontOpaqueScenePixels[static_cast<std::size_t>(index)];
+            if (haveRegularFactors) {
+                const float factor = regularCavityFactors[
+                    static_cast<std::size_t>(index)];
+                regular.red *= factor;
+                regular.green *= factor;
+                regular.blue *= factor;
             }
-            surfaceLayers->cavityAppliedBeforeTransparency = true;
+            if (haveFrontFactors) {
+                const float factor = inFrontCavityFactors[
+                    static_cast<std::size_t>(index)];
+                front.red *= factor;
+                front.green *= factor;
+                front.blue *= factor;
+            }
         }
+        if (surfaceLayers != nullptr)
+            surfaceLayers->cavityAppliedBeforeTransparency = true;
     }
 
-    // Keep QPainter's per-object layer shading, then retain that layer's
-    // nearest surface depth at each covered pixel. This lets intersecting
-    // transparent objects composite in a local far-to-near order rather than
-    // inheriting one global average-depth order.
+    // The sorted fallback retains its per-pixel far-to-near order, but now
+    // composites the captured Workbench fragments in scene-linear color.
     bool transparentFragmentBudgetExceeded = false;
     for (int objectOrder = 0; objectOrder < objects.size(); ++objectOrder) {
         const ViewportRenderObject &object = objects[objectOrder];
-        renderObject(object, nullptr, [&](const QImage &layer) {
-            for (int y = 0; y < height; ++y) {
-                const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
-                for (int x = 0; x < width; ++x) {
-                    const int index = y * width + x;
-                    const QRgb pixel = row[x];
-                    const int alphaByte = qAlpha(pixel);
-                    if (alphaByte == 0 || alphaByte == 255 ||
-                        objectDepth[index] == noDepth ||
-                        objectDepth[index] <= (object.showInFront
-                            ? frontOpaqueDepth[index] : opaqueDepth[index])) {
-                        continue;
-                    }
-                    if (regularTransparentFragments.size() +
-                            frontTransparentFragments.size() >=
-                        kMaximumTransparentFragments) {
-                        transparentFragmentBudgetExceeded = true;
-                        return;
-                    }
-                    (object.showInFront ? frontTransparentFragments
-                                        : regularTransparentFragments).append(
-                        {index, objectDepth[index], objectOrder,
-                         object.showInFront, pixel});
-                }
-                if (transparentFragmentBudgetExceeded) return;
+        RasterWorkbenchFragmentSink objectFragments;
+        renderObject(object, &objectFragments, [&](const QImage &) {
+            if (objectFragments.size() >
+                static_cast<std::size_t>(kMaximumTransparentFragments)) {
+                transparentFragmentBudgetExceeded = true;
+                return;
             }
         });
         if (transparentFragmentBudgetExceeded) return false;
+        std::sort(objectFragments.begin(), objectFragments.end(),
+                  [width](const auto &left, const auto &right) {
+                      const int leftPixel = left.y * width + left.x;
+                      const int rightPixel = right.y * width + right.x;
+                      if (leftPixel != rightPixel) return leftPixel < rightPixel;
+                      return left.cameraDepth < right.cameraDepth;
+                  });
+        int previousPixel = -1;
+        float previousDepth = 0.0f;
+        std::array<float, 3> previousColor{};
+        float previousAlpha = 0.0f;
+        bool havePrevious = false;
+        const QVector<float> &domainOpaqueDepth = object.showInFront
+            ? frontOpaqueSceneDepth : opaqueSceneDepth;
+        for (const RasterWorkbenchLinearFragment &fragment : objectFragments) {
+            if (fragment.alpha <= 0.0f ||
+                isOpaqueWorkbenchAlpha(fragment.alpha) ||
+                fragment.x < 0 || fragment.x >= width ||
+                fragment.y < 0 || fragment.y >= height) continue;
+            const int index = fragment.y * width + fragment.x;
+            if (havePrevious && index == previousPixel &&
+                std::abs(fragment.cameraDepth - previousDepth) <= 1.0e-5f &&
+                fragment.sceneLinearRgb == previousColor &&
+                std::abs(fragment.alpha - previousAlpha) <= 1.0e-6f) {
+                continue;
+            }
+            previousPixel = index;
+            previousDepth = fragment.cameraDepth;
+            previousColor = fragment.sceneLinearRgb;
+            previousAlpha = fragment.alpha;
+            havePrevious = true;
+            // Workbench's in-front transparent range resolves after the
+            // in-front opaque range, so preserve that explicit pass order.
+            // Regular transparent fragments still test against regular opaque
+            // depth before entering the sorted fallback.
+            if (!object.showInFront &&
+                fragment.cameraDepth <= domainOpaqueDepth[index]) continue;
+            if (regularTransparentFragments.size() +
+                    frontTransparentFragments.size() >=
+                kMaximumTransparentFragments) {
+                transparentFragmentBudgetExceeded = true;
+                break;
+            }
+            (object.showInFront ? frontTransparentFragments
+                                : regularTransparentFragments).append(
+                {index, fragment.cameraDepth, objectOrder,
+                 fragment.sceneLinearRgb,
+                 fragment.alpha});
+        }
+        if (transparentFragmentBudgetExceeded) return false;
     }
 
-    const auto sortTransparentFragments =
-        [](QVector<TransparentFragment> *fragments) {
+    const auto sortPixelFragments = [](QVector<TransparentFragment> *fragments) {
         std::sort(fragments->begin(), fragments->end(),
-              [](const TransparentFragment &left,
-                 const TransparentFragment &right) {
-                  if (left.pixelIndex != right.pixelIndex) {
-                      return left.pixelIndex < right.pixelIndex;
-                  }
-                  if (left.depth != right.depth) {
-                      return left.depth < right.depth;
-                  }
-                  return left.objectOrder < right.objectOrder;
-              });
+                  [](const TransparentFragment &left,
+                     const TransparentFragment &right) {
+                      if (left.pixelIndex != right.pixelIndex)
+                          return left.pixelIndex < right.pixelIndex;
+                      if (left.depth != right.depth)
+                          return left.depth < right.depth;
+                      return left.objectOrder < right.objectOrder;
+                  });
     };
-    sortTransparentFragments(&regularTransparentFragments);
-    sortTransparentFragments(&frontTransparentFragments);
-    QVector<float> regularTransparentRed(pixelCount, 0.0f);
-    QVector<float> regularTransparentGreen(pixelCount, 0.0f);
-    QVector<float> regularTransparentBlue(pixelCount, 0.0f);
-    QVector<float> regularTransparentAlpha(pixelCount, 0.0f);
-    QVector<float> frontTransparentRed(pixelCount, 0.0f);
-    QVector<float> frontTransparentGreen(pixelCount, 0.0f);
-    QVector<float> frontTransparentBlue(pixelCount, 0.0f);
-    QVector<float> frontTransparentAlpha(pixelCount, 0.0f);
-    const auto accumulateTransparentFragments =
-        [&](const QVector<TransparentFragment> &domainFragments,
-            QVector<float> *red, QVector<float> *green,
-            QVector<float> *blue, QVector<float> *alphaBuffer) {
-    for (const TransparentFragment &fragment : domainFragments) {
-        const int index = fragment.pixelIndex;
-        const QRgb pixel = fragment.color;
-        const int alphaByte = qAlpha(pixel);
-        const float alpha = alphaByte / 255.0f;
-        const float remain = 1.0f - alpha;
-        const float sourceRed = static_cast<float>(qRed(pixel)) / alphaByte;
-        const float sourceGreen = static_cast<float>(qGreen(pixel)) / alphaByte;
-        const float sourceBlue = static_cast<float>(qBlue(pixel)) / alphaByte;
-        (*red)[index] = sourceRed * alpha + (*red)[index] * remain;
-        (*green)[index] = sourceGreen * alpha + (*green)[index] * remain;
-        (*blue)[index] = sourceBlue * alpha + (*blue)[index] * remain;
-        (*alphaBuffer)[index] = alpha + (*alphaBuffer)[index] * remain;
-    }
+    sortPixelFragments(&regularTransparentFragments);
+    sortPixelFragments(&frontTransparentFragments);
+    std::vector<RasterWorkbenchLinearPixel> regularTransparentPixels(
+        static_cast<std::size_t>(pixelCount));
+    std::vector<RasterWorkbenchLinearPixel> frontTransparentPixels(
+        static_cast<std::size_t>(pixelCount));
+    const auto accumulateLinearFragments = [](
+        const QVector<TransparentFragment> &fragments,
+        std::vector<RasterWorkbenchLinearPixel> *pixels) {
+        for (const TransparentFragment &fragment : fragments) {
+            RasterWorkbenchLinearPixel &pixel =
+                (*pixels)[static_cast<std::size_t>(fragment.pixelIndex)];
+            const float remain = 1.0f - fragment.alpha;
+            pixel.red = fragment.sceneLinearRgb[0] * fragment.alpha +
+                        pixel.red * remain;
+            pixel.green = fragment.sceneLinearRgb[1] * fragment.alpha +
+                          pixel.green * remain;
+            pixel.blue = fragment.sceneLinearRgb[2] * fragment.alpha +
+                         pixel.blue * remain;
+            pixel.alpha = fragment.alpha + pixel.alpha * remain;
+        }
     };
-    accumulateTransparentFragments(regularTransparentFragments,
-        &regularTransparentRed, &regularTransparentGreen,
-        &regularTransparentBlue, &regularTransparentAlpha);
-    accumulateTransparentFragments(frontTransparentFragments,
-        &frontTransparentRed, &frontTransparentGreen,
-        &frontTransparentBlue, &frontTransparentAlpha);
-    const auto makeTransparentPixel = [](float red, float green, float blue,
-                                         float alpha) {
-        return qRgba(std::clamp(qRound(red * 255.0f), 0, 255),
-                     std::clamp(qRound(green * 255.0f), 0, 255),
-                     std::clamp(qRound(blue * 255.0f), 0, 255),
-                     std::clamp(qRound(alpha * 255.0f), 0, 255));
+    accumulateLinearFragments(regularTransparentFragments,
+                             &regularTransparentPixels);
+    accumulateLinearFragments(frontTransparentFragments,
+                             &frontTransparentPixels);
+    const auto overLinear = [](const RasterWorkbenchLinearPixel &front,
+                               const RasterWorkbenchLinearPixel &back) {
+        const float remain = 1.0f - front.alpha;
+        return RasterWorkbenchLinearPixel{
+            front.red + back.red * remain,
+            front.green + back.green * remain,
+            front.blue + back.blue * remain,
+            front.alpha + back.alpha * remain};
     };
-    const auto over = [](QRgb foreground, QRgb background) {
+    const bool hasPixelBackground = sceneLinearBackgroundPixels.size() ==
+        static_cast<std::size_t>(pixelCount);
+    const auto displayPremultiplied = [&](const RasterWorkbenchLinearPixel &pixel) {
+        if (pixel.alpha <= 0.0f) return qRgba(0, 0, 0, 0);
+        const float inverseAlpha = 1.0f / pixel.alpha;
+        const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+            QVector3D(pixel.red * inverseAlpha, pixel.green * inverseAlpha,
+                      pixel.blue * inverseAlpha),
+            shadingSettings.colorTransform, shadingSettings.colorExposure,
+            shadingSettings.colorGamma, shadingSettings.colorLutData,
+            shadingSettings.colorLutMetadata);
+        return qPremultiply(qRgba(
+            std::clamp(qRound(display.x() * 255.0f), 0, 255),
+            std::clamp(qRound(display.y() * 255.0f), 0, 255),
+            std::clamp(qRound(display.z() * 255.0f), 0, 255),
+            std::clamp(qRound(pixel.alpha * 255.0f), 0, 255)));
+    };
+    const auto compositeDisplay = [](QRgb foreground, QRgb background) {
         const float remain = 1.0f - qAlpha(foreground) / 255.0f;
         return qRgba(
             std::clamp(qRed(foreground) + qRound(qRed(background) * remain),
@@ -1247,41 +1278,49 @@ bool compositeRasterWorkbenchSurfaces(
             : nullptr;
         for (int x = 0; x < width; ++x) {
             const int index = y * width + x;
-            const QRgb regularTransparent = makeTransparentPixel(
-                regularTransparentRed[index], regularTransparentGreen[index],
-                regularTransparentBlue[index], regularTransparentAlpha[index]);
-            const QRgb frontTransparent = makeTransparentPixel(
-                frontTransparentRed[index], frontTransparentGreen[index],
-                frontTransparentBlue[index], frontTransparentAlpha[index]);
-            const QRgb regularSurface = over(regularTransparent,
-                                             opaqueColor[index]);
-            const QRgb opaqueSurface = over(frontOpaqueColor[index],
-                                            opaqueColor[index]);
-            const float transparentRemain =
-                1.0f - qAlpha(frontOpaqueColor[index]) / 255.0f;
-            const QRgb retainedRegularTransparent = qRgba(
-                qRound(qRed(regularTransparent) * transparentRemain),
-                qRound(qGreen(regularTransparent) * transparentRemain),
-                qRound(qBlue(regularTransparent) * transparentRemain),
-                qRound(qAlpha(regularTransparent) * transparentRemain));
-            const QRgb retainedTransparent = over(
-                frontTransparent, retainedRegularTransparent);
-            QRgb surface = over(frontTransparent,
-                                over(frontOpaqueColor[index], regularSurface));
-            if (opaqueRow != nullptr) opaqueRow[x] = opaqueSurface;
-            if (transparentRow != nullptr) {
-                transparentRow[x] = retainedTransparent;
+            const auto &regularOpaque = opaqueScenePixels[
+                static_cast<std::size_t>(index)];
+            const auto &frontOpaque = frontOpaqueScenePixels[
+                static_cast<std::size_t>(index)];
+            const auto &regularTransparent = regularTransparentPixels[
+                static_cast<std::size_t>(index)];
+            const auto &frontTransparent = frontTransparentPixels[
+                static_cast<std::size_t>(index)];
+            RasterWorkbenchLinearPixel background;
+            if (hasPixelBackground) {
+                const QVector3D &color = sceneLinearBackgroundPixels[
+                    static_cast<std::size_t>(index)];
+                background = RasterWorkbenchLinearPixel::fromStraight(
+                    color.x(), color.y(), color.z(), 1.0f);
+            } else if (sceneLinearBackground.has_value()) {
+                const QVector3D &color = *sceneLinearBackground;
+                background = RasterWorkbenchLinearPixel::fromStraight(
+                    color.x(), color.y(), color.z(), 1.0f);
             }
-            if (qAlpha(surface) == 0) continue;
-            const QRgb old = destination[x];
-            const float a = qAlpha(surface) / 255.0f;
-            const float oldAlpha = qAlpha(old) / 255.0f;
-            const float remain = 1.0f - a;
-            destination[x] = qRgba(
-                std::clamp(qRound(qRed(surface) + qRed(old) * remain), 0, 255),
-                std::clamp(qRound(qGreen(surface) + qGreen(old) * remain), 0, 255),
-                std::clamp(qRound(qBlue(surface) + qBlue(old) * remain), 0, 255),
-                std::clamp(qRound((a + oldAlpha * remain) * 255.0f), 0, 255));
+            RasterWorkbenchLinearPixel regular = overLinear(regularOpaque,
+                                                             background);
+            regular = overLinear(regularTransparent, regular);
+            RasterWorkbenchLinearPixel final = overLinear(frontOpaque, regular);
+            final = overLinear(frontTransparent, final);
+            RasterWorkbenchLinearPixel opaqueLayer = overLinear(
+                frontOpaque, regularOpaque);
+            const QRgb opaqueDisplay = displayPremultiplied(opaqueLayer);
+            const float frontRemain = 1.0f - frontOpaque.alpha;
+            const RasterWorkbenchLinearPixel retainedRegularTransparent{
+                regularTransparent.red * frontRemain,
+                regularTransparent.green * frontRemain,
+                regularTransparent.blue * frontRemain,
+                regularTransparent.alpha * frontRemain};
+            const RasterWorkbenchLinearPixel transparentLayer = overLinear(
+                frontTransparent, retainedRegularTransparent);
+            const QRgb transparentDisplay = displayPremultiplied(
+                transparentLayer);
+            if (opaqueRow != nullptr) opaqueRow[x] = opaqueDisplay;
+            if (transparentRow != nullptr)
+                transparentRow[x] = transparentDisplay;
+
+            const QRgb combined = displayPremultiplied(final);
+            destination[x] = compositeDisplay(combined, destination[x]);
         }
     }
     return true;

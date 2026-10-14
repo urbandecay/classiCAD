@@ -9634,6 +9634,147 @@ int main(int argc, char *argv[])
                                 matcapSlotsQPainterDisplaySaved &&
                                 matcapSlotsQPainterProbesVisible,
                             "GPU and QPainter MatCap per-face material-slot fixtures must capture all visible faces in display and scene-linear output");
+
+                        ViewportRenderObject transparentSlotsObject =
+                            materialSlotsObject;
+                        for (WorkbenchMaterialData &material :
+                             transparentSlotsObject.meshMaterials) {
+                            material.alpha = 0.5f;
+                        }
+                        CurveHitTester transparentSlotsHitTester;
+                        ViewportRenderer transparentSlotsRenderer(
+                            gpuTransform, transparentSlotsHitTester);
+                        transparentSlotsRenderer.setShadingSettings(
+                            studioSlotsShading);
+                        QImage transparentSlotsDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        transparentSlotsDisplay.fill(Qt::transparent);
+                        RasterWorkbenchFragmentSink transparentSlotsFragments;
+                        QPainter transparentSlotsPainter(
+                            &transparentSlotsDisplay);
+                        transparentSlotsPainter.setRenderHint(
+                            QPainter::Antialiasing, false);
+                        transparentSlotsRenderer.drawShape(
+                            transparentSlotsPainter,
+                            transparentSlotsObject.shape, glSize, false,
+                            false, true, QColor(), QString(), 0.0,
+                            transparentSlotsObject.objectId,
+                            transparentSlotsObject.geometryRevision,
+                            transparentSlotsObject.preparedDepthGeometry.data(),
+                            {}, transparentSlotsObject.displayColorSceneLinear,
+                            transparentSlotsObject.workbenchMaterial,
+                            transparentSlotsObject.displayName,
+                            transparentSlotsObject.libraryPath,
+                            identityMeshObjectTransform,
+                            transparentSlotsObject.meshMaterials,
+                            &transparentSlotsFragments);
+                        transparentSlotsPainter.end();
+                        const Point3D materialViewDirection =
+                            gpuTransform.viewDirection();
+                        const Point3D materialViewUp = gpuTransform.viewUp();
+                        const QVector3D materialFacing = workbenchNormalize(
+                            QVector3D(float(materialViewDirection.x),
+                                      float(materialViewDirection.y),
+                                      float(materialViewDirection.z)));
+                        const QVector3D materialUp(
+                            float(materialViewUp.x), float(materialViewUp.y),
+                            float(materialViewUp.z));
+                        const QVector3D materialRight = workbenchNormalize(
+                            QVector3D::crossProduct(materialUp,
+                                                    materialFacing));
+                        WorkbenchStudioLighting transparentSlotsLighting =
+                            workbenchStudioLightingPreset(
+                                studioSlotsShading.studioLightPreset);
+                        transparentSlotsLighting.useSpecular =
+                            studioSlotsShading.specularLighting &&
+                            transparentSlotsLighting.useSpecular;
+                        transparentSlotsLighting =
+                            workbenchStudioLightingForView(
+                                transparentSlotsLighting,
+                                studioSlotsShading.studioLightRotationDegrees,
+                                studioSlotsShading.worldSpaceLighting,
+                                materialRight, materialUp, materialFacing);
+                        const std::array<QPoint, 3> transparentSlotProbes{
+                            QPoint(320, 120), QPoint(230, 260),
+                            QPoint(420, 275)};
+                        const std::array<QVector3D, 3>
+                            transparentSlotWorldNormals{
+                                QVector3D(0.0f, 0.0f, 1.0f),
+                                QVector3D(0.0f, -1.0f, 0.0f),
+                                QVector3D(1.0f, 0.0f, 0.0f)};
+                        bool transparentSlotFragmentsPresent =
+                            transparentSlotsFragments.size() > 5000;
+                        bool transparentSlotAlphasMatch = true;
+                        bool transparentSlotLightingMatches = true;
+                        for (int slot = 0; slot < 3; ++slot) {
+                            const RasterWorkbenchLinearFragment *faceFragment =
+                                nullptr;
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 transparentSlotsFragments) {
+                                if (fragment.x !=
+                                        transparentSlotProbes[slot].x() ||
+                                    fragment.y !=
+                                        transparentSlotProbes[slot].y()) {
+                                    continue;
+                                }
+                                const QVector3D fragmentNormal(
+                                    fragment.worldNormal[0],
+                                    fragment.worldNormal[1],
+                                    fragment.worldNormal[2]);
+                                if (QVector3D::dotProduct(
+                                        fragmentNormal,
+                                        transparentSlotWorldNormals[slot]) >
+                                    0.99f) {
+                                    faceFragment = &fragment;
+                                    break;
+                                }
+                            }
+                            if (faceFragment == nullptr) {
+                                transparentSlotFragmentsPresent = false;
+                                continue;
+                            }
+                            transparentSlotAlphasMatch &=
+                                std::abs(faceFragment->alpha - 0.5f) <
+                                0.003f;
+                            const QVector3D worldNormal(
+                                faceFragment->worldNormal[0],
+                                faceFragment->worldNormal[1],
+                                faceFragment->worldNormal[2]);
+                            const QVector3D viewNormal(
+                                QVector3D::dotProduct(worldNormal,
+                                                      materialRight),
+                                QVector3D::dotProduct(worldNormal, materialUp),
+                                QVector3D::dotProduct(worldNormal,
+                                                      materialFacing));
+                            // Workbench uses a constant view-space incident
+                            // direction for orthographic rendering.
+                            const QVector3D incidentView(0.0f, 0.0f, 1.0f);
+                            const WorkbenchMaterialData &material =
+                                transparentSlotsObject.meshMaterials[slot];
+                            const WorkbenchPackedMaterialData packed =
+                                workbenchPackMaterialData(
+                                    material.metallic, material.roughness,
+                                    material.alpha);
+                            const QVector3D expected = workbenchStudioShade(
+                                material.baseColorSceneLinear, viewNormal,
+                                incidentView, packed.roughness,
+                                packed.metallic, transparentSlotsLighting);
+                            const QVector3D actual(
+                                faceFragment->sceneLinearRgb[0],
+                                faceFragment->sceneLinearRgb[1],
+                                faceFragment->sceneLinearRgb[2]);
+                            transparentSlotLightingMatches &=
+                                (expected - actual).length() < 0.00001f;
+                        }
+                        passed &= check(
+                            transparentSlotFragmentsPresent,
+                            "QPainter transparent Studio fixture must expose all three face-slot fragments");
+                        passed &= check(
+                            transparentSlotAlphasMatch,
+                            "QPainter transparent Studio face-slot fragments must preserve material alpha 0.5");
+                        passed &= check(
+                            transparentSlotLightingMatches,
+                            "QPainter transparent Studio material slots must shade with the first 8-bit packed payload, without opaque G-buffer quantization");
                     }
                     const QString matcapBackfaceCaptureDirectory =
                         qEnvironmentVariable(

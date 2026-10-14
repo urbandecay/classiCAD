@@ -4709,8 +4709,15 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   distinct payloads.
 - This verifies one opaque mesh with three visible face slots for Studio
   Default. Other Studio presets/rotations and roughness/metallic values,
-  textured and transparent slots, additional slot counts, and broad mesh
-  parity remain open. Blender 5.2.2's
+  textured slots, additional slot counts, and broad mesh parity remain open.
+  An offscreen QPainter fragment contract also verifies the three transparent
+  Studio slots preserve alpha `0.5` and shade from the initial 8-bit packed
+  material payload, without the opaque-only 5-bit roughness/3-bit metallic
+  truncation. This checks per-fragment payload behavior; it does not establish
+  final transparent OIT resolve parity across classiCAD and Blender. Blender
+  5.2.2's transparent accumulation path is pinned in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L496-L522).
+  Blender 5.2.2's
   deferred Workbench resolve and material
   payload are pinned in
   [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620)
@@ -4719,7 +4726,8 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - Validation: `cmake --build build -j4` passed with the dependency audit; the
   offscreen `viewport_render_contracts` capture passed; Blender reported
   version 5.2.2; and `workbench_display_probe_compare.py` passed for both GPU
-  and QPainter PNG/PFM pairs.
+  and QPainter PNG/PFM pairs. The transparent payload and alpha fragment
+  contract passed in the same offscreen `viewport_render_contracts` test.
 
 #### `check_normal+y` MatCap per-face material slots
 

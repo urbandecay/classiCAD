@@ -7776,6 +7776,54 @@ int main(int argc, char *argv[])
                                     patternedTextureObject,
                                     studioTextureShading);
                         }
+                        ViewportRenderObject extendedTextureObject =
+                            patternedTextureObject;
+                        QVector<QPointF> extendedUvCorners;
+                        extendedUvCorners.reserve(
+                            extendedTextureObject.shape.polygonMesh.uvMaps[0]
+                                .cornerValues.size());
+                        for (const QPointF &uv :
+                             extendedTextureObject.shape.polygonMesh.uvMaps[0]
+                                 .cornerValues) {
+                            extendedUvCorners.append(
+                                QPointF(uv.x() * 2.0 - 0.5,
+                                        uv.y() * 2.0 - 0.5));
+                        }
+                        extendedTextureObject.shape.polygonMesh.uvMaps[0]
+                            .cornerValues = extendedUvCorners;
+                        if (!extendedTextureObject.meshMaterials.isEmpty()) {
+                            extendedTextureObject.meshMaterials[0]
+                                .textureImageInterpolation =
+                                QStringLiteral("Linear");
+                        }
+                        const QStringList textureExtensionModes{
+                            QStringLiteral("REPEAT"),
+                            QStringLiteral("EXTEND"),
+                            QStringLiteral("CLIP"),
+                            QStringLiteral("MIRROR")};
+                        bool textureExtensionCapturesSucceeded = true;
+                        for (const QString &extension :
+                             textureExtensionModes) {
+                            if (!extendedTextureObject.meshMaterials.isEmpty()) {
+                                extendedTextureObject.meshMaterials[0]
+                                    .textureImageExtension = extension;
+                            }
+                            const QString extensionStem =
+                                QStringLiteral("color_texture_extension_%1")
+                                    .arg(extension.toLower());
+                            textureExtensionCapturesSucceeded &=
+                                captureGpuColorSource(
+                                    extensionStem, extendedTextureObject,
+                                    textureColorShading) &&
+                                captureQPainterColorSource(
+                                    extensionStem, extendedTextureObject,
+                                    textureColorShading);
+                        }
+                        passed &= check(
+                            textureExtensionCapturesSucceeded,
+                            "matched GPU and QPainter Image Texture extension captures must render all four UV extension modes");
+                        lightingCapturesSucceeded &=
+                            textureExtensionCapturesSucceeded;
 
                         // Exercise Image Texture filtering through the
                         // production GPU path for a planar NURBS patch. Its

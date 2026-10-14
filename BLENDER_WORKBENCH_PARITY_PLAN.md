@@ -5188,15 +5188,18 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L412).
   Source review found that QPainter byte and scene-linear float color sampling
   instead flipped V before calculating the row, causing upper UDIM rows such
-  as tile 1011 to resolve as missing. Both samplers now select
-  `floor(uv.y)` and pass the tile-local V coordinate to their image sampler,
-  which performs the image-row flip. The alpha sampler already used this
-  ordering.
+  as tile 1011 to resolve as missing. The mesh raster adapter already stores
+  V-flipped UVs for its top-down image path, so the tiled branch now recovers
+  the original Blender UV for tile selection. The byte sampler then flips the
+  tile-local V for QImage rows, while the float sampler passes local Blender V
+  to its own row-flipping sampler. The alpha sampler already selected tiles
+  from original UVs.
 - Validation: `cmake --build build -j4` passed with the dependency audit.
-  Offscreen CTest `viewport_render_contracts` passed (1/1, 27.37 seconds); its
-  vertical UDIM fixture uses different colors and asymmetric alpha in tiles
-  1001 and 1011 and checks that both rows are sampled. No matched Blender
-  render comparison was made for this category.
+  Offscreen CTest `viewport_render_contracts` passed (1/1, 38.80 seconds) with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR` set, which activates the vertical
+  UDIM checks. Its byte tiles 1001/1011 use distinct colors and asymmetric
+  alpha, and the float variant requires scene-linear fragments from both
+  rows. No matched Blender render comparison was made for the UDIM fix itself.
 
 ### QPainter scene-linear float UDIM row contract (2026-10-14)
 
@@ -5206,10 +5209,36 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   samples from both rows. This directly covers the float color sampler's
   tile selection while preserving the existing image-byte and asymmetric
   alpha checks.
+- Validation: the capture-enabled offscreen CTest `viewport_render_contracts`
+  passed (1/1, 38.80 seconds), including this float-row assertion. This is a
+  renderer contract, not a matched Blender float-UDIM render comparison; an
+  equivalent float-image Blender fixture remains open.
+
+### Workbench Image Texture extension-mode comparison (2026-10-14)
+
+- Added opt-in matched captures for Blender 5.2.2 and classiCAD GPU/QPainter
+  using the existing nonblank polygon cube and asymmetric 2×2 sRGB texture.
+  The cube's X/Z-derived UVs are scaled into `[-0.5, 1.5]` so Repeat, Extend,
+  Clip, and Mirror are all exercised outside the image bounds. Blender's
+  reference helper now accepts an Image Texture extension and patterned-UV
+  scale/offset. Workbench 5.2.2 maps these sampler modes in pinned
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L540).
+- For Repeat, Extend, and Mirror, GPU and QPainter display captures each have
+  the same foreground-mask result as the existing cube edge fixture: 224 XOR
+  pixels and IoU `0.997991`. In shared foreground regions, GPU channel MAE is
+  `0.0157–0.0508/255` and QPainter channel MAE is `0.2598–0.3081/255` across
+  those three modes. Clip yields GPU 5 XOR / IoU `0.999885` and QPainter 57
+  XOR / IoU `0.998690`; common-foreground channel MAE is `0.0667/255` GPU and
+  `0.2788/255` QPainter. The localized Clip mask difference is consistent with
+  coverage at transparent image borders; no sampler or production code change
+  is justified by this sweep.
 - Validation: `cmake --build build -j4` passed with the dependency audit;
-  offscreen CTest `viewport_render_contracts` passed (1/1, 26.08 seconds).
-  This is a renderer contract, not a matched Blender float-UDIM render
-  comparison; an equivalent float-image Blender fixture remains open.
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  38.80 seconds). Blender reported 5.2.2 LTS for all four references, and
+  `workbench_image_compare.py` completed for eight GPU/QPainter PNG pairs.
+  The captures use Flat lighting, AA Off, zero dither, the matched orthographic
+  cube camera, and a neutral World background. This does not establish alpha
+  cutout parity for all extension/filter combinations or other geometries.
 
 ### Matched GPU cavity effect comparison (2026-10-14)
 

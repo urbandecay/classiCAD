@@ -375,7 +375,8 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
         return false;
     }
     sampleWorkbenchImage(tile.value(),
-                         QPointF(uv.x() - tileU, uv.y() - tileV),
+                         QPointF(uv.x() - tileU,
+                                 1.0 - (uv.y() - tileV)),
                          interpolation, extension, rgba, linearRgb, srgb);
     return true;
 }
@@ -2281,13 +2282,17 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         const QPointF uv =
                             (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
                              triangle.uvs[2] * p2) / denominator;
+                        // Mesh raster UVs are pre-flipped for top-down QImage
+                        // sampling. UDIM row selection must recover Blender's
+                        // original bottom-up UV before looking up a tile.
+                        const QPointF udimUv(uv.x(), 1.0 - uv.y());
                         uchar rgba[4]{};
                         float linearRgb[3]{};
                         float floatRgba[4]{};
                         if (hasFloatTexture) {
                             const bool sampled = triangle.tiledTexture
                                 ? sampleWorkbenchFloatUdimImage(
-                                    triangle.floatTextureTiles, uv,
+                                    triangle.floatTextureTiles, udimUv,
                                     triangle.textureInterpolation,
                                     triangle.textureExtension, floatRgba)
                                 : (sampleWorkbenchFloatImage(
@@ -2302,7 +2307,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             }
                         } else if (triangle.tiledTexture) {
                             if (!sampleWorkbenchUdimImage(
-                                    triangle.textureTiles, uv,
+                                    triangle.textureTiles, udimUv,
                                     triangle.textureInterpolation,
                                     triangle.textureExtension, rgba,
                                     linearRgb, triangle.textureSrgb)) {

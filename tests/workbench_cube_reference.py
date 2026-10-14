@@ -214,6 +214,24 @@ def arguments():
         help="Image Texture interpolation used for TEXTURE color source",
     )
     parser.add_argument(
+        "--texture-extension",
+        choices=("REPEAT", "EXTEND", "CLIP", "MIRROR"),
+        default="REPEAT",
+        help="Image Texture extension used for TEXTURE color source",
+    )
+    parser.add_argument(
+        "--texture-uv-scale",
+        type=float,
+        default=1.0,
+        help="multiply patterned cube UV coordinates by this value",
+    )
+    parser.add_argument(
+        "--texture-uv-offset",
+        type=float,
+        default=0.0,
+        help="add this value to patterned cube UV coordinates",
+    )
+    parser.add_argument(
         "--texture-uv-pattern",
         action="store_true",
         help="vary cube UVs from vertex X/Z for a patterned image comparison",
@@ -340,6 +358,10 @@ def main():
     args = arguments()
     if any(dimension <= 0 for dimension in args.resolution):
         raise ValueError("render dimensions must be positive")
+    if not math.isfinite(args.texture_uv_scale) or not math.isfinite(
+        args.texture_uv_offset
+    ):
+        raise ValueError("texture UV scale and offset must be finite")
     if (not math.isfinite(args.material_alpha) or
             not 0.0 <= args.material_alpha <= 1.0):
         raise ValueError("material alpha must be finite and in [0, 1]")
@@ -479,6 +501,7 @@ def main():
             if args.texture_alpha_mode:
                 image_node.image.alpha_mode = args.texture_alpha_mode
             image_node.interpolation = args.texture_interpolation
+            image_node.extension = args.texture_extension
             image_node.show_texture = True
             material.node_tree.nodes.active = image_node
             uv_layer = cube.data.uv_layers.active.data
@@ -489,8 +512,10 @@ def main():
                             cube.data.loops[loop_index].vertex_index
                         ].co
                         uv_layer[loop_index].uv = (
-                            (vertex.x + 1.0) * 0.5,
-                            (vertex.z + 1.0) * 0.5,
+                            (vertex.x + 1.0) * 0.5 * args.texture_uv_scale
+                            + args.texture_uv_offset,
+                            (vertex.z + 1.0) * 0.5 * args.texture_uv_scale
+                            + args.texture_uv_offset,
                         )
             else:
                 for loop in uv_layer:
@@ -632,6 +657,7 @@ def main():
         if args.texture_alpha_mode:
             image_node.image.alpha_mode = args.texture_alpha_mode
         image_node.interpolation = args.texture_interpolation
+        image_node.extension = args.texture_extension
         image_node.show_texture = True
         material.node_tree.nodes.active = image_node
         mesh.materials.append(material)
@@ -679,6 +705,7 @@ def main():
         if args.texture_alpha_mode:
             image_node.image.alpha_mode = args.texture_alpha_mode
         image_node.interpolation = args.texture_interpolation
+        image_node.extension = args.texture_extension
         image_node.show_texture = True
         material.node_tree.nodes.active = image_node
         mesh.materials.append(material)
@@ -702,6 +729,7 @@ def main():
             if args.texture_alpha_mode:
                 secondary_node.image.alpha_mode = args.texture_alpha_mode
             secondary_node.interpolation = args.texture_interpolation
+            secondary_node.extension = args.texture_extension
             secondary_node.show_texture = True
             secondary_material.node_tree.nodes.active = secondary_node
             mesh.materials.append(secondary_material)

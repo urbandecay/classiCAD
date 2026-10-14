@@ -4108,3 +4108,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `workbench_effect_delta_compare.py` ran against Blender 5.2.2. This covers
   one unselected default cube only; other casters, receivers, directions,
   focus/shift settings, and QPainter shadow configurations remain open.
+
+### Matched QPainter Linear UDIM texture comparison (2026-10-14)
+
+- Compared the existing QPainter two-tile polygon-mesh capture with a fresh
+  Blender 5.2.2 `MESH_TEXTURE` render using Flat lighting, Linear Image Texture
+  filtering, STRAIGHT alpha, AA Off, and the same orthographic view. The Blender
+  World background was set to the classiCAD fixture's scene-linear background.
+- The QPainter fragment PFM stores rows in Qt top-down order, while Blender's
+  PFM is bottom-up. `workbench_pfm_compare.py` now accepts
+  `--candidate-top-down` to flip such captures before comparison and labels the
+  row handling in its output. After alignment, foreground-mask IoU is 0.985560
+  (464 XOR pixels; 31,711 Blender and 32,091 QPainter pixels). The two-pixel
+  silhouette interior, excluding a six-pixel band around the shared triangle
+  diagonal, contains 26,278 pixels; scene-linear RGB MAE is 0.000213, p95
+  0.000815, and maximum 0.000815. Whole-frame channel MAEs are 0.000566 red,
+  0.000630 green, and 0.000054 blue; larger maxima localize to cutout/edge
+  coverage rather than the stable interior sample colors.
+- This verifies Linear-filter sampling across two horizontal UDIM tiles for
+  one external PNG and one mesh fixture; it does not cover other extensions,
+  vertical tiles, float images, other texture filters, NURBS, or GPU parity.
+  Blender's pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60)
+  supplies the tile lookup and filtering behavior.
+- Validation: the offscreen `viewport_render_contracts` capture passed, the
+  reference was rendered with Blender 5.2.2, and
+  `workbench_pfm_compare.py --candidate-top-down` completed on the paired
+  captures. The 640×480 coverage edge differences remain recorded separately.

@@ -3,8 +3,8 @@
 
 Foreground is defined as a pixel whose largest RGB component is greater than
 the supplied threshold in either image. PFM rows are bottom-up by definition;
-the tool preserves that order for both images, so paired captures compare in
-the same coordinate convention.
+the tool preserves that order for both images. Use --candidate-top-down for
+QPainter fragment captures serialized in Qt's top-down row order.
 """
 
 import argparse
@@ -151,6 +151,16 @@ def compare(reference, candidate, threshold, edge_threshold=0.01):
         report["edge_coverage"] = {"available": False,
                                    "reason": "captures need stable foreground and background regions"}
     return report
+
+
+def flip_rows(capture):
+    width, height, pixels = capture
+    row_values = width * 3
+    flipped = array.array("f")
+    for row in range(height - 1, -1, -1):
+        start = row * row_values
+        flipped.extend(pixels[start : start + row_values])
+    return width, height, flipped
 
 
 def corner_background(width, height, pixels):
@@ -337,6 +347,11 @@ def parse_args(argv=None):
               "image's median corner background (default: 0.01)"),
     )
     parser.add_argument(
+        "--candidate-top-down",
+        action="store_true",
+        help="flip candidate rows from Qt top-down order into PFM bottom-up order",
+    )
+    parser.add_argument(
         "--json-output",
         metavar="PATH",
         help="also write the concise report as JSON to PATH",
@@ -352,12 +367,17 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     try:
+        candidate = read_rgb_pfm(args.candidate)
+        if args.candidate_top_down:
+            candidate = flip_rows(candidate)
         report = compare(
             read_rgb_pfm(args.reference),
-            read_rgb_pfm(args.candidate),
+            candidate,
             args.threshold,
             args.edge_threshold,
         )
+        if args.candidate_top_down:
+            report["candidate_row_order"] = "top-down; flipped to PFM bottom-up"
         report["reference"] = os.path.basename(args.reference)
         report["candidate"] = os.path.basename(args.candidate)
         rendered = json.dumps(report, indent=2, sort_keys=True, allow_nan=False)

@@ -7478,12 +7478,8 @@ int main(int argc, char *argv[])
                                 display.size() == QSize(640, 480) &&
                                 display.save(displayPath);
                             const bool qpainterColorSourceCaptured =
-                                (captureCase.colorMode !=
-                                     ViewportColorMode::Object &&
-                                 captureCase.colorMode !=
-                                     ViewportColorMode::Random &&
-                                 captureCase.colorMode !=
-                                     ViewportColorMode::Custom) ||
+                                captureCase.colorMode ==
+                                    ViewportColorMode::Material ||
                                 captureQPainterColorSource(
                                     stem, colorSourceObject, colorShading);
                             lightingCapturesSucceeded &= linearSaved &&

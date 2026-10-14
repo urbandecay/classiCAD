@@ -2461,30 +2461,46 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   triangle boundaries with a fixed 4x4 subpixel grid. Covered subpixels also
   provide the edge pixel's perspective-correct interpolation weights, and
   fractional coverage is applied to the final alpha. Interior pixels keep the
-  existing center-sample path. The grid follows the target device pixel scale,
-  including high-DPI painting.
+  existing center-sample path. Edge samples are evaluated at destination
+  physical-pixel centers after applying `QPainter::deviceTransform`; temporary
+  rasters are tagged and placed at that physical-pixel scale.
 - This is a bounded edge-coverage approximation for the software fallback; it
   does not reproduce Blender's TAA/SMAA filters or temporal accumulation.
   Blender 5.2.2 performs AA after scene passes in
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc),
   while opaque mesh geometry is depth-tested in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc).
-  The C++ build passes. No matched-image comparison was run; that remains part
-  of the acceptance checklist.
+  A production-path CPU contract compares the exterior edge profile with a
+  matching NURBS quad at DPR 1, 1.25, 1.5, and 2. The C++ build and focused
+  `workbench_raster_fragment_contracts` test pass. Mesh shared-edge and exact
+  vertex fill rules are outside that edge-profile assertion. No matched Blender
+  image comparison was run; that remains part of the acceptance checklist.
 
 ## QPainter NURBS triangle edge coverage (2026-10-13)
 
+- **DPR footprint correction (2026-10-14):** A call-site audit found that the
+  mesh raster sampled target physical pixels while the NURBS raster still
+  sampled logical pixels. At DPR above 1 this made NURBS edge coverage span
+  multiple physical pixels. Both paths now transform projected vertices with
+  `QPainter::deviceTransform`, rasterize and place their temporary images in
+  physical-pixel space, and map fragment observations back to logical
+  coordinates. The planar NURBS resolve uses the same target-pixel dimensions
+  under its existing allocation bound.
 - The QPainter tessellated NURBS surface and solid face raster paths now use
-  the same bounded 4x4 edge coverage estimate as polygon meshes. The
-  subpixel-averaged barycentric weights feed textured UV sampling and
+  the same bounded 4x4 physical-pixel edge coverage estimate as polygon meshes.
+  The subpixel-averaged barycentric weights feed textured UV sampling and
   perspective shading, and fractional coverage reaches both the color alpha
-  and the software fragment sink. Image alpha cutoff behavior is unchanged.
+  and the software fragment sink. Planar untextured coverage resolve also
+  accumulates at physical-pixel resolution under the existing one-million
+  pixel bound. Image alpha cutoff behavior is unchanged.
 - This makes the NURBS software edges use the same approximation as mesh
   edges; it does not reproduce Blender's TAA/SMAA temporal and filter stages.
   Blender 5.2.2 AA remains a later pass in
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc).
-  The C++ build passes. No controlled Blender image comparison was run; that
-  remains open.
+  The production-path edge-profile contract passes at DPR 1, 1.25, 1.5, and 2;
+  the full C++ build passes. It excludes exact corners and the mesh's internal
+  triangulation seam, whose shared-edge fill rules differ. No controlled
+  Blender image comparison was run; that remains open.
 
 ## Phase Two: imported scene materials and result contracts (2026-10-13)
 

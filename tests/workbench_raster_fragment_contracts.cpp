@@ -36,6 +36,47 @@ bool sameImage(const QImage &a, const QImage &b)
     return true;
 }
 
+bool sameOuterAlphaProfile(const QImage &a, const QImage &b)
+{
+    // Compare the exterior silhouette away from the four vertices. Mesh and
+    // NURBS tessellators can use different shared-edge fill rules along their
+    // internal diagonals and exact corners, which is separate from the DPR
+    // sampling footprint this contract exercises.
+    if (a.size() != b.size()) return false;
+    int minX = a.width(), minY = a.height(), maxX = -1, maxY = -1;
+    for (int y = 0; y < a.height(); ++y) {
+        for (int x = 0; x < a.width(); ++x) {
+            if (qAlpha(a.pixel(x, y)) > 0 || qAlpha(b.pixel(x, y)) > 0) {
+                minX = std::min(minX, x);
+                minY = std::min(minY, y);
+                maxX = std::max(maxX, x);
+                maxY = std::max(maxY, y);
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) return false;
+    const auto onOutsideEdge = [&](const QImage &image, int x, int y) {
+        if (qAlpha(image.pixel(x, y)) == 0) return false;
+        return x == 0 || y == 0 || x + 1 == image.width() ||
+               y + 1 == image.height() ||
+               qAlpha(image.pixel(x - 1, y)) == 0 ||
+               qAlpha(image.pixel(x + 1, y)) == 0 ||
+               qAlpha(image.pixel(x, y - 1)) == 0 ||
+               qAlpha(image.pixel(x, y + 1)) == 0;
+    };
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            if (!onOutsideEdge(a, x, y) && !onOutsideEdge(b, x, y)) continue;
+            const bool nearHorizontalCorner =
+                (x - minX <= 1 || maxX - x <= 1) &&
+                (y - minY <= 1 || maxY - y <= 1);
+            if (nearHorizontalCorner) continue;
+            if (qAlpha(a.pixel(x, y)) != qAlpha(b.pixel(x, y))) return false;
+        }
+    }
+    return true;
+}
+
 bool imagesWithinOneCodeValue(const QImage &a, const QImage &b)
 {
     if (a.size() != b.size() || a.format() != b.format()) return false;
@@ -92,6 +133,25 @@ QImage render(ViewportRenderer &renderer, const Shape &shape,
                        QColor(Qt::white), {}, 0.0, id, 1, nullptr, {},
                        std::nullopt, material, {}, {},
                        identityMeshObjectTransform, meshMaterials, sink);
+    painter.end();
+    return image;
+}
+
+QImage renderAtDpr(ViewportRenderer &renderer, const Shape &shape,
+                   const QSize &logicalSize, qreal dpr, ObjectId id,
+                   std::optional<WorkbenchMaterialData> material = std::nullopt,
+                   const QVector<WorkbenchMaterialData> &meshMaterials = {})
+{
+    QImage image(QSize(qRound(logicalSize.width() * dpr),
+                       qRound(logicalSize.height() * dpr)),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(dpr);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    renderer.drawShape(painter, shape, logicalSize, false, false, false,
+                       QColor(Qt::white), {}, 0.0, id, 1, nullptr, {},
+                       std::nullopt, material, {}, {},
+                       identityMeshObjectTransform, meshMaterials);
     painter.end();
     return image;
 }
@@ -315,6 +375,51 @@ int main(int argc, char **argv)
         sameFragmentProbes(firstDiagonalFragments,
                            alternateDiagonalFragments),
         "scene-linear transparent fragments must be invariant under planar NURBS tessellation diagonal changes");
+    Shape coverageMesh = mesh;
+    Shape coverageSurface = surface;
+    constexpr double coverageOffsetX = 0.013;
+    constexpr double coverageOffsetY = -0.021;
+    for (Point3D &point : coverageMesh.polygonMesh.vertices) {
+        point.x += coverageOffsetX;
+        point.y += coverageOffsetY;
+        point.z = -2.0;
+    }
+    for (Point3D &point : coverageSurface.nurbsSurface.controlPoints) {
+        point.x += coverageOffsetX;
+        point.y += coverageOffsetY;
+        point.z = -2.0;
+    }
+    QVector<WorkbenchMaterialData> coverageMeshMaterials(1);
+    coverageMeshMaterials[0] = opaqueSurfaceMaterial;
+    bool coverageProfilesMatch = true;
+    bool sawPartialCoverage = false;
+    bool coverageIsSixteenthBased = true;
+    for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+        const QImage meshCoverage = renderAtDpr(
+            renderer, coverageMesh, size, dpr, ObjectId::fromValue(meshId),
+            std::nullopt, coverageMeshMaterials);
+        const QImage nurbsCoverage = renderAtDpr(
+            renderer, coverageSurface, size, dpr,
+            ObjectId::fromValue(surfaceId), opaqueSurfaceMaterial);
+        const bool profilesMatch =
+            sameOuterAlphaProfile(meshCoverage, nurbsCoverage);
+        coverageProfilesMatch &= profilesMatch;
+        for (int y = 0; y < nurbsCoverage.height(); ++y) {
+            for (int x = 0; x < nurbsCoverage.width(); ++x) {
+                const int alpha = qAlpha(nurbsCoverage.pixel(x, y));
+                if (alpha > 0 && alpha < 255) {
+                    sawPartialCoverage = true;
+                    coverageIsSixteenthBased &=
+                        std::abs(alpha - qRound(alpha / 255.0 * 16.0) *
+                                                 (255.0 / 16.0)) <= 1;
+                }
+            }
+        }
+    }
+    passed &= check(coverageProfilesMatch,
+                    "QPainter mesh and NURBS edge coverage must match at DPR 1, 1.25, 1.5, and 2");
+    passed &= check(sawPartialCoverage && coverageIsSixteenthBased,
+                    "QPainter fractional triangle-edge alpha must retain the bounded 4x4 coverage steps");
     passed &= check(std::abs(meshDepth - surfaceDepth) > 0.5f,
                     "camera depth must vary with surface position");
 

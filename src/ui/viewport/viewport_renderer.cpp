@@ -49,6 +49,53 @@ namespace {
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 
+qreal workbenchTrianglePixelCoverage(
+    const std::array<QPointF, 3> &points, qreal area, qreal px, qreal py,
+    qreal stepX, qreal stepY, qreal *b0, qreal *b1, qreal *b2)
+{
+    const auto weightsAt = [&](qreal x, qreal y,
+                               qreal *w0, qreal *w1, qreal *w2) {
+        *w1 = ((x - points[0].x()) * (points[2].y() - points[0].y()) -
+               (y - points[0].y()) * (points[2].x() - points[0].x())) / area;
+        *w2 = ((points[1].x() - points[0].x()) * (y - points[0].y()) -
+               (points[1].y() - points[0].y()) * (x - points[0].x())) / area;
+        *w0 = 1.0 - *w1 - *w2;
+    };
+    weightsAt(px, py, b0, b1, b2);
+    const qreal edge0 = std::hypot(points[2].x() - points[1].x(),
+                                   points[2].y() - points[1].y());
+    const qreal edge1 = std::hypot(points[0].x() - points[2].x(),
+                                   points[0].y() - points[2].y());
+    const qreal edge2 = std::hypot(points[1].x() - points[0].x(),
+                                   points[1].y() - points[0].y());
+    const qreal nearestEdge = std::min({std::abs(*b0) * std::abs(area) / edge0,
+                                        std::abs(*b1) * std::abs(area) / edge1,
+                                        std::abs(*b2) * std::abs(area) / edge2});
+    if (*b0 >= 0.0 && *b1 >= 0.0 && *b2 >= 0.0 &&
+        nearestEdge >= 0.75 * std::max(stepX, stepY)) {
+        return qreal(1.0);
+    }
+    qreal sum0 = 0.0, sum1 = 0.0, sum2 = 0.0;
+    int covered = 0;
+    for (int sy = 0; sy < 4; ++sy) {
+        for (int sx = 0; sx < 4; ++sx) {
+            qreal w0, w1, w2;
+            weightsAt(px + (sx - 1.5) * stepX / 4.0,
+                      py + (sy - 1.5) * stepY / 4.0, &w0, &w1, &w2);
+            if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
+            sum0 += w0;
+            sum1 += w1;
+            sum2 += w2;
+            ++covered;
+        }
+    }
+    if (covered == 0) return qreal(0.0);
+    *b0 = sum0 / covered;
+    *b1 = sum1 / covered;
+    *b2 = sum2 / covered;
+    return covered / 16.0;
+}
+
 QVector3D transformWorkbenchMeshNormal(const std::array<double, 16> &matrix,
                                        const Point3D &normal)
 {
@@ -1948,86 +1995,47 @@ void ViewportRenderer::drawShape(QPainter &painter,
             meshViewLighting, shadingSettings_.studioLightRotationDegrees,
             shadingSettings_.worldSpaceLighting, meshViewRight,
             meshViewUpVector, meshViewFacing);
-        const auto trianglePixelCoverage = [](const std::array<QPointF, 3> &points,
-                                               qreal area, qreal px, qreal py,
-                                               qreal stepX, qreal stepY,
-                                               qreal *b0, qreal *b1, qreal *b2) {
-            const auto weightsAt = [&](qreal x, qreal y,
-                                       qreal *w0, qreal *w1, qreal *w2) {
-                *w1 = ((x - points[0].x()) * (points[2].y() - points[0].y()) -
-                       (y - points[0].y()) * (points[2].x() - points[0].x())) / area;
-                *w2 = ((points[1].x() - points[0].x()) * (y - points[0].y()) -
-                       (points[1].y() - points[0].y()) * (x - points[0].x())) / area;
-                *w0 = 1.0 - *w1 - *w2;
-            };
-            weightsAt(px, py, b0, b1, b2);
-            const qreal edge0 = std::hypot(points[2].x() - points[1].x(),
-                                           points[2].y() - points[1].y());
-            const qreal edge1 = std::hypot(points[0].x() - points[2].x(),
-                                           points[0].y() - points[2].y());
-            const qreal edge2 = std::hypot(points[1].x() - points[0].x(),
-                                           points[1].y() - points[0].y());
-            const qreal nearestEdge = std::min({std::abs(*b0) * std::abs(area) / edge0,
-                                                std::abs(*b1) * std::abs(area) / edge1,
-                                                std::abs(*b2) * std::abs(area) / edge2});
-            if (*b0 >= 0.0 && *b1 >= 0.0 && *b2 >= 0.0 &&
-                nearestEdge >= 0.75 * std::max(stepX, stepY)) {
-                return qreal(1.0);
-            }
-            qreal sum0 = 0.0, sum1 = 0.0, sum2 = 0.0;
-            int covered = 0;
-            for (int sy = 0; sy < 4; ++sy) {
-                for (int sx = 0; sx < 4; ++sx) {
-                    qreal w0, w1, w2;
-                    weightsAt(px + (sx - 1.5) * stepX / 4.0,
-                             py + (sy - 1.5) * stepY / 4.0, &w0, &w1, &w2);
-                    if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
-                    sum0 += w0; sum1 += w1; sum2 += w2;
-                    ++covered;
-                }
-            }
-            if (covered == 0) return qreal(0.0);
-            *b0 = sum0 / covered;
-            *b1 = sum1 / covered;
-            *b2 = sum2 / covered;
-            return covered / 16.0;
-        };
         const auto drawWorkbenchTriangle = [&](const MeshTriangle &triangle) {
             const QImage &texture = triangle.texture;
             const bool hasFloatTexture = triangle.floatTexture.isValid() ||
                                          !triangle.floatTextureTiles.isEmpty();
             const bool hasTexture = hasFloatTexture || !texture.isNull() ||
                                     !triangle.textureTiles.isEmpty();
-            const qreal area = (triangle.points[1].x() - triangle.points[0].x()) *
-                                   (triangle.points[2].y() - triangle.points[0].y()) -
-                               (triangle.points[1].y() - triangle.points[0].y()) *
-                                   (triangle.points[2].x() - triangle.points[0].x());
+            const QTransform deviceTransform = painter.deviceTransform();
+            bool inverseValid = false;
+            const QTransform logicalFromDevice =
+                deviceTransform.inverted(&inverseValid);
+            if (!inverseValid) return;
+            const std::array<QPointF, 3> devicePoints{
+                deviceTransform.map(triangle.points[0]),
+                deviceTransform.map(triangle.points[1]),
+                deviceTransform.map(triangle.points[2])};
+            const qreal area =
+                (devicePoints[1].x() - devicePoints[0].x()) *
+                    (devicePoints[2].y() - devicePoints[0].y()) -
+                (devicePoints[1].y() - devicePoints[0].y()) *
+                    (devicePoints[2].x() - devicePoints[0].x());
             if (std::abs(area) < 1.0e-12 ||
                 (!hasTexture && !triangle.useWorkbenchColor)) return;
             const qreal minX = std::clamp(
-                std::min({triangle.points[0].x(), triangle.points[1].x(), triangle.points[2].x()}),
-                0.0, qreal(viewportSize.width()));
+                std::min({devicePoints[0].x(), devicePoints[1].x(), devicePoints[2].x()}),
+                0.0, qreal(painter.device()->width()));
             const qreal maxX = std::clamp(
-                std::max({triangle.points[0].x(), triangle.points[1].x(), triangle.points[2].x()}),
-                0.0, qreal(viewportSize.width()));
+                std::max({devicePoints[0].x(), devicePoints[1].x(), devicePoints[2].x()}),
+                0.0, qreal(painter.device()->width()));
             const qreal minY = std::clamp(
-                std::min({triangle.points[0].y(), triangle.points[1].y(), triangle.points[2].y()}),
-                0.0, qreal(viewportSize.height()));
+                std::min({devicePoints[0].y(), devicePoints[1].y(), devicePoints[2].y()}),
+                0.0, qreal(painter.device()->height()));
             const qreal maxY = std::clamp(
-                std::max({triangle.points[0].y(), triangle.points[1].y(), triangle.points[2].y()}),
-                0.0, qreal(viewportSize.height()));
+                std::max({devicePoints[0].y(), devicePoints[1].y(), devicePoints[2].y()}),
+                0.0, qreal(painter.device()->height()));
             if (maxX <= minX || maxY <= minY) return;
-            const QTransform transform = painter.transform();
             const qreal dpr = painter.device() != nullptr
                 ? painter.device()->devicePixelRatioF() : 1.0;
-            const qreal scaleX = std::max<qreal>(
-                1.0e-6, std::abs(transform.m11()) * dpr);
-            const qreal scaleY = std::max<qreal>(
-                1.0e-6, std::abs(transform.m22()) * dpr);
             const int left = qFloor(minX);
             const int top = qFloor(minY);
-            const int width = std::max(1, qCeil((maxX - left) * scaleX));
-            const int height = std::max(1, qCeil((maxY - top) * scaleY));
+            const int width = std::max(1, qCeil(maxX) - left);
+            const int height = std::max(1, qCeil(maxY) - top);
             if (width > 16384 || height > 16384 ||
                 qint64(width) * height > 64 * 1024 * 1024) {
                 if (!hasTexture && triangle.useWorkbenchColor) {
@@ -2037,18 +2045,18 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 return;
             }
             QImage raster(width, height, QImage::Format_RGBA8888);
+            raster.setDevicePixelRatio(dpr);
             raster.fill(Qt::transparent);
             const qreal alpha = hasTexture ? triangle.color.alphaF()
                                            : triangle.sceneLinearAlpha;
             for (int y = 0; y < height; ++y) {
                 uchar *row = raster.scanLine(y);
-                const qreal py = top + (y + 0.5) / scaleY;
+                const qreal py = top + y + 0.5;
                 for (int x = 0; x < width; ++x) {
-                    const qreal px = left + (x + 0.5) / scaleX;
+                    const qreal px = left + x + 0.5;
                     qreal b0, b1, b2;
-                    const qreal coverage = trianglePixelCoverage(
-                        {triangle.points[0], triangle.points[1], triangle.points[2]},
-                        area, px, py, 1.0 / scaleX, 1.0 / scaleY,
+                    const qreal coverage = workbenchTrianglePixelCoverage(
+                        devicePoints, area, px, py, 1.0, 1.0,
                         &b0, &b1, &b2);
                     if (coverage <= 0.0) continue;
                     const qreal p0 = b0 * triangle.reciprocalDepths[0];
@@ -2198,7 +2206,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             (point0.z * p0 + point1.z * p1 + point2.z * p2) /
                                 denominator};
                         observeWorkbenchFragment(
-                            fragmentSink, painter, QPointF(px, py),
+                            fragmentSink, painter,
+                            logicalFromDevice.map(QPointF(px, py)),
                             fragmentPosition, meshCameraPosition,
                             meshViewDirection, shadedLinear, pixelAlpha,
                             shapeObjectId, transform_);
@@ -2221,7 +2230,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
             painter.save();
             painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-            painter.drawImage(QRectF(left, top, width / scaleX, height / scaleY), raster);
+            painter.setWorldTransform(QTransform());
+            bool baseInverseValid = false;
+            const QTransform baseLogicalFromDevice =
+                painter.deviceTransform().inverted(&baseInverseValid);
+            if (baseInverseValid) {
+                painter.drawImage(
+                    baseLogicalFromDevice.map(QPointF(left, top)), raster);
+            }
             painter.restore();
         };
         for (const MeshTriangle &triangle : triangles) {
@@ -3384,6 +3400,24 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         std::vector<CoverageResolvePixel> coverageResolvePixels;
         std::vector<CoverageResolveFragment> coverageResolveFragments;
         bool coverageResolveActive = false;
+        const QTransform coverageDeviceTransform = painter.deviceTransform();
+        bool coverageInverseValid = false;
+        const QTransform logicalFromCoverageDevice =
+            coverageDeviceTransform.inverted(&coverageInverseValid);
+        if (!coverageInverseValid) return;
+        const QTransform targetTransform = painter.transform();
+        const qreal targetDpr = painter.device() != nullptr
+            ? painter.device()->devicePixelRatioF() : 1.0;
+        const qreal coverageScaleX = std::max<qreal>(
+            1.0e-6, std::abs(targetTransform.m11()) * targetDpr);
+        const qreal coverageScaleY = std::max<qreal>(
+            1.0e-6, std::abs(targetTransform.m22()) * targetDpr);
+        const int coverageTargetWidth = painter.device() != nullptr
+            ? painter.device()->width()
+            : std::max(1, qRound(viewportSize.width() * coverageScaleX));
+        const int coverageTargetHeight = painter.device() != nullptr
+            ? painter.device()->height()
+            : std::max(1, qRound(viewportSize.height() * coverageScaleY));
         const auto appendTriangle = [&](const Point3D &a,
                                         const Point3D &b,
                                         const Point3D &c,
@@ -3409,47 +3443,16 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 !project(triangle.c, &screenC)) {
                 return;
             }
-            const qreal area = (screenB.x() - screenA.x()) *
-                                   (screenC.y() - screenA.y()) -
-                               (screenB.y() - screenA.y()) *
-                                   (screenC.x() - screenA.x());
+            const std::array<QPointF, 3> devicePoints{
+                coverageDeviceTransform.map(screenA),
+                coverageDeviceTransform.map(screenB),
+                coverageDeviceTransform.map(screenC)};
+            const qreal area =
+                (devicePoints[1].x() - devicePoints[0].x()) *
+                    (devicePoints[2].y() - devicePoints[0].y()) -
+                (devicePoints[1].y() - devicePoints[0].y()) *
+                    (devicePoints[2].x() - devicePoints[0].x());
             if (std::abs(area) < 1.0e-12) return;
-            const auto coverageWeights = [&](qreal px, qreal py,
-                                             qreal *w0, qreal *w1, qreal *w2) {
-                const auto weightsAt = [&](qreal x, qreal y,
-                                           qreal *a, qreal *b, qreal *c) {
-                    *b = ((x - screenA.x()) * (screenC.y() - screenA.y()) -
-                          (y - screenA.y()) * (screenC.x() - screenA.x())) / area;
-                    *c = ((screenB.x() - screenA.x()) * (y - screenA.y()) -
-                          (screenB.y() - screenA.y()) * (x - screenA.x())) / area;
-                    *a = 1.0 - *b - *c;
-                };
-                weightsAt(px, py, w0, w1, w2);
-                const qreal e0 = std::hypot(screenC.x() - screenB.x(), screenC.y() - screenB.y());
-                const qreal e1 = std::hypot(screenA.x() - screenC.x(), screenA.y() - screenC.y());
-                const qreal e2 = std::hypot(screenB.x() - screenA.x(), screenB.y() - screenA.y());
-                const qreal edgeDistance = std::min({std::abs(*w0) * std::abs(area) / e0,
-                                                     std::abs(*w1) * std::abs(area) / e1,
-                                                     std::abs(*w2) * std::abs(area) / e2});
-                if (*w0 >= 0.0 && *w1 >= 0.0 && *w2 >= 0.0 && edgeDistance >= 0.75) {
-                    return qreal(1.0);
-                }
-                qreal sum0 = 0.0, sum1 = 0.0, sum2 = 0.0;
-                int covered = 0;
-                for (int sy = 0; sy < 4; ++sy) {
-                    for (int sx = 0; sx < 4; ++sx) {
-                        qreal a, b, c;
-                        weightsAt(px + (sx - 1.5) * 0.25,
-                                  py + (sy - 1.5) * 0.25, &a, &b, &c);
-                        if (a < 0.0 || b < 0.0 || c < 0.0) continue;
-                        sum0 += a; sum1 += b; sum2 += c;
-                        ++covered;
-                    }
-                }
-                if (covered == 0) return qreal(0.0);
-                *w0 = sum0 / covered; *w1 = sum1 / covered; *w2 = sum2 / covered;
-                return covered / 16.0;
-            };
             // QPainter's screen Y axis points down, so a negative projected
             // signed area corresponds to Blender/OpenGL's CCW front face.
             bool frontFacing = area < 0.0;
@@ -3469,12 +3472,26 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 // Shade untextured triangles per sample as Workbench's resolve
                 // pass does. Keep the triangle's flat normal, while varying
                 // the incident direction across perspective views.
-                const int left = qFloor(std::max<qreal>(0, std::min({screenA.x(), screenB.x(), screenC.x()})));
-                const int top = qFloor(std::max<qreal>(0, std::min({screenA.y(), screenB.y(), screenC.y()})));
-                const int right = qCeil(std::min<qreal>(viewportSize.width(), std::max({screenA.x(), screenB.x(), screenC.x()})));
-                const int bottom = qCeil(std::min<qreal>(viewportSize.height(), std::max({screenA.y(), screenB.y(), screenC.y()})));
+                const int left = qFloor(std::clamp(
+                    std::min({devicePoints[0].x(), devicePoints[1].x(),
+                              devicePoints[2].x()}),
+                    0.0, qreal(coverageTargetWidth)));
+                const int top = qFloor(std::clamp(
+                    std::min({devicePoints[0].y(), devicePoints[1].y(),
+                              devicePoints[2].y()}),
+                    0.0, qreal(coverageTargetHeight)));
+                const int right = qCeil(std::clamp(
+                    std::max({devicePoints[0].x(), devicePoints[1].x(),
+                              devicePoints[2].x()}),
+                    0.0, qreal(coverageTargetWidth)));
+                const int bottom = qCeil(std::clamp(
+                    std::max({devicePoints[0].y(), devicePoints[1].y(),
+                              devicePoints[2].y()}),
+                    0.0, qreal(coverageTargetHeight)));
                 if (right <= left || bottom <= top) return;
-                if (qint64(right - left) * (bottom - top) > 4000000) {
+                const int rasterWidth = right - left;
+                const int rasterHeight = bottom - top;
+                if (qint64(rasterWidth) * rasterHeight > 4000000) {
                     painter.setBrush(shaded);
                     painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
                     return;
@@ -3497,8 +3514,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             1.0e-9);
                     }
                 }
-                QImage raster(right - left, bottom - top,
+                QImage raster(rasterWidth, rasterHeight,
                               QImage::Format_ARGB32_Premultiplied);
+                raster.setDevicePixelRatio(targetDpr);
                 raster.fill(Qt::transparent);
                 for (int y = 0; y < raster.height(); ++y) {
                     auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
@@ -3506,7 +3524,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         const qreal px = left + x + 0.5;
                         const qreal py = top + y + 0.5;
                         qreal w0, w1, w2;
-                        const qreal coverage = coverageWeights(px, py, &w0, &w1, &w2);
+                        const qreal coverage = workbenchTrianglePixelCoverage(
+                            devicePoints, area, px, py, 1.0, 1.0,
+                            &w0, &w1, &w2);
                         if (coverage <= 0.0) continue;
                         const qreal cw0 = w0 * reciprocal[0];
                         const qreal cw1 = w1 * reciprocal[1];
@@ -3539,17 +3559,24 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         if (fragmentSink != nullptr &&
                             !coverageResolveActive) {
                             observeWorkbenchFragment(
-                                fragmentSink, painter, QPointF(px, py),
+                                fragmentSink, painter,
+                                logicalFromCoverageDevice.map(QPointF(px, py)),
                                 fragmentPosition, cameraPosition, viewDirection,
                                 sampleLinear, sample.alphaF() * coverage, objectId,
                                 transform_);
                         }
                         if (coverageResolveActive) {
+                            const int pixelX = qFloor(px);
+                            const int pixelY = qFloor(py);
+                            if (pixelX < 0 || pixelX >= coverageTargetWidth ||
+                                pixelY < 0 || pixelY >= coverageTargetHeight) {
+                                continue;
+                            }
                             CoverageResolvePixel &resolved =
                                 coverageResolvePixels[
-                                    static_cast<size_t>(top + y) *
-                                        static_cast<size_t>(viewportSize.width()) +
-                                    static_cast<size_t>(left + x)];
+                                    static_cast<size_t>(pixelY) *
+                                        static_cast<size_t>(coverageTargetWidth) +
+                                    static_cast<size_t>(pixelX)];
                             const qreal sampleAlpha = sample.alphaF();
                             resolved.premultipliedRgba[0] +=
                                 sample.redF() * sampleAlpha * coverage;
@@ -3563,9 +3590,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             if (fragmentSink != nullptr) {
                                 CoverageResolveFragment &fragment =
                                     coverageResolveFragments[
-                                        static_cast<size_t>(top + y) *
-                                            static_cast<size_t>(viewportSize.width()) +
-                                        static_cast<size_t>(left + x)];
+                                        static_cast<size_t>(pixelY) *
+                                            static_cast<size_t>(coverageTargetWidth) +
+                                        static_cast<size_t>(pixelX)];
                                 fragment.values[0] +=
                                     sampleLinear.x() * static_cast<float>(coverage);
                                 fragment.values[1] +=
@@ -3589,18 +3616,45 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     }
                 }
                 if (!coverageResolveActive) {
-                    painter.drawImage(QPoint(left, top), raster);
+                    painter.save();
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform,
+                                          false);
+                    painter.setWorldTransform(QTransform());
+                    bool baseInverseValid = false;
+                    const QTransform baseLogicalFromDevice =
+                        painter.deviceTransform().inverted(&baseInverseValid);
+                    if (baseInverseValid) {
+                        painter.drawImage(
+                            baseLogicalFromDevice.map(QPointF(left, top)),
+                            raster);
+                    }
+                    painter.restore();
                 }
                 return;
             }
             // QPainter has no perspective-correct textured-triangle primitive.
             // Rasterize the projected triangle and correct UV interpolation by
             // reciprocal camera depth, as the polygon-mesh fallback does.
-            const int left = qFloor(std::max<qreal>(0, std::min({screenA.x(), screenB.x(), screenC.x()})));
-            const int top = qFloor(std::max<qreal>(0, std::min({screenA.y(), screenB.y(), screenC.y()})));
-            const int right = qCeil(std::min<qreal>(viewportSize.width(), std::max({screenA.x(), screenB.x(), screenC.x()})));
-            const int bottom = qCeil(std::min<qreal>(viewportSize.height(), std::max({screenA.y(), screenB.y(), screenC.y()})));
-            if (right <= left || bottom <= top || qint64(right-left) * (bottom-top) > 4000000) return;
+            const int left = qFloor(std::clamp(
+                std::min({devicePoints[0].x(), devicePoints[1].x(),
+                          devicePoints[2].x()}),
+                0.0, qreal(coverageTargetWidth)));
+            const int top = qFloor(std::clamp(
+                std::min({devicePoints[0].y(), devicePoints[1].y(),
+                          devicePoints[2].y()}),
+                0.0, qreal(coverageTargetHeight)));
+            const int right = qCeil(std::clamp(
+                std::max({devicePoints[0].x(), devicePoints[1].x(),
+                          devicePoints[2].x()}),
+                0.0, qreal(coverageTargetWidth)));
+            const int bottom = qCeil(std::clamp(
+                std::max({devicePoints[0].y(), devicePoints[1].y(),
+                          devicePoints[2].y()}),
+                0.0, qreal(coverageTargetHeight)));
+            if (right <= left || bottom <= top) return;
+            const int rasterWidth = right - left;
+            const int rasterHeight = bottom - top;
+            if (qint64(rasterWidth) * rasterHeight > 4000000) return;
             const Point3D cameraWorld = transform_.cameraPosition(viewportSize);
             const Point3D viewDirection = transform_.viewDirection();
             const Point3D points[3] = {triangle.a, triangle.b, triangle.c};
@@ -3618,14 +3672,19 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         1.0e-9);
                 }
             }
-            QImage raster(right-left, bottom-top, QImage::Format_ARGB32_Premultiplied);
+            QImage raster(rasterWidth, rasterHeight,
+                          QImage::Format_ARGB32_Premultiplied);
+            raster.setDevicePixelRatio(targetDpr);
             raster.fill(Qt::transparent);
             for (int y = 0; y < raster.height(); ++y) {
                 auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
                 for (int x = 0; x < raster.width(); ++x) {
-                    const qreal px = left + x + 0.5, py = top + y + 0.5;
+                    const qreal px = left + x + 0.5;
+                    const qreal py = top + y + 0.5;
                     qreal w0, w1, w2;
-                    const qreal coverage = coverageWeights(px, py, &w0, &w1, &w2);
+                    const qreal coverage = workbenchTrianglePixelCoverage(
+                        devicePoints, area, px, py, 1.0, 1.0,
+                        &w0, &w1, &w2);
                     if (coverage <= 0.0) continue;
                     const qreal cw0=w0*reciprocal[0], cw1=w1*reciprocal[1], cw2=w2*reciprocal[2];
                     const qreal denominator=cw0+cw1+cw2;
@@ -3717,7 +3776,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                              points[2].z * cw2) / denominator +
                                 preparedOffset.z};
                         observeWorkbenchFragment(
-                            fragmentSink, painter, QPointF(px, py),
+                            fragmentSink, painter,
+                            logicalFromCoverageDevice.map(QPointF(px, py)),
                             fragmentPosition, cameraPosition, viewDirection,
                             texturedLinear, alpha * coverage, objectId, transform_);
                     }
@@ -3728,7 +3788,17 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                               qRound(alpha * coverage * 255)));
                 }
             }
-            painter.drawImage(QPoint(left,top), raster);
+            painter.save();
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter.setWorldTransform(QTransform());
+            bool baseInverseValid = false;
+            const QTransform baseLogicalFromDevice =
+                painter.deviceTransform().inverted(&baseInverseValid);
+            if (baseInverseValid) {
+                painter.drawImage(
+                    baseLogicalFromDevice.map(QPointF(left, top)), raster);
+            }
+            painter.restore();
         };
 
         painter.save();
@@ -3825,7 +3895,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             !nurbsTiledTexture && nurbsTexture.isNull() &&
             !nurbsFloatTexture.isValid() && nurbsFloatTextureTiles.isEmpty() &&
             !fillTriangles.isEmpty() &&
-            qint64(viewportSize.width()) * viewportSize.height() <= 1000000) {
+            qint64(coverageTargetWidth) * coverageTargetHeight <= 1000000) {
             const QVector3D referenceNormal =
                 workbenchNormalize(fillTriangles.first().normal);
             qreal minimumDepth = fillTriangles.first().depth;
@@ -3845,8 +3915,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                     maximumDepth - minimumDepth < 1.0e-5;
             if (coverageResolveActive) {
                 const size_t pixelCount =
-                    static_cast<size_t>(viewportSize.width()) *
-                    static_cast<size_t>(viewportSize.height());
+                    static_cast<size_t>(coverageTargetWidth) *
+                    static_cast<size_t>(coverageTargetHeight);
                 coverageResolvePixels.resize(pixelCount);
                 if (fragmentSink != nullptr) {
                     coverageResolveFragments.resize(pixelCount);
@@ -3857,16 +3927,17 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             drawTriangle(triangle);
         }
         if (coverageResolveActive) {
-            QImage resolvedRaster(viewportSize,
+            QImage resolvedRaster(coverageTargetWidth, coverageTargetHeight,
                                   QImage::Format_ARGB32_Premultiplied);
+            resolvedRaster.setDevicePixelRatio(targetDpr);
             resolvedRaster.fill(Qt::transparent);
-            for (int y = 0; y < viewportSize.height(); ++y) {
+            for (int y = 0; y < coverageTargetHeight; ++y) {
                 auto *row = reinterpret_cast<QRgb *>(resolvedRaster.scanLine(y));
-                for (int x = 0; x < viewportSize.width(); ++x) {
+                for (int x = 0; x < coverageTargetWidth; ++x) {
                     const CoverageResolvePixel &resolved =
                         coverageResolvePixels[
                             static_cast<size_t>(y) *
-                                static_cast<size_t>(viewportSize.width()) +
+                                static_cast<size_t>(coverageTargetWidth) +
                             static_cast<size_t>(x)];
                     if (resolved.coverage <= 0.0) continue;
                     const qreal scale = resolved.coverage > 1.0
@@ -3888,14 +3959,14 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     if (fragmentSink != nullptr &&
                             coverageResolveFragments[
                                 static_cast<size_t>(y) *
-                                    static_cast<size_t>(viewportSize.width()) +
+                                    static_cast<size_t>(coverageTargetWidth) +
                                 static_cast<size_t>(x)].values[6] > 0.0f) {
                         const qreal inverseCoverage =
                             1.0 / resolved.coverage;
                         const CoverageResolveFragment &fragment =
                             coverageResolveFragments[
                                 static_cast<size_t>(y) *
-                                    static_cast<size_t>(viewportSize.width()) +
+                                    static_cast<size_t>(coverageTargetWidth) +
                                 static_cast<size_t>(x)];
                         const Point3D worldPosition{
                             fragment.values[3] * inverseCoverage,
@@ -3903,7 +3974,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             fragment.values[5] * inverseCoverage};
                         observeWorkbenchFragment(
                             fragmentSink, painter,
-                            QPointF(x + 0.5, y + 0.5), worldPosition,
+                            logicalFromCoverageDevice.map(
+                                QPointF(x + 0.5, y + 0.5)),
+                            worldPosition,
                             cameraPosition, viewDirection,
                             QVector3D(fragment.values[0], fragment.values[1],
                                       fragment.values[2]) /
@@ -3913,7 +3986,18 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     }
                 }
             }
-            painter.drawImage(QPoint(0, 0), resolvedRaster);
+            painter.save();
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter.setWorldTransform(QTransform());
+            bool baseInverseValid = false;
+            const QTransform baseLogicalFromDevice =
+                painter.deviceTransform().inverted(&baseInverseValid);
+            if (baseInverseValid) {
+                painter.drawImage(
+                    baseLogicalFromDevice.map(QPointF(0.0, 0.0)),
+                    resolvedRaster);
+            }
+            painter.restore();
         }
         painter.restore();
         return;

@@ -860,6 +860,21 @@ int main(int argc, char *argv[])
                 shadowFactorLight, 0.0f, 0.1f, 0.9f, false) ==
                 1.0f,
         "QPainter shadow focus must follow Blender's shift/focus smoothstep while shadowed and zero-intensity limits remain stable");
+    const float unitShadowBias = rasterWorkbenchShadowDepthBias(-1.0f, 1.0f);
+    const float smallShadowBias = rasterWorkbenchShadowDepthBias(-0.001f,
+                                                                  0.001f);
+    const float largeShadowBias = rasterWorkbenchShadowDepthBias(-1000.0f,
+                                                                  1000.0f);
+    passed &= check(
+        unitShadowBias > 0.0f && smallShadowBias > 0.0f &&
+            largeShadowBias > 0.0f &&
+            std::abs(smallShadowBias * 1000.0f - unitShadowBias) <
+                unitShadowBias * 0.01f &&
+            std::abs(largeShadowBias / 1000.0f - unitShadowBias) <
+                unitShadowBias * 0.01f &&
+            rasterWorkbenchShadowDepthBias(
+                std::numeric_limits<float>::quiet_NaN(), 1.0f) == 0.0f,
+        "QPainter shadow comparison tolerance must scale with light-depth range and reject non-finite bounds");
     ViewportShadingSettings highShadowFocusSettings = shadowSettings;
     highShadowFocusSettings.shadowFocus = 0.0;
     const QImage highShadowFocusImage = renderCpuShadow(

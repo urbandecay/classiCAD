@@ -2568,8 +2568,14 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
 - The QPainter shadow resolve now applies Blender's normal/light `smoothstep`
   using `shadow_shift`, clamped `shadow_focus`, and the mapped light direction.
   Shadow intensity mixes that lit-normal response with the shadowed/unshadowed
-  result. Shift no longer changes the software light-depth bias, which remains
-  a fixed bounded-fallback value.
+  result. Shift no longer changes the software light-depth bias. The fallback
+  now scales its light-depth comparison tolerance from the caster depth range
+  with a two-ULP floor for float quantization; a numerical contract checks the
+  same relative tolerance at 1/1000, 1, and 1000x scene scales and rejects non-finite
+  bounds. Blender 5.2.2 uses stencil shadow volumes in
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1111-L1123),
+  so this tolerance is a QPainter fallback robustness rule, not Blender bias
+  parity.
 - The source formula is from Blender 5.2.2
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L280-L300)
   and [`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh#L677-L689).

@@ -494,6 +494,22 @@ float rasterWorkbenchShadowFactor(const QVector3D &normal,
     return shadowMix * (shadowed ? 0.0f : intensity) + (1.0f - intensity);
 }
 
+float rasterWorkbenchShadowDepthBias(float minimumLightDepth,
+                                     float maximumLightDepth) noexcept
+{
+    if (!std::isfinite(minimumLightDepth) ||
+        !std::isfinite(maximumLightDepth)) {
+        return 0.0f;
+    }
+    const float depthRange = std::abs(maximumLightDepth - minimumLightDepth);
+    const float maximumMagnitude = std::max(
+        std::abs(minimumLightDepth), std::abs(maximumLightDepth));
+    const float nextDepth = std::nextafter(
+        maximumMagnitude, std::numeric_limits<float>::infinity());
+    const float floatStep = nextDepth - maximumMagnitude;
+    return std::max(depthRange * 1.0e-6f, floatStep * 2.0f);
+}
+
 QRgb rasterWorkbenchDofMedian3x3(
     const std::array<QRgb, 9> &samples) noexcept
 {
@@ -2309,6 +2325,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<float> receiverLightDepth;
     QVector<QVector2D> transparentReceiverLightCoordinates;
     QVector<float> transparentReceiverLightDepth;
+    float softwareDepthBias = 0.0f;
     if (shadowEnabled && !shadowTriangles.isEmpty()) {
         QVector3D lightDirection(-settings.shadowDirection.x(),
                                   settings.shadowDirection.z(),
@@ -2327,14 +2344,21 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         float minX = std::numeric_limits<float>::max();
         float maxX = std::numeric_limits<float>::lowest();
         float minY = minX, maxY = maxX;
+        float minLightDepth = std::numeric_limits<float>::max();
+        float maxLightDepth = std::numeric_limits<float>::lowest();
         for (const ShadowTriangle &triangle : shadowTriangles) {
             for (const QVector3D &point : triangle.vertices) {
                 const float x = QVector3D::dotProduct(point, lightRight);
                 const float y = QVector3D::dotProduct(point, lightUp);
+                const float z = QVector3D::dotProduct(point, lightDirection);
                 minX = std::min(minX, x); maxX = std::max(maxX, x);
                 minY = std::min(minY, y); maxY = std::max(maxY, y);
+                minLightDepth = std::min(minLightDepth, z);
+                maxLightDepth = std::max(maxLightDepth, z);
             }
         }
+        softwareDepthBias = rasterWorkbenchShadowDepthBias(
+            minLightDepth, maxLightDepth);
         const float extentX = std::max(maxX - minX, 1.0e-4f);
         const float extentY = std::max(maxY - minY, 1.0e-4f);
         const float padX = extentX * 0.02f + 1.0e-4f;
@@ -2766,7 +2790,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     surfaceLayers->transparentColor.size() == colorImage->size();
                 if ((hasTransparentTop || hasTransparentReceiver) &&
                     !hasRetainedLayers) continue;
-                constexpr float softwareDepthBias = 0.001f;
                 const auto shadowFactorAt = [&](const QVector2D &lightPixel,
                                                 float receiverDepth,
                                                 const QVector3D &normal) {

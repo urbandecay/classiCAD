@@ -58,6 +58,11 @@ float rasterWorkbenchShadowFactor(const QVector3D &normal,
                                  float intensity, float shift, float focus,
                                  bool shadowed) noexcept;
 
+// Scale the QPainter shadow-map comparison tolerance to caster depth range
+// while retaining headroom for float depth quantization.
+float rasterWorkbenchShadowDepthBias(float minimumLightDepth,
+                                     float maximumLightDepth) noexcept;
+
 // Blender Workbench's DOF cleanup takes a component-wise median over a 3x3
 // neighborhood of gathered RGBA samples.
 QRgb rasterWorkbenchDofMedian3x3(

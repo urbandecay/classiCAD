@@ -4461,8 +4461,9 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   0.000630 green, and 0.000054 blue; larger maxima localize to cutout/edge
   coverage rather than the stable interior sample colors.
 - This verifies Linear-filter sampling across two horizontal UDIM tiles for
-  one external PNG and one mesh fixture; it does not cover other extensions,
-  vertical tiles, float images, other texture filters, NURBS, or GPU parity.
+  one external PNG and one mesh fixture; vertical-tile coverage is recorded
+  below. Other extensions, float images, other texture filters, NURBS, and GPU
+  parity remain open.
   Blender's pinned
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60)
   supplies the tile lookup and filtering behavior.
@@ -4470,3 +4471,32 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   reference was rendered with Blender 5.2.2, and
   `workbench_pfm_compare.py --candidate-top-down` completed on the paired
   captures. The 640×480 coverage edge differences remain recorded separately.
+
+### Matched QPainter vertical UDIM texture comparison (2026-10-14)
+
+- Extended the controlled QPainter mesh capture and Blender reference helper
+  to render the vertical 1001/1011 tile pair with Linear filtering, Flat
+  lighting, Texture color, STRAIGHT alpha, and AA Off. Each 2×2 external PNG
+  uses distinct upper/lower colors and a transparent texel. Their UVs exercise
+  both vertical tiles and the top-down image-row conversion. The new Blender
+  flag is `--texture-udim-vertical`; QPainter capture artifacts are written
+  under `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`.
+- The scene-linear comparison has foreground-mask IoU 0.981909 (581 XOR
+  pixels; 31,631 Blender and 32,020 QPainter foreground pixels). Whole-frame
+  channel MAE is 0.002220 red, 0.001570 green, and 0.000146 blue. The stable
+  red-dominant 1001 and green-dominant 1011 regions have matching spatial
+  bright/dark row patterns and mean scene-linear colors within 0.002 per
+  channel; the remaining image error is concentrated at coverage and alpha
+  edges. Production contracts verify both tile colors are sampled and the two
+  transparent texels reduce visible fragment coverage.
+- Blender 5.2.2 chooses one UDIM tile from the integer UV coordinates and
+  samples within that tile in pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60).
+  Filtering does not bridge neighboring tile layers. This comparison verifies
+  vertical tile lookup and orientation for one mesh/PNG case; broader mesh
+  UVs, NURBS, other filters, float tiles, and final edge coverage remain open.
+- Validation: `cmake --build build -j4` passed with the dependency audit; the
+  offscreen viewport contract with the lighting capture directory passed.
+  Blender reported version 5.2.2, and
+  `workbench_pfm_compare.py --candidate-top-down` completed on the matched
+  scene-linear captures.

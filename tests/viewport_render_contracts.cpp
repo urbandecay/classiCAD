@@ -8094,6 +8094,154 @@ int main(int argc, char *argv[])
                             "QPainter mesh UDIM capture must render both tiles and the transparent cutout");
                         lightingCapturesSucceeded &= udimMeshTextureSaved;
 
+                        const QString verticalTile1001Path = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-udim-vertical.1001.png"));
+                        const QString verticalTile1011Path = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-udim-vertical.1011.png"));
+                        QImage verticalTile1001(2, 2,
+                                                QImage::Format_RGBA8888);
+                        verticalTile1001.setPixelColor(
+                            0, 0, QColor(240, 48, 24, 255));
+                        verticalTile1001.setPixelColor(
+                            1, 0, QColor(240, 48, 24, 255));
+                        verticalTile1001.setPixelColor(
+                            0, 1, QColor(96, 24, 12, 255));
+                        verticalTile1001.setPixelColor(
+                            1, 1, QColor(96, 24, 12, 0));
+                        QImage verticalTile1011(2, 2,
+                                                QImage::Format_RGBA8888);
+                        verticalTile1011.setPixelColor(
+                            0, 0, QColor(24, 216, 72, 0));
+                        verticalTile1011.setPixelColor(
+                            1, 0, QColor(24, 216, 72, 255));
+                        verticalTile1011.setPixelColor(
+                            0, 1, QColor(16, 144, 48, 255));
+                        verticalTile1011.setPixelColor(
+                            1, 1, QColor(16, 144, 48, 255));
+                        const bool verticalTilesSaved =
+                            verticalTile1001.save(verticalTile1001Path) &&
+                            verticalTile1011.save(verticalTile1011Path);
+                        ViewportRenderObject verticalUdimObject =
+                            udimMeshTextureObject;
+                        verticalUdimObject.shape.polygonMesh.uvMaps[0]
+                            .cornerValues = {
+                                QPointF(0.0, 0.05), QPointF(1.0, 0.05),
+                                QPointF(1.0, 1.95), QPointF(0.0, 0.05),
+                                QPointF(1.0, 1.95), QPointF(0.0, 1.95)};
+                        DocumentImageTextureTile verticalTileRecord1001;
+                        verticalTileRecord1001.number = 1001;
+                        verticalTileRecord1001.filepath =
+                            verticalTile1001Path;
+                        verticalTileRecord1001.sourceFileExists = true;
+                        DocumentImageTextureTile verticalTileRecord1011;
+                        verticalTileRecord1011.number = 1011;
+                        verticalTileRecord1011.filepath =
+                            verticalTile1011Path;
+                        verticalTileRecord1011.sourceFileExists = true;
+                        WorkbenchMaterialData verticalUdimMaterial =
+                            udimMaterial;
+                        verticalUdimMaterial.textureImageTiles = {
+                            verticalTileRecord1001,
+                            verticalTileRecord1011};
+                        verticalUdimObject.meshMaterials = {
+                            verticalUdimMaterial};
+                        QImage verticalUdimDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        verticalUdimDisplay.fill(
+                            nurbsTextureDisplay.pixelColor(0, 0));
+                        RasterWorkbenchFragmentSink verticalUdimFragments;
+                        QPainter verticalUdimPainter(&verticalUdimDisplay);
+                        qpainterTextureRenderer.drawShape(
+                            verticalUdimPainter, verticalUdimObject.shape,
+                            glSize, false, false, true, QColor(), QString(),
+                            0.0, verticalUdimObject.objectId,
+                            verticalUdimObject.geometryRevision, nullptr, {},
+                            std::nullopt, std::nullopt,
+                            verticalUdimObject.displayName, QString(),
+                            identityMeshObjectTransform,
+                            verticalUdimObject.meshMaterials,
+                            &verticalUdimFragments);
+                        verticalUdimPainter.end();
+                        QVector<float> verticalUdimLinear(
+                            textureExpectedValues);
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < verticalUdimLinear.size();
+                             pixel += 3) {
+                            verticalUdimLinear[pixel] =
+                                textureBackground.x();
+                            verticalUdimLinear[pixel + 1] =
+                                textureBackground.y();
+                            verticalUdimLinear[pixel + 2] =
+                                textureBackground.z();
+                        }
+                        int verticalTile1001Samples = 0;
+                        int verticalTile1011Samples = 0;
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             verticalUdimFragments) {
+                            if (fragment.x < 0 ||
+                                fragment.x >= glSize.width() ||
+                                fragment.y < 0 ||
+                                fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype pixel =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            verticalUdimLinear[pixel] =
+                                fragment.sceneLinearRgb[0];
+                            verticalUdimLinear[pixel + 1] =
+                                fragment.sceneLinearRgb[1];
+                            verticalUdimLinear[pixel + 2] =
+                                fragment.sceneLinearRgb[2];
+                            if (fragment.sceneLinearRgb[0] >
+                                fragment.sceneLinearRgb[1] * 2.0f) {
+                                ++verticalTile1001Samples;
+                            }
+                            if (fragment.sceneLinearRgb[1] >
+                                fragment.sceneLinearRgb[0] * 2.0f) {
+                                ++verticalTile1011Samples;
+                            }
+                        }
+                        const QString verticalUdimDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_udim_vertical_qpainter.png"));
+                        const QString verticalUdimLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_udim_vertical_qpainter.pfm"));
+                        QFile verticalUdimLinearFile(
+                            verticalUdimLinearPath);
+                        const bool verticalUdimLinearSaved =
+                            verticalUdimLinearFile.open(QIODevice::WriteOnly) &&
+                            verticalUdimLinearFile.write(texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            verticalUdimLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    verticalUdimLinear.constData()),
+                                verticalUdimLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                verticalUdimLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool verticalUdimSaved = verticalTilesSaved &&
+                            verticalTile1001Samples > 1000 &&
+                            verticalTile1011Samples > 1000 &&
+                            verticalUdimFragments.size() <
+                                udimMeshTextureFragments.size() &&
+                            verticalUdimFragments.size() > 25000 &&
+                            verticalUdimFragments.size() < 40000 &&
+                            verticalUdimLinearSaved &&
+                            verticalUdimDisplay.save(
+                                verticalUdimDisplayPath);
+                        passed &= check(
+                            verticalUdimSaved,
+                            "QPainter mesh UDIM capture must select both vertical tiles, preserve asymmetric alpha, and save scene-linear output");
+                        lightingCapturesSucceeded &= verticalUdimSaved;
+
                         ViewportTransform perspectiveTextureTransform;
                         perspectiveTextureTransform.zoom() = 17.28;
                         perspectiveTextureTransform.setViewDirection(

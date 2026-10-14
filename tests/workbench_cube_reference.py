@@ -1,6 +1,6 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
-Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho] [--no-specular]
+Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho] [--texture-udim-vertical] [--no-specular]
 AA accepts OFF, FXAA (Workbench's one-sample TAA+SMAA enum), or 5/8/11/16/32.
 Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
@@ -150,6 +150,11 @@ def arguments():
         help="load a 1001/1002 UDIM set and span both tiles in a texture fixture",
     )
     parser.add_argument(
+        "--texture-udim-vertical",
+        action="store_true",
+        help="load a 1001/1011 UDIM set and span both V tiles in a texture fixture",
+    )
+    parser.add_argument(
         "--texture-color-space",
         help="set the loaded Image Texture image color space before Workbench sampling",
     )
@@ -231,7 +236,10 @@ def arguments():
         "--jitter-metadata",
         help="render one AA-off Blender reference for every offset in a classiCAD capture metadata file",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.texture_udim and args.texture_udim_vertical:
+        parser.error("choose only one UDIM axis")
+    return args
 
 
 def make_linear_output(scene, output_path):
@@ -412,9 +420,12 @@ def main():
         for loop, uv in zip(uv_layer.data, ((0.0, 0.0), (1.0, 0.0),
                                             (1.0, 1.0), (0.0, 1.0))):
             loop.uv = uv
-        if args.texture_udim:
+        if args.texture_udim or args.texture_udim_vertical:
             for loop in uv_layer.data:
-                loop.uv.x *= 2.0
+                if args.texture_udim_vertical:
+                    loop.uv.y *= 2.0
+                else:
+                    loop.uv.x *= 2.0
         material = bpy.data.materials.new("NurbsTextureMaterial")
         material.diffuse_color = (0.8, 0.8, 0.8, args.material_alpha)
         material.use_nodes = True
@@ -422,10 +433,11 @@ def main():
         image_node.image = bpy.data.images.load(
             os.path.abspath(args.texture_image), check_existing=True
         )
-        if args.texture_udim:
+        if args.texture_udim or args.texture_udim_vertical:
             image_node.image.source = "TILED"
-            if image_node.image.tiles.get(1002) is None:
-                image_node.image.tiles.new(1002)
+            udim_tile = 1011 if args.texture_udim_vertical else 1002
+            if image_node.image.tiles.get(udim_tile) is None:
+                image_node.image.tiles.new(udim_tile)
         if args.texture_color_space:
             image_node.image.colorspace_settings.name = args.texture_color_space
         if args.texture_alpha_mode:
@@ -455,9 +467,12 @@ def main():
              (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
         ):
             loop.uv = uv
-        if args.texture_udim:
+        if args.texture_udim or args.texture_udim_vertical:
             for loop in uv_layer.data:
-                loop.uv.x *= 2.0
+                if args.texture_udim_vertical:
+                    loop.uv.y *= 2.0
+                else:
+                    loop.uv.x *= 2.0
         material = bpy.data.materials.new("MeshTextureMaterial")
         material.diffuse_color = (0.8, 0.8, 0.8, args.material_alpha)
         material.use_nodes = True
@@ -465,10 +480,11 @@ def main():
         image_node.image = bpy.data.images.load(
             os.path.abspath(args.texture_image), check_existing=True
         )
-        if args.texture_udim:
+        if args.texture_udim or args.texture_udim_vertical:
             image_node.image.source = "TILED"
-            if image_node.image.tiles.get(1002) is None:
-                image_node.image.tiles.new(1002)
+            udim_tile = 1011 if args.texture_udim_vertical else 1002
+            if image_node.image.tiles.get(udim_tile) is None:
+                image_node.image.tiles.new(udim_tile)
         if args.texture_color_space:
             image_node.image.colorspace_settings.name = args.texture_color_space
         if args.texture_alpha_mode:

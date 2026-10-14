@@ -3336,9 +3336,11 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   active dense scalar grid from the existing sparse records, transforms the
   selected Blender slice plane through `gridToObject`, `objectToWorld`, and
   object placement, then samples the slice with CLOSEST, LINEAR, or CUBIC
-  filtering. The density, density scale, extinction floor, signed scattering,
-  color source, and world-space slice step feed a scene-linear source-over
-  resolve. Regular opaque and transparent depth can occlude the slice;
+  filtering. Slice opacity uses the selected object-space bound dimension,
+  multiplied by the corresponding object scale and 0.05; object rotation does
+  not expand that dimension into a world-axis-aligned bound. The density,
+  density scale, extinction floor, signed scattering, and color source feed a
+  scene-linear source-over resolve. Regular opaque and transparent depth can occlude the slice;
   `showInFront` coverage clips it, and in-front objects composite afterward.
 - CPU work is capped at 16M dense voxels, 1M target pixels, and 1M covered
   slice samples. This slice rasterizer is separate from the bounded QPainter
@@ -3360,14 +3362,19 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   defines the transformed slice plane, depth/stencil rejection, and volume
   sampling modes. Its [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc)
   builds the selected slice face and derives its step from the selected axis of
-  object dimensions; the shader applies the depth/stencil checks per fragment.
-  Shadow sampling remains a shader TODO.
+  `BKE_object_dimensions_get`; the pinned [`object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc#L3498-L3509)
+  defines those dimensions as object-space bounds multiplied by object scale,
+  without rotating the bounds into world axes. The QPainter path follows that
+  rule. A rotated anisotropic fixture confirms a 2-unit selected object axis
+  keeps a 0.1 slice step even when rotation makes its world AABB extent 4
+  units. The shader applies depth/stencil checks per fragment. Shadow sampling
+  remains a shader TODO.
 - The production viewport contract exercises a volume-only QPainter scene and
   verifies that a valid slice changes the scene image. Validation:
   `cmake --build build -j4` passed with the source dependency audit, and both
   offscreen `viewport_render_contracts` and
-  `workbench_raster_fragment_contracts` passed. Matched Blender output and
-  matched Blender output, complex overlapping opaque-depth cases, and
+  `workbench_raster_fragment_contracts` passed. Matched Blender output,
+  complex overlapping opaque-depth cases, and
   transformed slice-plane coverage remain open. The CPU ray marcher
   is a bounded approximation with a 16M dense-voxel cap, 1M candidate pixels
   per volume, and 4M aggregate integration samples per composition;

@@ -1737,6 +1737,41 @@ int main(int argc, char *argv[])
         passed &= check(volumeSliceRendered && volumeSliceChangedPixels > 0,
                         "QPainter Workbench fallback composites enabled scalar-volume slice samples in scene linear color");
 
+        ScalarVolume3D rotatedAnisotropicSlice = sliceVolume;
+        rotatedAnisotropicSlice.activeBounds = {-1, -1, -2, 0, 0, 1};
+        rotatedAnisotropicSlice.expandedVoxelCount = 16;
+        rotatedAnisotropicSlice.denseVoxelCount = 16;
+        rotatedAnisotropicSlice.activeRecords.clear();
+        for (int z = -2; z <= 1; ++z) {
+            for (int y = -1; y <= 0; ++y) {
+                for (int x = -1; x <= 0; ++x) {
+                    rotatedAnisotropicSlice.activeRecords.append(
+                        {x, y, z, 1, false, 1.0f});
+                }
+            }
+        }
+        rotatedAnisotropicSlice.sliceAxis = QStringLiteral("X");
+        ViewportRenderObject rotatedAnisotropicObject = sliceVolumeObject;
+        rotatedAnisotropicObject.shape.scalarVolume = rotatedAnisotropicSlice;
+        rotatedAnisotropicObject.shape.scalarVolume.objectToWorld = {
+            0.0, 0.0, -1.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 1.0};
+        QVector<RasterWorkbenchVolumeSliceSample> rotatedSliceSamples;
+        const bool rotatedSliceSampled = rasterWorkbenchVolumeSliceSamples(
+            rotatedAnisotropicObject, transform, size, 1.0,
+            &rotatedSliceSamples);
+        const bool rotatedSliceStepMatchesObjectDimension =
+            !rotatedSliceSamples.isEmpty() && std::all_of(
+                rotatedSliceSamples.cbegin(), rotatedSliceSamples.cend(),
+                [](const RasterWorkbenchVolumeSliceSample &sample) {
+                    return std::abs(sample.sliceStepWorld - 0.1f) < 1.0e-5f;
+                });
+        passed &= check(
+            rotatedSliceSampled && rotatedSliceStepMatchesObjectDimension,
+            "QPainter rotated anisotropic volume slice opacity must use the selected object-space dimension after object scale");
+
         ViewportRenderObject transparentSliceOccluder = makeQuad(
             9111, 64, 48, 576, 432, -1.0,
             QVector3D(0.05f, 0.1f, 0.9f), 0.65);

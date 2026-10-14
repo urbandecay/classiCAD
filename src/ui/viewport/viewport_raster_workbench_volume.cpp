@@ -172,16 +172,37 @@ bool rasterWorkbenchVolumeSliceSamples(
         c[axis]=plane; c[a]=(i&1)?maxs[a]:mins[a]; c[b]=(i&2)?maxs[b]:mins[b];
         grid[i]={c[0],c[1],c[2]};
     }
-    // Blender v5.2.2 workbench volume pass derives slice opacity step from
-    // the world AABB extent on the selected grid axis, times 0.05.
+    // Blender v5.2.2 uses the selected object dimension for slice opacity.
+    // Object dimensions apply object scale to the object-space bounds, but do
+    // not rotate those dimensions into world-axis-aligned extents.
     const ScalarVolumeMatrix &m=v.gridToObject;
     const ScalarVolumeMatrix &n=v.objectToWorld;
     auto worldFor=[&](Vec3 g){Vec3 q=mapPoint(m,g); q=mapPoint(n,q); q.x+=object.placementTranslation.x; q.y+=object.placementTranslation.y; q.z+=object.placementTranslation.z; return q;};
-    Vec3 low{std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),std::numeric_limits<double>::max()};
-    Vec3 high{-low.x,-low.y,-low.z};
-    for(int i=0;i<8;++i){Vec3 g{(i&1)?maxs[0]:mins[0],(i&2)?maxs[1]:mins[1],(i&4)?maxs[2]:mins[2]};Vec3 w=worldFor(g);if(!finite(w))return false;low.x=std::min(low.x,w.x);low.y=std::min(low.y,w.y);low.z=std::min(low.z,w.z);high.x=std::max(high.x,w.x);high.y=std::max(high.y,w.y);high.z=std::max(high.z,w.z);}
-    const double ext[3]={high.x-low.x,high.y-low.y,high.z-low.z};
-    const float step=float(std::max(1e-16,ext[axis]*0.05));
+    Vec3 objectLow{std::numeric_limits<double>::max(),
+                   std::numeric_limits<double>::max(),
+                   std::numeric_limits<double>::max()};
+    Vec3 objectHigh{-objectLow.x, -objectLow.y, -objectLow.z};
+    for (int i = 0; i < 8; ++i) {
+        const Vec3 gridPoint{(i & 1) ? maxs[0] : mins[0],
+                             (i & 2) ? maxs[1] : mins[1],
+                             (i & 4) ? maxs[2] : mins[2]};
+        const Vec3 objectPoint = mapPoint(m, gridPoint);
+        if (!finite(objectPoint) || !finite(worldFor(gridPoint))) return false;
+        objectLow.x = std::min(objectLow.x, objectPoint.x);
+        objectLow.y = std::min(objectLow.y, objectPoint.y);
+        objectLow.z = std::min(objectLow.z, objectPoint.z);
+        objectHigh.x = std::max(objectHigh.x, objectPoint.x);
+        objectHigh.y = std::max(objectHigh.y, objectPoint.y);
+        objectHigh.z = std::max(objectHigh.z, objectPoint.z);
+    }
+    const double objectExtent[3] = {objectHigh.x - objectLow.x,
+                                    objectHigh.y - objectLow.y,
+                                    objectHigh.z - objectLow.z};
+    const double objectScale[3] = {std::hypot(n[0], n[4], n[8]),
+                                   std::hypot(n[1], n[5], n[9]),
+                                   std::hypot(n[2], n[6], n[10])};
+    const float step = float(std::max(
+        1e-16, objectExtent[axis] * objectScale[axis] * 0.05));
     std::array<SliceVertex,4> vertices;
     const Point3D eye=camera.cameraPosition(viewportSize), forward=camera.viewDirection();
     for(int i=0;i<4;++i){Vec3 w=worldFor(grid[i]);if(!finite(w))return false;double d=-((w.x-eye.x)*forward.x+(w.y-eye.y)*forward.y+(w.z-eye.z)*forward.z);if(!std::isfinite(d))return false;vertices[i]={w,grid[i],d};}

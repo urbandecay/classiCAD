@@ -1615,12 +1615,28 @@ two pixels leaves 29,718 samples with channel MAE `0.0000498` and maximum
 `(240,240)`, `(320,240)`, `(400,240)`, `(240,280)`, `(320,280)`, and
 `(400,280)` match exactly. This validates
 GPU texture filtering and normalized parameter UVs for a regular planar NURBS
-patch, not trimmed/nonplanar surfaces, texture alpha, UDIMs, or QPainter
+patch, not trimmed/nonplanar surfaces, other alpha modes, UDIMs, or QPainter
 rendering. The classiCAD capture is `color_texture_nurbs.png/.pfm` from
 `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; Blender uses
 `--scene NURBS_TEXTURE --match-classicad-ortho --lighting FLAT
 --color-source TEXTURE --texture-interpolation Linear` with the captured
 `workbench-texture-pattern.png`.
+
+**Full-frame Straight-alpha Image Texture cutoff on a NURBS patch (2026-10-14):**
+The same degree-one NURBS and Blender 5.2.2 proxy were rendered with a 2×2
+sRGB texture whose left column has alpha zero and right column alpha one.
+Both use the straight-alpha interpretation, Linear filtering, Repeat
+extension, Flat lighting, AA Off, and matched scene-linear background. The
+cutout mask IoU is `0.999930` (2 XOR pixels), with 28,630 Blender and 28,628
+classiCAD foreground pixels. Per-channel full-frame scene-linear MAE is below
+`0.000010`; the shared foreground eroded by two pixels has channel MAE
+`0.0000492` and maximum `0.00342`. This verifies the enabled Blender
+`alpha_cutoff` behavior for a regular planar NURBS patch and its filtered
+boundary; PREMUL, IGNORE, CHANNEL_PACKED, UDIM alpha, trimmed surfaces, and
+QPainter remain open. Reproduce with the same capture environment and
+`--texture-alpha-mode STRAIGHT`; the files are
+`color_texture_nurbs_alpha.png/.pfm` and
+`workbench-texture-alpha.png`.
 
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
@@ -2877,7 +2893,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. Other presets, Studio
   rotations, camera orientations, and QPainter output remain open.
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; a matched regular planar NURBS patch comparison also covers filtered Texture UVs. Point/face domains, other texture filters/alpha/UDIM, trimmed/nonplanar surface cases, and QPainter parity remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and Straight-alpha cutoff. Point/face domains, other texture filters/alpha modes/UDIM, trimmed/nonplanar surface cases, and QPainter parity remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling, both idle and during navigation.

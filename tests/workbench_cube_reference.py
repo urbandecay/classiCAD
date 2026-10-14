@@ -114,6 +114,11 @@ def arguments():
         help="set the loaded Image Texture image color space before Workbench sampling",
     )
     parser.add_argument(
+        "--texture-alpha-mode",
+        choices=("STRAIGHT", "PREMUL", "CHANNEL_PACKED", "IGNORE"),
+        help="set the loaded image alpha interpretation for Workbench cutout tests",
+    )
+    parser.add_argument(
         "--texture-interpolation",
         choices=("Closest", "Linear", "Cubic", "Smart"),
         default="Closest",
@@ -280,6 +285,8 @@ def main():
             )
             if args.texture_color_space:
                 image_node.image.colorspace_settings.name = args.texture_color_space
+            if args.texture_alpha_mode:
+                image_node.image.alpha_mode = args.texture_alpha_mode
             image_node.interpolation = args.texture_interpolation
             image_node.show_texture = True
             material.node_tree.nodes.active = image_node
@@ -345,6 +352,8 @@ def main():
         )
         if args.texture_color_space:
             image_node.image.colorspace_settings.name = args.texture_color_space
+        if args.texture_alpha_mode:
+            image_node.image.alpha_mode = args.texture_alpha_mode
         image_node.interpolation = args.texture_interpolation
         image_node.show_texture = True
         material.node_tree.nodes.active = image_node

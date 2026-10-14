@@ -6802,6 +6802,89 @@ int main(int argc, char *argv[])
                             nurbsTextureRendered && nurbsTextureLinearSaved &&
                             nurbsTextureDisplaySaved;
 
+                        QImage alphaCutoutTexture(2, 2,
+                                                  QImage::Format_RGBA8888);
+                        alphaCutoutTexture.setPixelColor(
+                            0, 0, QColor(240, 32, 16, 0));
+                        alphaCutoutTexture.setPixelColor(
+                            1, 0, QColor(24, 224, 48, 255));
+                        alphaCutoutTexture.setPixelColor(
+                            0, 1, QColor(32, 64, 240, 0));
+                        alphaCutoutTexture.setPixelColor(
+                            1, 1, QColor(240, 208, 24, 255));
+                        const QString alphaCutoutTexturePath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("workbench-texture-alpha.png"));
+                        const bool alphaCutoutTextureSaved =
+                            alphaCutoutTexture.save(alphaCutoutTexturePath);
+                        nurbsTextureObject.workbenchMaterial.textureImagePath =
+                            alphaCutoutTexturePath;
+                        nurbsTextureObject.workbenchMaterial
+                            .textureImageAlphaMode = QStringLiteral("STRAIGHT");
+                        QImage nurbsTextureAlphaDisplay;
+                        QVector<float> nurbsTextureAlphaSceneLinear;
+                        const bool nurbsTextureAlphaRendered =
+                            alphaCutoutTextureSaved && renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-nurbs-texture-alpha"),
+                                &nurbsTextureAlphaDisplay,
+                                &nurbsTextureObject, nullptr, nullptr,
+                                QString{}, &nurbsTextureAlphaSceneLinear,
+                                &textureBackground);
+                        int nurbsTextureAlphaForegroundPixels = 0;
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < nurbsTextureAlphaSceneLinear.size();
+                             pixel += 3) {
+                            const QVector3D color(
+                                nurbsTextureAlphaSceneLinear[pixel],
+                                nurbsTextureAlphaSceneLinear[pixel + 1],
+                                nurbsTextureAlphaSceneLinear[pixel + 2]);
+                            if ((color - textureBackground).lengthSquared() >
+                                1.0e-5f) {
+                                ++nurbsTextureAlphaForegroundPixels;
+                            }
+                        }
+                        passed &= check(
+                            nurbsTextureAlphaRendered &&
+                                nurbsTextureAlphaForegroundPixels > 5000 &&
+                                nurbsTextureAlphaForegroundPixels <
+                                    nurbsTextureForegroundPixels,
+                            "GPU NURBS Image Texture alpha cutoff must retain both transparent and opaque UV regions");
+                        const QString nurbsTextureAlphaLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_alpha.pfm"));
+                        const QString nurbsTextureAlphaDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_nurbs_alpha.png"));
+                        QFile nurbsTextureAlphaLinearFile(
+                            nurbsTextureAlphaLinearPath);
+                        const bool nurbsTextureAlphaLinearSaved =
+                            nurbsTextureAlphaRendered &&
+                            nurbsTextureAlphaSceneLinear.size() ==
+                                textureExpectedValues &&
+                            nurbsTextureAlphaLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            nurbsTextureAlphaLinearFile.write(
+                                texturePfmHeader) == texturePfmHeader.size() &&
+                            nurbsTextureAlphaLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    nurbsTextureAlphaSceneLinear.constData()),
+                                nurbsTextureAlphaSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                nurbsTextureAlphaSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool nurbsTextureAlphaDisplaySaved =
+                            nurbsTextureAlphaRendered &&
+                            nurbsTextureAlphaDisplay.size() == QSize(640, 480) &&
+                            nurbsTextureAlphaDisplay.save(
+                                nurbsTextureAlphaDisplayPath);
+                        lightingCapturesSucceeded &=
+                            nurbsTextureAlphaLinearSaved &&
+                            nurbsTextureAlphaDisplaySaved;
+
                         textureColorShading.lightingMode =
                             ViewportLightingMode::Studio;
                         QImage studioTextureDisplay;

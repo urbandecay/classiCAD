@@ -8751,12 +8751,55 @@ int main(int argc, char *argv[])
                                 alphaMeshFragments.size() > 1000 &&
                                 alphaMeshLinearSaved &&
                                 alphaMeshDisplay.save(alphaMeshDisplayPath);
+                            const bool gpuAlphaMeshCaptureSaved =
+                                captureGpuColorSource(
+                                    QStringLiteral(
+                                        "color_texture_mesh_alpha_") +
+                                        modeFileName + QStringLiteral("_gpu"),
+                                    alphaMeshObject,
+                                    textureColorShading);
                             passed &= check(
                                 alphaMeshCaptureSaved,
                                 "QPainter mesh texture alpha-mode capture must render a nonblank cutoff fixture");
+                            passed &= check(
+                                gpuAlphaMeshCaptureSaved,
+                                "GPU mesh texture alpha-mode capture must render the matched cutoff fixture");
                             lightingCapturesSucceeded &=
-                                alphaMeshCaptureSaved;
+                                alphaMeshCaptureSaved &&
+                                gpuAlphaMeshCaptureSaved;
                         }
+                        const int gpuStraightAlphaPixels = foregroundPixels(
+                            QDir(lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_alpha_straight_gpu.png")));
+                        const int gpuPremulAlphaPixels = foregroundPixels(
+                            QDir(lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_alpha_premul_gpu.png")));
+                        const int gpuPackedAlphaPixels = foregroundPixels(
+                            QDir(lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_alpha_channel_packed_gpu.png")));
+                        const int gpuIgnoredAlphaPixels = foregroundPixels(
+                            QDir(lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_alpha_none_gpu.png")));
+                        const bool gpuAlphaModeMasksMatch =
+                            gpuStraightAlphaPixels > 1000 &&
+                            gpuPremulAlphaPixels > 1000 &&
+                            gpuPackedAlphaPixels >
+                                gpuStraightAlphaPixels + 5000 &&
+                            gpuIgnoredAlphaPixels >
+                                gpuPremulAlphaPixels + 5000 &&
+                            std::abs(gpuStraightAlphaPixels -
+                                     gpuPremulAlphaPixels) < 100 &&
+                            std::abs(gpuPackedAlphaPixels -
+                                     gpuIgnoredAlphaPixels) < 100;
+                        passed &= check(
+                            gpuAlphaModeMasksMatch,
+                            "GPU mesh texture alpha modes must cut out STRAIGHT/PREMUL samples while CHANNEL_PACKED/NONE bypass the cutoff");
+                        lightingCapturesSucceeded &=
+                            gpuAlphaModeMasksMatch;
 
                         const QString udimTile1001Path = QDir(
                             lightingCaptureDirectory).filePath(

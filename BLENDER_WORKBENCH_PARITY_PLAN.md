@@ -5482,3 +5482,44 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   to a generated boundary image, and `--texture-alpha-mode STRAIGHT` or
   `CHANNEL_PACKED`. Match the World with
   `--world-color 0.0219421387 0.0219421387 0.0219421387`.
+
+### Matched GPU mesh texture alpha-mode comparison (2026-10-14)
+
+- Extended the existing QPainter mesh alpha-mode capture to the GPU path for
+  `STRAIGHT`, `PREMUL`, `CHANNEL_PACKED`, and `NONE`, using the same 2×2 sRGB
+  image, Linear filtering, Repeat extension, Flat lighting, AA Off, and
+  640×480 orthographic camera as Blender 5.2.2. The offscreen contract checks
+  that GPU STRAIGHT/PREMUL masks contain the expected cutoff holes and that
+  CHANNEL_PACKED/NONE retain those samples.
+- Against Blender, GPU display-mask IoU is `0.999856` (3 XOR pixels) for both
+  STRAIGHT and PREMUL, and `0.999937` (2 XOR pixels) for CHANNEL_PACKED and
+  NONE. On the shared PNG foreground away from the silhouette, display-channel
+  MAE is `0.0404/255` STRAIGHT, `1.275/255` PREMUL, and `0.0424/255` for each
+  cutoff-disabled mode. Scene-linear error was measured over the common
+  foreground after excluding a two-pixel silhouette border and six pixels
+  around the shared triangle diagonal. Per-channel MAE `(blue, green, red)` is
+  `(7.14e-5, 4.42e-5, 4.56e-5)` for STRAIGHT, `(0.00464, 0.00310, 0.00122)`
+  for PREMUL, and `(7.05e-5, 4.43e-5, 3.56e-5)` for CHANNEL_PACKED and NONE.
+  The larger PREMUL difference is consistent with the QPainter comparison and
+  is concentrated in filtered low-alpha texture regions; this fixture does not
+  isolate whether image decoding or filtering accounts for it, so it does not
+  justify a production sampling change.
+- Blender 5.2.2 unpremultiplies PREMUL samples before returning texture RGB and
+  applies the fragment cutoff for STRAIGHT/PREMUL in pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L433).
+  Its
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L536-L553)
+  disables cutoff for CHANNEL_PACKED and NONE/Ignore. The matched Blender helper
+  applies the selected alpha mode to both mesh texture materials so both
+  triangles share the same controlled image interpretation.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  39.61 seconds); all four Blender references reported 5.2.2 LTS; and matched
+  PNG/PFM comparisons completed for GPU and QPainter. Reproduce the classiCAD
+  matrix with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>` and Blender with
+  `--scene MESH_TEXTURE --match-classicad-ortho --aa OFF --lighting FLAT
+  --color-source TEXTURE --texture-interpolation Linear
+  --texture-extension REPEAT --texture-image` set to the selected straight or
+  premultiplied capture asset, pass that same file as
+  `--texture-image-secondary`, and select each `--texture-alpha-mode`. Match
+  World color with `--world-color 0.0219421387 0.0219421387 0.0219421387`.

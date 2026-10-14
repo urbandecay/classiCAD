@@ -1686,6 +1686,26 @@ and `.pfm` under `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; Blender uses
 --color-source TEXTURE --texture-interpolation Linear` and the same pattern
 image.
 
+**Full-frame QPainter textured polygon mesh comparison (2026-10-14):** The
+QPainter fallback and Blender 5.2.2 render the same 640×480 planar mesh made
+from two explicitly matching triangles, with per-corner normalized UVs, the
+same sRGB 2×2 pattern, Linear filtering, Flat lighting, AgX, and matched
+orthographic framing. Foreground mask IoU is `0.987882` (390 XOR pixels;
+31,794 Blender and 32,184 QPainter foreground pixels). On their shared
+foreground eroded by two pixels, display RGB MAE is `0.535` with maximum 42;
+the CPU fragment capture compared in scene-linear RGB has channel MAE
+`0.00157`, p95 `0.00374`, and maximum `0.00819`. Four interior quadrant probes
+agree within 1 display code value per channel. This comparison found no
+additional texture RGB or UV defect; the remaining difference is concentrated
+in edge coverage and small interpolation/color errors. It validates one
+opaque, regular-image, planar case and does not establish other mesh shapes,
+texture extension/alpha modes, or perspective sampling. Capture files are
+`color_texture_mesh_qpainter.png` and `.pfm` under
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR`; Blender uses
+`--scene MESH_TEXTURE --match-classicad-ortho --aa OFF --lighting FLAT
+--color-source TEXTURE --texture-interpolation Linear` and the same pattern
+image.
+
 **QPainter Image Texture interpolation contract (2026-10-14):** A patterned
 2×2 image checks that QPainter produces identical Texture-mode pixels for the
 Blender node interpolation labels Linear, Cubic, and Smart. A production mesh

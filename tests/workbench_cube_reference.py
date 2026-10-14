@@ -21,7 +21,7 @@ def arguments():
     parser.add_argument("output", help="PNG output path")
     parser.add_argument(
         "--scene",
-        choices=("CUBE", "NURBS_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
+        choices=("CUBE", "NURBS_TEXTURE", "MESH_TEXTURE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
     )
@@ -344,6 +344,42 @@ def main():
                                             (1.0, 1.0), (0.0, 1.0))):
             loop.uv = uv
         material = bpy.data.materials.new("NurbsTextureMaterial")
+        material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
+        material.use_nodes = True
+        image_node = material.node_tree.nodes.new("ShaderNodeTexImage")
+        image_node.image = bpy.data.images.load(
+            os.path.abspath(args.texture_image), check_existing=True
+        )
+        if args.texture_color_space:
+            image_node.image.colorspace_settings.name = args.texture_color_space
+        if args.texture_alpha_mode:
+            image_node.image.alpha_mode = args.texture_alpha_mode
+        image_node.interpolation = args.texture_interpolation
+        image_node.show_texture = True
+        material.node_tree.nodes.active = image_node
+        mesh.materials.append(material)
+    elif args.scene == "MESH_TEXTURE":
+        if args.color_source != "TEXTURE" or not args.texture_image:
+            raise ValueError("MESH_TEXTURE requires TEXTURE color source and --texture-image")
+        # Match classiCAD's explicit two-triangle planar mesh fixture so the
+        # full-frame comparison uses the same diagonal and per-corner UVs.
+        mesh = bpy.data.meshes.new("MeshTextureProxyMesh")
+        mesh.from_pydata(
+            [(-1.0, -1.0, 0.0), (1.0, -1.0, 0.0),
+             (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0)],
+            [], [(0, 1, 2), (0, 2, 3)],
+        )
+        mesh.update()
+        proxy = bpy.data.objects.new("MeshTextureProxy", mesh)
+        bpy.context.collection.objects.link(proxy)
+        uv_layer = mesh.uv_layers.new(name="UVMap")
+        for loop, uv in zip(
+            uv_layer.data,
+            ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0),
+             (0.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+        ):
+            loop.uv = uv
+        material = bpy.data.materials.new("MeshTextureMaterial")
         material.diffuse_color = (0.8, 0.8, 0.8, 1.0)
         material.use_nodes = True
         image_node = material.node_tree.nodes.new("ShaderNodeTexImage")

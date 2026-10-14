@@ -6922,6 +6922,131 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &=
                             qpainterNurbsTextureSaved;
 
+                        ViewportRenderObject qpainterMeshTextureObject;
+                        qpainterMeshTextureObject.shape.geometryType =
+                            GeometryType::PolygonMesh;
+                        PolygonMesh3D &qpainterMeshTextureMesh =
+                            qpainterMeshTextureObject.shape.polygonMesh;
+                        qpainterMeshTextureMesh.vertices = {
+                            {-1.0, -1.0, 0.0}, {1.0, -1.0, 0.0},
+                            {1.0, 1.0, 0.0}, {-1.0, 1.0, 0.0}};
+                        qpainterMeshTextureMesh.faces = {{0, 1, 2}, {0, 2, 3}};
+                        qpainterMeshTextureMesh.faceMaterialIndices = {0, 0};
+                        qpainterMeshTextureMesh.uvMaps = {
+                            {QStringLiteral("UVMap"),
+                             {QPointF(0.0, 0.0), QPointF(1.0, 0.0),
+                              QPointF(1.0, 1.0), QPointF(0.0, 0.0),
+                              QPointF(1.0, 1.0), QPointF(0.0, 1.0)}}};
+                        qpainterMeshTextureMesh.activeUvMapName =
+                            QStringLiteral("UVMap");
+                        qpainterMeshTextureMesh.defaultUvMapName =
+                            QStringLiteral("UVMap");
+                        WorkbenchMaterialData qpainterMeshTextureMaterial;
+                        qpainterMeshTextureMaterial.baseColorSceneLinear =
+                            QVector3D(0.8f, 0.8f, 0.8f);
+                        qpainterMeshTextureMaterial.textureImagePath =
+                            patternedTexturePath;
+                        qpainterMeshTextureMaterial.textureImageSrgb = true;
+                        qpainterMeshTextureMaterial.textureImageAlphaMode =
+                            QStringLiteral("STRAIGHT");
+                        qpainterMeshTextureMaterial
+                            .textureImageInterpolation =
+                                QStringLiteral("Linear");
+                        qpainterMeshTextureMaterial.textureImageExtension =
+                            QStringLiteral("REPEAT");
+                        const QVector<WorkbenchMaterialData>
+                            qpainterMeshTextureMaterials{
+                                qpainterMeshTextureMaterial};
+                        qpainterMeshTextureObject.meshMaterials =
+                            qpainterMeshTextureMaterials;
+                        qpainterMeshTextureObject.objectId =
+                            ObjectId::fromValue(9102);
+                        qpainterMeshTextureObject.displayName =
+                            QStringLiteral("MeshTexturePatch");
+                        qpainterMeshTextureObject.geometryRevision = 1;
+                        QImage qpainterMeshTextureDisplay(
+                            glSize, QImage::Format_ARGB32_Premultiplied);
+                        qpainterMeshTextureDisplay.fill(
+                            nurbsTextureDisplay.pixelColor(0, 0));
+                        RasterWorkbenchFragmentSink
+                            qpainterMeshTextureFragments;
+                        QPainter qpainterMeshTexturePainter(
+                            &qpainterMeshTextureDisplay);
+                        qpainterTextureRenderer.drawShape(
+                            qpainterMeshTexturePainter,
+                            qpainterMeshTextureObject.shape, glSize, false,
+                            false, true, QColor(), QString(), 0.0,
+                            qpainterMeshTextureObject.objectId,
+                            qpainterMeshTextureObject.geometryRevision,
+                            nullptr, {}, std::nullopt, std::nullopt,
+                            qpainterMeshTextureObject.displayName, QString(),
+                            identityMeshObjectTransform,
+                            qpainterMeshTextureMaterials,
+                            &qpainterMeshTextureFragments);
+                        qpainterMeshTexturePainter.end();
+                        QVector<float> qpainterMeshTextureSceneLinear(
+                            textureExpectedValues);
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < qpainterMeshTextureSceneLinear.size();
+                             pixel += 3) {
+                            qpainterMeshTextureSceneLinear[pixel] =
+                                textureBackground.x();
+                            qpainterMeshTextureSceneLinear[pixel + 1] =
+                                textureBackground.y();
+                            qpainterMeshTextureSceneLinear[pixel + 2] =
+                                textureBackground.z();
+                        }
+                        for (const RasterWorkbenchLinearFragment &fragment :
+                             qpainterMeshTextureFragments) {
+                            if (fragment.x < 0 || fragment.x >= glSize.width() ||
+                                fragment.y < 0 || fragment.y >= glSize.height()) {
+                                continue;
+                            }
+                            const qsizetype pixel =
+                                (qsizetype(fragment.y) * glSize.width() +
+                                 fragment.x) * 3;
+                            qpainterMeshTextureSceneLinear[pixel] =
+                                fragment.sceneLinearRgb[0];
+                            qpainterMeshTextureSceneLinear[pixel + 1] =
+                                fragment.sceneLinearRgb[1];
+                            qpainterMeshTextureSceneLinear[pixel + 2] =
+                                fragment.sceneLinearRgb[2];
+                        }
+                        const QString qpainterMeshTextureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_qpainter.png"));
+                        const QString qpainterMeshTextureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "color_texture_mesh_qpainter.pfm"));
+                        QFile qpainterMeshTextureLinearFile(
+                            qpainterMeshTextureLinearPath);
+                        const bool qpainterMeshTextureLinearSaved =
+                            qpainterMeshTextureFragments.size() > 5000 &&
+                            qpainterMeshTextureLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            qpainterMeshTextureLinearFile.write(
+                                texturePfmHeader) == texturePfmHeader.size() &&
+                            qpainterMeshTextureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    qpainterMeshTextureSceneLinear.constData()),
+                                qpainterMeshTextureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                            qpainterMeshTextureSceneLinear.size() *
+                                qsizetype(sizeof(float));
+                        const bool qpainterMeshTextureSaved =
+                            patternedTextureSaved &&
+                            validatePolygonMesh(qpainterMeshTextureMesh) &&
+                            qpainterMeshTextureLinearSaved &&
+                            qpainterMeshTextureDisplay.save(
+                                qpainterMeshTextureDisplayPath);
+                        passed &= check(
+                            qpainterMeshTextureSaved,
+                            "QPainter polygon-mesh Image Texture capture must render the matched two-triangle patch");
+                        lightingCapturesSucceeded &=
+                            qpainterMeshTextureSaved;
+
                         QImage alphaCutoutTexture(2, 2,
                                                   QImage::Format_RGBA8888);
                         alphaCutoutTexture.setPixelColor(

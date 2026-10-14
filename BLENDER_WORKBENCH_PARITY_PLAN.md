@@ -2641,6 +2641,32 @@ above is from scene-linear captures and remains the preferred color metric.
   tool, and dimension failures outside this category; its serialization
   contract passed.
 
+### Full-frame background and display comparison (2026-10-14)
+
+- Repeated the five matched nonblank 640×480 cube captures with Blender 5.2.2
+  (`d13f752e3b9c`) and classiCAD's offscreen GPU capture. The cases were World
+  and Viewport backgrounds under AgX and Standard, plus Standard with exposure
+  1 and gamma 2; AA and dither were off. The four corner scene-linear RGB
+  values matched exactly for each background source, and the 27 face-interior
+  probes matched exactly for every case. This is a render-result fixture, not
+  Blender's interactive Theme background path.
+- Full-frame display comparison found a one-channel, one-code-value rounding
+  residual on the World background: 195,944 differing pixels for AgX
+  (0.29938/255 MAE) and the same count for Standard (0.32612/255 MAE). Under
+  Standard with exposure 1 and gamma 2, the World case differed at 224 cube
+  edge pixels (0.06781/255 MAE, max 117/255). Viewport-background captures
+  differed at 224 cube edge pixels under AgX (0.01872/255 MAE, max 47/255)
+  and Standard (0.04035/255 MAE, max 94/255). The edge residuals are localized
+  to cube coverage; sampled face colors and background scene-linear values
+  remain equal. These numbers clarify the earlier probe-only comparison and do
+  not sign off on all color-management or background options.
+- Validation: the offscreen `viewport_render_contracts` capture passed (1/1);
+  Blender 5.2.2 background renders and scene-linear conversions completed for
+  all five cases. `workbench_display_probe_compare.py` and
+  `workbench_pfm_compare.py` were used on the captures. Theme, interactive
+  Solid/Wireframe background display, QPainter, non-sRGB display devices, and
+  broader transforms remain open.
+
 ### QPainter interactive World background conversion (2026-10-13)
 
 - Blender's Solid viewport overlay supplies the World color as scene-linear

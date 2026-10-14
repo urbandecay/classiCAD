@@ -642,8 +642,13 @@ inline QVector3D workbenchMatcapSampleLinearHalf(const QByteArray &data,
 {
     if (data.isEmpty() || width <= 0 || height <= 0 || layer < 0 || layer > 1)
         return {};
-    const float x = std::clamp(u, 0.0f, 1.0f) * (width - 1);
-    const float y = std::clamp(v, 0.0f, 1.0f) * (height - 1);
+    // OpenGL normalized linear sampling addresses texel centers at
+    // (index + 0.5) / dimension, then clamps the filter footprint to the
+    // edge texels. This is the CPU equivalent of the GPU MatCap sampler.
+    const float x = std::clamp(std::clamp(u, 0.0f, 1.0f) * width - 0.5f,
+                               0.0f, float(width - 1));
+    const float y = std::clamp(std::clamp(v, 0.0f, 1.0f) * height - 0.5f,
+                               0.0f, float(height - 1));
     const int x0 = static_cast<int>(x);
     const int y0 = static_cast<int>(y);
     const int x1 = std::min(x0 + 1, width - 1);
@@ -697,8 +702,13 @@ inline QVector3D workbenchMatcapSampleLinear(const QImage &image,
 {
     // Match Blender's linear-filtered sRGB texture sampling: decode each
     // texel first, then interpolate its scene-linear values.
-    const float x = std::clamp(u, 0.0f, 1.0f) * (image.width() - 1);
-    const float y = std::clamp(v, 0.0f, 1.0f) * (image.height() - 1);
+    if (image.isNull()) return {};
+    const float x = std::clamp(
+        std::clamp(u, 0.0f, 1.0f) * image.width() - 0.5f,
+        0.0f, float(image.width() - 1));
+    const float y = std::clamp(
+        std::clamp(v, 0.0f, 1.0f) * image.height() - 0.5f,
+        0.0f, float(image.height() - 1));
     const int x0 = static_cast<int>(x);
     const int y0 = static_cast<int>(y);
     const int x1 = std::min(x0 + 1, image.width() - 1);

@@ -147,6 +147,46 @@ int main(int argc, char **argv)
     shading.colorTransform = 0;
     renderer.setShadingSettings(shading);
 
+    QImage matcapTexture(2, 2, QImage::Format_RGB32);
+    matcapTexture.setPixelColor(0, 0, QColor(0, 0, 0));
+    matcapTexture.setPixelColor(1, 0, QColor(255, 0, 0));
+    matcapTexture.setPixelColor(0, 1, QColor(0, 255, 0));
+    matcapTexture.setPixelColor(1, 1, QColor(0, 0, 255));
+    const QVector3D linearTextureCenter =
+        workbenchMatcapSampleLinear(matcapTexture, 0.5f, 0.5f);
+    const QVector3D linearTextureCorner =
+        workbenchMatcapSampleLinear(matcapTexture, 0.25f, 0.25f);
+    passed &= check((linearTextureCenter - QVector3D(0.25f, 0.25f, 0.25f))
+                            .length() < 1.0e-5f &&
+                        linearTextureCorner.length() < 1.0e-5f &&
+                        (workbenchMatcapSampleLinear(matcapTexture, 1.0f, 1.0f) -
+                         QVector3D(0.0f, 0.0f, 1.0f)).length() < 1.0e-5f,
+                    "QPainter MatCap filtering must use normalized texel centers and clamp to edge texels");
+
+    QByteArray halfMatcap(0, Qt::Uninitialized);
+    for (int layer = 0; layer < 2; ++layer) {
+        for (int texel = 0; texel < 4; ++texel) {
+            const float value = float((layer == 0 ? 0 : 10) + texel);
+            for (int channel = 0; channel < 3; ++channel) {
+                const qfloat16 half(value);
+                quint16 bits = 0;
+                std::memcpy(&bits, &half, sizeof(bits));
+                bits = qToLittleEndian(bits);
+                halfMatcap.append(reinterpret_cast<const char *>(&bits),
+                                  sizeof(bits));
+            }
+        }
+    }
+    const QVector3D halfTextureCenter = workbenchMatcapSampleLinearHalf(
+        halfMatcap, 2, 2, 0, 0.5f, 0.5f);
+    const QVector3D halfTextureCorner = workbenchMatcapSampleLinearHalf(
+        halfMatcap, 2, 2, 1, 1.0f, 1.0f);
+    passed &= check((halfTextureCenter - QVector3D(1.5f, 1.5f, 1.5f))
+                            .length() < 1.0e-5f &&
+                        (halfTextureCorner - QVector3D(13.0f, 13.0f, 13.0f))
+                                .length() < 1.0e-5f,
+                    "half-float MatCap filtering must use normalized texel centers and clamp to edge texels");
+
     constexpr quint64 meshId = 7201;
     constexpr quint64 surfaceId = 7202;
     constexpr float materialAlpha = 0.45f;

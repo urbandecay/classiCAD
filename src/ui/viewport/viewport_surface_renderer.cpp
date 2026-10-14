@@ -1894,11 +1894,11 @@ bool ViewportSurfaceRenderer::initialize()
                                           dot(incidentWorld, uViewFacing)));
             }
             if (uStudioLighting) {
-                int packed = int(material.a);
-                selected = (packed & 256) != 0;
-                packed &= 255;
-                float roughness = float(packed & 31) * (1.0 / 31.0);
-                float metallic = float((packed >> 5) & 7) * (1.0 / 7.0);
+                int materialBits = int(material.a);
+                selected = (materialBits & 256) != 0;
+                materialBits &= 255;
+                float roughness = float(materialBits & 31) * (1.0 / 31.0);
+                float metallic = float((materialBits >> 5) & 7) * (1.0 / 7.0);
                 color = workbenchStudioLighting(material.rgb, roughness,
                                                 metallic, normal, incident);
             } else if (uMatcapLighting && uMatcapAvailable) {

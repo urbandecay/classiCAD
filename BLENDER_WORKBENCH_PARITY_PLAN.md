@@ -76,10 +76,9 @@ wrap, ambient, specular toggle, rotation, and world-space mode come from the
 existing Workbench Studio-light adapter. The shared normal prepass is requested
 for eligible scene-linear Studio draws, including draws with shadows using the
 shared per-sample shadow factor. Studio remains on the forward path when
-X-Ray, preview, or cavity diagnostic output is active. The C++ build passes;
-shader runtime and matched Blender image
-comparison remain open because this environment has not provided a working
-OpenGL comparison context.
+X-Ray, preview, or cavity diagnostic output is active. The C++ build and
+offscreen `viewport_render_contracts` now pass with an active OpenGL context.
+Matched Blender image comparison remains open.
 
 **MatCap G-buffer resolve update (2026-10-13):** The same eligible deferred
 resolve now handles MatCap using the existing Blender-derived MatCap UV
@@ -88,16 +87,18 @@ scene-linear material color, while specular is added when enabled. Horizontal
 flip, perspective incident reconstruction, orthographic view direction, and
 the independent front-object material/normal merge are retained. If the MatCap
 resource cannot be prepared, the existing forward output is left in place.
-This path shares the Studio restrictions above. The C++ build passes; GPU
-shader execution and matched Blender image comparison remain open.
+This path shares the Studio restrictions above. The C++ build and offscreen
+`viewport_render_contracts` pass with an active OpenGL context. Matched Blender
+image comparison remains open.
 
 **Deferred MatCap back-face orientation (2026-10-13):** The deferred MatCap
 resolve now applies the sign stored in the material payload to the decoded
 normal before computing MatCap UVs. This matches Blender 5.2.2's prepass
 facing payload and composite normal flip, while leaving the payload magnitude
 available for the selected marker. Cavity keeps the unflipped prepass normal,
-matching Blender's independent cavity normal input. The C++ build passes; a
-two-sided GPU capture and matched Blender image comparison remain open.
+matching Blender's independent cavity normal input. The C++ build and offscreen
+`viewport_render_contracts` pass with an active OpenGL context; a two-sided
+GPU capture and matched Blender image comparison remain open.
 
 **Opaque cavity resolve update (2026-10-13):** Eligible scene-linear opaque
 resolves now apply Workbench cavity and curvature from the shared depth,
@@ -105,8 +106,8 @@ view-normal, object-ID, and blue-noise inputs before transparent accumulation.
 The resolve uses the same per-AA-sample cavity sequence and settings as the
 forward shader. If the shared prepass or required SSAO depth snapshot is
 unavailable, it keeps the forward color result. X-Ray, previews, and cavity
-diagnostic output still use the forward route. The C++ build passes; the GLSL
-path has not yet been executed in a working GL context, so matched output
+diagnostic output still use the forward route. The C++ build and offscreen
+`viewport_render_contracts` pass with an active OpenGL context; matched output
 validation remains open.
 
 **Deferred selection-tint update (2026-10-13):** Selected opaque ranges can now
@@ -115,8 +116,9 @@ Studio roughness/metallic, and MatCap face-orientation data while carrying a
 selected marker in otherwise unused payload values. The resolve applies the
 same orange theme tint and 51/255 mix after lighting and cavity. This also
 survives the existing `showInFront` material-data merge. Preview and selection
-overlay draws remain on their existing path. The C++ build passes; GPU
-execution and matched visual comparison remain open.
+overlay draws remain on their existing path. The C++ build and offscreen
+`viewport_render_contracts` pass with an active OpenGL context. Matched visual
+comparison remains open.
 
 **Opaque shadow-mask resolve update (2026-10-13):** The shared scene sample now
 owns an `R16F` shadow-factor attachment, with a separate attachment for the
@@ -125,16 +127,20 @@ it already applies, including stencil-volume visibility, depth-map PCF,
 shadow focus/offset, and intensity. The front factor merges with front color,
 material, depth, and normal data; the deferred resolve applies it after cavity
 and before selected tint. The mask clears to neutral visibility 1. Transparent
-objects keep their existing direct shading path. The C++ build passes; GL
-execution and matched Blender output comparison remain open.
+objects keep their existing direct shading path. The C++ build and offscreen
+`viewport_render_contracts` pass with an active OpenGL context. Matched Blender
+output comparison remains open.
 
 **Deferred resolve shader scope correction (2026-10-13):** A source audit found
 that the embedded GLSL referenced `selected`, `normal`, and `incident` outside
 the blocks where they had been declared. These values now have function scope;
 the view normal is fetched only for Studio, MatCap, or cavity, and the
 perspective incident direction is reconstructed only for Studio or MatCap.
-The C++ build passes, but this environment has no GLSL validator or working GL
-context, so shader compilation and execution remain unverified.
+Headless OpenGL validation later exposed `packed` as a reserved GLSL identifier
+in the material resolve. It is now named `materialBits`. The C++ build passes,
+and both `viewport_render_contracts` and `workbench_render_pass_capture` pass
+with `QT_QPA_PLATFORM=offscreen`; matched Blender image comparison remains
+open.
 
 **Translucent tool-preview dispatch correction (2026-10-13):** Solid preview
 fills now enter the transparency dispatch even though their source geometry is
@@ -1703,9 +1709,8 @@ depth domain. Visual depth comparison remains open.
   describe the actual color outputs consumed by the live and offscreen AA
   paths. Focused capture assertions cover opaque, deferred, transparent, and
   in-front color reporting.
-  The C++ build succeeds, but running the capture executable with Qt's
-  offscreen platform cannot create the required OpenGL 3.3 context, so those
-  runtime assertions remain unverified here.
+  The C++ build succeeds, and `viewport_render_contracts` now passes these
+  runtime assertions with Qt's offscreen OpenGL context.
 
 ### QPainter X-Ray outline behavior (2026-10-13)
 
@@ -2481,8 +2486,9 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   `workbench_persistence_contracts`,
   `workbench_render_result_format_contracts`, and
   `viewport_wheel_navigation_aa` pass. `viewport_render_contracts` reaches its
-  existing OpenGL-only NURBS-solid check and exits because this environment
-  cannot create the required context; no GPU visual validation is claimed.
+  existing OpenGL-only NURBS-solid check. A later offscreen run of
+  `viewport_render_contracts` creates an OpenGL context and passes; this
+  validates its covered GPU paths but is not a broad GPU visual comparison.
 
 ## Blender 5.2.2 source references
 

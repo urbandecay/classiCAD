@@ -119,6 +119,12 @@ def arguments():
         help="Workbench object color source (default: MATERIAL)",
     )
     parser.add_argument(
+        "--attribute-domain",
+        choices=("POINT", "CORNER"),
+        default="CORNER",
+        help="color attribute domain for VERTEX source (default: CORNER)",
+    )
+    parser.add_argument(
         "--single-color",
         nargs=3,
         type=float,
@@ -356,19 +362,28 @@ def main():
                     loop.uv = (0.5, 0.5)
         if args.color_source == "VERTEX":
             color_attribute = cube.data.color_attributes.new(
-                name="Color", type="FLOAT_COLOR", domain="CORNER"
+                name="Color", type="FLOAT_COLOR", domain=args.attribute_domain
             )
-            for polygon in cube.data.polygons:
-                for loop_index in polygon.loop_indices:
-                    vertex = cube.data.vertices[
-                        cube.data.loops[loop_index].vertex_index
-                    ].co
-                    color_attribute.data[loop_index].color = (
-                        0.1 + 0.35 * (vertex.x + 1.0),
-                        0.1 + 0.35 * (vertex.y + 1.0),
-                        0.1 + 0.35 * (vertex.z + 1.0),
+            if args.attribute_domain == "POINT":
+                for vertex_index, vertex in enumerate(cube.data.vertices):
+                    color_attribute.data[vertex_index].color = (
+                        0.1 + 0.35 * (vertex.co.x + 1.0),
+                        0.1 + 0.35 * (vertex.co.y + 1.0),
+                        0.1 + 0.35 * (vertex.co.z + 1.0),
                         1.0,
                     )
+            else:  # CORNER
+                for polygon in cube.data.polygons:
+                    for loop_index in polygon.loop_indices:
+                        vertex = cube.data.vertices[
+                            cube.data.loops[loop_index].vertex_index
+                        ].co
+                        color_attribute.data[loop_index].color = (
+                            0.1 + 0.35 * (vertex.x + 1.0),
+                            0.1 + 0.35 * (vertex.y + 1.0),
+                            0.1 + 0.35 * (vertex.z + 1.0),
+                            1.0,
+                        )
             color_index = cube.data.color_attributes.find(color_attribute.name)
             cube.data.color_attributes.active_color_index = color_index
             cube.data.color_attributes.render_color_index = color_index

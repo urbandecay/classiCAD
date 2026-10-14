@@ -6479,13 +6479,18 @@ int main(int argc, char *argv[])
                         struct ColorSourceCaptureCase {
                             const char *name;
                             ViewportColorMode colorMode;
+                            MeshAttributeDomain attributeDomain =
+                                MeshAttributeDomain::Corner;
                         };
                         const ColorSourceCaptureCase colorSourceCases[] = {
                             {"color_material", ViewportColorMode::Material},
                             {"color_object", ViewportColorMode::Object},
                             {"color_random", ViewportColorMode::Random},
                             {"color_custom", ViewportColorMode::Custom},
-                            {"color_attribute", ViewportColorMode::Attribute}};
+                            {"color_attribute", ViewportColorMode::Attribute},
+                            {"color_attribute_point",
+                             ViewportColorMode::Attribute,
+                             MeshAttributeDomain::Point}};
                         for (const ColorSourceCaptureCase &captureCase :
                              colorSourceCases) {
                             ViewportRenderObject colorSourceObject =
@@ -6513,7 +6518,7 @@ int main(int argc, char *argv[])
                                 ViewportColorMode::Attribute) {
                                 MeshColorAttribute attribute;
                                 attribute.name = QStringLiteral("Color");
-                                attribute.domain = MeshAttributeDomain::Corner;
+                                attribute.domain = captureCase.attributeDomain;
                                 attribute.dataType =
                                     QStringLiteral("FLOAT_COLOR");
                                 attribute.colorSpace =
@@ -6521,21 +6526,26 @@ int main(int argc, char *argv[])
                                 attribute.componentCount = 4;
                                 const PolygonMesh3D &mesh =
                                     colorSourceObject.shape.polygonMesh;
-                                for (const QVector<int> &face : mesh.faces) {
-                                    for (int vertexIndex : face) {
-                                        const Point3D &point =
-                                            mesh.vertices[vertexIndex];
+                                const auto appendPointColor =
+                                    [&attribute](const Point3D &point) {
                                         const auto channel = [](double value) {
                                             return float(0.1 +
                                                 0.35 * (value + 1.0));
                                         };
-                                        attribute.values.append(
-                                            channel(point.x));
-                                        attribute.values.append(
-                                            channel(point.y));
-                                        attribute.values.append(
-                                            channel(point.z));
+                                        attribute.values.append(channel(point.x));
+                                        attribute.values.append(channel(point.y));
+                                        attribute.values.append(channel(point.z));
                                         attribute.values.append(1.0f);
+                                    };
+                                if (attribute.domain ==
+                                    MeshAttributeDomain::Point) {
+                                    for (const Point3D &point : mesh.vertices)
+                                        appendPointColor(point);
+                                } else {
+                                    for (const QVector<int> &face : mesh.faces) {
+                                        for (int vertexIndex : face)
+                                            appendPointColor(
+                                                mesh.vertices[vertexIndex]);
                                     }
                                 }
                                 colorSourceObject.shape.polygonMesh

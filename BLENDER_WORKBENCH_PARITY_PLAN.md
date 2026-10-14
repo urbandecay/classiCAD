@@ -1539,7 +1539,7 @@ background render and PFM conversion completed.
 
 **QPainter MatCap horizontal flip (2026-10-14):** The CPU MatCap UV helper already accepts the Workbench horizontal-reflection control, and both the mesh-fragment and NURBS-surface shading call sites pass the viewport's persisted `matcapFlipX` setting. Headless production-path contracts render tilted NURBS and polygon-mesh fixtures with the asymmetric `metal_bronze` preset and verify that enabling Flip X changes each output. Blender 5.2.2 negates the computed MatCap UV X coordinate when flipped in [`workbench_matcap.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh#L11-L22). These contracts verify setting flow through both QPainter geometry paths, not matched Blender output; other presets, camera orientations, and full-frame parity remain open.
 
-Phase Two color-source comparison: matched 640×480 Flat captures for Material, Object, and Random use the same cube, name, camera, and RGB inputs. All nine scene-linear and display probes match exactly for each source. Feature contracts verify interpolated Attribute RGB with material alpha, active-then-default color-attribute selection, and Texture RGB replacing material RGB while retaining material alpha. Blender import and native JSON now retain the default color attribute separately from the active attribute; both renderers use it when the active attribute is unset, and keep the material fallback when neither exists, matching Blender's active/default selection in [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc). Texture extraction now selects Blender's separately marked active texture node (`show_texture`) even when `nodes.active` points elsewhere, following [`node_get_active_texture`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/uvedit/uvedit_ops.cc#L98-L152). Meshes also retain Blender's default/render UV layer separately; GPU, QPainter, and raster paths use active UV first and default/render UV when active is unset, matching [`active_or_default_uv_map_name`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh.cc#L1300-L1324) and the Workbench mesh batch setup in [`draw_cache_impl_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_cache_impl_mesh.cc#L628-L635). Blender 5.2.2's active-texture selection contract and classiCAD's UV fallback/serialization contracts pass. The QPainter texture-alpha cutoff uses `< 0.1`, with a contract retaining exactly `0.1` and discarding the next float below, matching Blender's pinned [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429). Material alpha uses round-to-nearest UNorm8 packing; the CPU shadow contract now checks values immediately below, at, and above the 254.5/255 boundary against the opaque classification, following Blender's pinned [`math_base_inline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/math_base_inline.cc#L2362-L2368). Existing records establish interior probes; the full-frame Flat comparisons below cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute. Matched Point/Face-domain Blender images, other texture filters/alpha/UDIM output, and broader QPainter comparisons remain open. The focused viewport contract passes; `core_contracts` still reports perspective/zoom, snapping, curve-tool, and dimension failures outside this color-source category. Reproduce the three exact color-source comparisons with `tests/workbench_cube_reference.py --lighting FLAT --color-source MATERIAL|OBJECT|RANDOM|TEXTURE|SINGLE|VERTEX` and compare each output pair with `tests/workbench_display_probe_compare.py`.
+Phase Two color-source comparison: matched 640×480 Flat captures for Material, Object, and Random use the same cube, name, camera, and RGB inputs. All nine scene-linear and display probes match exactly for each source. Feature contracts verify interpolated Attribute RGB with material alpha, active-then-default color-attribute selection, and Texture RGB replacing material RGB while retaining material alpha. Blender import and native JSON now retain the default color attribute separately from the active attribute; both renderers use it when the active attribute is unset, and keep the material fallback when neither exists, matching Blender's active/default selection in [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc). Texture extraction now selects Blender's separately marked active texture node (`show_texture`) even when `nodes.active` points elsewhere, following [`node_get_active_texture`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/uvedit/uvedit_ops.cc#L98-L152). Meshes also retain Blender's default/render UV layer separately; GPU, QPainter, and raster paths use active UV first and default/render UV when active is unset, matching [`active_or_default_uv_map_name`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh.cc#L1300-L1324) and the Workbench mesh batch setup in [`draw_cache_impl_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_cache_impl_mesh.cc#L628-L635). Blender 5.2.2's active-texture selection contract and classiCAD's UV fallback/serialization contracts pass. The QPainter texture-alpha cutoff uses `< 0.1`, with a contract retaining exactly `0.1` and discarding the next float below, matching Blender's pinned [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429). Material alpha uses round-to-nearest UNorm8 packing; the CPU shadow contract now checks values immediately below, at, and above the 254.5/255 boundary against the opaque classification, following Blender's pinned [`math_base_inline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/math_base_inline.cc#L2362-L2368). Existing records establish interior probes; the full-frame Flat comparisons below cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute. Point-domain GPU output is compared below; Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute. Other texture filters/alpha/UDIM output and broader QPainter comparisons remain open. The focused viewport contract passes; `core_contracts` still reports perspective/zoom, snapping, curve-tool, and dimension failures outside this color-source category. Reproduce the three exact color-source comparisons with `tests/workbench_cube_reference.py --lighting FLAT --color-source MATERIAL|OBJECT|RANDOM|TEXTURE|SINGLE|VERTEX` and compare each output pair with `tests/workbench_display_probe_compare.py`.
 
 **Full-frame Flat color-source cube comparison (2026-10-14):** Compared
 Material, Object, Random, and Texture inputs on the same nonblank polygon cube
@@ -1585,10 +1585,35 @@ face-interior probes have scene-linear MAE `0.0000316` and max `0.0004883`;
 display MAE is `0.0370/255`, max `1/255`. Full-frame foreground-mask IoU is
 `0.997991` (224 XOR pixels), per-channel scene-linear MAE is at most
 `0.000316`, and display whole-frame MAE is `0.07142/255`. This validates the
-GPU interpolated corner-color path for this cube; other geometries and
-matched Point/Face-domain Blender comparisons remain open. Reproduce with
+GPU interpolated corner-color path for this cube; other geometries remain
+open. Point-domain output is compared below, while Blender has no active
+Face-domain color attribute to compare. Reproduce with
 `--color-source VERTEX` in `tests/workbench_cube_reference.py` and
 `color_attribute.png/.pfm` from the classiCAD lighting capture directory.
+
+**Full-frame Flat Point Attribute cube comparison (2026-10-14):** Extended
+the fixture to create the active/render `FLOAT_COLOR` layer on Blender's
+`POINT` domain and the matching per-vertex classiCAD attribute. At 640×480,
+scale 5.0, AA Off, Flat lighting, AgX, and the matched neutral background,
+the 27 face-interior probes have scene-linear MAE `0.0000316` and max
+`0.0004883`; display MAE is `0.0370/255`, max `1/255`. Full-frame
+foreground-mask IoU is `0.997991` (224 XOR pixels), and per-channel
+scene-linear MAE is `0.0000633`, `0.0000619`, and `0.0003159`. This verifies
+the GPU Point-domain interpolation path against Blender 5.2.2 for this cube.
+Reproduce with `--color-source VERTEX --attribute-domain POINT` in
+`tests/workbench_cube_reference.py` and
+`color_attribute_point.png/.pfm` from the classiCAD lighting capture
+directory.
+
+Blender 5.2.2 does not expose a `FLOAT_COLOR` attribute on the `FACE` domain
+as a color attribute: creating it leaves `Mesh.color_attributes.find(name)`
+at `-1`, and active/render color selection remains unset. The Workbench
+reference therefore cannot render a matched Face-domain color layer. The
+existing QPainter Face-domain contract verifies classiCAD's face-constant
+extension; it is not Blender parity. Point and Corner are the renderable
+color domains compared here. Blender's pinned `workbench_state.cc` checks
+active then default color names and verifies the selected layer with
+`bke::mesh::is_color_attribute` (lines 1415–1442).
 
 **QPainter Face-domain color attribute contract (2026-10-14):** The software
 renderer contract now builds a two-triangle mesh with an active `FLOAT_COLOR`
@@ -1599,8 +1624,11 @@ contract passes through the production `ViewportRenderer` path. Blender 5.2.2
 selects the active color attribute, falling back to the default only when the
 active name is absent, and validates it as a color attribute in pinned
 [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L244-L257).
-This adds a regression check for QPainter's Face-domain index path; a matched
-Blender rendered comparison and GPU Point/Face comparisons remain open.
+This adds a regression check for QPainter's Face-domain index path. A matched
+Blender rendered comparison is unavailable because Blender 5.2.2 does not
+recognize Face-domain `FLOAT_COLOR` as a color attribute. The GPU Point path
+is covered by the matched comparison above; a GPU Face-domain comparison has
+no Blender reference equivalent.
 
 **Full-frame varying-UV Texture cube comparison (2026-10-14):** Extended the
 offscreen cube capture and Blender 5.2.2 fixture with a 2×2 sRGB image whose
@@ -3151,7 +3179,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   Full-frame GPU MatCap comparison covers `metal_bronze` with
   specular and `check_normal+y` without specular. Other presets, Studio
   rotations, camera orientations, and QPainter output remain open.
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation) plus a two-tile mesh UDIM Closest-filter image comparison; the production capture contract also exercises Linear filtering, while its matched Blender image comparison remains open. A CPU contract now covers Point interpolation and constant Face-domain colors. Residual silhouette and display-edge differences remain. Matched Blender Point/Face comparisons, trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation) plus a two-tile mesh UDIM Closest-filter image comparison; the production capture contract also exercises Linear filtering, while its matched Blender image comparison remains open. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling, both idle and during navigation.

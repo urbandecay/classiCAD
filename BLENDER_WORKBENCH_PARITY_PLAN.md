@@ -5315,3 +5315,36 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   and `tests/workbench_effect_delta_compare.py` at threshold 3. No C++ source
   changed, so no rebuild was required. Full QPainter cavity parity remains
   open.
+
+### GPU per-face mesh texture-slot comparison (2026-10-14)
+
+- Added an opt-in GPU capture of the existing two-triangle planar mesh with
+  two distinct sRGB 2×2 Image Textures assigned by face material index. The
+  capture shares geometry, UVs, Linear filtering, Repeat extension, Flat
+  lighting, 640×480 orthographic framing, and the neutral scene-linear
+  background with Blender 5.2.2's `MESH_TEXTURE` reference. The Blender
+  helper already supports the second texture through
+  `--texture-image-secondary`.
+- The display foreground masks contain 31,794 Blender and 31,792 classiCAD
+  pixels (2 XOR; IoU `0.999937`). On the shared foreground after excluding a
+  two-pixel silhouette border, display channel MAE is `0.040/255`, p95 is
+  `0/255`, and maximum is `2/255`. Scene-linear full-frame channel MAE is
+  `6.4e-6` blue, `6.9e-6` green, and `9.3e-6` red. The PFM foreground mask
+  also has 2 XOR pixels and IoU `0.999937`; its larger maximum channel errors
+  occur at raster edges. This establishes GPU image selection for two opaque
+  per-face slots in this planar case and gives no evidence for a renderer
+  change.
+- Blender source for per-material texture selection is pinned to
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L542)
+  and mesh texture pass setup to
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1051-L1103).
+  Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
+  38.57 seconds); Blender reported 5.2.2 LTS; and the PNG/PFM comparisons
+  completed. Reproduce with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>` and Blender's
+  `--scene MESH_TEXTURE --texture-image workbench-texture-pattern.png
+  --texture-image-secondary workbench-texture-pattern-secondary.png`, setting
+  `--world-color 0.0219421387 0.0219421387 0.0219421387` to match the captured
+  background. This does not cover alpha-mixed slots, perspective, or other
+  mesh geometries.

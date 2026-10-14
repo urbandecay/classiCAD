@@ -8185,6 +8185,17 @@ int main(int argc, char *argv[])
                             "QPainter polygon-mesh Image Texture capture must render the matched two-triangle patch");
                         lightingCapturesSucceeded &=
                             qpainterMeshTextureSaved;
+                        const bool gpuMeshTextureSaved =
+                            captureGpuColorSource(
+                                QStringLiteral("color_texture_mesh_gpu"),
+                                qpainterMeshTextureObject,
+                                textureColorShading);
+                        passed &= check(
+                            patternedTextureSaved &&
+                                patternedTextureSecondarySaved &&
+                                gpuMeshTextureSaved,
+                            "GPU polygon-mesh Image Texture capture must render both per-face texture slots on the matched two-triangle patch");
+                        lightingCapturesSucceeded &= gpuMeshTextureSaved;
 
                         const QString meshAlphaStraightPath = QDir(
                             lightingCaptureDirectory).filePath(

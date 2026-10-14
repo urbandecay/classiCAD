@@ -155,6 +155,12 @@ float saturate(float value)
     return std::clamp(value, 0.0f, 1.0f);
 }
 
+bool isOpaqueWorkbenchAlpha(float alpha)
+{
+    // Blender classifies material transparency after packing alpha to UNorm8.
+    return workbenchPackUnitFloatToUnorm8(alpha) >= 1.0f;
+}
+
 float objectSourceAlpha(const ViewportRenderObject &object,
                         ViewportColorMode colorMode)
 {
@@ -725,7 +731,8 @@ bool compositeRasterWorkbenchSurfaces(
                      ++fragmentIndex) {
                     const RasterWorkbenchLinearFragment &fragment =
                         objectFragments[static_cast<std::size_t>(fragmentIndex)];
-                    if (fragment.alpha < 0.999f || fragment.x < 0 ||
+                    if (!isOpaqueWorkbenchAlpha(fragment.alpha) ||
+                        fragment.x < 0 ||
                         fragment.x >= width || fragment.y < 0 ||
                         fragment.y >= height) continue;
                     const int index = fragment.y * width + fragment.x;
@@ -792,7 +799,8 @@ bool compositeRasterWorkbenchSurfaces(
             float previousAlpha = 0.0f;
             bool havePrevious = false;
             for (const RasterWorkbenchLinearFragment &fragment : objectFragments) {
-                if (fragment.alpha <= 0.0f || fragment.alpha >= 0.999f ||
+                if (fragment.alpha <= 0.0f ||
+                    isOpaqueWorkbenchAlpha(fragment.alpha) ||
                     fragment.x < 0 || fragment.x >= width ||
                     fragment.y < 0 || fragment.y >= height) continue;
                 const int index = fragment.y * width + fragment.x;
@@ -1706,7 +1714,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             if (!valid) continue;
             const float triangleSourceAlpha = triangleIndex < triangleAlphas.size()
                 ? triangleAlphas[triangleIndex] : objectAlpha;
-            if (shadowEnabled && triangleSourceAlpha >= 0.999f) {
+            if (shadowEnabled &&
+                isOpaqueWorkbenchAlpha(triangleSourceAlpha)) {
                 ShadowTriangle caster;
                 for (int corner = 0; corner < 3; ++corner)
                     caster.vertices[corner] = world[corner];
@@ -1800,7 +1809,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     writeNearest(sample);
                     const float sourceAlpha = triangleSourceAlpha;
                     if ((cavityEnabled || shadowEnabled) &&
-                        sourceAlpha >= 0.999f) {
+                        isOpaqueWorkbenchAlpha(sourceAlpha)) {
                         QVector<RasterSample> &domainOpaqueSamples =
                             object.showInFront ? inFrontOpaqueSamples
                                                : opaqueSamples;

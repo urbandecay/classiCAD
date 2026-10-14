@@ -478,6 +478,37 @@ int main(int argc, char *argv[])
     }
     passed &= check(shadowPixels > 0,
         "QPainter Workbench shadow setting must darken receiver pixels for opaque triangulated casters");
+
+    const auto renderMaterialAlphaShadow = [&](float alpha) {
+        QVector<ViewportRenderObject> objects = shadowObjects;
+        objects[1].hasWorkbenchMaterial = true;
+        objects[1].workbenchMaterial.alpha = alpha;
+        ViewportShadingSettings settings = shadowSettings;
+        settings.colorMode = ViewportColorMode::Material;
+        QImage image(orthographicDofSize,
+                     QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        applyRasterWorkbenchEffects(
+            &image, objects, orthographicDofTransform,
+            orthographicDofSize, 1.0, settings);
+        return image;
+    };
+    const QImage alpha254ShadowImage =
+        renderMaterialAlphaShadow(254.0f / 255.0f);
+    const QImage alphaZeroShadowImage = renderMaterialAlphaShadow(0.0f);
+    const QImage alphaRoundedOpaqueShadowImage =
+        renderMaterialAlphaShadow(0.9985f);
+    const QImage fullyOpaqueMaterialShadowImage =
+        renderMaterialAlphaShadow(1.0f);
+    passed &= check(
+        workbenchPackUnitFloatToUnorm8(254.0f / 255.0f) < 1.0f &&
+            workbenchPackUnitFloatToUnorm8(0.9985f) == 1.0f,
+        "Workbench material alpha packing must match Blender's 8-bit UNorm threshold");
+    passed &= check(alpha254ShadowImage == alphaZeroShadowImage,
+        "QPainter Workbench must exclude a material alpha that packs to 254/255 from software shadow casting");
+    passed &= check(
+        alphaRoundedOpaqueShadowImage == fullyOpaqueMaterialShadowImage,
+        "QPainter Workbench must cast the same software shadow for an alpha that rounds to 255/255 as for fully opaque material");
     ViewportShadingSettings zeroShadowSettings = shadowSettings;
     zeroShadowSettings.shadowIntensity = 0.0;
     passed &= check(renderCpuShadow(zeroShadowSettings) == noShadowImage,

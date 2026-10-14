@@ -2521,6 +2521,21 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   triangulation seam, whose shared-edge fill rules differ. No controlled
   Blender image comparison was run; that remains open.
 
+## QPainter shadow material opacity classification (2026-10-14)
+
+- The QPainter Solid fallback now classifies opaque Workbench material alpha
+  after Blender's UNorm8 packing step. Alpha `254/255` stays transparent to
+  the opaque shadow receiver/caster buffers, while `0.9985` rounds to `255/255`
+  and casts like alpha 1.0. The focused viewport contract covers both sides of
+  that threshold, and the full build plus focused contract pass.
+- Blender packs alpha with `unit_float_to_uchar_clamp` and considers material
+  alpha opaque only when the packed byte is 255 in pinned
+  [`workbench_private.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_private.hh#L1599-L1622)
+  and [`math_base_inline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/math_base_inline.cc#L2362-L2368).
+  This narrows material opacity classification; the QPainter shadow caster
+  geometry, texture cutout sampler, and receiver visibility remain software
+  approximations.
+
 ## Phase Two: imported scene materials and result contracts (2026-10-13)
 
 - **Render-result shading source:** an imported Blender scene's saved

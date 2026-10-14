@@ -11486,6 +11486,120 @@ int main(int argc, char *argv[])
                                 dofGatedImage == dofBaselineImage,
                             "GPU Workbench DOF must retain opaque background coverage, smooth high-contrast surface edges, and be bypassed when camera DOF is disabled");
                     }
+                    const QString qpainterDofCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_QPAINTER_DOF_CAPTURE");
+                    if (!qpainterDofCapturePath.isEmpty()) {
+                        const QString qpainterDofBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_DOF_BASELINE_CAPTURE");
+                        ViewportRenderObject qpainterDofObject = surfaceObject;
+                        qpainterDofObject.selected = false;
+                        ViewportTransform dofCamera = gpuTransform;
+                        dofCamera.setPerspectiveEnabled(true);
+                        ViewportCameraPreferences dofOptics =
+                            dofCamera.cameraPreferences();
+                        dofOptics.sceneCameraEnabled = true;
+                        dofOptics.focalLengthMillimeters = 25.0;
+                        dofOptics.focusDistance = std::sqrt(
+                            std::pow(dofCamera.cameraPosition(glSize).x, 2.0) +
+                            std::pow(dofCamera.cameraPosition(glSize).y, 2.0) +
+                            std::pow(dofCamera.cameraPosition(glSize).z, 2.0));
+                        dofOptics.fStop = 0.1;
+                        dofOptics.apertureBlades = 6;
+                        dofOptics.apertureRotationRadians = 0.2;
+                        dofOptics.apertureRatio = 1.2;
+                        const bool dofCameraConfigured =
+                            dofCamera.setCameraPreferences(dofOptics);
+                        passed &= check(
+                            dofCameraConfigured,
+                            "QPainter Workbench DOF capture camera must accept the matched optics");
+                        const auto renderQPainterDof = [&](bool enabled,
+                                                           QImage *image) {
+                            if (image == nullptr || !dofCameraConfigured)
+                                return false;
+                            ViewportShadingSettings settings = rawFaceShading;
+                            settings.depthOfField = enabled;
+                            CurveHitTester hitTester;
+                            ViewportRenderer renderer(dofCamera, hitTester);
+                            renderer.setShadingSettings(settings);
+                            renderer.setWorkbenchRasterAntialiasingEnabled(
+                                false);
+                            const auto drawObject = [&renderer, &glSize](
+                                QPainter &painter,
+                                const ViewportRenderObject &object,
+                                RasterWorkbenchFragmentSink *fragmentSink) {
+                                renderer.drawShape(
+                                    painter, object.shape, glSize, false,
+                                    object.selected, true, object.layerColor,
+                                    object.layerLineType,
+                                    object.layerLineWeightMm, object.objectId,
+                                    object.geometryRevision,
+                                    object.preparedDepthGeometry.data(),
+                                    object.preparedGeometryOffset,
+                                    object.displayColorSceneLinear,
+                                    object.workbenchMaterial,
+                                    object.displayName, object.libraryPath,
+                                    object.meshObjectTransform,
+                                    object.meshMaterials, fragmentSink);
+                            };
+                            *image = QImage(
+                                glSize, QImage::Format_ARGB32_Premultiplied);
+                            image->fill(Qt::transparent);
+                            RasterWorkbenchSurfaceLayers layers;
+                            const QVector3D background(0.0219421387f,
+                                                       0.0219421387f,
+                                                       0.0219421387f);
+                            const bool composited =
+                                compositeRasterWorkbenchSurfaces(
+                                    image, {qpainterDofObject}, dofCamera,
+                                    glSize, 1.0, false, false, settings,
+                                    background, drawObject, &layers);
+                            if (composited) {
+                                applyRasterWorkbenchEffects(
+                                    image, {qpainterDofObject}, dofCamera,
+                                    glSize, 1.0, settings, &layers);
+                            }
+                            return composited;
+                        };
+                        QImage qpainterDofBaseline;
+                        QImage qpainterDof;
+                        const bool baselineRendered =
+                            renderQPainterDof(false, &qpainterDofBaseline);
+                        const bool dofRendered =
+                            renderQPainterDof(true, &qpainterDof);
+                        const bool baselineSaved =
+                            qpainterDofBaselinePath.isEmpty() ||
+                            qpainterDofBaseline.save(
+                                qpainterDofBaselinePath);
+                        const bool dofSaved = qpainterDof.save(
+                            qpainterDofCapturePath);
+                        const bool baselineCaptured =
+                            baselineRendered && baselineSaved;
+                        const bool dofCaptured = dofRendered && dofSaved;
+                        passed &= check(
+                            baselineRendered && dofRendered,
+                            "QPainter Workbench DOF scene compositing must succeed for baseline and enabled renders");
+                        passed &= check(
+                            baselineSaved && dofSaved,
+                            "QPainter Workbench DOF PNG captures must save successfully");
+                        passed &= check(
+                            baselineCaptured && dofCaptured,
+                            "QPainter Workbench DOF baseline and effect renders must complete before image comparison");
+                        int changedPixels = 0;
+                        if (baselineCaptured && dofCaptured) {
+                            for (int y = 0; y < glSize.height(); ++y) {
+                                for (int x = 0; x < glSize.width(); ++x) {
+                                    changedPixels +=
+                                        qpainterDof.pixelColor(x, y) !=
+                                        qpainterDofBaseline.pixelColor(x, y);
+                                }
+                            }
+                        }
+                        passed &= check(
+                            baselineCaptured && dofCaptured &&
+                                changedPixels > 0,
+                            "QPainter Workbench DOF capture must render a nonblank baseline and change pixels when enabled");
+                    }
                     ViewportShadingSettings outlinedSceneShading =
                         rawFaceShading;
                     outlinedSceneShading.outline = true;

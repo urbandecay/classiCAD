@@ -2931,6 +2931,27 @@ above is from scene-linear captures and remains the preferred color metric.
   `viewport_render_contracts` test and Blender's
   `tests/workbench_dof_reference.py --aperture-blades 2`; metrics came from
   `tests/workbench_dof_compare.py` at thresholds 2 and 3.
+- **QPainter DOF comparison (2026-10-14):** Added an opt-in baseline/effect
+  capture for the CPU compositor using the existing native NURBS cube depth
+  geometry, matched 640×480 perspective optics, six aperture blades, f/0.1,
+  rotation 0.2 radians, ratio 1.2, and the same neutral scene-linear World
+  background as Blender 5.2.2. The polygon-mesh fixture has no prepared CPU
+  depth triangles and is correctly rejected by this compositor, so the
+  QPainter capture uses the equivalent native cube fixture already supported
+  by its prepared-depth path. At a 3/255 per-pixel effect threshold, Blender
+  changes 11,647 pixels and QPainter changes 4,265; effect-mask IoU is
+  `0.024466`. Across the mask union, signed RGB-delta MAE is `18.13681/255`,
+  p95 `57/255`, and maximum `93/255`. This exposes a substantial CPU DOF
+  approximation gap. It does not isolate whether the cause is the gather
+  kernel, half-resolution gather, or source-depth reconstruction, so no
+  production equation change is justified from the final-image metric alone.
+  Blender's pinned DOF pass and gather shader remain the reference; broader
+  camera/aperture settings and fallback parity remain open.
+  Reproduce with `CLASSICAD_VIEWPORT_QPAINTER_DOF_CAPTURE` and
+  `CLASSICAD_VIEWPORT_QPAINTER_DOF_BASELINE_CAPTURE` on the offscreen
+  `viewport_render_contracts` test, Blender's
+  `tests/workbench_dof_reference.py --aperture-blades 6`, and
+  `tests/workbench_effect_delta_compare.py` at threshold 3.
 - **Scene-linear outline attribution (2026-10-14):** The controlled
   polygon-cube capture now saves the pre-display Blender Combined and
   classiCAD scene-color targets as RGB PFM alongside the existing PNG pair.

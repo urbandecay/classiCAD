@@ -1385,17 +1385,15 @@ bool ViewportSurfaceRenderer::initialize()
                     if (all(greaterThanEqual(shadowCoordinate.xy, vec2(0.0))) &&
                         all(lessThanEqual(shadowCoordinate.xy, vec2(1.0))) &&
                         shadowCoordinate.z >= 0.0 && shadowCoordinate.z <= 1.0) {
-                        vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
-                        visibility = 0.0;
-                        for (int y = -1; y <= 1; ++y) {
-                            for (int x = -1; x <= 1; ++x) {
-                                visibility += texture(
-                                    uShadowMap,
-                                    vec3(shadowCoordinate.xy + vec2(x, y) * texel,
-                                         shadowCoordinate.z - uShadowBias));
-                            }
-                        }
-                        visibility /= 9.0;
+                        // Blender resolves a binary stencil-volume mask at
+                        // the current pixel. Keep this topology fallback's
+                        // depth comparison to one bilinear sample; a 3x3
+                        // kernel adds substantially more softness than the
+                        // later viewport anti-aliasing needs.
+                        visibility = texture(
+                            uShadowMap,
+                            vec3(shadowCoordinate.xy,
+                                 shadowCoordinate.z - uShadowBias));
                     }
                 }
                 float focus = clamp(uShadowFocus, 0.0001, 0.99999);

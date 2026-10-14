@@ -532,14 +532,53 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
                 ],
             }],
         },
+        {
+            "id": "material-udim-float", "name": "UDIM Float",
+            "baseColorSceneLinear": [1, 1, 1, 1], "roughness": 0.5,
+            "metallic": 0.0,
+            "imageTextures": [{
+                "nodeName": "ProxyContract.FloatUDIM",
+                "nodeType": "TEX_IMAGE",
+                "imageName": "ProxyContract.FloatUDIMImage",
+                "filepath": str(pathlib.Path(directory) / "float.<UDIM>.png"),
+                "colorSpace": "ACEScg", "alphaMode": "PREMUL",
+                "interpolation": "Closest", "extension": "MIRROR",
+                "sourceTransformId": "identity", "packedDataBase64": "",
+                "packed": False, "sourceFileExists": False,
+                "sceneLinearFloatDataBase64": "",
+                "tiles": [
+                    {"number": 1001,
+                     "filepath": str(pathlib.Path(directory) / "float.1001.png"),
+                     "sourceFileExists": False, "packedDataBase64": "",
+                     "sceneLinearFloatWidth": 2, "sceneLinearFloatHeight": 1,
+                     "sourceTransformId": "blender-float-buffer",
+                     "sceneLinearFloatDataBase64": base64.b64encode(
+                         struct.pack("<8f", 0.2, 0.05, -0.1, 0.25,
+                                     0.75, -1.0, 0.375, 0.5)
+                     ).decode("ascii")},
+                    {"number": 1002,
+                     "filepath": str(pathlib.Path(directory) / "float.1002.png"),
+                     "sourceFileExists": False, "packedDataBase64": "",
+                     "sceneLinearFloatWidth": 2, "sceneLinearFloatHeight": 1,
+                     "sourceTransformId": "blender-float-buffer",
+                     "sceneLinearFloatDataBase64": base64.b64encode(
+                         struct.pack("<8f", -0.4, 0.6, 3.0, 0.0,
+                                     1.2, 0.1, -2.0, 1.0)
+                     ).decode("ascii")},
+                ],
+            }],
+        },
     ]
     document["materials"].extend(udim_records)
     udim_materials = adapter.classiCAD_materials(document)
     obj.data.materials.append(udim_materials["material-udim-packed"])
     obj.data.materials.append(udim_materials["material-udim-external"])
+    obj.data.materials.append(udim_materials["material-udim-float"])
+    udim_float_packed_tiles = {}
     for material_id, expected_node, expected_interpolation, expected_extension in (
             ("material-udim-packed", "ProxyContract.PackedUDIM", "Closest", "MIRROR"),
-            ("material-udim-external", "ProxyContract.ExternalUDIM", "Linear", "REPEAT")):
+            ("material-udim-external", "ProxyContract.ExternalUDIM", "Linear", "REPEAT"),
+            ("material-udim-float", "ProxyContract.FloatUDIM", "Closest", "MIRROR")):
         udim_material = next(
             material for material in bpy.data.materials
             if material.get("classiCAD_material_id") == material_id
@@ -559,7 +598,17 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             packed.tile_number: bytes(packed.packed_file.data)
             for packed in udim_node.image.packed_files
         }
-        assert packed_tiles == {1001: png_data, 1002: png_data_udim}
+        if material_id == "material-udim-float":
+            assert set(packed_tiles) == {1001, 1002}
+            assert all(payload.startswith(b"\x76\x2f\x31\x01")
+                       for payload in packed_tiles.values())
+            udim_float_packed_tiles = packed_tiles
+            assert udim_node.image.is_float
+            assert udim_node.image.alpha_mode == "PREMUL"
+            assert udim_node.image.colorspace_settings.name == "Non-Color"
+            assert udim_node.image.get("classiCAD_proxy_float_payload")
+        else:
+            assert packed_tiles == {1001: png_data, 1002: png_data_udim}
 
     image_count_after_udim_sync = sum(
         1 for image in bpy.data.images if image.get("classiCAD_proxy_image")
@@ -569,7 +618,8 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
                if image.get("classiCAD_proxy_image")) == image_count_after_udim_sync
 
     udim_temporary_templates = []
-    for material_id in ("material-udim-packed", "material-udim-external"):
+    for material_id in ("material-udim-packed", "material-udim-external",
+                        "material-udim-float"):
         udim_material = next(
             material for material in bpy.data.materials
             if material.get("classiCAD_material_id") == material_id
@@ -671,7 +721,9 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             ("material-udim-packed", "ProxyContract.PackedUDIM",
              {1001: png_data, 1002: png_data_udim}),
             ("material-udim-external", "ProxyContract.ExternalUDIM",
-             {1001: png_data, 1002: png_data_udim})):
+             {1001: png_data, 1002: png_data_udim}),
+            ("material-udim-float", "ProxyContract.FloatUDIM",
+             udim_float_packed_tiles)):
         udim_material = next(
             material for material in bpy.data.materials
             if material.get("classiCAD_material_id") == material_id
@@ -687,5 +739,10 @@ with tempfile.TemporaryDirectory(prefix="classiCAD_proxy_contract_") as director
             for packed in udim_node.image.packed_files
         }
         assert packed_tiles == expected_tiles
+        if material_id == "material-udim-float":
+            assert udim_node.image.is_float
+            assert udim_node.image.alpha_mode == "PREMUL"
+            assert udim_node.image.colorspace_settings.name == "Non-Color"
+            assert udim_node.image.get("classiCAD_proxy_float_payload")
 
 print("Blender project proxy UV, UDIM, and face-material contract passed")

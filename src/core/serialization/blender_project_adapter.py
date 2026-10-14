@@ -712,6 +712,9 @@ def _sync_classicad_image_texture(material, record):
     packed_data = reference.get("packedDataBase64", "")
     if tiles:
         image = _create_classicad_tiled_image(reference)
+        float_payload_image = bool(
+            image is not None and image.get("classiCAD_proxy_float_payload", False)
+        )
     elif packed_data:
         try:
             image_bytes = base64.b64decode(packed_data, validate=True)
@@ -793,6 +796,27 @@ def _sync_classicad_image_texture(material, record):
     _activate_classicad_image_node(material, node)
 
 
+def _classicad_float_tile_bytes(reference, tile, number):
+    float_reference = {
+        "imageName": reference.get("imageName", "") + "." + str(number),
+        "alphaMode": reference.get("alphaMode", "STRAIGHT"),
+        "colorSpace": reference.get("colorSpace", ""),
+        "sceneLinearFloatDataBase64": tile.get(
+            "sceneLinearFloatDataBase64", ""),
+        "sceneLinearFloatWidth": tile.get("sceneLinearFloatWidth", 0),
+        "sceneLinearFloatHeight": tile.get("sceneLinearFloatHeight", 0),
+    }
+    float_image = _create_classicad_float_payload_image(float_reference)
+    if float_image is None:
+        return b""
+    try:
+        return bytes(float_image.packed_file.data)
+    except (AttributeError, TypeError, ValueError):
+        return b""
+    finally:
+        bpy.data.images.remove(float_image)
+
+
 def _create_classicad_tiled_image(reference):
     """Rebuild a bounded packed UDIM image for a Workbench Image Texture."""
     tiles = reference.get("tiles")
@@ -803,7 +827,12 @@ def _create_classicad_tiled_image(reference):
 
     tile_payloads = []
     tile_numbers = set()
+    payload_kinds = set()
     total_bytes = 0
+    use_float_payloads = all(
+        isinstance(tile, dict) and tile.get("sceneLinearFloatDataBase64")
+        for tile in tiles
+    )
     template_extension = os.path.splitext(template)[1].lower()
     for tile in tiles:
         if not isinstance(tile, dict):
@@ -819,53 +848,64 @@ def _create_classicad_tiled_image(reference):
                 os.path.normpath(tile_path) != os.path.normpath(expected_path)):
             return None
 
+        payload = (_classicad_float_tile_bytes(reference, tile, number)
+                   if use_float_payloads else b"")
+        payload_kind = "float" if payload else "source"
         encoded = tile.get("packedDataBase64", "")
-        if encoded:
+        if not payload and encoded:
             if not isinstance(encoded, str) or len(encoded) > 44 * 1024 * 1024:
-                return None
-            try:
-                payload = base64.b64decode(encoded, validate=True)
-            except (ValueError, TypeError):
-                return None
-        else:
-            if (not tile.get("sourceFileExists") or not tile_path or
-                    not os.path.isfile(tile_path)):
-                return None
+                payload = b""
+            else:
+                try:
+                    payload = base64.b64decode(encoded, validate=True)
+                except (ValueError, TypeError):
+                    payload = b""
+        if not payload and tile.get("sourceFileExists") and tile_path and os.path.isfile(tile_path):
             try:
                 size = os.path.getsize(tile_path)
-                if size <= 0 or size > 32 * 1024 * 1024:
-                    return None
-                with open(tile_path, "rb") as handle:
-                    payload = handle.read(32 * 1024 * 1024 + 1)
+                if 0 < size <= MAX_PROXY_IMAGE_BYTES:
+                    with open(tile_path, "rb") as handle:
+                        payload = handle.read(MAX_PROXY_IMAGE_BYTES + 1)
+                    if len(payload) != size:
+                        payload = b""
             except OSError:
-                return None
-            if len(payload) != size:
-                return None
+                payload = b""
+        if not payload and not use_float_payloads:
+            payload = _classicad_float_tile_bytes(reference, tile, number)
+            if payload:
+                payload_kind = "float"
         if not payload:
             return None
         total_bytes += len(payload)
         if total_bytes > 32 * 1024 * 1024:
             return None
-        extension = os.path.splitext(tile_path)[1].lower() or template_extension
-        if template_extension and extension != template_extension:
-            return None
-        if not extension:
-            if payload.startswith(b"\x89PNG\r\n\x1a\n"):
-                extension = ".png"
-            elif payload.startswith(b"\xff\xd8"):
-                extension = ".jpg"
-            else:
+        if payload_kind == "float":
+            extension = ".exr"
+        else:
+            extension = os.path.splitext(tile_path)[1].lower() or template_extension
+            if template_extension and extension != template_extension:
                 return None
-        tile_payloads.append((number, payload, extension))
+            if not extension:
+                if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+                    extension = ".png"
+                elif payload.startswith(b"\xff\xd8"):
+                    extension = ".jpg"
+                elif payload.startswith(b"\x76\x2f\x31\x01"):
+                    extension = ".exr"
+                else:
+                    return None
+        payload_kinds.add(payload_kind)
+        tile_payloads.append((number, payload, extension, payload_kind))
 
-    if not tile_payloads or len({extension for _, _, extension in tile_payloads}) != 1:
+    if (not tile_payloads or len(payload_kinds) != 1 or
+            len({extension for _, _, extension, _ in tile_payloads}) != 1):
         return None
     tile_payloads.sort(key=lambda entry: entry[0])
     extension = tile_payloads[0][2]
     image = None
     directory = tempfile.mkdtemp(prefix="classiCAD_udim_proxy_")
     try:
-        for number, payload, _ in tile_payloads:
+        for number, payload, _, _ in tile_payloads:
             path = os.path.join(directory, "texture.%d%s" % (number, extension))
             with open(path, "wb") as handle:
                 handle.write(payload)
@@ -881,13 +921,17 @@ def _create_classicad_tiled_image(reference):
             image = None
             _remove_temporary_image_directory(directory)
             return None
-        for number, _, _ in tile_payloads:
+        for number, _, _, _ in tile_payloads:
             if number not in existing_numbers:
                 image.tiles.new(number)
                 existing_numbers.add(number)
         image.filepath = os.path.join(directory, "texture.<UDIM>" + extension)
         image.filepath_raw = image.filepath
         image.reload()
+        float_payload_tiles = payload_kinds == {"float"}
+        if float_payload_tiles:
+            image.colorspace_settings.name = "Non-Color"
+        image.alpha_mode = reference.get("alphaMode", "STRAIGHT")
         image.pack()
         packed = {
             int(item.tile_number): bytes(item.packed_file.data)
@@ -895,11 +939,14 @@ def _create_classicad_tiled_image(reference):
         }
         if (set(packed) != tile_numbers or any(
                 packed[number] != payload
-                for number, payload, _ in tile_payloads)):
+                for number, payload, _, _ in tile_payloads)):
             bpy.data.images.remove(image)
             image = None
             _remove_temporary_image_directory(directory)
             return None
+        image["classiCAD_proxy_float_payload"] = float_payload_tiles
+        image["classiCAD_source_color_space"] = reference.get("colorSpace", "")
+        image["classiCAD_source_alpha_mode"] = reference.get("alphaMode", "STRAIGHT")
         atexit.register(_remove_temporary_image_directory, directory)
         return image
     except (RuntimeError, OSError, ValueError, TypeError):

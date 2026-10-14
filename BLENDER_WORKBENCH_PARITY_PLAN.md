@@ -2923,8 +2923,9 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   tiles, Workbench-active node state, interpolation and extension, idempotent
   synchronization, and exact tile bytes after save/reopen after deleting the
   temporary source tiles. It does not render a visual comparison. Per-tile
-  scene-linear float payload reconstruction, malformed or unavailable tiles,
-  and sources outside the bounded path and size rules remain unsupported.
+  scene-linear float payload reconstruction is covered in the following
+  category; malformed or unavailable tiles and sources outside the bounded
+  path and size rules remain unsupported.
 - Blender 5.2.2 Workbench resolves tiled images from mesh UVs in
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60).
 - Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
@@ -2966,8 +2967,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   PREMUL, NONE, and CHANNEL_PACKED modes, including negative and above-one
   values and fractional alpha. It verifies exact float texels, restored mode,
   active node and sampler state, packed data, repeated synchronization, and
-  save/reopen. This checks stored sampling data and mode transport; a matched
-  rendered-pixel comparison is still open. Tiled per-tile float payloads and
-  payloads that fail the declared bounds remain unsupported.
+  save/reopen after removing the temporary EXR sources. This checks stored
+  sampling data and mode transport; a matched rendered-pixel comparison is
+  still open. Tiled per-tile float payloads are tracked in the following
+  category; payloads that fail the declared bounds remain unsupported.
+- Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
+  `cmake --build build -j4` and the 314-file dependency audit passed.
+
+### Blender proxy UDIM scene-linear float tiles (2026-10-14)
+
+- Tiled Image Texture proxies now materialize per-tile scene-linear RGBA32F
+  payloads as packed EXR tiles when every tile has a valid payload. All tiles
+  are normalized into one scene-linear sampler domain, then share the source
+  image's captured alpha mode; the original colorspace and alpha metadata are
+  retained on the managed image. If payload coverage is partial, the adapter
+  only proceeds when all tiles can instead be rebuilt from source files. It
+  does not combine scene-linear and unconverted source tiles into one image,
+  since Blender 5.2.2 assigns one colorspace and alpha mode per Image.
+- The proxy contract checks two float tiles with distinct negative/HDR texels,
+  zero/fractional/unit alpha, PREMUL mode, Non-Color proxy sampling, EXR
+  signatures, tile-number associations, idempotent sync, and exact packed
+  bytes after saving/reopening with temporary tile sources deleted. Blender's
+  packed UDIM implementation serializes/restores each tile number and packed
+  payload in pinned [`image.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image.cc#L2873-L2942).
+  The contract verifies stored tile data and metadata, not rendered texture
+  pixels. Active Environment Texture UDIMs remain unsupported.
 - Validation: `blender_project_proxy_contract.py` passed under Blender 5.2.2;
   `cmake --build build -j4` and the 314-file dependency audit passed.

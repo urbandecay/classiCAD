@@ -93,9 +93,19 @@ def arguments():
     )
     parser.add_argument(
         "--color-source",
-        choices=("MATERIAL", "OBJECT", "RANDOM"),
+        choices=("MATERIAL", "OBJECT", "RANDOM", "TEXTURE"),
         default="MATERIAL",
         help="Workbench object color source (default: MATERIAL)",
+    )
+    parser.add_argument(
+        "--texture-image",
+        help="external image used by the active Image Texture node for TEXTURE color source",
+    )
+    parser.add_argument(
+        "--texture-interpolation",
+        choices=("Closest", "Linear", "Cubic", "Smart"),
+        default="Closest",
+        help="Image Texture interpolation used for TEXTURE color source",
     )
     parser.add_argument(
         "--material-color",
@@ -237,10 +247,25 @@ def main():
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object
         cube.name = "ReferenceCube"
-        if args.material_color is not None:
+        if args.material_color is not None or args.color_source == "TEXTURE":
             material = bpy.data.materials.new("ReferenceCubeMaterial")
-            material.diffuse_color = (*args.material_color, 1.0)
+            material.diffuse_color = (
+                *(args.material_color or (0.8, 0.8, 0.8)), 1.0
+            )
             cube.data.materials.append(material)
+        if args.color_source == "TEXTURE":
+            if not args.texture_image:
+                raise ValueError("TEXTURE color source requires --texture-image")
+            material.use_nodes = True
+            image_node = material.node_tree.nodes.new("ShaderNodeTexImage")
+            image_node.image = bpy.data.images.load(
+                os.path.abspath(args.texture_image), check_existing=True
+            )
+            image_node.interpolation = args.texture_interpolation
+            image_node.show_texture = True
+            material.node_tree.nodes.active = image_node
+            for loop in cube.data.uv_layers.active.data:
+                loop.uv = (0.5, 0.5)
         if args.object_color is not None:
             cube.color = (*args.object_color, 1.0)
     elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):

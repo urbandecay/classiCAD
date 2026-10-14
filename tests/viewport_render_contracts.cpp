@@ -4698,6 +4698,89 @@ int main(int argc, char *argv[])
                             lightingCapturesSucceeded &= linearSaved &&
                                                          displaySaved;
                         }
+
+                        ViewportRenderObject textureSourceObject =
+                            polygonCubeObject;
+                        textureSourceObject.displayName =
+                            QStringLiteral("ReferenceCube");
+                        textureSourceObject.displayColorSceneLinear =
+                            QVector4D(0.12f, 0.62f, 0.18f, 1.0f);
+                        QVector<QPointF> textureUvCorners;
+                        for (const QVector<int> &face :
+                             textureSourceObject.shape.polygonMesh.faces) {
+                            for (qsizetype corner = 0;
+                                 corner < face.size(); ++corner) {
+                                textureUvCorners.append(QPointF(0.5, 0.5));
+                            }
+                        }
+                        textureSourceObject.shape.polygonMesh.uvMaps = {
+                            {QStringLiteral("WorkbenchTextureUV"),
+                             textureUvCorners}};
+                        textureSourceObject.shape.polygonMesh.activeUvMapName =
+                            QStringLiteral("WorkbenchTextureUV");
+                        textureSourceObject.shape.polygonMesh.defaultUvMapName =
+                            QStringLiteral("WorkbenchTextureUV");
+                        const QString textureAssetPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("workbench-texture.png"));
+                        QImage textureAsset(1, 1, QImage::Format_RGBA8888);
+                        textureAsset.fill(QColor(192, 128, 64, 255));
+                        const bool textureAssetSaved =
+                            textureAsset.save(textureAssetPath);
+                        if (!textureSourceObject.meshMaterials.isEmpty()) {
+                            WorkbenchMaterialData &textureMaterial =
+                                textureSourceObject.meshMaterials[0];
+                            textureMaterial.baseColorSceneLinear =
+                                QVector3D(0.91f, 0.12f, 0.05f);
+                            textureMaterial.textureImagePath = textureAssetPath;
+                            textureMaterial.textureImageSrgb = true;
+                            textureMaterial.textureImageAlphaMode =
+                                QStringLiteral("STRAIGHT");
+                            textureMaterial.textureImageInterpolation =
+                                QStringLiteral("Closest");
+                            textureMaterial.textureImageExtension =
+                                QStringLiteral("REPEAT");
+                        }
+                        ViewportShadingSettings textureColorShading =
+                            rawFaceShading;
+                        textureColorShading.lightingMode =
+                            ViewportLightingMode::Flat;
+                        textureColorShading.colorMode =
+                            ViewportColorMode::Texture;
+                        QImage textureDisplay;
+                        QVector<float> textureSceneLinear;
+                        const bool textureRendered = renderCoordinatedScene(
+                            textureColorShading,
+                            QByteArrayLiteral("color-source-match-texture"),
+                            &textureDisplay, &textureSourceObject, nullptr,
+                            nullptr, QString{}, &textureSceneLinear);
+                        const QString textureDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture.png"));
+                        const QString textureLinearPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral("color_texture.pfm"));
+                        QFile textureLinearFile(textureLinearPath);
+                        const QByteArray texturePfmHeader =
+                            QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                        const qsizetype textureExpectedValues = 640 * 480 * 3;
+                        const bool textureLinearSaved = textureRendered &&
+                            textureSceneLinear.size() == textureExpectedValues &&
+                            textureLinearFile.open(QIODevice::WriteOnly) &&
+                            textureLinearFile.write(texturePfmHeader) ==
+                                texturePfmHeader.size() &&
+                            textureLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    textureSceneLinear.constData()),
+                                textureSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                textureSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool textureDisplaySaved = textureRendered &&
+                            textureDisplay.size() == QSize(640, 480) &&
+                            textureDisplay.save(textureDisplayPath);
+                        lightingCapturesSucceeded &= textureAssetSaved &&
+                            textureLinearSaved && textureDisplaySaved;
                         const QVector3D matchedWorldColor(0.12f, 0.07f,
                                                           0.035f);
                         const QVector3D matchedViewportColorSceneLinear(

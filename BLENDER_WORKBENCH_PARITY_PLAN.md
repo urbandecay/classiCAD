@@ -1419,6 +1419,25 @@ The QPainter contract now explicitly protects this existing two-way behavior
 from a future mistaken per-label cubic reconstruction. It checks backend
 consistency only; matched Blender texture render probes remain open.
 
+**Active Image Texture rendered probe (2026-10-14):** The controlled cube
+fixture now supports Blender's `TEXTURE` color source with an active Image
+Texture node. Its offscreen classiCAD counterpart assigns the same external
+one-pixel sRGB PNG to every face corner at the same UV and uses Flat lighting.
+Blender 5.2.2 and classiCAD captures matched exactly at all 27 top/front/right
+face probes in scene-linear RGB and display RGB (MAE and maximum error both
+zero). This verifies the active-node sample, material-color override, image
+color conversion, and display path for opaque constant-UV input. It does not
+verify filtered/nonconstant UVs, alpha/PREMUL cutoff behavior, OCIO float
+payloads, UDIM sampling, or full-frame edge parity. Reproduce by capturing
+classiCAD with
+`CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=/tmp/classicad-workbench-texture QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`,
+then run `workbench_cube_reference.py --aa OFF --zero-dither --lighting FLAT
+--color-source TEXTURE --texture-image
+/tmp/classicad-workbench-texture/workbench-texture.png --linear-output
+/tmp/classicad-workbench-texture/blender_color_texture.exr --linear-pfm-output
+/tmp/classicad-workbench-texture/blender_color_texture.pfm` and compare the
+paired PNG/PFM files with `workbench_display_probe_compare.py`.
+
 **Studio world-space direction update (2026-10-13):** Blender 5.2.2's
 `workbench_resources.cc` builds a world-shading rotation matrix and remaps the
 stored Studio Light direction axes. classiCAD's world-space Studio adapter now

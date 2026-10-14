@@ -8257,6 +8257,76 @@ int main(int argc, char *argv[])
                             curvedNurbsLinearSaved &&
                             curvedNurbsDisplaySaved;
 
+                        ViewportTransform curvedPerspectiveTransform;
+                        curvedPerspectiveTransform.zoom() = 17.28;
+                        curvedPerspectiveTransform.setViewDirection(
+                            {4.0, -6.0, 4.0});
+                        curvedPerspectiveTransform.setPerspectiveEnabled(true);
+                        QImage curvedPerspectiveDisplay;
+                        QVector<float> curvedPerspectiveSceneLinear;
+                        const bool curvedPerspectiveRendered =
+                            renderCoordinatedScene(
+                                textureColorShading,
+                                QByteArrayLiteral(
+                                    "color-source-match-nurbs-curved-perspective-gpu"),
+                                &curvedPerspectiveDisplay,
+                                &curvedNurbsTextureObject,
+                                &curvedPerspectiveTransform, nullptr,
+                                QString{}, &curvedPerspectiveSceneLinear,
+                                &textureBackground);
+                        const QString curvedPerspectiveStem =
+                            QStringLiteral(
+                                "color_texture_nurbs_curved_perspective");
+                        const QString curvedPerspectiveDisplayPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                curvedPerspectiveStem +
+                                QStringLiteral(".png"));
+                        QFile curvedPerspectiveLinearFile(QDir(
+                            lightingCaptureDirectory).filePath(
+                                curvedPerspectiveStem +
+                                QStringLiteral(".pfm")));
+                        const bool curvedPerspectiveLinearSaved =
+                            curvedPerspectiveRendered &&
+                            curvedPerspectiveSceneLinear.size() ==
+                                textureExpectedValues &&
+                            curvedPerspectiveLinearFile.open(
+                                QIODevice::WriteOnly) &&
+                            curvedPerspectiveLinearFile.write(
+                                texturePfmHeader) == texturePfmHeader.size() &&
+                            curvedPerspectiveLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    curvedPerspectiveSceneLinear.constData()),
+                                curvedPerspectiveSceneLinear.size() *
+                                    qsizetype(sizeof(float))) ==
+                                curvedPerspectiveSceneLinear.size() *
+                                    qsizetype(sizeof(float));
+                        const bool curvedPerspectiveDisplaySaved =
+                            curvedPerspectiveRendered &&
+                            curvedPerspectiveDisplay.size() == QSize(640, 480) &&
+                            curvedPerspectiveDisplay.save(
+                                curvedPerspectiveDisplayPath);
+                        int curvedPerspectiveForegroundPixels = 0;
+                        for (int y = 0;
+                             y < curvedPerspectiveDisplay.height(); ++y) {
+                            for (int x = 0;
+                                 x < curvedPerspectiveDisplay.width(); ++x) {
+                                if (curvedPerspectiveDisplay.pixelColor(x, y) !=
+                                    curvedPerspectiveDisplay.pixelColor(0, 0)) {
+                                    ++curvedPerspectiveForegroundPixels;
+                                }
+                            }
+                        }
+                        passed &= check(
+                            curvedPerspectiveRendered &&
+                                curvedPerspectiveLinearSaved &&
+                                curvedPerspectiveDisplaySaved &&
+                                curvedPerspectiveForegroundPixels > 5000,
+                            "GPU perspective curved NURBS Image Texture capture must match the controlled Blender camera target");
+                        lightingCapturesSucceeded &=
+                            curvedPerspectiveRendered &&
+                            curvedPerspectiveLinearSaved &&
+                            curvedPerspectiveDisplaySaved;
+
                         CurveHitTester qpainterTextureHitTester;
                         ViewportRenderer qpainterTextureRenderer(
                             gpuTransform, qpainterTextureHitTester);

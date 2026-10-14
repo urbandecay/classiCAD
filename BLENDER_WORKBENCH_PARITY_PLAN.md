@@ -3472,7 +3472,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   and Paint world-space rotations 0°, 37°, and 90°. Exact edge parity remains
   open. Other presets, AA modes, camera orientations, and broader full-frame
   QPainter parity remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed/nonplanar surface cases, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed surfaces, broader curved-surface settings/camera coverage, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
@@ -5605,8 +5605,8 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   MIRROR to mirrored repeat, and CLIP to clamp-to-border in pinned
   [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L513).
   The matched fixture tests opaque STRAIGHT texture color with Linear filtering;
-  other filtering modes, perspective NURBS, and non-coplanar geometry remain
-  open.
+  other filtering modes and perspective NURBS texture cases beyond the curved
+  Repeat fixture remain open.
 - Validation: `cmake --build build -j4` passed with the dependency audit;
   capture-enabled offscreen CTest `viewport_render_contracts` passed (1/1,
   39.82 seconds); the three Blender references reported 5.2.2 LTS; and paired
@@ -5635,7 +5635,8 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `0.0423/255` with maximum `4/255`. The remaining mismatch is concentrated
   at display/raster coverage boundaries; these results validate this curved
   GPU texture/material path, not trimmed surfaces, alternate filters/extensions,
-  perspective views, or the QPainter curved-surface fallback.
+  perspective views beyond the matched configuration below, or the QPainter
+  curved-surface fallback.
 - Blender 5.2.2 interpolates the per-vertex UV varying in pinned
   [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
   and samples Image Texture color in
@@ -5655,3 +5656,40 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   --texture-image <dir>/workbench-texture-pattern.png
   --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither`,
   plus `--linear-output` and `--linear-pfm-output` for scene-linear capture.
+
+### Matched GPU perspective Image Texture on a nonplanar NURBS patch (2026-10-14)
+
+- Reused the asymmetric degree-2 NURBS patch and its exported exact display
+  triangles/normalized UVs, switching both renderers to a matched perspective
+  camera: view `(4, -6, 4)`, classiCAD zoom `17.28`, Blender's corresponding
+  25 mm lens and 36 mm sensor, 640×480, Flat lighting, Linear/Repeat texture,
+  and AA Off. This exercises perspective-correct texture coordinates on a
+  genuinely curved, non-coplanar surface without introducing tessellation as
+  another comparison variable.
+- Blender 5.2.2 and GPU classiCAD foreground masks match exactly (IoU `1.0`,
+  zero XOR pixels; 44,879 foreground pixels each). Scene-linear RGB MAE on the
+  shared foreground eroded by four pixels is `0.00000061`, maximum `0.00342`;
+  all nine fixed interior probes match exactly. Display-channel MAE is
+  `0.0350/255` on the shared foreground, maximum `2/255`. This validates the
+  perspective curved-texture configuration; other camera poses, texture modes,
+  trimming, and QPainter perspective behavior remain open.
+- Blender's Workbench prepass passes smoothly interpolated UVs to the fragment
+  shader in pinned
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105),
+  where pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L433)
+  samples Image Texture color. classiCAD retains its source NURBS surface and
+  material adapter; the shared OBJ exists only as test comparison geometry.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 39.66 seconds); Blender reported 5.2.2 LTS; and paired PNG/PFM
+  comparisons completed. Reproduce classiCAD captures and the proxy with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir> QT_QPA_PLATFORM=offscreen
+  ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`,
+  then render Blender using `--scene NURBS_TEXTURE_CURVED
+  --nurbs-proxy-obj <dir>/color_texture_nurbs_curved_proxy.obj
+  --match-classicad-perspective --view-direction 4 -6 4 --aa OFF
+  --lighting FLAT --color-source TEXTURE --texture-interpolation Linear
+  --texture-extension REPEAT --texture-image <dir>/workbench-texture-pattern.png
+  --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither`, plus
+  `--linear-output` and `--linear-pfm-output` for scene-linear capture.

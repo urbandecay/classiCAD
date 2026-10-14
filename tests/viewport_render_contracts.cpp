@@ -1503,6 +1503,29 @@ int main(int argc, char *argv[])
                 outlineMatchesSceneLinearResolve &&
                 outlineEffectReplay == agxOutlineImage,
             "opaque QPainter outlines must blend in scene-linear space before Standard or AgX display conversion");
+        ViewportShadingSettings transparentOutlineSettings =
+            standardOutlineSettings;
+        transparentOutlineSettings.colorTransform = 0;
+        QImage transparentOutlineImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        transparentOutlineImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers transparentOutlineLayers;
+        renderer.setShadingSettings(transparentOutlineSettings);
+        const bool transparentOutlineRendered =
+            compositeRasterWorkbenchSurfaces(
+                &transparentOutlineImage, {objects[0]}, transform, size, 1.0,
+                false, true, transparentOutlineSettings, backgroundLinear,
+                drawObject, &transparentOutlineLayers);
+        QImage transparentOutlineEffectReplay = transparentOutlineImage;
+        applyRasterWorkbenchEffects(
+            &transparentOutlineEffectReplay, {objects[0]}, transform, size,
+            1.0, transparentOutlineSettings, &transparentOutlineLayers);
+        passed &= check(
+            transparentOutlineRendered &&
+                transparentOutlineLayers.outlineAppliedBeforeDisplay &&
+                transparentOutlineLayers.sceneLinearSize == size &&
+                transparentOutlineEffectReplay == transparentOutlineImage,
+            "QPainter transparent-material outlines must use the retained scene-linear resolve and avoid a duplicate display-space pass");
         renderer.setShadingSettings(shading);
 
         ViewportRenderObject cavityReceiver = objects[0];

@@ -988,35 +988,63 @@ bool compositeRasterWorkbenchSurfaces(
                 frontTransparent.blue + transparent.blue * remainOpaque * remainFrontTransparent,
                 frontTransparent.alpha + transparent.alpha * remainOpaque * remainFrontTransparent};
         }
-        bool opaqueSourceMaterials = true;
-        for (const ViewportRenderObject &object : objects) {
-            opaqueSourceMaterials = opaqueSourceMaterials &&
-                isOpaqueWorkbenchAlpha(
-                    objectSourceAlpha(object, shadingSettings.colorMode));
-            for (const WorkbenchMaterialData &material : object.meshMaterials) {
-                opaqueSourceMaterials = opaqueSourceMaterials &&
-                    isOpaqueWorkbenchAlpha(material.alpha);
-            }
-            for (auto material = object.nurbsSolidFaceMaterials.cbegin();
-                 material != object.nurbsSolidFaceMaterials.cend(); ++material) {
-                opaqueSourceMaterials = opaqueSourceMaterials &&
-                    isOpaqueWorkbenchAlpha(material->alpha);
-            }
-        }
         const bool canResolveOpaqueOutlineInSceneLinear =
             surfaceLayers != nullptr && shadingSettings.outline &&
             !shadingSettings.shadows && !shadingSettings.depthOfField &&
-            !shadingSettings.xrayEnabled() && opaqueSourceMaterials;
+            !shadingSettings.xrayEnabled();
         if (canResolveOpaqueOutlineInSceneLinear) {
+            std::vector<quint64> regularObjectIds(
+                static_cast<std::size_t>(pixelCount), 0);
+            std::vector<quint64> frontObjectIds(
+                static_cast<std::size_t>(pixelCount), 0);
+            std::vector<float> regularObjectDepth(
+                static_cast<std::size_t>(pixelCount), noDepth);
+            std::vector<float> frontObjectDepth(
+                static_cast<std::size_t>(pixelCount), noDepth);
+            for (int index = 0; index < pixelCount; ++index) {
+                const int regularIndex = opaqueObject[index];
+                if (regularIndex >= 0 && regularIndex < objects.size()) {
+                    regularObjectIds[static_cast<std::size_t>(index)] =
+                        objects[regularIndex].objectId.value();
+                    regularObjectDepth[static_cast<std::size_t>(index)] =
+                        opaqueSceneDepth[index];
+                }
+                const int frontIndex = frontOpaqueObject[index];
+                if (frontIndex >= 0 && frontIndex < objects.size()) {
+                    frontObjectIds[static_cast<std::size_t>(index)] =
+                        objects[frontIndex].objectId.value();
+                    frontObjectDepth[static_cast<std::size_t>(index)] =
+                        frontOpaqueSceneDepth[index];
+                }
+            }
+            const auto updateTransparentObjectIds = [&](
+                const std::vector<RasterWorkbenchLinearFragment> &fragments,
+                std::vector<quint64> *objectIds,
+                std::vector<float> *objectDepth) {
+                for (const RasterWorkbenchLinearFragment &fragment : fragments) {
+                    if (fragment.alpha <= 0.0f || fragment.x < 0 ||
+                        fragment.x >= width || fragment.y < 0 ||
+                        fragment.y >= height) continue;
+                    const int index = fragment.y * width + fragment.x;
+                    const std::size_t pixelIndex =
+                        static_cast<std::size_t>(index);
+                    if (fragment.cameraDepth > (*objectDepth)[pixelIndex]) {
+                        (*objectDepth)[pixelIndex] = fragment.cameraDepth;
+                        (*objectIds)[pixelIndex] = fragment.sourceId;
+                    }
+                }
+            };
+            updateTransparentObjectIds(fragments, &regularObjectIds,
+                                       &regularObjectDepth);
+            updateTransparentObjectIds(frontFragments, &frontObjectIds,
+                                       &frontObjectDepth);
             std::vector<quint64> visibleObjectIds(
                 static_cast<std::size_t>(pixelCount), 0);
             for (int index = 0; index < pixelCount; ++index) {
-                const int objectIndex = frontOpaqueObject[index] >= 0
-                    ? frontOpaqueObject[index] : opaqueObject[index];
-                if (objectIndex >= 0 && objectIndex < objects.size()) {
-                    visibleObjectIds[static_cast<std::size_t>(index)] =
-                        objects[objectIndex].objectId.value();
-                }
+                const std::size_t pixelIndex =
+                    static_cast<std::size_t>(index);
+                visibleObjectIds[pixelIndex] = frontObjectIds[pixelIndex] != 0
+                    ? frontObjectIds[pixelIndex] : regularObjectIds[pixelIndex];
             }
             const QColor outline = shadingSettings.outlineColor;
             const QVector3D outlineColor = workbenchSrgbToSceneLinear(

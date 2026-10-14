@@ -1022,8 +1022,7 @@ bool compositeRasterWorkbenchSurfaces(
                 frontTransparent.alpha + transparent.alpha * remainOpaque * remainFrontTransparent};
         }
         const bool canResolveOutlineInSceneLinear =
-            surfaceLayers != nullptr && shadingSettings.outline &&
-            !(shadingSettings.shadows && shadingSettings.depthOfField);
+            surfaceLayers != nullptr && shadingSettings.outline;
         if (canResolveOutlineInSceneLinear) {
             std::vector<quint64> regularObjectIds(
                 static_cast<std::size_t>(pixelCount), 0);
@@ -1098,7 +1097,7 @@ bool compositeRasterWorkbenchSurfaces(
                     static_cast<std::size_t>(pixelCount), 0.0f);
                 surfaceLayers->sceneLinearOutlinePending = true;
                 surfaceLayers->sceneLinearDofPending =
-                    shadingSettings.depthOfField && !shadingSettings.shadows &&
+                    shadingSettings.depthOfField &&
                     !shadingSettings.xrayEnabled() &&
                     transform.cameraPreferences().sceneCameraEnabled;
             }

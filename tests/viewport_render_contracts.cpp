@@ -564,7 +564,8 @@ int main(int argc, char *argv[])
     const auto renderSortedDofOutline = [&](int colorTransform,
                                             bool withOutline,
                                             bool withDof,
-                                            bool withShadows = false) {
+                                            bool withShadows = false,
+                                            bool useWeightedOit = false) {
         ViewportShadingSettings settings = orthographicDofSettings;
         settings.outline = withOutline;
         settings.depthOfField = withDof;
@@ -580,7 +581,7 @@ int main(int argc, char *argv[])
         sortedDofRenderer.setShadingSettings(settings);
         result.rendered = compositeRasterWorkbenchSurfaces(
             &image, sortedDofObjects, orthographicDofTransform,
-            orthographicDofSize, 1.0, false, false, settings,
+            orthographicDofSize, 1.0, false, useWeightedOit, settings,
             QVector3D(0.12f, 0.07f, 0.035f), drawSortedDofObject,
             &result.layers);
         result.beforeEffects = result.layers.sceneLinearColor;
@@ -600,10 +601,16 @@ int main(int argc, char *argv[])
         renderSortedDofOutline(1, true, true, true);
     const SortedDofOutlineRender sortedAgxShadowDofOutline =
         renderSortedDofOutline(0, true, true, true);
+    const SortedDofOutlineRender weightedStandardShadowDofOutline =
+        renderSortedDofOutline(1, true, true, true, true);
+    const SortedDofOutlineRender weightedAgxShadowDofOutline =
+        renderSortedDofOutline(0, true, true, true, true);
     bool sortedDofDisplayMatches = true;
     bool sortedDofChangedScene = false;
     bool sortedDofOutlineChangedScene = false;
     bool sortedShadowChangedScene = false;
+    bool weightedDofDisplayMatches = true;
+    bool weightedDofChangedScene = false;
     if (sortedStandardDofOutline.layers.sceneLinearSize ==
             orthographicDofSize &&
         sortedAgxDofOutline.layers.sceneLinearSize == orthographicDofSize &&
@@ -611,6 +618,10 @@ int main(int argc, char *argv[])
         sortedStandardShadowDofOutline.layers.sceneLinearSize ==
             orthographicDofSize &&
         sortedAgxShadowDofOutline.layers.sceneLinearSize ==
+            orthographicDofSize &&
+        weightedStandardShadowDofOutline.layers.sceneLinearSize ==
+            orthographicDofSize &&
+        weightedAgxShadowDofOutline.layers.sceneLinearSize ==
             orthographicDofSize) {
         for (int y = 0; y < orthographicDofSize.height(); ++y) {
             for (int x = 0; x < orthographicDofSize.width(); ++x) {
@@ -692,6 +703,50 @@ int main(int argc, char *argv[])
                         qRound(display.z() * 255.0f),
                         qRound(linear.alpha * 255.0f)));
                 }
+                const RasterWorkbenchLinearPixel &weightedStandard =
+                    weightedStandardShadowDofOutline.layers
+                        .sceneLinearColor[index];
+                const RasterWorkbenchLinearPixel &weightedAgx =
+                    weightedAgxShadowDofOutline.layers
+                        .sceneLinearColor[index];
+                const RasterWorkbenchLinearPixel &weightedBefore =
+                    weightedStandardShadowDofOutline.beforeEffects[index];
+                weightedDofChangedScene |= std::abs(
+                    weightedStandard.red - weightedBefore.red) > 1.0e-5f ||
+                    std::abs(weightedStandard.green - weightedBefore.green) >
+                        1.0e-5f ||
+                    std::abs(weightedStandard.blue - weightedBefore.blue) >
+                        1.0e-5f;
+                weightedDofDisplayMatches &=
+                    std::abs(weightedStandard.red - weightedAgx.red) <
+                        1.0e-5f &&
+                    std::abs(weightedStandard.green - weightedAgx.green) <
+                        1.0e-5f &&
+                    std::abs(weightedStandard.blue - weightedAgx.blue) <
+                        1.0e-5f &&
+                    std::abs(weightedStandard.alpha - weightedAgx.alpha) <
+                        1.0e-5f;
+                for (const auto &[pixel, linear, transformIndex] : {
+                         std::tuple<QRgb,
+                                    const RasterWorkbenchLinearPixel &, int>{
+                             weightedStandardShadowDofOutline.image.pixel(x, y),
+                             weightedStandard, 1},
+                         std::tuple<QRgb,
+                                    const RasterWorkbenchLinearPixel &, int>{
+                             weightedAgxShadowDofOutline.image.pixel(x, y),
+                             weightedAgx, 0}}) {
+                    const QVector3D display =
+                        workbenchSceneLinearToDisplaySrgb(
+                            QVector3D(linear.red / linear.alpha,
+                                      linear.green / linear.alpha,
+                                      linear.blue / linear.alpha),
+                            transformIndex, 0.0f, 1.0f, {}, {});
+                    weightedDofDisplayMatches &= pixel == qPremultiply(qRgba(
+                        qRound(display.x() * 255.0f),
+                        qRound(display.y() * 255.0f),
+                        qRound(display.z() * 255.0f),
+                        qRound(linear.alpha * 255.0f)));
+                }
             }
         }
     } else {
@@ -703,6 +758,8 @@ int main(int argc, char *argv[])
             sortedStandardDofOnly.rendered &&
             sortedStandardShadowDofOutline.rendered &&
             sortedAgxShadowDofOutline.rendered &&
+            weightedStandardShadowDofOutline.rendered &&
+            weightedAgxShadowDofOutline.rendered &&
             sortedStandardDofOutline.layers.outlineAppliedBeforeDisplay &&
             sortedAgxDofOutline.layers.outlineAppliedBeforeDisplay &&
             sortedStandardShadowDofOutline.layers.outlineAppliedBeforeDisplay &&
@@ -711,9 +768,16 @@ int main(int argc, char *argv[])
             !sortedAgxDofOutline.layers.sceneLinearDofPending &&
             !sortedStandardShadowDofOutline.layers.sceneLinearDofPending &&
             !sortedAgxShadowDofOutline.layers.sceneLinearDofPending &&
+            weightedStandardShadowDofOutline.layers
+                    .outlineAppliedBeforeDisplay &&
+            weightedAgxShadowDofOutline.layers
+                    .outlineAppliedBeforeDisplay &&
+            !weightedStandardShadowDofOutline.layers.sceneLinearDofPending &&
+            !weightedAgxShadowDofOutline.layers.sceneLinearDofPending &&
             sortedDofChangedScene && sortedDofOutlineChangedScene &&
-            sortedShadowChangedScene && sortedDofDisplayMatches,
-        "sorted QPainter shadow-plus-outline-plus-DOF must resolve every effect in scene-linear color before one Standard or AgX display transform");
+            sortedShadowChangedScene && sortedDofDisplayMatches &&
+            weightedDofChangedScene && weightedDofDisplayMatches,
+        "sorted and weighted QPainter shadow-plus-outline-plus-DOF must resolve every effect in scene-linear color before one Standard or AgX display transform");
 
     // CPU shadow fallback: an opaque elevated quad casts onto an opaque
     // receiver. The input image is deliberately uniform so changed pixels

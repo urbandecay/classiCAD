@@ -2560,6 +2560,18 @@ above is from scene-linear captures and remains the preferred color metric.
   four-million-fragment limit can still route scenes to the older average-depth
   fallback. The GPU overlap fixture does not validate QPainter's software
   cavity sampling against Blender.
+- **Full-frame Combined comparison (2026-10-14):** rendered the same
+  `TRANSPARENT_IN_FRONT` fixture in Blender 5.2.2 and classiCAD at 640×480,
+  top orthographic view, AA Off, and 0.01/2000 clip range. Matching the
+  classiCAD fixture's scene-linear clear color (`0.0232` per channel) was
+  required; the Blender fixture's default World color produces a nonmatching
+  background. After matching it, the Blender and classiCAD scene-linear
+  Combined PFMs are identical across all RGB samples (MAE and maximum error
+  are zero for each channel). Their foreground masks each cover 176,100 pixels
+  and have IoU 1.0 with zero XOR pixels. This establishes full-frame GPU color
+  composition for this fixture; view-Z and front-domain depth remain covered
+  by the existing isolated probes, and the saved classiCAD display PNG is the
+  raw scene-linear capture rather than a matched display-transform output.
 - QPainter weighted OIT also accumulates every depth-visible transparent
   triangle sample now, including depth-separated surfaces within one object,
   after opaque-depth rejection. Per-object sorting removes duplicate samples

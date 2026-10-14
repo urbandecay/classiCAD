@@ -2400,8 +2400,8 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc),
   while opaque mesh geometry is depth-tested in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc).
-  Build and matched-image validation are recorded with this change; visual
-  comparison against Blender remains part of the acceptance checklist.
+  The C++ build passes. No matched-image comparison was run; that remains part
+  of the acceptance checklist.
 
 ## QPainter NURBS triangle edge coverage (2026-10-13)
 
@@ -2414,8 +2414,8 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   edges; it does not reproduce Blender's TAA/SMAA temporal and filter stages.
   Blender 5.2.2 AA remains a later pass in
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc).
-  Build and matched-image validation are recorded with this change; controlled
-  Blender comparison remains open.
+  The C++ build passes. No controlled Blender image comparison was run; that
+  remains open.
 
 ## Phase Two: imported scene materials and result contracts (2026-10-13)
 

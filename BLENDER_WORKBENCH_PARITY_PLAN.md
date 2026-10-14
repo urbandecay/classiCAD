@@ -4357,8 +4357,40 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   magnitude differences remain.
 - This comparison covers one unselected default cube only. Selected outlines,
   multiple or overlapping objects, smoothing, UI scaling, camera variation,
-  and QPainter comparisons remain open. No implementation change was made;
+  and additional QPainter outline comparisons remain open. No implementation
+  change was made;
   this is a measured attribution, not a parity sign-off.
+
+### Matched QPainter object-outline comparison (2026-10-14)
+
+- Added opt-in baseline/effect image captures to the existing 640×480 QPainter
+  polygon-cube fixture. Set `CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_CAPTURE` and
+  `CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_BASELINE_CAPTURE` to request them. The
+  fixture uses the same camera, scene-linear world background, shading, and
+  display transform for both captures; Blender 5.2.2 references use the cube
+  script's `BASELINE` and `OUTLINE` effects, AA Off, zero dither, and matched
+  orthographic framing.
+- At RGB threshold 2/255, Blender changes 2,312 pixels and QPainter changes
+  2,320; their effect masks have 1,244 XOR pixels and IoU 0.576583. Each
+  renderer's observed effect mask equals the four-cardinal boundary of its own
+  baseline silhouette. The baseline silhouettes differ by 622 pixels (IoU
+  0.994440), so the outline-mask disagreement is attributable to the different
+  base coverage in this capture, not evidence of a different neighbor rule.
+  Mean maximum-channel effect is 19.1942/255 for Blender and 19.9328/255 for
+  QPainter. On the 1,694 shared effect pixels, signed RGB-delta error has
+  7.60055/255 max-channel MAE (p95 22, max 23); this still includes local edge
+  coverage and shading differences and does not isolate outline blend color.
+- Blender 5.2.2 compares the object ID against four cardinal neighbors in
+  [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L10-L24).
+  QPainter's same four-neighbor boundary behavior is covered by
+  `viewport_render_contracts`; no production change is justified from this
+  single capture. Other colors, selected and overlapping objects, UI scales,
+  camera views, AA modes, and scene-linear blend attribution remain open.
+- Validation: `cmake --build build -j4` passed with the dependency audit, and
+  the offscreen `viewport_render_contracts` test passed. A direct offscreen
+  invocation with both capture variables saved the QPainter pair. The Blender
+  reference script reported Blender 5.2.2 and the effect-delta comparison
+  completed successfully.
 
 ### Matched QPainter shadow comparison (2026-10-14)
 

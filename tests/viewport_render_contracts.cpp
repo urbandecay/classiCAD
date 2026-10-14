@@ -8976,8 +8976,12 @@ int main(int argc, char *argv[])
                     const QString qpainterShadowCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_CAPTURE");
+                    const QString qpainterOutlineCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_CAPTURE");
                     if (!qpainterCavityCapturePath.isEmpty() ||
-                        !qpainterShadowCapturePath.isEmpty()) {
+                        !qpainterShadowCapturePath.isEmpty() ||
+                        !qpainterOutlineCapturePath.isEmpty()) {
                         const QString qpainterCavityBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_BASELINE_CAPTURE");
@@ -8990,6 +8994,9 @@ int main(int argc, char *argv[])
                         const QString qpainterShadowBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_QPAINTER_SHADOW_BASELINE_CAPTURE");
+                        const QString qpainterOutlineBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_BASELINE_CAPTURE");
                         CurveHitTester qpainterCavityHitTester;
                         ViewportRenderer qpainterCavityRenderer(
                             gpuTransform, qpainterCavityHitTester);
@@ -9184,13 +9191,36 @@ int main(int argc, char *argv[])
                                  qpainterShadowBaselineImage.save(
                                      qpainterShadowBaselinePath));
                         }
+                        bool qpainterOutlineCaptured = true;
+                        bool qpainterOutlineBaselineCaptured = true;
+                        if (!qpainterOutlineCapturePath.isEmpty()) {
+                            ViewportShadingSettings qpainterOutlineSettings =
+                                qpainterCavityBaselineSettings;
+                            qpainterOutlineSettings.outline = true;
+                            QImage qpainterOutlineImage;
+                            QImage qpainterOutlineBaselineImage;
+                            qpainterOutlineCaptured = captureQPainterCavity(
+                                qpainterOutlineSettings,
+                                &qpainterOutlineImage, nullptr) &&
+                                qpainterOutlineImage.save(
+                                    qpainterOutlineCapturePath);
+                            qpainterOutlineBaselineCaptured =
+                                qpainterOutlineBaselinePath.isEmpty() ||
+                                (captureQPainterCavity(
+                                     qpainterCavityBaselineSettings,
+                                     &qpainterOutlineBaselineImage, nullptr) &&
+                                 qpainterOutlineBaselineImage.save(
+                                     qpainterOutlineBaselinePath));
+                        }
                         passed &= check(
                             qpainterCavityCaptured &&
                                 qpainterCavityBaselineCaptured &&
                                 qpainterLinearSaved &&
                                 qpainterShadowCaptured &&
-                                qpainterShadowBaselineCaptured,
-                            "opt-in QPainter cavity and shadow captures must render matched baseline and effect output");
+                                qpainterShadowBaselineCaptured &&
+                                qpainterOutlineCaptured &&
+                                qpainterOutlineBaselineCaptured,
+                            "opt-in QPainter cavity, shadow, and outline captures must render matched baseline and effect output");
                     }
                     const QString transparencyCapturePath =
                         qEnvironmentVariable(

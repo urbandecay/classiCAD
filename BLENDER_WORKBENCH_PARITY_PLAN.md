@@ -2,7 +2,29 @@
 
 ## Goal
 
-Make classiCAD's Solid viewport behave and look like Blender's Workbench viewport for the same scene, settings, view, and output size. Use Blender 5.2.2 as the reference version. The bundled Workbench lights, MatCaps, and color-management data in this repository already come from Blender 5.2.2.
+classiCAD is being built as a Blender-like modeling application with NURBS as
+its native geometry foundation and Blender project import as an interoperability
+path. Its objects should look and feel like Blender's for equivalent scenes and
+settings, while remaining editable through classiCAD's own NURBS geometry and
+tools.
+
+This Phase Two mission establishes that foundation through the Solid viewport
+and render path. Port Blender 5.2.2 Workbench's visible shading, material,
+color-management, effects, and anti-aliasing behavior into classiCAD's C++/Qt
+application. Preserve the Workbench material adapter and classiCAD's exact
+geometry contracts so a later shader system can supply Blender-compatible
+material values without replacing the native model or tessellation data.
+
+Blender's relevant rendering behavior and pass structure are implementation
+references; classiCAD remains a separate application rather than importing
+Blender's entire internal architecture. The work should leave clean seams for
+later Blender-like features, including an Outliner, Object Mode, and Edit Mode.
+Those interaction modes and panels are future work, not a reason to fabricate
+their geometry or UI contracts during this viewport phase.
+
+Use Blender 5.2.2 as the reference version. The bundled Workbench lights,
+MatCaps, and color-management data in this repository already come from
+Blender 5.2.2.
 
 This plan covers Workbench shading and effects, viewport anti-aliasing, and the Smooth Wires preferences shown in Blender's Viewport > Quality panel. It complements [BLENDER_VIEWPORT_PARITY_PLAN.md](BLENDER_VIEWPORT_PARITY_PLAN.md), which covers the grid, camera projection, and navigation.
 

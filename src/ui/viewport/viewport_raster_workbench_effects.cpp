@@ -1915,9 +1915,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         if (!settings.outline) return;
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
-        constexpr quint64 selectedIdMask = 0x80000000ull;
         const QColor outline = settings.outlineColor;
-        const QColor selectionOutline = viewportSelectionColor();
         // Blender offsets its four object-ID taps by UI scale in normalized
         // viewport coordinates. The QPainter ID buffer is allocated at the
         // device-pixel resolution, so this is the equivalent texel distance.
@@ -1935,7 +1933,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     0, width - 1);
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
                 int differentNeighbors = 0;
-                bool selectedEdge = (objectId & selectedIdMask) != 0;
                 const std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(outlineSampleOffset, 0),
                     QPoint(-outlineSampleOffset, 0),
@@ -1948,18 +1945,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const quint64 neighborId =
                         samples[sy * width + sx].objectId;
                     differentNeighbors += neighborId != objectId;
-                    selectedEdge = selectedEdge ||
-                                   (neighborId & selectedIdMask) != 0;
                 }
                 const float edgeOpacity = differentNeighbors / 4.0f;
-                const QColor &edgeColor = selectedEdge
-                                              ? selectionOutline : outline;
                 const float sourceAlpha =
-                    static_cast<float>(edgeColor.alphaF()) * edgeOpacity;
+                    static_cast<float>(outline.alphaF()) * edgeOpacity;
                 if (sourceAlpha <= 0.0f) continue;
-                const float outlineRed = static_cast<float>(edgeColor.red());
-                const float outlineGreen = static_cast<float>(edgeColor.green());
-                const float outlineBlue = static_cast<float>(edgeColor.blue());
+                const float outlineRed = static_cast<float>(outline.red());
+                const float outlineGreen = static_cast<float>(outline.green());
+                const float outlineBlue = static_cast<float>(outline.blue());
                 const QRgb pixel = source.pixel(x, y);
                 const float dstAlpha = qAlpha(pixel) / 255.0f;
                 const float outAlpha = sourceAlpha +

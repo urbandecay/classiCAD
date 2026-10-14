@@ -684,6 +684,19 @@ int main(int argc, char *argv[])
             outlineScaleDpr2.pixelColor(62, 128).red() > 40,
         "QPainter outlines must sample cardinal object IDs at the integer Blender UI footprint");
 
+    ViewportRenderObject selectedOutlineObject = outlineScaleObject;
+    selectedOutlineObject.selected = true;
+    QImage selectedOutlineImage(orthographicDofSize,
+                                QImage::Format_ARGB32_Premultiplied);
+    selectedOutlineImage.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &selectedOutlineImage, {selectedOutlineObject},
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        outlineScaleSettings);
+    passed &= check(
+        selectedOutlineImage == outlineScaleDpr1,
+        "QPainter Workbench outline color must stay uniform for selected and unselected object IDs");
+
     ViewportShadingSettings xrayOutlineSettings = outlineScaleSettings;
     xrayOutlineSettings.xray = true;
     xrayOutlineSettings.xrayAlpha = 0.5;

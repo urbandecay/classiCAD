@@ -2405,9 +2405,11 @@ Status: in progress; the implementation and source reviews found the blockers li
 - Blender Workbench uses the configured object-outline color for all object
   IDs. The GPU outline pass now uses that color for both selected and
   unselected objects; CAD selection feedback remains in its separate overlay
-  path. An offscreen contract compares selected and unselected silhouette
-  pixels against matching outline-free baselines. QPainter outline composition
-  and broader effect pixel comparisons remain open.
+  path. The QPainter outline pass now also uses the configured color without
+  branching on the selected-ID bit. Its offscreen contract compares selected
+  and unselected object images and requires identical outline output. The GPU
+  contract compares selected and unselected silhouette pixels against matching
+  outline-free baselines. Broader effect pixel comparisons remain open.
 - **Workbench effect UI-scale sampling:** GPU outline, QPainter outline, and
   QPainter curvature cardinal taps now share an integer scale adapter
   (`max(1, qRound(DPR))`), matching Blender's integer `U.pixelsize` footprint

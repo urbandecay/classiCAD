@@ -3067,6 +3067,41 @@ above is from scene-linear captures and remains the preferred color metric.
   `viewport_render_contracts` test, Blender's
   `tests/workbench_dof_reference.py --aperture-blades 6`, and
   `tests/workbench_effect_delta_compare.py` at threshold 3.
+- **GPU transparent-film DOF alpha (2026-10-15):** Blender 5.2.2 runs its
+  transparent color resolve and transparent-depth pass before DOF, then runs
+  DOF before AA. The GPU resolve now restores alpha from the exact source pixel
+  with `texelFetch` after its linearly filtered RGB resolve. A matched
+  640×480 pair uses two overlapping camera-facing translucent quads, a
+  transparent film, AA Off, orthographic projection, and the same camera,
+  focus distance (1000), focal length (2000 mm), f-stop (0.01), blade count,
+  aperture rotation, and ratio in both applications. The first capture showed
+  classiCAD changing 6,779 alpha pixels (maximum 90/255) while Blender changed
+  none by more than 1/255; pinning resolve alpha to the source pixel removed
+  those changes. The final alpha comparator reports zero changed pixels over
+  1/255 in both renderers, maximum alpha deltas of 1/255 (Blender) and 0/255
+  (classiCAD), identical alpha coverage masks, and maximum Blender/classiCAD
+  effect-alpha error of 1/255. This supports the alpha behavior for this
+  overlapping-quad fixture only. RGB effect coverage remains a separate open
+  mismatch: at a 2/255 threshold the DOF RGB change masks contain 3,960 Blender
+  pixels and 1,222 classiCAD pixels, with no shared mask pixels. The existing
+  RGB DOF approximation and its broader optical/output parity remain open.
+  Blender's pinned [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2632-L2645)
+  orders transparent resolve/depth before DOF and AA;
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L993-L1093)
+  binds combined color and scene depth. The custom blend inputs are declared
+  in [`workbench_effect_dof_infos.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/infos/workbench_effect_dof_infos.hh#L78-L85)
+  and populated by
+  [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L21-L34).
+  Reproduce classiCAD captures with
+  `CLASSICAD_VIEWPORT_TRANSPARENCY_CAPTURE=<file>
+  CLASSICAD_VIEWPORT_TRANSPARENT_DOF_CAPTURE_DIR=<dir>
+  QT_QPA_PLATFORM=offscreen ctest --test-dir build -R
+  '^viewport_render_contracts$' --output-on-failure`. Render Blender 5.2.2
+  baseline/effect with `tests/workbench_cube_reference.py --scene
+  TRANSPARENT_OVERLAP --match-classicad-ortho --view-direction 4 -6 4
+  --ortho-scale 5 --transparent-film --aa OFF --zero-dither [--camera-dof]
+  <output.png>`, then compare alpha using
+  `tests/workbench_transparent_dof_alpha_compare.py`.
 - **Scene-linear outline attribution (2026-10-14):** The controlled
   polygon-cube capture now saves the pre-display Blender Combined and
   classiCAD scene-color targets as RGB PFM alongside the existing PNG pair.

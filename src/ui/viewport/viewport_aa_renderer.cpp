@@ -928,6 +928,10 @@ bool ViewportAaRenderer::initialize()
             float coc = abs(cocAtDepth(depth));
             float blend = smoothstep(1.0, 3.0, coc);
             outColor = mix(texture(uSource, vUv), texture(uBlur, halfUv), blend);
+            // Blender's custom DOF resolve blends only the RGB contribution
+            // into Combined for transparent film. Preserve the exact source
+            // pixel alpha rather than filtering it with this linear sample.
+            outColor.a = texelFetch(uSource, p, 0).a;
             outCoc = vec4(0.0);
         }
     )glsl";

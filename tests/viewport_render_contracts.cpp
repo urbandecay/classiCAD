@@ -15957,6 +15957,131 @@ int main(int argc, char *argv[])
                             withinPixels(transparencyMinY, 86) &&
                             withinPixels(transparencyMaxX, 479) &&
                             withinPixels(transparencyMaxY, 393);
+                        const QString transparentDofCaptureDirectory =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_TRANSPARENT_DOF_CAPTURE_DIR");
+                        if (!transparentDofCaptureDirectory.isEmpty()) {
+                            const auto renderTransparentDof =
+                                [&](bool enabled, QImage *image) {
+                                if (image == nullptr ||
+                                    !QDir().mkpath(
+                                        transparentDofCaptureDirectory) ||
+                                    !framebuffer.bind()) {
+                                    return false;
+                                }
+                                ViewportAaRenderer dofAaRenderer;
+                                dofAaRenderer.setMode(static_cast<int>(
+                                    ViewportAntiAliasingMode::Off));
+                                dofAaRenderer.setDisplayTransform(
+                                    transparencyShading, true);
+                                ViewportCameraPreferences dofOptics =
+                                    gpuTransform.cameraPreferences();
+                                dofOptics.sceneCameraEnabled = enabled;
+                                dofOptics.focalLengthMillimeters = 2000.0;
+                                dofOptics.focusDistance = 1000.0;
+                                dofOptics.fStop = 0.01;
+                                dofOptics.apertureBlades = 6;
+                                dofOptics.apertureRotationRadians = 0.2;
+                                dofOptics.apertureRatio = 1.2;
+                                if (enabled) {
+                                    const auto clip = viewportProjectionClipRange(
+                                        gpuTransform, glSize);
+                                    dofAaRenderer.setDepthOfField(
+                                        true, dofOptics,
+                                        gpuTransform.isPerspectiveEnabled(),
+                                        clip.nearPlane, clip.farPlane);
+                                }
+                                if (!dofAaRenderer.beginSceneSample(
+                                        glSize, 1.0, gpuTransform,
+                                        enabled
+                                            ? QByteArrayLiteral(
+                                                  "transparent-dof-enabled")
+                                            : QByteArrayLiteral(
+                                                  "transparent-dof-baseline"),
+                                        false, true)) {
+                                    return false;
+                                }
+                                functions.glViewport(0, 0, glSize.width(),
+                                                     glSize.height());
+                                const GLfloat transparentBackground[4] = {
+                                    0.0f, 0.0f, 0.0f, 0.0f};
+                                functions.glClearBufferfv(
+                                    GL_COLOR, 0, transparentBackground);
+                                const auto result =
+                                    ViewportWorkbenchScenePassCoordinator::
+                                        renderSceneColor(
+                                            gpuSurfaceRenderer,
+                                            ViewportWorkbenchScenePassPacket::
+                                                fromScene(
+                                                    transparentObjects,
+                                                    dofAaRenderer.sampleCamera(),
+                                                    glSize, 1.0,
+                                                    transparencyShading,
+                                                    &dofAaRenderer.targets(),
+                                                    true));
+                                if (result.rendered) {
+                                    dofAaRenderer.markCurrentSampleAttachmentsValid(
+                                        result.report.populatedAttachments);
+                                }
+                                dofAaRenderer.finishSceneSample();
+                                functions.glFinish();
+                                *image = framebuffer.toImage();
+                                const QString suffix = enabled
+                                    ? QStringLiteral("dof")
+                                    : QStringLiteral("baseline");
+                                return result.rendered &&
+                                    !image->isNull() &&
+                                    image->save(QDir(
+                                        transparentDofCaptureDirectory).filePath(
+                                            QStringLiteral(
+                                                "transparent-%1.png").arg(
+                                                    suffix)));
+                            };
+                            QImage transparentDofBaseline;
+                            QImage transparentDofEffect;
+                            const bool baselineRendered =
+                                renderTransparentDof(
+                                    false, &transparentDofBaseline);
+                            const bool effectRendered =
+                                renderTransparentDof(
+                                    true, &transparentDofEffect);
+                            int changedAlphaPixels = 0;
+                            int changedRgbPixels = 0;
+                            int maxAlphaDelta = 0;
+                            if (baselineRendered && effectRendered) {
+                                for (int y = 0; y < glSize.height(); ++y) {
+                                    for (int x = 0; x < glSize.width(); ++x) {
+                                        const int delta = std::abs(
+                                            transparentDofBaseline.pixelColor(
+                                                x, y).alpha() -
+                                            transparentDofEffect.pixelColor(
+                                                x, y).alpha());
+                                        changedAlphaPixels += delta > 1;
+                                        maxAlphaDelta = std::max(
+                                            maxAlphaDelta, delta);
+                                        const QColor baselinePixel =
+                                            transparentDofBaseline.pixelColor(
+                                                x, y);
+                                        const QColor effectPixel =
+                                            transparentDofEffect.pixelColor(
+                                                x, y);
+                                        changedRgbPixels += std::max({
+                                            std::abs(baselinePixel.red() -
+                                                     effectPixel.red()),
+                                            std::abs(baselinePixel.green() -
+                                                     effectPixel.green()),
+                                            std::abs(baselinePixel.blue() -
+                                                     effectPixel.blue())}) > 1;
+                                    }
+                                }
+                            }
+                            passed &= check(
+                                baselineRendered && effectRendered &&
+                                    changedRgbPixels > 0 &&
+                                    changedAlphaPixels == 0 &&
+                                    maxAlphaDelta <= 1,
+                                "GPU Workbench transparent-film DOF must blur scene color while preserving the film alpha mask");
+                        }
                         functions.glScissor(previousScissorBox[0],
                                             previousScissorBox[1],
                                             previousScissorBox[2],

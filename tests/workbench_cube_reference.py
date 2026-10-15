@@ -53,6 +53,11 @@ def arguments():
     )
     parser.add_argument("--ortho-scale", type=float, default=5.0)
     parser.add_argument(
+        "--camera-dof",
+        action="store_true",
+        help="enable Workbench DOF with the matched classiCAD transparent-film optics",
+    )
+    parser.add_argument(
         "--resolution",
         nargs=2,
         type=int,
@@ -490,6 +495,13 @@ def main():
         # camera's linear depth so weighted-OIT colors compare fairly too.
         camera_data.clip_start = 0.01
         camera_data.clip_end = max(2000.0, ortho_eye_distance * 2.0)
+    if args.camera_dof:
+        camera_data.dof.use_dof = True
+        camera_data.dof.focus_distance = 1000.0
+        camera_data.dof.aperture_fstop = 0.01
+        camera_data.dof.aperture_blades = 6
+        camera_data.dof.aperture_rotation = 0.2
+        camera_data.dof.aperture_ratio = 1.2
     camera.location = target + direction * ortho_eye_distance
     camera.rotation_euler = (
         (target - camera.location).to_track_quat("-Z", "Y").to_euler()
@@ -974,6 +986,7 @@ def main():
         scene.render.dither_intensity = 0.0
     scene.display.render_aa = args.aa
     shading = scene.display.shading
+    shading.use_dof = args.camera_dof
     shading.light = args.lighting
     light_preset = args.light_preset
     if args.lighting == "MATCAP" and not light_preset.lower().endswith(".exr"):

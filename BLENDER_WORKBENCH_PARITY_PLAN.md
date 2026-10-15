@@ -4113,6 +4113,19 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   metadata; the Blender-side fixture covers extraction only. Blender's active
   image sampling and UDIM lookup are documented by pinned
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L433).
+- **NURBS Surface material scalar extraction (2026-10-14):** the Blender
+  5.2.2 extractor contract now checks the assigned material record's name,
+  scene-linear diffuse RGBA, roughness `0.27`, metallic `0.41`, and derived
+  alpha `0.6`, in addition to its packed image metadata. The fixture now uses
+  Blender's valid 4×4 NURBS-surface primitive; its previous empty spline did
+  not satisfy the API's read-only control-count fields and stopped before
+  exercising extraction. This verifies Blender-record extraction alongside
+  the existing C++ `WorkbenchMaterialData` scalar projection contract. It does
+  not yet compare rendered pixels for an imported `.blend` material. Blender's
+  supported Workbench material resolution is pinned in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L37)
+  and
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L538-L553).
 - **Canonical material adapter projection:** Blender import and immutable
   viewport-frame construction now share
   `workbenchMaterialDataFromDocumentMaterial` in

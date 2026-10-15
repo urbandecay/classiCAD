@@ -9,6 +9,7 @@ tests/blender_surface_material_import_contract.py
 
 import base64
 import importlib.util
+import math
 import pathlib
 import sys
 
@@ -46,8 +47,13 @@ image_node.show_texture = True
 image_node.interpolation = "Closest"
 image_node.extension = "EXTEND"
 
-surface_data = bpy.data.curves.new("SurfaceMaterialPatch", type="SURFACE")
-spline = surface_data.splines.new("NURBS")
+bpy.ops.surface.primitive_nurbs_surface_surface_add(
+    enter_editmode=False, location=(0.0, 0.0, 0.0))
+surface_object = bpy.context.object
+surface_data = surface_object.data
+surface_object.name = "SurfaceMaterialObject"
+surface_data.name = "SurfaceMaterialPatch"
+spline = surface_data.splines[0]
 assert spline.point_count_u >= spline.order_u
 assert spline.point_count_v >= spline.order_v
 spline.material_index = 0
@@ -55,8 +61,6 @@ for index, point in enumerate(spline.points):
     point.co = (float(index % spline.point_count_u),
                 float(index // spline.point_count_u), 0.0, 1.0)
 surface_data.materials.append(material)
-surface_object = bpy.data.objects.new("SurfaceMaterialObject", surface_data)
-bpy.context.scene.collection.objects.link(surface_object)
 
 materials = {}
 unsupported = []
@@ -66,6 +70,13 @@ assert len(patches) == 1, patches
 surface = patches[0]["surface"]
 material_id = surface["material_id"]
 assert material_id in materials, material_id
+record = materials[material_id]
+assert record["name"] == "SurfaceTextureMaterial", record
+for actual, expected in zip(record["diffuse_color_linear"], (0.3, 0.5, 0.7, 0.6)):
+    assert math.isclose(actual, expected, rel_tol=0.0, abs_tol=1.0e-6), record
+assert math.isclose(record["roughness"], 0.27, rel_tol=0.0, abs_tol=1.0e-6), record
+assert math.isclose(record["metallic"], 0.41, rel_tol=0.0, abs_tol=1.0e-6), record
+assert math.isclose(record["alpha"], 0.6, rel_tol=0.0, abs_tol=1.0e-6), record
 references = materials[material_id]["image_textures"]
 assert len(references) == 1, references
 reference = references[0]

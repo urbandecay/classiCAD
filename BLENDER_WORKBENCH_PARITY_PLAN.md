@@ -1546,7 +1546,7 @@ The screenshot's Overlay and Edit Mode checkboxes are Smooth Wires preferences. 
 - The offscreen render contract now captures both GPU stroke categories with all four Overlay/Edit Mode preference combinations. It checks that changing one preference changes only its matching category. The grid continues through its own MSAA framebuffer, while filled surface edges and Workbench silhouettes stay on the separate scene AA/outline path.
 - Overlay Smooth Wires updates live in both Blender 5.2.2 and classiCAD. Edit Mode Smooth Wires takes effect after restart in both applications; classiCAD saves the requested value while keeping the active viewport value until relaunch.
 - The grid renderer's independent MSAA coverage is tested both in isolation and in composed offscreen captures with a representative Overlay stroke. The composed contract toggles Overlay Smooth Wires, confirms the stroke changes, and compares partial-coverage grid pixels away from the stroke to ensure grid antialiasing remains unchanged.
-- Overlapping smooth GPU strokes remain a parity gap. Blender 5.2.2 records line color, direction, and distance, gathers every line that can cover each pixel, then performs sorted alpha composition in its overlay AA pass ([`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L16-L24)). classiCAD currently applies analytic coverage and standard alpha blending as strokes are drawn in input order (`ViewportSceneRenderer::draw()` in `viewport_scene_renderer.cpp`). A global per-stroke depth sort would only approximate Blender at crossings where a line changes depth, and could reorder edit overlays; keep per-pixel overlap resolution open rather than claiming that sort as parity.
+- Overlapping smooth GPU strokes remain a parity gap. Blender 5.2.2 records line color, direction, and distance, then its AA shader samples the center texel and four cardinal neighbors, computes candidate-line coverage, and blends them over or under according to depth ([`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L16-L24), [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L152-L179)). classiCAD currently applies analytic coverage and standard alpha blending as strokes are drawn in input order (`ViewportSceneRenderer::draw()` in `viewport_scene_renderer.cpp`). A global per-stroke depth sort would only approximate Blender at crossings where a line changes depth, and could reorder edit overlays; keep per-pixel overlap resolution open rather than claiming that sort as parity.
 - Remaining fallback gap: the prepared-stroke fallback used when native GPU stroke drawing fails now applies depth-aware visibility when scene depth can be read, endpoint fades, and line patterns. Its visibility is sampled and approximate; without depth readback, visible strokes are unoccluded. The direct QPainter drawing paths still do not share the GPU stroke pass's full depth-aware treatment.
 
 ## Implementation stages
@@ -6162,9 +6162,11 @@ resolve remain open.
   perspective receiver depth. The zero-distance radius is zero, and the
   existing 76.8-pixel case remains uncapped. `cmake --build build -j4` passed
   the 320-source dependency audit and `viewport_render_contracts` passed
-  offscreen (1/1). This aligns the projected sample coordinates with Blender;
-  a matched low-distance output comparison and broader QPainter cavity parity
-  remain open. No GUI was launched.
+  offscreen (1/1). A matched Blender/QPainter comparison at distance `0.002`
+  found the CPU effect mask was empty before fractional-position
+  reconstruction, while Blender changed 68,358 pixels at 3/255. The
+  subsequent fractional-position comparison is recorded below. Broader
+  QPainter cavity parity remains open. No GUI was launched.
 
 ### QPainter cavity blue-noise row orientation (2026-10-15)
 
@@ -7169,11 +7171,22 @@ resolve remain open.
   from the preceding `0.067385` / `0.240255`. This is a sampling-contract
   correction, not a measured closure of the broader cavity contribution or
   image-parity gap.
-- A separate experiment reconstructed each nearest depth sample at its
-  fractional screen coordinate. On this matched fixture that raised factor
-  MAE to `0.074770`, so that part was removed. The QPainter raster currently
-  retains its stored neighbor position; fractional reconstruction remains an
-  open candidate requiring a better matched position/depth comparison.
+- The earlier fractional-position experiment was removed after its factor
+  MAE rose on the larger-radius fixture. Blender's pinned cavity shader
+  reconstructs the sampled view-space point from both UV and depth, so the CPU
+  fallback now moves each retained depth sample from its pixel center to the
+  actual fractional sample coordinate on the constant camera-depth plane.
+  At distance `0.002`, GPU/QPainter factor MAE fell from `0.051837` to
+  `0.023112` (p95 `0.047223`); the QPainter effect mask grew from zero pixels
+  to 68,039 against Blender's 68,358 (IoU `0.371182` at 3/255). At the usual
+  distance `0.2`, QPainter changes 36,834 pixels versus Blender's 27,109
+  (IoU `0.214307`); factor MAE is `0.074704`, p95 `0.245981`. The small-radius
+  comparison confirms the source-aligned reconstruction matters, while the
+  default-radius mismatch and full-image cavity parity remain open. Validation:
+  `cmake --build build -j4`, capture-enabled offscreen
+  `viewport_render_contracts` at distances `0.002` and `0.2` (1/1 each), paired
+  Blender 5.2.2 background renders, and
+  `workbench_qpainter_cavity_diagnostic.py` passed. No GUI was launched.
 - Blender's pinned sampler and UV bounds are in
   [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L520-L541);
   the classiCAD depth texture uses `GL_NEAREST` and `GL_CLAMP_TO_EDGE` in

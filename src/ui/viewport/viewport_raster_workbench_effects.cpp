@@ -3265,10 +3265,31 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
                 ++validNeighbors;
                 if (ssao) {
-                    // Keep the CPU raster's stored neighbor position until
-                    // fractional-depth reconstruction is independently
-                    // demonstrated to improve the matched fixture.
-                    const QVector3D direction = neighbor.position -
+                    // Blender reconstructs the sampled view position from
+                    // the fractional UV and sampled depth. Retained CPU depth
+                    // samples store only the pixel-center position, so move
+                    // that point across its constant camera-depth plane to
+                    // the actual sample coordinate before measuring SSAO.
+                    QVector3D sampledPosition = neighbor.position;
+                    const WorkPlaneFrame neighborViewPlane =
+                        makeWorkPlaneFrameFromNormal(
+                            {neighbor.position.x(), neighbor.position.y(),
+                             neighbor.position.z()},
+                            towardCamera, viewRight);
+                    QPointF fractionalSample;
+                    if (isValidWorkPlaneFrame(neighborViewPlane) &&
+                        transform.screenToWorkPlane(
+                            sampleScreen, viewportSize, neighborViewPlane,
+                            &fractionalSample)) {
+                        const Point3D reconstructed =
+                            workPlaneFramePointToWorld(fractionalSample,
+                                                       neighborViewPlane);
+                        sampledPosition = QVector3D(
+                            static_cast<float>(reconstructed.x),
+                            static_cast<float>(reconstructed.y),
+                            static_cast<float>(reconstructed.z));
+                    }
+                    const QVector3D direction = sampledPosition -
                                                 center.position;
                     const float distance = direction.length();
                     const float cavityDot = QVector3D::dotProduct(

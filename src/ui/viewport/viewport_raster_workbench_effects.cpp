@@ -3544,6 +3544,20 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             float factorSum = 0.0f;
             for (const QVector2D &sampleOffset : sampleOffsets) {
                 const QVector2D samplePosition = lightPixel + sampleOffset;
+                if (samplePosition.x() < 0.0f || samplePosition.y() < 0.0f ||
+                    samplePosition.x() >= lightMapWidth ||
+                    samplePosition.y() >= lightMapHeight) {
+                    // The light-map bounds enclose all caster vertices in
+                    // the plane perpendicular to the directional light.
+                    // Shadow volumes cannot extend beyond that projected
+                    // caster bounds, so an outside sample is unshadowed.
+                    factorSum += rasterWorkbenchShadowFactor(
+                        normal, lightDirection,
+                        static_cast<float>(settings.shadowIntensity),
+                        static_cast<float>(settings.shadowOffset),
+                        static_cast<float>(settings.shadowFocus), false);
+                    continue;
+                }
                 const int lightX = std::clamp(qFloor(samplePosition.x()), 0,
                                               lightMapWidth - 1);
                 const int lightY = std::clamp(qFloor(samplePosition.y()), 0,

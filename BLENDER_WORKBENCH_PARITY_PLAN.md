@@ -7985,3 +7985,11 @@ resolve remain open.
   software visibility path. Blender's transient subdivision edge data is not
   available in imported meshes. C++ build passed; matched image comparison
   remains open.
+
+### QPainter shadow samples outside caster bounds (2026-10-15)
+
+- Four-sample QPainter shadow coverage now treats light-map positions outside
+  the caster-bounded projection as unshadowed instead of clamping to the edge
+  texel. Directional shadow volumes preserve their position in the plane
+  perpendicular to the light, so caster shadows cannot extend beyond those
+  projected bounds. C++ build passed; matched image comparison remains open.

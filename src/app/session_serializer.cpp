@@ -355,8 +355,10 @@ bool viewportShadingFromJson(const QJsonValue &value,
         !boolean(QStringLiteral("matcapFlipX"), &restored.matcapFlipX)) {
         return false;
     }
-    if (!integer(QStringLiteral("studioLightRotationDegrees"), -3600, 3600,
-                 &restored.studioLightRotationDegrees) ||
+    if (!number(QStringLiteral("studioLightRotationDegrees"),
+                &restored.studioLightRotationDegrees) ||
+        restored.studioLightRotationDegrees < -3600.0 ||
+        restored.studioLightRotationDegrees > 3600.0 ||
         !boolean(QStringLiteral("worldSpaceLighting"),
                  &restored.worldSpaceLighting) ||
         !boolean(QStringLiteral("xray"), &restored.xray) ||

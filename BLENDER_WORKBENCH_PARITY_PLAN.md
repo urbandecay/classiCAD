@@ -2438,6 +2438,14 @@ verifies the default orthographic fixture at those two rotations; other
 presets and camera orientations remain open. The earlier 90-degree mismatch
 metrics above describe the pre-fix baseline.
 
+**Studio rotation precision (2026-10-15):** Blender stores
+`studiolight_rotate_z` in radians and can save fractional-degree values.
+classiCAD now retains the converted fractional degrees through lighting,
+cache keys, and session files; older sessions with integer degree values
+remain valid. The existing whole-degree slider rounds only its displayed
+position and label, while changing it still sets an integer degree. No matched
+Blender image comparison has been run specifically for fractional rotations.
+
 **QPainter planar NURBS coverage resolve (2026-10-13):** The fallback used to
 source-over each tessellation triangle after applying its own 4×4 subpixel
 coverage alpha. A split-quad test showed that this made translucent output

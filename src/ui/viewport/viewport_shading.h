@@ -65,7 +65,9 @@ struct ViewportShadingSettings {
     QString studioLightPreset = QStringLiteral("Default");
     QString matcapPreset = QStringLiteral("basic_grey");
     bool matcapFlipX = false;
-    int studioLightRotationDegrees = 0;
+    // Retain fractional degrees from Blender's saved rotation. The UI slider
+    // remains whole-degree, while rendering and sessions keep the precision.
+    qreal studioLightRotationDegrees = 0.0;
     bool worldSpaceLighting = false;
     bool xray = false;
     bool xrayWireframe = true;

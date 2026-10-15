@@ -7291,8 +7291,9 @@ public:
         qreal rotationRadians = 0.0;
         readNumber(QStringLiteral("studiolight_rotate_z"), -3.141592653589793,
                    3.141592653589793, &rotationRadians);
-        int rotationDegrees = qRound(qRadiansToDegrees(rotationRadians)) % 360;
-        if (rotationDegrees < 0) rotationDegrees += 360;
+        qreal rotationDegrees = qRadiansToDegrees(rotationRadians);
+        rotationDegrees = std::fmod(rotationDegrees, 360.0);
+        if (rotationDegrees < 0.0) rotationDegrees += 360.0;
         settings.studioLightRotationDegrees = rotationDegrees;
 
         const QString colorType = source.value(QStringLiteral("color_type")).toString();
@@ -8366,11 +8367,11 @@ protected:
         {
             const QSignalBlocker blocker(studioLightRotationSlider_);
             studioLightRotationSlider_->setValue(
-                viewportShadingSettings_.studioLightRotationDegrees);
+                qRound(viewportShadingSettings_.studioLightRotationDegrees));
         }
         studioLightRotationLabel_->setText(
             QStringLiteral("%1°")
-                .arg(viewportShadingSettings_.studioLightRotationDegrees));
+                .arg(qRound(viewportShadingSettings_.studioLightRotationDegrees)));
         studioLightRotationSlider_->setEnabled(
             viewportShadingSettings_.worldSpaceLighting &&
             viewportShadingSettings_.lightingMode == ViewportLightingMode::Studio);

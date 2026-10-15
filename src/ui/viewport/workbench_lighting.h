@@ -500,7 +500,7 @@ inline WorkbenchStudioLighting workbenchStudioLightingPreset(
 
 inline WorkbenchStudioLighting workbenchStudioLightingForView(
     const WorkbenchStudioLighting &source,
-    int rotationDegrees,
+    qreal rotationDegrees,
     bool worldSpace,
     const QVector3D &viewRight,
     const QVector3D &viewUp,
@@ -513,9 +513,8 @@ inline WorkbenchStudioLighting workbenchStudioLightingForView(
         // stored view-space directions remain unchanged.
         return lighting;
     }
-    constexpr float degreesToRadians = 0.01745329251994329577f;
-    const float angle = -static_cast<float>(rotationDegrees) *
-                        degreesToRadians;
+    constexpr qreal degreesToRadians = 0.01745329251994329577;
+    const float angle = static_cast<float>(-rotationDegrees * degreesToRadians);
     const float cosine = std::cos(angle);
     const float sine = std::sin(angle);
     for (WorkbenchStudioLight &light : lighting.lights) {

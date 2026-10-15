@@ -8553,3 +8553,11 @@ resolve remain open.
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L24-L32).
   The radial offset remains driven by interleaved gradient noise. C++ build
   passed; matched DOF output comparison remains open.
+
+### Workbench active color attribute precedence (2026-10-15)
+
+- GPU and QPainter Attribute mode now use the mesh's active color attribute
+  first and fall back to the default attribute only when no active attribute
+  is available, matching Blender 5.2.2. Previously both paths preferred the
+  default attribute when both existed. C++ build passed; matched image
+  comparison remains open.

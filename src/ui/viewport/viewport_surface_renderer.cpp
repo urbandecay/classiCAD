@@ -2817,14 +2817,14 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                        &meshShadowTopologyClosed);
             const MeshColorAttribute *activeAttribute = nullptr;
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
-                if (attribute.name == mesh.defaultColorAttributeName) {
+                if (attribute.name == mesh.activeColorAttributeName) {
                     activeAttribute = &attribute;
                     break;
                 }
             }
             if (activeAttribute == nullptr) {
                 for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
-                    if (attribute.name == mesh.activeColorAttributeName) {
+                    if (attribute.name == mesh.defaultColorAttributeName) {
                         activeAttribute = &attribute;
                         break;
                     }

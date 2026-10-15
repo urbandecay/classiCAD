@@ -5772,6 +5772,39 @@ edge comparison remains open.
   `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_BASELINE_CAPTURE` paths. This diagnostic
   does not establish full QPainter cavity parity.
 
+### QPainter cavity projected-radius correction (2026-10-15)
+
+- `rasterWorkbenchCavityStep()` received a cavity radius already converted to
+  pixels, then divided that value by two a second time. Blender 5.2.2's cavity
+  shader applies its half factor while converting a normalized UV offset; in
+  the matched 640×480 orthographic view with `cavityDistance=0.2`, the CPU
+  pixel-space base radius is already 25.6 px. The QPainter path now retains
+  that full projected radius. A focused contract requires a 20 px input step
+  to remain 20 px in orthographic views, while retaining the existing
+  perspective receiver-depth scaling.
+- The measured effect masks grew toward Blender's coverage, but did not
+  establish factor parity. On the opaque cube at 3/255, Blender/QPainter
+  changed-pixel counts moved from 27,109/15,732 to 27,109/31,875 and mask IoU
+  from `0.164347` to `0.203362`. GPU/QPainter combined-factor MAE on common
+  baseline foreground increased from `0.049919` to `0.067398` (p95 from
+  `0.212904` to `0.242188`), so the wider footprint improves mask overlap but
+  exposes remaining differences in sampling, visibility, or factor
+  accumulation. On the transparent overlap fixture, QPainter changed pixels
+  increased from 1,200 to 3,490 against Blender's 20,751; mask IoU improved
+  from `0.057829` to `0.168185`. The scene-linear mask IoU improved from
+  `0.051458` to `0.149657`, and full-frame RGB effect-delta MAE decreased from
+  `0.00233283` to `0.00204065`. Cavity alpha remains unchanged by the effect.
+- Validation: `cmake --build build -j4` passed; capture-enabled offscreen
+  `viewport_render_contracts` passed (1/1, 30.00 seconds); the diagnostic
+  capture and cube comparator completed; and both scene-linear and display
+  effect-delta comparisons completed for the transparent overlap fixture.
+  The changed radius is a verified correction to the CPU projection scale;
+  QPainter cavity factor and full image parity remain open. Blender's matching
+  shader conversion is pinned to
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L463-L585)
+  and GPU projection setup to
+  [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L416-L465).
+
 ### GPU per-face mesh texture-slot comparison (2026-10-14)
 
 - Added an opt-in GPU capture of the existing two-triangle planar mesh with

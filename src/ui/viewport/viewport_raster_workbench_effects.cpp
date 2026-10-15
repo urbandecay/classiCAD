@@ -404,7 +404,10 @@ float rasterWorkbenchCavityStep(float baseRadiusPixels,
         if (targetDepth > 1.0e-6f && receiverDepth > 1.0e-6f)
             radius *= targetDepth / receiverDepth;
     }
-    return std::max(1.0f, radius / 2.0f);
+    // The caller supplies an already projected radius in pixels. Blender's
+    // shader halves its UV-space offset before sampling; that conversion is
+    // already accounted for when expressing this footprint in pixels.
+    return std::max(1.0f, radius);
 }
 
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,

@@ -185,9 +185,9 @@ int main(int argc, char *argv[])
         20.0f, QVector3D(0.0f, 0.0f, 5.0f), cavityCamera,
         cavityTarget, cavityViewDirection, false);
     passed &= check(nearCavityStep > farCavityStep &&
-                        orthographicNearStep == 10.0f &&
+                        orthographicNearStep == 20.0f &&
                         orthographicFarStep == orthographicNearStep,
-                    "QPainter cavity SSAO footprint must shrink with perspective receiver depth and stay fixed in orthographic views");
+                    "QPainter cavity SSAO footprint must use the projected pixel radius, shrink with perspective receiver depth, and stay fixed in orthographic views");
 
     const QVector3D frontPrepassNormal = rasterWorkbenchPrepassNormal(
         QVector3D(0.2f, -0.3f, 0.9327379f), true,

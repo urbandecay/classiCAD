@@ -47,6 +47,10 @@ MAX_VOLUME_GRID_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_COLLECTION_INSTANCES = 50000
 MAX_COLLECTION_IMAGE_EMPTY_INSTANCES = 256
 MAX_COLLECTION_IMAGE_EMPTY_PIXELS = 16 * 1024 * 1024
+MAX_COLLECTION_VOLUME_INSTANCES = 4
+MAX_COLLECTION_VOLUME_PAYLOAD_BYTES = 32 * 1024 * 1024
+MAX_COLLECTION_VOLUME_RECORDS = 524288
+MAX_COLLECTION_VOLUME_DENSE_VOXELS = 16 * 1024 * 1024
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -1142,7 +1146,8 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
             evaluated_obj.to_mesh_clear()
 
 
-def extract_scalar_volume_grid(obj, scene, depsgraph):
+def extract_scalar_volume_grid(obj, scene, depsgraph,
+                               transform_override=None):
     """Extract one bounded scalar VolumeGrid through Geometry Nodes fields.
 
     Blender exposes grid metadata but not voxel arrays through bpy. Grid To
@@ -1304,7 +1309,9 @@ def extract_scalar_volume_grid(obj, scene, depsgraph):
             "data_type": grid.data_type,
             "channels": int(grid.channels),
             "grid_to_object": matrix_values(grid.matrix_object),
-            "object_to_world": matrix_values(obj.matrix_world),
+            "object_to_world": matrix_values(
+                transform_override if transform_override is not None
+                else obj.matrix_world),
             "background": background,
             "active_bounds": active_bounds,
             "expanded_voxel_count": expanded_voxel_count,
@@ -1324,6 +1331,11 @@ def extract_scalar_volume_grid(obj, scene, depsgraph):
 
         return {
             "volume_grid": grid_payload,
+            "_transport_metrics": {
+                "payload_bytes": payload_bytes,
+                "active_record_count": len(records),
+                "dense_voxel_count": dense_voxel_count,
+            },
             "volume_display": {
                 "density": finite_number(obj.data.display.density),
                 "render_space": str(obj.data.render.space),
@@ -2104,8 +2116,10 @@ def extract_scene(input_path, mode):
                     item = object_metadata(obj, scene, volume_depsgraph)
                     item["object_type"] = "VOLUME"
                     item["import_mode"] = mode
-                    item.update(extract_scalar_volume_grid(
-                        obj, scene, volume_depsgraph))
+                    volume_data = extract_scalar_volume_grid(
+                        obj, scene, volume_depsgraph)
+                    volume_data.pop("_transport_metrics", None)
+                    item.update(volume_data)
                     item["view_layer_hidden"] = {
                         view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
                         for view_layer in scene.view_layers
@@ -2163,6 +2177,11 @@ def extract_scene(input_path, mode):
             image_instance_count = 0
             image_instance_pixels = 0
             image_instance_limit_exceeded = False
+            volume_instance_count = 0
+            volume_instance_limit_exceeded = False
+            volume_instance_payload_bytes = 0
+            volume_instance_active_records = 0
+            volume_instance_dense_voxels = 0
 
             # Surface wire extraction updates Blender's dependency graph while
             # evaluating a temporary object, so snapshot instance identities
@@ -2185,7 +2204,8 @@ def extract_scene(input_path, mode):
                     source_obj.type == "EMPTY" and
                     str(getattr(source_obj, "empty_display_type", "")) == "IMAGE")
                 if source_obj.type not in {
-                        "MESH", "CURVE", "SURFACE", "FONT", "META"} and not is_image_empty:
+                        "MESH", "CURVE", "SURFACE", "FONT", "META",
+                        "VOLUME"} and not is_image_empty:
                     unsupported_instance_types.add(source_obj.type)
                     continue
                 if is_image_empty:
@@ -2201,6 +2221,11 @@ def extract_scene(input_path, mode):
                         continue
                     image_instance_count += 1
                     image_instance_pixels += image_pixels
+                if source_obj.type == "VOLUME":
+                    if volume_instance_count >= MAX_COLLECTION_VOLUME_INSTANCES:
+                        volume_instance_limit_exceeded = True
+                        continue
+                    volume_instance_count += 1
                 if len(instance_records) >= MAX_COLLECTION_INSTANCES:
                     instance_limit_exceeded = True
                     break
@@ -2259,6 +2284,58 @@ def extract_scene(input_path, mode):
                                 item, instance_id, source_obj, parent_source,
                                 instance_transform)
                             output["items"].append(item)
+                    elif source_obj.type == "VOLUME":
+                        if (volume_instance_payload_bytes >=
+                                MAX_COLLECTION_VOLUME_PAYLOAD_BYTES or
+                                volume_instance_active_records >=
+                                MAX_COLLECTION_VOLUME_RECORDS or
+                                volume_instance_dense_voxels >=
+                                MAX_COLLECTION_VOLUME_DENSE_VOXELS):
+                            volume_instance_limit_exceeded = True
+                            unsupported_item = unsupported_object_record(
+                                source_obj, scene, instance_depsgraph)
+                            unsupported_item["object_id"] = instance_id
+                            unsupported_item["reason"] = (
+                                "collection Volume instance aggregate extraction limit was reached")
+                            output["unsupported_items"].append(unsupported_item)
+                            continue
+                        item = object_metadata(
+                            source_obj, scene, instance_depsgraph)
+                        item["object_type"] = "VOLUME"
+                        item["import_mode"] = mode
+                        volume_data = extract_scalar_volume_grid(
+                            source_obj, scene, instance_depsgraph,
+                            transform_override=instance_transform)
+                        metrics = volume_data.pop("_transport_metrics")
+                        if (
+                                volume_instance_payload_bytes +
+                                metrics["payload_bytes"] >
+                                MAX_COLLECTION_VOLUME_PAYLOAD_BYTES or
+                                volume_instance_active_records +
+                                metrics["active_record_count"] >
+                                MAX_COLLECTION_VOLUME_RECORDS or
+                                volume_instance_dense_voxels +
+                                metrics["dense_voxel_count"] >
+                                MAX_COLLECTION_VOLUME_DENSE_VOXELS):
+                            volume_instance_limit_exceeded = True
+                            unsupported_item = unsupported_object_record(
+                                source_obj, scene, instance_depsgraph)
+                            unsupported_item["object_id"] = instance_id
+                            unsupported_item["reason"] = (
+                                "collection Volume instance exceeded the remaining per-scene payload, record, or dense-voxel budget")
+                            output["unsupported_items"].append(unsupported_item)
+                            continue
+                        item.update(volume_data)
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        output["items"].append(item)
+                        volume_instance_payload_bytes += metrics["payload_bytes"]
+                        volume_instance_active_records += metrics[
+                            "active_record_count"]
+                        volume_instance_dense_voxels += metrics[
+                            "dense_voxel_count"]
+                        volume_grid_count += 1
                     elif source_obj.type in {"FONT", "META"}:
                         item_features = []
                         evaluated_object = source_obj.evaluated_get(
@@ -2376,6 +2453,16 @@ def extract_scene(input_path, mode):
                     "static Image Empty collection instances exceeded the per-scene limit of %d instances or %d decoded pixels; remaining image instances were skipped" %
                     (MAX_COLLECTION_IMAGE_EMPTY_INSTANCES,
                      MAX_COLLECTION_IMAGE_EMPTY_PIXELS),
+                )
+            if volume_instance_limit_exceeded:
+                add_unsupported(
+                    output["unsupported_features"], stable_id(scene),
+                    "collection_volume_instance_limit",
+                    "collection Volume instances exceeded the per-scene limits of %d items, %d payload bytes, %d active records, or %d dense voxels; remaining instances were skipped" %
+                    (MAX_COLLECTION_VOLUME_INSTANCES,
+                     MAX_COLLECTION_VOLUME_PAYLOAD_BYTES,
+                     MAX_COLLECTION_VOLUME_RECORDS,
+                     MAX_COLLECTION_VOLUME_DENSE_VOXELS),
                 )
             if unsupported_instance_types:
                 add_unsupported(

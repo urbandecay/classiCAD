@@ -7738,7 +7738,7 @@ resolve remain open.
 ### Blender collection geometry instances (2026-10-15)
 
 - Blender extraction now expands visible collection instances of mesh, curve,
-  NURBS surface, font, metaball, and static file-backed Image Empty objects
+  NURBS surface, font, metaball, scalar Volume, and static file-backed Image Empty objects
   into separate scene items, keeping mesh vertices
   local with the instance transform and applying that transform to exact curve
   and surface control points. Mesh material slots, surface patch materials,
@@ -7751,7 +7751,10 @@ resolve remain open.
   source editing settings are not retained. Image instances use the source
   object's per-instance world matrix and are capped at 256 instances and 16M
   decoded pixels per scene, in addition to the packed-byte limit. Other
-  generated instance types remain unsupported. The C++ build passed;
+  generated instance types remain unsupported. Scalar Volume instances use
+  the instance matrix for object-to-world placement and are capped at four
+  instances, 32 MiB aggregate payload, 524,288 active records, and 16M dense
+  voxels per scene. The C++ build passed;
   no matched Blender instance comparison has been run.
 
 ### Transform theme color on selected overlays (2026-10-15)
@@ -7846,3 +7849,11 @@ resolve remain open.
   pixels per scene, while sharing the existing 32 MiB packed-byte budget.
   Projection modes and other Image Empty display rules remain unsupported;
   no matched comparison has been run.
+
+### Collection-instanced Blender scalar Volumes (2026-10-15)
+
+- Supported scalar Volume grids inside collection instances now retain their
+  grid-to-object transform and use the dependency-graph instance matrix for
+  object-to-world placement. Per-scene instance, payload, record, and dense
+  voxel caps bound duplicated grids. Other Volume grid types remain unsupported;
+  no matched instance comparison has been run.

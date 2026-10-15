@@ -10317,9 +10317,15 @@ protected:
                 const PolygonMesh3D &mesh = visibleShape.polygonMesh;
                 auto wireGeometry = QSharedPointer<ViewportDepthGeometry>::create();
                 QVector<int> wireVertexIndices;
+                QVector<QVector3D> wireEndpointNormals;
                 QSet<quint64> seenEdges;
                 QVector<QVector3D> vertexNormals(mesh.vertices.size());
                 QVector<int> vertexNormalCounts(mesh.vertices.size(), 0);
+                int totalCornerCount = 0;
+                for (const QVector<int> &face : mesh.faces) {
+                    totalCornerCount += face.size();
+                }
+                QVector<QVector3D> loopWorldNormals(totalCornerCount);
                 struct MeshWireEdgeUse {
                     int faceCount = 0;
                     QVector3D firstFaceNormal;
@@ -10392,7 +10398,10 @@ protected:
                                                      float(source.z));
                         }
                         if (cornerNormal.lengthSquared() <= 1.0e-16f) continue;
-                        vertexNormals[vertex] += worldNormal(cornerNormal);
+                        const QVector3D transformedCornerNormal =
+                            worldNormal(cornerNormal);
+                        loopWorldNormals[loop] = transformedCornerNormal;
+                        vertexNormals[vertex] += transformedCornerNormal;
                         ++vertexNormalCounts[vertex];
                     }
                     for (int corner = 0; corner < face.size(); ++corner) {
@@ -10417,6 +10426,7 @@ protected:
                         }
                         ++use.faceCount;
                     }
+                    firstCorner += face.size();
                 }
                 const double threshold = std::sqrt(std::abs(std::clamp(
                     viewportShadingSettings_.wireframeThreshold, 0.0, 1.0))) *
@@ -10435,6 +10445,7 @@ protected:
                         (m[8] * local.x + m[9] * local.y + m[10] * local.z + m[11]) /
                             divisor};
                 };
+                firstCorner = 0;
                 for (const QVector<int> &face : mesh.faces) {
                     for (int corner = 0; corner < face.size(); ++corner) {
                         const int first = face[corner];
@@ -10467,6 +10478,10 @@ protected:
                             << QVector3D(float(a.x), float(a.y), float(a.z))
                             << QVector3D(float(b.x), float(b.y), float(b.z));
                         wireVertexIndices << first << second;
+                        wireEndpointNormals
+                            << loopWorldNormals.value(firstCorner + corner)
+                            << loopWorldNormals.value(
+                                   firstCorner + (corner + 1) % face.size());
                     }
                     firstCorner += face.size();
                 }
@@ -10613,7 +10628,12 @@ protected:
                             curvatureOffsetFactor = 1.0f - wireData * 0.75f;
                         }
                         QVector3D facingNormal;
-                        if (vertex >= 0 && vertex < vertexNormals.size() &&
+                        if (endpoint >= 0 &&
+                            endpoint < wireEndpointNormals.size()) {
+                            facingNormal = wireEndpointNormals[endpoint];
+                        }
+                        if (facingNormal.lengthSquared() <= 1.0e-16f &&
+                            vertex >= 0 && vertex < vertexNormals.size() &&
                             vertexNormalCounts[vertex] > 0) {
                             facingNormal = vertexNormals[vertex].normalized();
                         }

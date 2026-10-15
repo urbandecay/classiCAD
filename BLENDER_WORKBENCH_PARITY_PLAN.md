@@ -7994,6 +7994,15 @@ resolve remain open.
   available in imported meshes. C++ build passed; matched image comparison
   remains open.
 
+### Blender mesh wire endpoint corner normals (2026-10-15)
+
+- Mesh-wire offset directions now use the transformed source corner normal at
+  each emitted edge endpoint, matching Blender's loop-domain wire normal input.
+  The old vertex-averaged normal remains only as a fallback when corner data is
+  absent. This keeps hard-edge offsets separate on adjoining faces; shared
+  edges still use classiCAD's selected representative face. C++ build passed;
+  matched image comparison remains open.
+
 ### QPainter shadow samples outside caster bounds (2026-10-15)
 
 - Four-sample QPainter shadow coverage now treats light-map positions outside

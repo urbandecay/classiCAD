@@ -7562,11 +7562,12 @@ resolve remain open.
   hides mesh fills while keeping the edge overlay visible in both paths.
 - Object wire colors now use the imported Standard, AgX, Filmic, Neutral, or
   custom-LUT display transform, including exposure and gamma, after Blender's
-  half-brightness adjustment. This is a partial port: the imported threshold
-  does not yet filter edges, `show_all_edges` has no distinct effect while all
-  polygon edges are drawn, and Blender's view-facing wire color gradient and
-  exact selected-object colors are not reproduced. Loose mesh edges remain
-  represented by their existing companion curves. NURBS surfaces now hide
+  half-brightness adjustment. Polygon edge filtering uses Blender's face-angle
+  factor and square-root threshold conversion; boundary and nonmanifold edges
+  remain visible, while `show_all_edges` bypasses the threshold. Blender's
+  optimal-subdivision edge flags and view-facing wire color gradient are not
+  represented, and exact selected-object colors are not reproduced. Loose mesh
+  edges remain represented by their existing companion curves. NURBS surfaces now hide
   their fill for Blender's WIRE display and reuse the cached surface-wire
   tessellation for global, per-object, and WIRE display overlays. Blender's
   legacy surface control-net wire layout may differ from this evaluated

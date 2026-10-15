@@ -7349,10 +7349,6 @@ public:
                    &settings.wireframeOpacity);
         readNumber(QStringLiteral("wireframe_threshold"), 0.0, 1.0,
                    &settings.wireframeThreshold);
-        if (settings.wireframeThreshold < 1.0) {
-            unsupported.append(QStringLiteral(
-                "wireframe_threshold (edge filtering is not implemented)"));
-        }
         const QString wireColorType =
             source.value(QStringLiteral("wireframe_color_type")).toString();
         if (wireColorType == QLatin1String("THEME"))
@@ -10011,6 +10007,72 @@ protected:
                 const PolygonMesh3D &mesh = visibleShape.polygonMesh;
                 auto wireGeometry = QSharedPointer<ViewportDepthGeometry>::create();
                 QSet<quint64> seenEdges;
+                struct MeshWireEdgeUse {
+                    int faceCount = 0;
+                    QVector3D firstFaceNormal;
+                    QVector3D secondFaceNormal;
+                    bool normalsValid = true;
+                };
+                QHash<quint64, MeshWireEdgeUse> edgeUses;
+                const auto faceNormal = [&mesh](const QVector<int> &face,
+                                                QVector3D *normal) {
+                    if (!normal || face.size() < 3) return false;
+                    double nx = 0.0;
+                    double ny = 0.0;
+                    double nz = 0.0;
+                    for (int corner = 0; corner < face.size(); ++corner) {
+                        const int first = face[corner];
+                        const int second = face[(corner + 1) % face.size()];
+                        if (first < 0 || second < 0 || first >= mesh.vertices.size() ||
+                            second >= mesh.vertices.size()) {
+                            return false;
+                        }
+                        const Point3D &a = mesh.vertices[first];
+                        const Point3D &b = mesh.vertices[second];
+                        if (!std::isfinite(a.x) || !std::isfinite(a.y) ||
+                            !std::isfinite(a.z) || !std::isfinite(b.x) ||
+                            !std::isfinite(b.y) || !std::isfinite(b.z)) {
+                            return false;
+                        }
+                        nx += (a.y - b.y) * (a.z + b.z);
+                        ny += (a.z - b.z) * (a.x + b.x);
+                        nz += (a.x - b.x) * (a.y + b.y);
+                    }
+                    const double length = std::sqrt(nx * nx + ny * ny + nz * nz);
+                    if (!std::isfinite(length) || length <= 1.0e-12) return false;
+                    *normal = QVector3D(float(nx / length), float(ny / length),
+                                        float(nz / length));
+                    return true;
+                };
+                for (const QVector<int> &face : mesh.faces) {
+                    QVector3D normal;
+                    const bool validNormal = faceNormal(face, &normal);
+                    for (int corner = 0; corner < face.size(); ++corner) {
+                        const int first = face[corner];
+                        const int second = face[(corner + 1) % face.size()];
+                        if (first < 0 || second < 0 || first >= mesh.vertices.size() ||
+                            second >= mesh.vertices.size() || first == second) {
+                            continue;
+                        }
+                        const quint32 low = static_cast<quint32>(std::min(first, second));
+                        const quint32 high = static_cast<quint32>(std::max(first, second));
+                        const quint64 key = (quint64(low) << 32) | high;
+                        MeshWireEdgeUse &use = edgeUses[key];
+                        if (use.faceCount == 0) {
+                            use.firstFaceNormal = normal;
+                            use.normalsValid = validNormal;
+                        } else if (use.faceCount == 1) {
+                            use.secondFaceNormal = normal;
+                            use.normalsValid = use.normalsValid && validNormal;
+                        } else {
+                            use.normalsValid = false;
+                        }
+                        ++use.faceCount;
+                    }
+                }
+                const double threshold = std::sqrt(std::abs(std::clamp(
+                    viewportShadingSettings_.wireframeThreshold, 0.0, 1.0))) *
+                    (254.0 / 255.0);
                 const auto transformedVertex = [&renderObject, &mesh](int index) {
                     const Point3D &local = mesh.vertices[index];
                     const auto &m = renderObject.meshObjectTransform;
@@ -10038,6 +10100,18 @@ protected:
                         const quint64 key = (quint64(low) << 32) | high;
                         if (seenEdges.contains(key)) continue;
                         seenEdges.insert(key);
+                        const MeshWireEdgeUse use = edgeUses.value(key);
+                        if (!renderObject.showAllEdges && use.faceCount == 2 &&
+                            use.normalsValid) {
+                            const double cosine = std::clamp(
+                                double(QVector3D::dotProduct(use.firstFaceNormal,
+                                                              use.secondFaceNormal)),
+                                -1.0, 1.0);
+                            const double factor = std::clamp(
+                                200.0 * (cosine - 1.0) + 1.0, 0.0, 1.0) *
+                                (254.0 / 255.0);
+                            if (factor > threshold) continue;
+                        }
                         const Point3D a = transformedVertex(first);
                         const Point3D b = transformedVertex(second);
                         wireGeometry->preciseLineVertices << a << b;

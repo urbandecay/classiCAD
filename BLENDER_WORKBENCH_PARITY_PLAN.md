@@ -6694,6 +6694,20 @@ resolve remain open.
   and `workbench_transparent_film_compare.py --q-painter` passed on the paired
   files.
 
+### QPainter mesh edge-coverage audit (2026-10-15)
+
+- Rechecked the production fallback in `workbenchTrianglePixelCoverage` and
+  its mesh callers. AA Off uses a pixel-center sample and a half-open top-left
+  edge rule; enabled fallback AA uses its bounded 4×4 sample estimate. Shared
+  edge ownership, transparent-quad fragment resolution, and mesh/NURBS edge
+  profiles across device-pixel ratios already have contracts in
+  `tests/workbench_raster_fragment_contracts.cpp`.
+- Blender 5.2.2 uses GPU triangle rasterization and its transparent OIT pass;
+  the pinned renderer does not define a CPU sample grid. The center sample is
+  a defensible single-sample fallback rule, while the 4×4 grid remains an
+  approximation. No coverage change is justified without a matched Blender
+  edge-profile comparison, so this audit makes no renderer change.
+
 ### QPainter World cavity with transparent film (2026-10-15)
 
 - Added a matching `TRANSPARENT_CAVITY_OVERLAP` Blender 5.2.2 fixture and an

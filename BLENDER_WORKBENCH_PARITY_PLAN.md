@@ -4514,8 +4514,9 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   and
   `QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`
   passed. The fallback still composites fractional coverage from adjacent
-  triangles separately, which can differ from aggregating subpixel coverage
-  before blending. No matched Blender frame comparison was run.
+  triangles separately at this point in the implementation history; the
+  per-surface transparent resolve is documented in the following section. No
+  matched Blender frame comparison was run.
 
 ### QPainter transparent mesh fractional edge resolve (2026-10-14)
 
@@ -4543,6 +4544,17 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `classicad_workbench_raster_fragment_contracts_test` and
   `classicad_viewport_render_contracts_test` passed. The existing `qfloat16`
   memcpy warning remains; no matched Blender frame comparison was run.
+
+**QPainter mesh edge-coverage re-audit (2026-10-14):** The previously noted
+pixel-center-only mesh candidate is stale. `workbenchTrianglePixelCoverage`
+uses 4×4 subpixel samples for fractional edge pixels, averages barycentric
+weights over covered samples, and applies winding-normalized top-left edge
+ownership. The mesh path retains sample masks and resolves bounded same-depth
+transparent fragments; its pixel, bounds-test, and entry caps are recorded
+above. `workbench_raster_fragment_contracts` passes. No second edge-coverage
+algorithm is justified by the current source. This CPU approximation still
+does not reproduce Blender 5.2.2's later GPU AA pass; matched full-frame mesh
+edge comparison remains open.
 
 ### QPainter textured NURBS fractional-edge resolve (2026-10-14)
 

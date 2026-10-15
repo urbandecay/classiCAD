@@ -7422,3 +7422,7 @@ resolve remain open.
   each group. This follows Blender's regular-then-in-front pass ordering, but
   still cannot reproduce per-pixel depth ordering in the average-depth path.
   The C++ build passed; no matched image comparison is claimed.
+- The shared fallback depth estimate now weights each tessellated triangle by
+  its surface area. This prevents densely tessellated regions from steering
+  painter order more than equally sized sparse regions; it remains an
+  object-level approximation and does not replace Blender's per-pixel sorting.

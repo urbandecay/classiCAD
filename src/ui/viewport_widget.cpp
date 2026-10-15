@@ -156,6 +156,50 @@ namespace {
 
 constexpr qreal kDragSnapBreakawayPixels = 36.0;
 
+qreal averageSurfaceViewDepth(const ViewportRenderObject &object,
+                              const ViewportTransform &transform)
+{
+    const QVector<QVector3D> *vertices = object.preparedDepthGeometry
+        ? &object.preparedDepthGeometry->surfaceVertices
+        : nullptr;
+    if (vertices == nullptr || vertices->isEmpty()) {
+        return transform.worldDirectionToView(
+            object.placementTranslation).towardCamera;
+    }
+
+    qreal weightedDepth = 0.0;
+    qreal totalArea = 0.0;
+    qreal fallbackDepth = 0.0;
+    for (int index = 0; index + 2 < vertices->size(); index += 3) {
+        const QVector3D &a = vertices->at(index);
+        const QVector3D &b = vertices->at(index + 1);
+        const QVector3D &c = vertices->at(index + 2);
+        const Point3D worldA(a.x() + object.preparedGeometryOffset.x,
+                             a.y() + object.preparedGeometryOffset.y,
+                             a.z() + object.preparedGeometryOffset.z);
+        const Point3D worldB(b.x() + object.preparedGeometryOffset.x,
+                             b.y() + object.preparedGeometryOffset.y,
+                             b.z() + object.preparedGeometryOffset.z);
+        const Point3D worldC(c.x() + object.preparedGeometryOffset.x,
+                             c.y() + object.preparedGeometryOffset.y,
+                             c.z() + object.preparedGeometryOffset.z);
+        const qreal depthA = transform.worldDirectionToView(worldA).towardCamera;
+        const qreal depthB = transform.worldDirectionToView(worldB).towardCamera;
+        const qreal depthC = transform.worldDirectionToView(worldC).towardCamera;
+        const QVector3D ab = b - a;
+        const QVector3D ac = c - a;
+        const qreal area = QVector3D::crossProduct(ab, ac).length() * 0.5;
+        const qreal triangleDepth = (depthA + depthB + depthC) / 3.0;
+        fallbackDepth += triangleDepth;
+        if (std::isfinite(area) && area > 0.0) {
+            weightedDepth += triangleDepth * area;
+            totalArea += area;
+        }
+    }
+    if (totalArea > 0.0) return weightedDepth / totalArea;
+    return fallbackDepth / std::max<qsizetype>(1, vertices->size() / 3);
+}
+
 enum class ComponentSelectionMode { Vertex, Edge, Face };
 
 struct ComponentPickCycleState {
@@ -9214,24 +9258,7 @@ protected:
             }
             const auto averageViewDepth = [this](
                 const ViewportRenderObject &object) {
-                const QVector<QVector3D> *vertices =
-                    object.preparedDepthGeometry
-                        ? &object.preparedDepthGeometry->surfaceVertices
-                        : nullptr;
-                if (vertices == nullptr || vertices->isEmpty()) {
-                    return viewportTransform_.worldDirectionToView(
-                        object.placementTranslation).towardCamera;
-                }
-                qreal depth = 0.0;
-                for (const QVector3D &vertex : *vertices) {
-                    const Point3D world(
-                        vertex.x() + object.preparedGeometryOffset.x,
-                        vertex.y() + object.preparedGeometryOffset.y,
-                        vertex.z() + object.preparedGeometryOffset.z);
-                    depth += viewportTransform_.worldDirectionToView(world)
-                                 .towardCamera;
-                }
-                return depth / vertices->size();
+                return averageSurfaceViewDepth(object, viewportTransform_);
             };
             std::stable_sort(
                 surfaceDrawObjects.begin(), surfaceDrawObjects.end(),
@@ -11114,24 +11141,7 @@ protected:
             QVector<ViewportRenderObject> fallbackSurfaceObjects;
             const auto averageViewDepth = [this](
                 const ViewportRenderObject &object) {
-                const QVector<QVector3D> *vertices =
-                    object.preparedDepthGeometry
-                        ? &object.preparedDepthGeometry->surfaceVertices
-                        : nullptr;
-                if (vertices == nullptr || vertices->isEmpty()) {
-                    return viewportTransform_.worldDirectionToView(
-                        object.placementTranslation).towardCamera;
-                }
-                qreal depth = 0.0;
-                for (const QVector3D &vertex : *vertices) {
-                    const Point3D world(
-                        vertex.x() + object.preparedGeometryOffset.x,
-                        vertex.y() + object.preparedGeometryOffset.y,
-                        vertex.z() + object.preparedGeometryOffset.z);
-                    depth += viewportTransform_.worldDirectionToView(world)
-                                 .towardCamera;
-                }
-                return depth / vertices->size();
+                return averageSurfaceViewDepth(object, viewportTransform_);
             };
             const auto isSurfaceObject = [](const ViewportRenderObject &object) {
                 const GeometryType type = object.shape.geometryType;

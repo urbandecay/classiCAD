@@ -8415,6 +8415,8 @@ resolve remain open.
   resolve uses a separate transparent overlay target and updates depth as it
   blends each neighbor in
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L763-L904).
+  Neighbor depth is local to this resolve; only the center raster sample can
+  update scene depth, since Blender's final AA target has no depth attachment.
   C++ build and matched GPU image comparison remain open.
 
 ### Blender mesh color attribute selection (2026-10-15)

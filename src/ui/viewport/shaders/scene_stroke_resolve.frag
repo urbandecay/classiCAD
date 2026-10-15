@@ -114,6 +114,7 @@ void main()
     vec4 centerRecord = fetchLineRecord(pixel);
     vec4 resolvedLineColor = vec4(0.0);
     float resolvedLineDepth = sceneDepth;
+    float outputDepth = sceneDepth;
     vec4 centerRasterColor = vec4(0.0);
     if (centerRecord.w != 0.0) {
         centerRasterColor = texelFetch(uLineColor, pixel, 0);
@@ -125,6 +126,7 @@ void main()
         // overlay sample; neighbors are compared against its depth below.
         resolvedLineDepth = correctedMeshWireDepth(
             pixel, centerRecord, texelFetch(uCandidateDepth, pixel, 0).r);
+        outputDepth = resolvedLineDepth;
     }
 
     for (int index = 0; index < 4; ++index) {
@@ -179,5 +181,7 @@ void main()
     // can incorrectly place a farther wire in front of the surface.
     fragmentColor = resolvedLineColor + baseColor *
                     (1.0 - resolvedLineColor.a);
-    gl_FragDepth = resolvedLineDepth;
+    // Neighbor depths order only this AA resolve. Blender writes no depth
+    // for expanded neighbor coverage into the scene target.
+    gl_FragDepth = outputDepth;
 }

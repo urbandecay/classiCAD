@@ -61,7 +61,9 @@ public:
                    RasterWorkbenchFragmentSink *fragmentSink = nullptr,
                    const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials = {},
                    const QVector<float> *opaqueSceneDepth = nullptr,
-                   const QSize &opaqueSceneDepthSize = {}) const;
+                   const QSize &opaqueSceneDepthSize = {},
+                   const QVector<Point3D> *blenderSurfaceWireVerticesWorld =
+                       nullptr) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -87,7 +89,9 @@ public:
                               std::nullopt,
                           const QString &displayName = QString(),
                           const QString &libraryPath = QString(),
-                          RasterWorkbenchFragmentSink *fragmentSink = nullptr) const;
+                          RasterWorkbenchFragmentSink *fragmentSink = nullptr,
+                          const QVector<Point3D> *blenderWireVerticesWorld =
+                              nullptr) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

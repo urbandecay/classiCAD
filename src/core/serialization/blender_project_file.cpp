@@ -1682,6 +1682,32 @@ bool parseBlenderSurfaceItem(
     }
     result.geometry.geometryType = classiCAD::GeometryType::NurbsSurface;
     result.geometry.nurbsSurface = std::move(surface);
+    const QJsonValue wireVerticesValue =
+        item.value(QStringLiteral("surface_wire_vertices_world"));
+    if (!wireVerticesValue.isUndefined()) {
+        if (!wireVerticesValue.isArray()) {
+            setError(errorMessage, QStringLiteral("surface wire vertices are invalid"));
+            return false;
+        }
+        const QJsonArray wireVertices = wireVerticesValue.toArray();
+        if (wireVertices.size() > 400000 || (wireVertices.size() % 2) != 0) {
+            setError(errorMessage, QStringLiteral("surface wire vertex count is invalid"));
+            return false;
+        }
+        result.blenderSurfaceWireVerticesWorld.reserve(wireVertices.size());
+        for (const QJsonValue &wireVertexValue : wireVertices) {
+            QVector<double> xyz;
+            if (!jsonNumberArray(wireVertexValue, 3, &xyz)) {
+                setError(errorMessage, QStringLiteral("surface wire vertex is invalid"));
+                return false;
+            }
+            result.blenderSurfaceWireVerticesWorld.append(
+                {xyz[0], xyz[1], xyz[2]});
+        }
+        result.blenderSurfaceWireGeometryFingerprint =
+            classiCAD::nurbsSurfaceGeometryFingerprint(
+                result.geometry.nurbsSurface);
+    }
     const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
     result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
     result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();

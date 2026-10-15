@@ -533,6 +533,19 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("blenderMeshImportMode"),
                                 sceneObject.blenderMeshImportMode);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
+        if (!sceneObject.blenderSurfaceWireVerticesWorld.isEmpty()) {
+            QJsonArray wireVertices;
+            for (const Point3D &point :
+                 sceneObject.blenderSurfaceWireVerticesWorld) {
+                wireVertices.append(QJsonArray{point.x, point.y, point.z});
+            }
+            serializedObject.insert(QStringLiteral("blenderSurfaceWireVerticesWorld"),
+                                    wireVertices);
+            serializedObject.insert(
+                QStringLiteral("blenderSurfaceWireGeometryFingerprint"),
+                QString::fromLatin1(
+                    sceneObject.blenderSurfaceWireGeometryFingerprint));
+        }
         QJsonObject solidFaceMaterials;
         QStringList solidFaceIds = sceneObject.nurbsSolidFaceMaterialIds.keys();
         std::sort(solidFaceIds.begin(), solidFaceIds.end());
@@ -1479,6 +1492,57 @@ bool documentFromJson(const QJsonValue &value,
             }
         }
         sceneObject.geometry = std::move(shape);
+        const QJsonValue surfaceWireValue = serializedObject.value(
+            QStringLiteral("blenderSurfaceWireVerticesWorld"));
+        if (!surfaceWireValue.isUndefined()) {
+            const QJsonValue surfaceFingerprintValue = serializedObject.value(
+                QStringLiteral("blenderSurfaceWireGeometryFingerprint"));
+            if (sceneObject.geometry.geometryType != GeometryType::NurbsSurface ||
+                !surfaceWireValue.isArray() ||
+                !surfaceFingerprintValue.isString()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender surface wire display data"));
+                return false;
+            }
+            const QByteArray fingerprintHex =
+                surfaceFingerprintValue.toString().toLatin1();
+            if (fingerprintHex.size() != 64 ||
+                QByteArray::fromHex(fingerprintHex).toHex() != fingerprintHex) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender surface geometry fingerprint"));
+                return false;
+            }
+            const QJsonArray wireVertices = surfaceWireValue.toArray();
+            if (wireVertices.size() > 400000 ||
+                (wireVertices.size() % 2) != 0) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender surface wire vertex count"));
+                return false;
+            }
+            sceneObject.blenderSurfaceWireVerticesWorld.reserve(
+                wireVertices.size());
+            for (const QJsonValue &wireVertexValue : wireVertices) {
+                if (!wireVertexValue.isArray() ||
+                    wireVertexValue.toArray().size() != 3) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender surface wire vertex"));
+                    return false;
+                }
+                const QJsonArray coordinates = wireVertexValue.toArray();
+                for (const QJsonValue &coordinate : coordinates) {
+                    if (!coordinate.isDouble() ||
+                        !std::isfinite(coordinate.toDouble())) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid Blender surface wire vertex"));
+                        return false;
+                    }
+                }
+                sceneObject.blenderSurfaceWireVerticesWorld.append(
+                    {coordinates[0].toDouble(), coordinates[1].toDouble(),
+                     coordinates[2].toDouble()});
+            }
+            sceneObject.blenderSurfaceWireGeometryFingerprint = fingerprintHex;
+        }
         if (version >= 21) {
             const QJsonValue faceMaterialsValue =
                 serializedObject.value(QStringLiteral("nurbsSolidFaceMaterialIds"));

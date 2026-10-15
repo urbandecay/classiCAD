@@ -4,6 +4,10 @@
 #include "nurbs_surface_evaluator.h"
 #include "surface_trim_region.h"
 
+#include <QCryptographicHash>
+#include <QDataStream>
+#include <QIODevice>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -212,6 +216,45 @@ bool validateNurbsSurface(const NurbsSurface3D &surface, QString *error)
         error->clear();
     }
     return true;
+}
+
+QByteArray nurbsSurfaceGeometryFingerprint(const NurbsSurface3D &surface)
+{
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::BigEndian);
+    stream.setFloatingPointPrecision(QDataStream::DoublePrecision);
+    stream << qint32(surface.dimension)
+           << qint32(surface.degreeU) << qint32(surface.degreeV)
+           << qint32(surface.orderU) << qint32(surface.orderV)
+           << qint32(surface.controlVertexCountU)
+           << qint32(surface.controlVertexCountV)
+           << quint8(surface.rational ? 1 : 0)
+           << quint32(surface.controlPoints.size());
+    for (const Point3D &point : surface.controlPoints)
+        stream << point.x << point.y << point.z;
+    const auto writeDoubles = [&stream](const QVector<double> &values) {
+        stream << quint32(values.size());
+        for (double value : values) stream << value;
+    };
+    writeDoubles(surface.weights);
+    writeDoubles(surface.knotsU);
+    writeDoubles(surface.knotsV);
+    stream << quint32(surface.trimLoops.size());
+    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+        stream << quint8(loop.isHole ? 1 : 0)
+               << qint32(loop.curve.dimension) << qint32(loop.curve.degree)
+               << qint32(loop.curve.order)
+               << quint8(loop.curve.rational ? 1 : 0)
+               << quint32(loop.curve.controlPoints.size());
+        for (const QPointF &point : loop.curve.controlPoints)
+            stream << point.x() << point.y();
+        writeDoubles(loop.curve.normalCoordinates);
+        writeDoubles(loop.curve.weights);
+        writeDoubles(loop.curve.knots);
+    }
+    if (stream.status() != QDataStream::Ok) return {};
+    return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
 }
 
 bool nurbsSurfaceParameterDomains(const NurbsSurface3D &surface,

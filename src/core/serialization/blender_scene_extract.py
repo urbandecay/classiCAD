@@ -1541,6 +1541,55 @@ def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None):
                     unsupported, item["object_id"], "modifier:" + modifier.name,
                     "exact surface import preserves source patches; modifier was not applied")
         patches.append(item)
+    # Blender draws legacy SURFACE objects from evaluated edge paths. Evaluate
+    # each source spline separately so its display lines stay with its exact
+    # imported NURBS patch.
+    if patches and depsgraph is not None and not obj.modifiers:
+        for item in patches:
+            spline_index = int(item["object_id"].rsplit(":", 1)[1])
+            temporary_data = obj.data.copy()
+            temporary_object = None
+            try:
+                try:
+                    for index in reversed(range(len(temporary_data.splines))):
+                        if index != spline_index:
+                            temporary_data.splines.remove(
+                                temporary_data.splines[index])
+                    temporary_object = bpy.data.objects.new(
+                        "__classiCAD_surface_wire_eval__", temporary_data)
+                    scene.collection.objects.link(temporary_object)
+                    temporary_object.matrix_world = obj.matrix_world.copy()
+                    with bpy.context.temp_override(
+                            scene=scene, view_layer=scene.view_layers[0]):
+                        bpy.context.view_layer.update()
+                    evaluated = temporary_object.evaluated_get(depsgraph)
+                    evaluated_mesh = evaluated.to_mesh()
+                    try:
+                        if len(evaluated_mesh.edges) <= 200000:
+                            wire_vertices = []
+                            for edge in evaluated_mesh.edges:
+                                first = evaluated.matrix_world @ evaluated_mesh.vertices[
+                                    edge.vertices[0]].co
+                                second = evaluated.matrix_world @ evaluated_mesh.vertices[
+                                    edge.vertices[1]].co
+                                wire_vertices.append(vector_values(first))
+                                wire_vertices.append(vector_values(second))
+                            item["surface_wire_vertices_world"] = wire_vertices
+                    finally:
+                        evaluated.to_mesh_clear()
+                except Exception as error:
+                    add_unsupported(
+                        unsupported, item["object_id"], "surface_wire",
+                        "Blender evaluated wire paths could not be captured: " +
+                        str(error))
+            finally:
+                if temporary_object is not None:
+                    bpy.data.objects.remove(temporary_object, do_unlink=True)
+                if temporary_data.users == 0:
+                    bpy.data.curves.remove(temporary_data)
+                with bpy.context.temp_override(
+                        scene=scene, view_layer=scene.view_layers[0]):
+                    bpy.context.view_layer.update()
     return patches
 
 

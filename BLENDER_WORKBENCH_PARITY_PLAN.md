@@ -7655,8 +7655,9 @@ resolve remain open.
   edges remain represented by their existing companion curves. NURBS surfaces now hide
   their fill for Blender's WIRE display and reuse the cached surface-wire
   tessellation for global, per-object, and WIRE display overlays. Blender's
-  legacy surface control-net wire layout may differ from this evaluated
-  surface tessellation. The WIRE fill suppression also covers the ordinary
+  legacy surface control-net wire layout may differ from this generated
+  surface tessellation when importing older files, native surfaces, or Blender
+  surfaces with modifiers. The WIRE fill suppression also covers the ordinary
   QPainter batch list, and GPU surface wire strokes now invalidate with the
   object's geometry revision.
   The C++ build passed; matched Blender image comparison remains open.
@@ -7704,3 +7705,20 @@ resolve remain open.
   coverage only. Blender's custom Smooth Wires depth-bias switch applies to
   the regular Overlay wire pass; edit-mesh edges use a separate fixed screen
   offset. The C++ build passed; matched depth-crossing captures remain open.
+
+### Blender-evaluated NURBS surface wires (2026-10-15)
+
+- Blender imports now carry evaluated SURFACE mesh edge paths as optional
+  display-only world-space line segments. Extraction is bounded to 200,000
+  edges and skips objects with modifiers, whose evaluated wire geometry would
+  not match the preserved exact NURBS patches. Multi-spline objects are
+  evaluated one patch at a time so their display edges remain attached to the
+  matching imported surface. A saved geometry fingerprint disables these
+  cached paths after control-net or trim edits; current geometry then uses the
+  generated wire fallback. Native classiCAD save/reopen preserves both the
+  paths and their fingerprint separately from the authoritative NURBS
+  geometry. QPainter and GPU wire overlays consume the same valid imported
+  paths. `evaluated.to_mesh().edges` is being used as a display proxy for
+  Blender's legacy SURFACE overlay, but edge-set equivalence has not been
+  confirmed. The C++ build passed; no matched Blender image comparison has
+  been run.

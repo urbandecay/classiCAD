@@ -10641,13 +10641,26 @@ protected:
                 (viewportShadingSettings_.solidWireframes ||
                  renderObject.showWire || renderObject.wireDisplay);
             if (drawNurbsSurfaceWireOverlay &&
-                renderObject.preparedDepthGeometry &&
-                !renderObject.preparedDepthGeometry->preciseLineVertices.isEmpty()) {
+                ((!renderObject.blenderSurfaceWireVerticesWorld.isEmpty()) ||
+                 (renderObject.preparedDepthGeometry &&
+                  !renderObject.preparedDepthGeometry->preciseLineVertices.isEmpty()))) {
                 auto wireGeometry = QSharedPointer<ViewportDepthGeometry>::create();
-                wireGeometry->lineVertices =
-                    renderObject.preparedDepthGeometry->lineVertices;
-                wireGeometry->preciseLineVertices =
-                    renderObject.preparedDepthGeometry->preciseLineVertices;
+                if (!renderObject.blenderSurfaceWireVerticesWorld.isEmpty()) {
+                    wireGeometry->preciseLineVertices =
+                        renderObject.blenderSurfaceWireVerticesWorld;
+                    wireGeometry->lineVertices.reserve(
+                        renderObject.blenderSurfaceWireVerticesWorld.size());
+                    for (const Point3D &point :
+                         renderObject.blenderSurfaceWireVerticesWorld) {
+                        wireGeometry->lineVertices.append(
+                            QVector3D(float(point.x), float(point.y), float(point.z)));
+                    }
+                } else {
+                    wireGeometry->lineVertices =
+                        renderObject.preparedDepthGeometry->lineVertices;
+                    wireGeometry->preciseLineVertices =
+                        renderObject.preparedDepthGeometry->preciseLineVertices;
+                }
                 QVector3D rimColor;
                 QVector3D frontWireColor;
                 const bool themeColor =
@@ -12073,7 +12086,8 @@ protected:
                                       : nullptr,
                                   renderObject.showInFront
                                       ? fallbackSurfaceLayers.inFrontSceneDepthSize
-                                      : fallbackSurfaceLayers.regularSceneDepthSize);
+                                      : fallbackSurfaceLayers.regularSceneDepthSize,
+                                  &renderObject.blenderSurfaceWireVerticesWorld);
                     }
                 }
             }
@@ -24855,7 +24869,9 @@ private:
                    RasterWorkbenchFragmentSink *fragmentSink = nullptr,
                    const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials = {},
                    const QVector<float> *opaqueSceneDepth = nullptr,
-                   const QSize &opaqueSceneDepthSize = {})
+                   const QSize &opaqueSceneDepthSize = {},
+                   const QVector<Point3D> *blenderSurfaceWireVerticesWorld =
+                       nullptr)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -24880,7 +24896,8 @@ private:
                                     fragmentSink,
                                     nurbsSolidFaceMaterials,
                                     opaqueSceneDepth,
-                                    opaqueSceneDepthSize); // stable solid-face material lookup
+                                    opaqueSceneDepthSize,
+                                    blenderSurfaceWireVerticesWorld); // stable solid-face material lookup
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

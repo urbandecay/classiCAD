@@ -3,6 +3,7 @@
 #include "nurbs_curve.h"
 #include "work_plane.h"
 
+#include <QByteArray>
 #include <QVector>
 
 namespace classiCAD {
@@ -55,6 +56,7 @@ QVector<NurbsSurfaceBoundaryCurve> nurbsSurfaceBoundaryCurves(
 QVector<double> expandedNurbsSurfaceKnotVector(const QVector<double> &knots);
 bool validateNurbsSurface(const NurbsSurface3D &surface,
                           QString *error = nullptr);
+QByteArray nurbsSurfaceGeometryFingerprint(const NurbsSurface3D &surface);
 bool nurbsSurfaceParameterDomains(const NurbsSurface3D &surface,
                                   qreal *uStart,
                                   qreal *uEnd,

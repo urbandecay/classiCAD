@@ -140,6 +140,12 @@ struct SceneObject {
     // This may be absolute even when libraryPath retains Blender's // form.
     QString workbenchRandomLibraryPath;
     Shape geometry;
+    // Blender-evaluated SURFACE wire edges in world coordinates. Display-only;
+    // the exact NURBS surface remains authoritative.
+    QVector<Point3D> blenderSurfaceWireVerticesWorld;
+    // Hash of the exact surface at import. Stale evaluated wires are ignored
+    // after control-net or trim edits.
+    QByteArray blenderSurfaceWireGeometryFingerprint;
     // World-space translation applied after evaluating spatial NURBS surface
     // or solid geometry. Planar curves keep their existing workplane mapping.
     Point3D placementTranslation;

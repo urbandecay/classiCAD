@@ -1511,7 +1511,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  RasterWorkbenchFragmentSink *fragmentSink,
                                  const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials,
                                  const QVector<float> *opaqueSceneDepth,
-                                 const QSize &opaqueSceneDepthSize) const
+                                 const QSize &opaqueSceneDepthSize,
+                                 const QVector<Point3D> *blenderSurfaceWireVerticesWorld) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -3001,7 +3002,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  nurbsSolidFaceReversed(shape.nurbsSolid, index),
                                  layerColor, displayColorSceneLinear,
                                  materialForFace(index), displayName, libraryPath,
-                                 fragmentSink);
+                                 fragmentSink, nullptr);
             }
         } else {
             for (int index = 0; index < faces.size(); ++index)
@@ -3012,7 +3013,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                                         index),
                                  layerColor, displayColorSceneLinear,
                                  materialForFace(index), displayName, libraryPath,
-                                 fragmentSink);
+                                 fragmentSink, nullptr);
         }
         return;
     }
@@ -3025,7 +3026,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          preparedGeometry, preparedOffset, preview, selected,
                          false, layerColor, displayColorSceneLinear,
                          workbenchMaterial, displayName, libraryPath,
-                         fragmentSink);
+                         fragmentSink, blenderSurfaceWireVerticesWorld);
         return;
     }
 
@@ -3716,7 +3717,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                             workbenchMaterial,
                                         const QString &displayName,
                                         const QString &libraryPath,
-                                        RasterWorkbenchFragmentSink *fragmentSink) const
+                                        RasterWorkbenchFragmentSink *fragmentSink,
+                                        const QVector<Point3D> *blenderWireVerticesWorld) const
 {
     Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
@@ -4908,7 +4910,19 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         }
     };
 
-    if (preparedGeometry != nullptr &&
+    if (blenderWireVerticesWorld != nullptr &&
+        !blenderWireVerticesWorld->isEmpty()) {
+        screenLines.reserve(blenderWireVerticesWorld->size() / 2);
+        for (int index = 0; index + 1 < blenderWireVerticesWorld->size(); index += 2) {
+            const auto moved = [&preparedOffset](const Point3D &point) {
+                return Point3D{point.x + preparedOffset.x,
+                               point.y + preparedOffset.y,
+                               point.z + preparedOffset.z};
+            };
+            appendScreenLine(moved(blenderWireVerticesWorld->at(index)),
+                             moved(blenderWireVerticesWorld->at(index + 1)));
+        }
+    } else if (preparedGeometry != nullptr &&
         !preparedGeometry->preciseLineVertices.isEmpty()) {
         const QVector<Point3D> &worldLines =
             preparedGeometry->preciseLineVertices;

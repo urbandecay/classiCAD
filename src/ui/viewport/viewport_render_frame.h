@@ -67,6 +67,7 @@ struct ViewportRenderObject {
     QString displayName;
     QString libraryPath;
     QString workbenchRandomLibraryPath;
+    QVector<Point3D> blenderSurfaceWireVerticesWorld;
     int objectIndex = -1;
     quint64 geometryRevision = 0;
     bool cacheable = true;

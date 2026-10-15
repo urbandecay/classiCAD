@@ -129,6 +129,14 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.libraryPath = sceneObject.libraryPath;
         entry.workbenchRandomLibraryPath =
             sceneObject.workbenchRandomLibraryPath;
+        if (sceneObject.geometry.geometryType == GeometryType::NurbsSurface &&
+            !sceneObject.blenderSurfaceWireGeometryFingerprint.isEmpty() &&
+            sceneObject.blenderSurfaceWireGeometryFingerprint ==
+                nurbsSurfaceGeometryFingerprint(
+                    sceneObject.geometry.nurbsSurface)) {
+            entry.blenderSurfaceWireVerticesWorld =
+                sceneObject.blenderSurfaceWireVerticesWorld;
+        }
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());

@@ -7371,14 +7371,13 @@ resolve remain open.
 
 ### QPainter oversized mesh color transform fallback (2026-10-15)
 
-- The bounded flat-polygon fallback for oversized untextured mesh triangles
-  now converts its stored scene-linear Workbench color through the configured
-  Standard, AgX, or custom view transform, exposure, gamma, and LUT before
-  drawing. It preserves the existing flat-shading behavior and applies the
-  configured X-Ray opacity to its packed source alpha, like the bounded raster
-  path.
-  Oversized textured triangles still have no raster fallback, and this change
-  has not been validated with a matched Blender image comparison.
+- Oversized mesh triangles now use a bounded coarse raster (at most four
+  million samples, with a 16,384-pixel side limit) instead of falling back to
+  one flat polygon color. The raster keeps perspective-correct UV and corner
+  color interpolation, scene-linear shading and display conversion, texture
+  alpha cutouts, and configured X-Ray opacity. Fine detail and edges are less
+  accurate at this size. No matched Blender image comparison has been run for
+  this fallback.
 
 ### QPainter oversized textured NURBS fallback (2026-10-15)
 

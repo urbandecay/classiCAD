@@ -2322,43 +2322,36 @@ void ViewportRenderer::drawShape(QPainter &painter,
             const int top = qFloor(minY);
             const int width = std::max(1, qCeil(maxX) - left);
             const int height = std::max(1, qCeil(maxY) - top);
-            if (width > 16384 || height > 16384 ||
-                qint64(width) * height > 64 * 1024 * 1024) {
-                if (!hasTexture && triangle.useWorkbenchColor) {
-                    const QVector3D displayRgb =
-                        workbenchSceneLinearToDisplaySrgb(
-                            triangle.sceneLinearColor,
-                            shadingSettings_.colorTransform,
-                            shadingSettings_.colorExposure,
-                            shadingSettings_.colorGamma,
-                            shadingSettings_.colorLutData,
-                            shadingSettings_.colorLutMetadata);
-                    painter.setBrush(QColor::fromRgbF(
-                        std::clamp<qreal>(displayRgb.x(), 0.0, 1.0),
-                        std::clamp<qreal>(displayRgb.y(), 0.0, 1.0),
-                        std::clamp<qreal>(displayRgb.z(), 0.0, 1.0),
-                        triangle.color.alphaF() *
-                            (shadingSettings_.xrayEnabled()
-                                 ? shadingSettings_.xrayAlpha
-                                 : 1.0)));
-                    painter.drawPolygon(triangle.points);
-                }
-                return;
-            }
-            QImage raster(width, height, QImage::Format_RGBA8888);
+            constexpr qint64 maximumRasterSamples = 4000000;
+            const qint64 rasterArea = qint64(width) * height;
+            const qreal sampleScale =
+                std::max({qreal(1.0),
+                          std::sqrt(static_cast<qreal>(rasterArea) /
+                                    static_cast<qreal>(maximumRasterSamples)),
+                          static_cast<qreal>(width) / 16384.0,
+                          static_cast<qreal>(height) / 16384.0});
+            const int sampleWidth = std::max(
+                1, qFloor(static_cast<qreal>(width) / sampleScale));
+            const int sampleHeight = std::max(
+                1, qFloor(static_cast<qreal>(height) / sampleScale));
+            const qreal sampleStepX =
+                static_cast<qreal>(width) / sampleWidth;
+            const qreal sampleStepY =
+                static_cast<qreal>(height) / sampleHeight;
+            QImage raster(sampleWidth, sampleHeight, QImage::Format_RGBA8888);
             raster.setDevicePixelRatio(dpr);
             raster.fill(Qt::transparent);
             const qreal alpha = hasTexture ? triangle.color.alphaF()
                                            : triangle.sceneLinearAlpha;
-            for (int y = 0; y < height; ++y) {
+            for (int y = 0; y < sampleHeight; ++y) {
                 uchar *row = raster.scanLine(y);
-                const qreal py = top + y + 0.5;
-                for (int x = 0; x < width; ++x) {
-                    const qreal px = left + x + 0.5;
+                const qreal py = top + (y + 0.5) * sampleStepY;
+                for (int x = 0; x < sampleWidth; ++x) {
+                    const qreal px = left + (x + 0.5) * sampleStepX;
                     qreal b0, b1, b2;
                     quint16 sampleMask = 0;
                     const qreal coverage = workbenchTrianglePixelCoverage(
-                        devicePoints, area, px, py, 1.0, 1.0,
+                        devicePoints, area, px, py, sampleStepX, sampleStepY,
                         &b0, &b1, &b2, &sampleMask,
                         workbenchRasterAntialiasingEnabled_ ? 4 : 1);
                     if (coverage <= 0.0) continue;
@@ -2588,8 +2581,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
             const QTransform baseLogicalFromDevice =
                 painter.deviceTransform().inverted(&baseInverseValid);
             if (baseInverseValid) {
+                const QRectF targetRect(
+                    baseLogicalFromDevice.map(QPointF(left, top)),
+                    baseLogicalFromDevice.map(
+                        QPointF(left + width, top + height)));
                 painter.drawImage(
-                    baseLogicalFromDevice.map(QPointF(left, top)), raster);
+                    targetRect.normalized(), raster);
             }
             painter.restore();
         };

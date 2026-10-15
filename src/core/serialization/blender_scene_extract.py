@@ -2015,6 +2015,9 @@ def extract_scene(input_path, mode):
                     )
                     item["object_id"] = instance_id
                     item["parent_id"] = parent_id
+                    if item["bounds_display_type"]:
+                        item["bounds_transform_world"] = matrix_values(
+                            instance.matrix_world)
                     item["collection_ids"] = sorted(
                         stable_id(collection)
                         for collection in parent_source.users_collection)

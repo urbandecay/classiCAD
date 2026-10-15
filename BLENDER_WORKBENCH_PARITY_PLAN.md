@@ -7731,8 +7731,9 @@ resolve remain open.
 
 - Blender extraction now expands visible dependency-graph mesh instances into
   separate imported mesh objects, retaining the source mesh-local vertices,
-  material slots, and each instance's world transform. Synthetic stable IDs
-  keep repeated copies distinct, and extraction is capped at 50,000 instances
+  material slots, each instance's world transform, and object-aligned bounds
+  transforms when Bounds display is enabled. Synthetic stable IDs keep
+  repeated copies distinct, and extraction is capped at 50,000 instances
   per scene. The source collection hierarchy, instance selection, and
   per-instance Blender Random variation are not represented; non-mesh
   collection instances are reported as unsupported. The C++ build passed;

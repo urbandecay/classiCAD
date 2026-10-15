@@ -30,7 +30,7 @@ struct BlenderGridAppearance {
     bool showOrthographicGrid = true;
     bool showAxisX = true;
     bool showAxisY = true;
-    bool showAxisZ = true;
+    bool showAxisZ = false;
 
     bool operator==(const BlenderGridAppearance &) const = default;
 };

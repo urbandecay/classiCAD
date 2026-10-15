@@ -78,7 +78,7 @@ struct ViewportShadingSettings {
     bool orthographicGridVisible = true;
     bool gridAxisXVisible = true;
     bool gridAxisYVisible = true;
-    bool gridAxisZVisible = true;
+    bool gridAxisZVisible = false;
     qreal wireframeOpacity = 1.0;
     qreal wireframeThreshold = 1.0;
     ViewportColorMode colorMode = ViewportColorMode::Material;

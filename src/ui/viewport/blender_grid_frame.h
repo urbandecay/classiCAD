@@ -17,7 +17,8 @@ struct BlenderGridFrame {
     QPointF cameraRelativeOffset;
     qreal focusDistance = 1.0;
     bool fixedAxisOrthographic = false;
-    // Blender's default axis display shows X and Y; Z is opt-in.
+    // Axes that lie in the resolved grid plane. Saved overlay flags decide
+    // which of these axes are shown.
     std::array<bool, 3> visibleAxes{{true, true, false}};
 };
 

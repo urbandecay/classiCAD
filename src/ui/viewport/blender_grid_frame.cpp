@@ -58,10 +58,11 @@ void setVisiblePlaneAxes(BlenderGridFrame *frame)
         break;
     case WorkPlane::XZ:
         frame->visibleAxes[0] = true;
-        // Blender hides the Z axis by default (V3D_SHOW_Z is not enabled).
+        frame->visibleAxes[2] = true;
         break;
     case WorkPlane::YZ:
         frame->visibleAxes[1] = true;
+        frame->visibleAxes[2] = true;
         break;
     }
 }

@@ -7565,8 +7565,9 @@ resolve remain open.
   half-brightness adjustment. Polygon edge filtering uses Blender's face-angle
   factor and square-root threshold conversion; boundary and nonmanifold edges
   remain visible, while `show_all_edges` bypasses the threshold. Blender's
-  optimal-subdivision edge flags and view-facing wire color gradient are not
-  represented, and exact selected-object colors are not reproduced. Loose mesh
+  selected mesh and NURBS surface wire overlays now use classiCAD's selection
+  color. Blender's active/inactive theme shades, optimal-subdivision edge flags,
+  and view-facing wire color gradient are not represented. Loose mesh
   edges remain represented by their existing companion curves. NURBS surfaces now hide
   their fill for Blender's WIRE display and reuse the cached surface-wire
   tessellation for global, per-object, and WIRE display overlays. Blender's

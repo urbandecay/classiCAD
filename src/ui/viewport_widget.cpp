@@ -10139,6 +10139,9 @@ protected:
                             renderObject.objectId, renderObject.displayName,
                             workbenchRandomIdentityLibraryPath(renderObject));
                     }
+                    if (renderObject.selected) {
+                        wireColor = viewportSelectionColor();
+                    }
                     wireColor.setAlphaF(std::clamp(
                         viewportShadingSettings_.wireframeOpacity, 0.0, 1.0));
                     ViewportSceneStroke wireStroke;
@@ -10184,6 +10187,9 @@ protected:
                     wireColor = workbenchRandomColor(
                         renderObject.objectId, renderObject.displayName,
                         workbenchRandomIdentityLibraryPath(renderObject));
+                }
+                if (renderObject.selected) {
+                    wireColor = viewportSelectionColor();
                 }
                 wireColor.setAlphaF(std::clamp(
                     viewportShadingSettings_.wireframeOpacity, 0.0, 1.0));

@@ -14582,6 +14582,143 @@ int main(int argc, char *argv[])
                             dofGatedImage == dofBaselineImage,
                             "GPU Workbench DOF must be bypassed when camera DOF is disabled");
                     }
+                    const QString gpuCurvatureCaptureDirectory =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_GPU_CURVATURE_CAPTURE_DIR");
+                    if (!gpuCurvatureCaptureDirectory.isEmpty()) {
+                        constexpr int curvatureSphereSegments = 32;
+                        constexpr int curvatureSphereRings = 16;
+                        ViewportRenderObject curvatureSphereObject =
+                            polygonCubeObject;
+                        curvatureSphereObject.shape = Shape{};
+                        curvatureSphereObject.shape.geometryType =
+                            GeometryType::PolygonMesh;
+                        curvatureSphereObject.shape.polygonMesh.vertices = {
+                            {0.0, 0.0, 1.0}};
+                        for (int ring = 1; ring < curvatureSphereRings; ++ring) {
+                            const double latitude =
+                                3.14159265358979323846 * ring /
+                                curvatureSphereRings;
+                            for (int segment = 0;
+                                 segment < curvatureSphereSegments; ++segment) {
+                                const double longitude =
+                                    2.0 * 3.14159265358979323846 * segment /
+                                    curvatureSphereSegments;
+                                curvatureSphereObject.shape.polygonMesh
+                                    .vertices.append({
+                                        std::sin(latitude) *
+                                            std::cos(longitude),
+                                        std::sin(latitude) *
+                                            std::sin(longitude),
+                                        std::cos(latitude)});
+                            }
+                        }
+                        const int sphereBottomIndex =
+                            curvatureSphereObject.shape.polygonMesh
+                                .vertices.size();
+                        curvatureSphereObject.shape.polygonMesh.vertices
+                            .append({0.0, 0.0, -1.0});
+                        for (int segment = 0;
+                             segment < curvatureSphereSegments; ++segment) {
+                            const int nextSegment =
+                                (segment + 1) % curvatureSphereSegments;
+                            curvatureSphereObject.shape.polygonMesh.faces
+                                .append({0, 1 + segment,
+                                         1 + nextSegment});
+                        }
+                        for (int ring = 0; ring < curvatureSphereRings - 2;
+                             ++ring) {
+                            const int upper = 1 +
+                                ring * curvatureSphereSegments;
+                            const int lower = upper +
+                                curvatureSphereSegments;
+                            for (int segment = 0;
+                                 segment < curvatureSphereSegments; ++segment) {
+                                const int nextSegment =
+                                    (segment + 1) % curvatureSphereSegments;
+                                curvatureSphereObject.shape.polygonMesh.faces
+                                    .append({upper + segment,
+                                             lower + segment,
+                                             lower + nextSegment,
+                                             upper + nextSegment});
+                            }
+                        }
+                        const int lastRing = 1 +
+                            (curvatureSphereRings - 2) *
+                                curvatureSphereSegments;
+                        for (int segment = 0;
+                             segment < curvatureSphereSegments; ++segment) {
+                            const int nextSegment =
+                                (segment + 1) % curvatureSphereSegments;
+                            curvatureSphereObject.shape.polygonMesh.faces
+                                .append({lastRing + segment,
+                                         sphereBottomIndex,
+                                         lastRing + nextSegment});
+                        }
+                        curvatureSphereObject.shape.polygonMesh
+                            .faceMaterialIndices = QVector<int>(
+                                curvatureSphereObject.shape.polygonMesh.faces
+                                    .size(), 0);
+                        curvatureSphereObject.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                buildViewportDepthGeometry(
+                                    curvatureSphereObject.shape));
+                        ViewportShadingSettings curvatureBaselineSettings =
+                            rawFaceShading;
+                        curvatureBaselineSettings.outline = false;
+                        curvatureBaselineSettings.shadows = false;
+                        curvatureBaselineSettings.cavity = false;
+                        ViewportShadingSettings curvatureSettings =
+                            curvatureBaselineSettings;
+                        curvatureSettings.cavity = true;
+                        curvatureSettings.cavityType =
+                            ViewportCavityType::Screen;
+                        curvatureSettings.curvatureRidgeFactor = 1.0;
+                        curvatureSettings.curvatureValleyFactor = 1.0;
+                        QImage curvatureBaseline;
+                        QImage curvatureEffect;
+                        const bool directoryReady =
+                            QDir().mkpath(gpuCurvatureCaptureDirectory);
+                        const bool curvatureBaselineRendered =
+                            directoryReady && renderCoordinatedScene(
+                                curvatureBaselineSettings,
+                                QByteArrayLiteral("gpu-curvature-baseline"),
+                                &curvatureBaseline,
+                                &curvatureSphereObject) &&
+                            curvatureBaseline.save(QDir(
+                                gpuCurvatureCaptureDirectory).filePath(
+                                    QStringLiteral("curvature-baseline.png")));
+                        const bool curvatureEffectRendered =
+                            directoryReady && renderCoordinatedScene(
+                                curvatureSettings,
+                                QByteArrayLiteral("gpu-curvature-effect"),
+                                &curvatureEffect,
+                                &curvatureSphereObject) &&
+                            curvatureEffect.save(QDir(
+                                gpuCurvatureCaptureDirectory).filePath(
+                                    QStringLiteral("curvature-effect.png")));
+                        int curvatureChangedPixels = 0;
+                        if (curvatureBaselineRendered &&
+                            curvatureEffectRendered) {
+                            for (int y = 0; y < glSize.height(); ++y) {
+                                for (int x = 0; x < glSize.width(); ++x) {
+                                    const QColor baseline =
+                                        curvatureBaseline.pixelColor(x, y);
+                                    const QColor effect =
+                                        curvatureEffect.pixelColor(x, y);
+                                    curvatureChangedPixels += std::max({
+                                        std::abs(baseline.red() - effect.red()),
+                                        std::abs(baseline.green() - effect.green()),
+                                        std::abs(baseline.blue() - effect.blue())}) > 1;
+                                }
+                            }
+                        }
+                        passed &= check(
+                            curvatureBaselineRendered &&
+                                curvatureEffectRendered &&
+                                curvatureChangedPixels > 0,
+                            "GPU Workbench curvature capture must render baseline and curvature-only effect output");
+                    }
                     const QString qpainterDofCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_QPAINTER_DOF_CAPTURE");
                     if (!qpainterDofCapturePath.isEmpty()) {

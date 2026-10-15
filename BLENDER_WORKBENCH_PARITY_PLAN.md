@@ -600,8 +600,31 @@ in ordinary free views or orthographic views is superseded by this correction.
   normalized texture coordinates, matching Blender 5.2.2's curvature shader.
   Previously classiCAD rounded the UI scale to an integer texel, which
   quantized fractional device-pixel ratios. Curvature controls and cavity
-  sample scheduling are unchanged. The C++ build passes; GPU image comparison
-  remains pending.
+  sample scheduling are unchanged. A matched curvature-only visual capture now
+  uses identical 32-segment, 16-ring faceted spheres at 640×480, orthographic
+  scale 5, direction `(4, -6, 4)`, AA Off, zero dither, and explicit ridge and
+  valley factors of 1.0. The first flat-cube fixture produced no measurable
+  Blender curvature signal, so the sphere fixture replaces it. At a 2/255
+  effect threshold, Blender and classiCAD change 12,083 and 12,081 pixels
+  (118 XOR; IoU 0.990281); at 3/255 they change 11,552 and 11,515 pixels
+  (209 XOR; IoU 0.982042). Mean effect magnitudes are 10.4016 and
+  10.3890/255 at threshold 2. On the effect-mask union, signed RGB-delta MAE
+  is 0.23927/255, p95 1/255, and maximum 16/255; full-frame delta MAE is
+  0.00962/255. This confirms the curvature-only response for this faceted
+  sphere and view. Smooth shading, fractional DPR/UI scale, other meshes, and
+  broader normal/raster cases remain open. Blender's pinned curvature shader
+  uses the same fractional `ui_scale / viewport_size` offsets and separate
+  curvature ridge/valley controls in
+  [`workbench_curvature.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_curvature.bsl.hh#L9-L50).
+  The offscreen GPU contract writes baseline/effect captures when
+  `CLASSICAD_VIEWPORT_GPU_CURVATURE_CAPTURE_DIR` is set; Blender uses
+  `tests/workbench_cube_reference.py --scene CURVATURE_SPHERE --effect
+  BASELINE|CURVATURE --match-classicad-ortho --view-direction 4 -6 4
+  --ortho-scale 5 --aa OFF --zero-dither`. Compare with
+  `tests/workbench_effect_delta_compare.py` at thresholds 2 and 3. Validation:
+  `cmake --build build -j4` passed with the 317-file dependency audit, the
+  capture-enabled offscreen `viewport_render_contracts` test passed (1/1), and
+  both Blender captures reported 5.2.2 LTS.
 
 ### Offscreen render precision improvement and remaining float gap (2026-10-12)
 

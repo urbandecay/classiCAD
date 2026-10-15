@@ -23,6 +23,7 @@ def arguments():
         "--scene",
         choices=(
             "CUBE",
+            "CURVATURE_SPHERE",
             "MATERIAL_SLOTS",
             "FOUR_MATERIAL_SLOTS",
             "FIVE_MATERIAL_SLOTS",
@@ -109,7 +110,7 @@ def arguments():
     )
     parser.add_argument(
         "--effect",
-        choices=("BASELINE", "SHADOWS", "CAVITY", "OUTLINE",
+        choices=("BASELINE", "SHADOWS", "CAVITY", "CURVATURE", "OUTLINE",
                  "OUTLINE_CAVITY"),
         default="BASELINE",
     )
@@ -558,6 +559,54 @@ def main():
         for polygon, slot_index in zip(grid.data.polygons,
                                        range(material_count)):
             polygon.material_index = slot_index
+    elif args.scene == "CURVATURE_SPHERE":
+        segments = 32
+        rings = 16
+        vertices = [(0.0, 0.0, 1.0)]
+        for ring in range(1, rings):
+            latitude = math.pi * ring / rings
+            for segment in range(segments):
+                longitude = 2.0 * math.pi * segment / segments
+                vertices.append((
+                    math.sin(latitude) * math.cos(longitude),
+                    math.sin(latitude) * math.sin(longitude),
+                    math.cos(latitude),
+                ))
+        bottom_index = len(vertices)
+        vertices.append((0.0, 0.0, -1.0))
+        faces = []
+        first_ring = 1
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            faces.append((
+                0,
+                first_ring + segment,
+                first_ring + next_segment,
+            ))
+        for ring in range(rings - 2):
+            upper = 1 + ring * segments
+            lower = upper + segments
+            for segment in range(segments):
+                next_segment = (segment + 1) % segments
+                faces.append((
+                    upper + segment,
+                    lower + segment,
+                    lower + next_segment,
+                    upper + next_segment,
+                ))
+        last_ring = 1 + (rings - 2) * segments
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            faces.append((
+                last_ring + segment,
+                bottom_index,
+                last_ring + next_segment,
+            ))
+        mesh = bpy.data.meshes.new("CurvatureSphereMesh")
+        mesh.from_pydata(vertices, (), faces)
+        mesh.update()
+        sphere = bpy.data.objects.new("CurvatureSphere", mesh)
+        bpy.context.collection.objects.link(sphere)
     elif args.scene in ("CUBE", "MATERIAL_SLOTS"):
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object
@@ -1003,9 +1052,16 @@ def main():
     shading.shadow_intensity = 0.5
     scene.display.shadow_shift = args.shadow_shift
     scene.display.shadow_focus = args.shadow_focus
-    shading.show_cavity = args.effect in ("CAVITY", "OUTLINE_CAVITY")
+    shading.show_cavity = args.effect in (
+        "CAVITY", "CURVATURE", "OUTLINE_CAVITY"
+    )
     if shading.show_cavity:
-        shading.cavity_type = "WORLD"
+        shading.cavity_type = (
+            "SCREEN" if args.effect == "CURVATURE" else "WORLD"
+        )
+    if args.effect == "CURVATURE":
+        shading.curvature_ridge_factor = 1.0
+        shading.curvature_valley_factor = 1.0
     shading.cavity_ridge_factor = 1.0
     shading.cavity_valley_factor = 1.0
     scene.display.matcap_ssao_samples = 16

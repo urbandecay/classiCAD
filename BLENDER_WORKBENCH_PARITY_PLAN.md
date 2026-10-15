@@ -1198,9 +1198,11 @@ in ordinary free views or orthographic views is superseded by this correction.
   transparent-depth pass does not write normals, and front opaque geometry
   owns its normal/material attachments.
 - In no-shared-target or target-allocation fallback cases, transparent ranges
-  retain the existing sorted/regular OIT behavior. The QPainter fallback has
-  no separate in-front surface domain. GPU pixel comparison remains pending;
-  these paths are not claimed as Blender parity.
+  retain the existing sorted/regular OIT behavior. The direct QPainter painter
+  fallback has no separate in-front surface domain; its bounded surface
+  compositor does keep regular and in-front domains separate. GPU pixel
+  comparison remains pending; these fallback paths are not claimed as Blender
+  parity.
 - Named pass reporting now includes front opaque color completion, and the
   offscreen Workbench result forwards populated scene attachments to the AA
   validity record, matching the interactive viewport without changing image
@@ -1442,12 +1444,12 @@ images and image tint remain unsupported. Quad sizing and offset follow Blender 
   applies to in-front transparency. This follows Blender's shader structure;
   no matched image comparison has been run for the change.
 
-**Transparency-domain plan correction (2026-10-14):** The QPainter Solid
+**Transparency-domain plan correction (2026-10-15):** The QPainter Solid
 compositor already keeps regular and `showInFront` opaque/transparent domains
 separate in its weighted and sorted paths, and existing contracts exercise
-their ordering. The source-comparison row's older statement that QPainter has
-no separate in-front domain is stale; the remaining gap is the no-shared-target
-GPU fallback and broader visual comparisons.
+their ordering. Only the direct painter fallback used when the bounded
+compositor is unavailable lacks separate in-front domains. The no-shared-target
+GPU fallback and broader visual comparisons remain open.
 
 ### Remaining parity gaps
 
@@ -8228,24 +8230,24 @@ resolve remain open.
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 
 - The direct QPainter picture fallback uses retained scene depth when available.
-  Default images are masked where a nearer surface is present, Back images are
-  masked wherever the retained scene has geometry, and Front images bypass the
-  mask. In the bounded deferred overlay route, Back and Front images bypass
-  scene-depth masking, matching Blender's final color-only output target. The
-  original image alpha and filtering are preserved. The bounded
-  raster mask is skipped above 16 million depth pixels or when depth is
+  Default images are masked where a nearer surface is present; Back and Front
+  images bypass the mask, matching Blender's final color-only output target.
+  The bounded deferred overlay route also draws Back and Front without
+  scene-depth masking. The original image alpha and filtering are preserved.
+  The bounded raster mask is skipped above 16 million depth pixels or when depth is
   unavailable; retained transparent surfaces are treated as occluding, and
   failed picture-texture previews still use the unmasked draw path. C++ build
   passed; matched image comparison remains open.
 
 ### QPainter Back Image blending with transparent surfaces (2026-10-15)
 
-- When the bounded QPainter surface compositor is active, ordinary Back
-  images are now drawn in a separate overlay after scene effects, matching
-  Blender's final overlay output pass. This target has no scene-depth
-  attachment, so the Back images blend over scene colors without an extra
-  opaque-depth mask. The selected image frame is drawn with its image.
-  Deferred image work stays within a 16-million-target-pixel budget. Blender's
+- Back images use Blender's late color-only overlay output pass, so they draw
+  over the scene without an opaque-depth mask. QPainter's bounded surface
+  compositor already draws them in a separate overlay after scene effects.
+  When that compositor cannot run, QPainter now keeps Back and Front images
+  in a far-to-near deferred overlay when the existing image-work budget allows;
+  otherwise the direct painter path can still draw them inline in scene order.
+  The selected image frame is drawn with its image. Blender's
   Back-image pass uses premultiplied-alpha blending with depth LEQUAL, while
   the final output framebuffer has no depth attachment; see pinned
   [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh)
@@ -8255,7 +8257,8 @@ resolve remain open.
   while Blender composites its scene-linear image sample before final display
   conversion. Semi-transparent image pixels can therefore differ under AgX or
   custom transforms. Transparent viewport film remains unsupported; the
-  failed-renderer fallback and matched image comparison remain open.
+  native-GPU renderer-failure fallback and matched image comparison remain
+  open. C++ build passed.
 
 ### QPainter curvature independent of World cavity taps (2026-10-15)
 
@@ -8670,11 +8673,13 @@ resolve remain open.
   Workbench view transform. Default images keep scene-depth masking; Back and
   Front bypass it because Blender composites them in a depthless color-only
   target. Direct QPainter fallback scenes still use encoded-space blending
-  and the retained-depth approximation described above when the bounded
-  deferred path is unavailable. If scene-linear image allocation or
-  conversion fails, QPainter switches that draw back to its encoded-image path
-  instead of treating source bytes as linear color. Front-depth and object-level In Front images
-  bypass scene depth, matching Blender's no-depth image pass. See Blender's image shader,
+  for ordinary direct draws. Back and Front images use a late, depthless
+  overlay when their bounded deferral is available; otherwise their inline
+  order remains scene-dependent. If scene-linear image allocation or conversion
+  fails, QPainter switches that draw back to its encoded-image path instead of
+  treating source bytes as linear color. Front-depth and object-level In Front
+  images bypass scene depth, matching Blender's no-depth image pass.
+  See Blender's image shader,
   [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1121-L1145), and [`gpu_shader_image_overlays_merge_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/shaders/gpu_shader_image_overlays_merge_frag.glsl). C++ build and matched Image Empty comparisons remain open.
 
 ### QPainter Image Empty fractional mip blend (2026-10-15)

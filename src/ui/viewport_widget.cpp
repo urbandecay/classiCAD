@@ -9615,6 +9615,30 @@ protected:
                     for (quint64 objectId : deferredPictureCandidates) {
                         rasterDeferredPictureObjectIds.insert(objectId);
                     }
+                } else {
+                    // Back and Front Image Empties belong to Blender's final
+                    // overlay output pass even when the bounded surface
+                    // compositor cannot run. Keep their far-to-near ordering
+                    // from the deferred list, then draw them after the direct
+                    // raster scene path below.
+                    rasterDeferredPictures.erase(
+                        std::remove_if(
+                            rasterDeferredPictures.begin(),
+                            rasterDeferredPictures.end(),
+                            [](const ViewportRenderObject *object) {
+                                return object == nullptr ||
+                                    (object->shape.pictureImageDepth ==
+                                         PictureImageDepth::Default &&
+                                     !object->showInFront);
+                            }),
+                        rasterDeferredPictures.end());
+                    for (const ViewportRenderObject *object :
+                         rasterDeferredPictures) {
+                        if (object != nullptr) {
+                            rasterDeferredPictureObjectIds.insert(
+                                object->objectId.value());
+                        }
+                    }
                 }
                 const bool separateWorkbenchEffects =
                     (renderShadingSettings.outline ||
@@ -9634,6 +9658,76 @@ protected:
                     rasterScenePainter.setRenderHint(
                         QPainter::Antialiasing, viewportAaMode_ != 0);
                     rasterWorkbenchEffectsLayered = true;
+                }
+            }
+        }
+        if (nativeRenderer == nullptr && rasterDeferredPictures.isEmpty()) {
+            QVector<const ViewportRenderObject *> latePictureCandidates;
+            for (const ViewportRenderObject &object : sceneDrawObjects) {
+                if (object.shape.geometryType != GeometryType::Picture ||
+                    object.shape.pictureImage.isNull() ||
+                    (object.shape.pictureImageDepth ==
+                         PictureImageDepth::Default &&
+                     !object.showInFront)) {
+                    continue;
+                }
+                latePictureCandidates.append(&object);
+            }
+            const qint64 pictureTargetPixels =
+                qint64(committedSceneLayer.width()) *
+                committedSceneLayer.height();
+            constexpr qint64 maximumDeferredPictureWorkPixels = 16'000'000;
+            if (!latePictureCandidates.isEmpty() && pictureTargetPixels > 0 &&
+                pictureTargetPixels <= maximumDeferredPictureWorkPixels /
+                                           latePictureCandidates.size()) {
+                const Point3D cameraPosition =
+                    viewportTransform_.cameraPosition(size());
+                const Point3D viewDirection = viewportTransform_.viewDirection();
+                QVector<QPair<qreal, const ViewportRenderObject *>>
+                    depthSortedPictures;
+                depthSortedPictures.reserve(latePictureCandidates.size());
+                for (const ViewportRenderObject *object :
+                     latePictureCandidates) {
+                    qreal sortDepth =
+                        std::numeric_limits<qreal>::infinity();
+                    if (object != nullptr) {
+                        const QVector<QPointF> corners =
+                            pictureFrameCorners(object->shape);
+                        if (corners.size() == 4) {
+                            QPointF localCenter;
+                            for (const QPointF &corner : corners) {
+                                localCenter += corner * 0.25;
+                            }
+                            const Point3D worldCenter =
+                                workPlaneFramePointToWorld(
+                                    localCenter,
+                                    shapeWorkPlaneFrame(object->shape));
+                            sortDepth = -(
+                                (cameraPosition.x - worldCenter.x) *
+                                    viewDirection.x +
+                                (cameraPosition.y - worldCenter.y) *
+                                    viewDirection.y +
+                                (cameraPosition.z - worldCenter.z) *
+                                    viewDirection.z);
+                            if (!std::isfinite(sortDepth)) {
+                                sortDepth =
+                                    std::numeric_limits<qreal>::infinity();
+                            }
+                        }
+                    }
+                    depthSortedPictures.append(qMakePair(sortDepth, object));
+                }
+                std::stable_sort(
+                    depthSortedPictures.begin(), depthSortedPictures.end(),
+                    [](const auto &left, const auto &right) {
+                        return left.first < right.first;
+                    });
+                for (const auto &entry : depthSortedPictures) {
+                    rasterDeferredPictures.append(entry.second);
+                    if (entry.second != nullptr) {
+                        rasterDeferredPictureObjectIds.insert(
+                            entry.second->objectId.value());
+                    }
                 }
             }
         }
@@ -13161,8 +13255,7 @@ protected:
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
-            if (rasterSurfaceBatchRendered &&
-                !rasterDeferredPictures.isEmpty()) {
+            if (!rasterDeferredPictures.isEmpty()) {
                 QImage displayOutputLayer(
                     committedSceneLayer.size(),
                     QImage::Format_ARGB32_Premultiplied);

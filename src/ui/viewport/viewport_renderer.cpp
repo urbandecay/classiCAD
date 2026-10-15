@@ -3603,16 +3603,15 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                     pixel[3] = 1.0f;
                                 }
                             }
-                            if (canUseSceneDepthRaster) {
+                            if (canUseSceneDepthRaster &&
+                                shape.pictureImageDepth ==
+                                    PictureImageDepth::Default) {
                                 const int depthIndex =
                                     y * opaqueSceneDepthSize.width() + x;
                                 const float sceneDepth =
                                     (*opaqueSceneDepth)[depthIndex];
                                 bool visible = !std::isfinite(sceneDepth);
-                                if (shape.pictureImageDepth ==
-                                    PictureImageDepth::Back) {
-                                    visible = !std::isfinite(sceneDepth);
-                                } else if (std::isfinite(sceneDepth)) {
+                                if (std::isfinite(sceneDepth)) {
                                     const qreal u = source.x() /
                                         shape.pictureImage.width();
                                     const qreal v = source.y() /

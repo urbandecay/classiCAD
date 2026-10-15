@@ -5358,6 +5358,33 @@ edge comparison remains open.
   `viewport_render_contracts` runs; the specular-off run passed (1/1). This
   comparison-only update made no C++ changes and required no rebuild.
 
+### GPU `check_normal+y` MatCap with specular enabled (2026-10-14)
+
+- Captured the GPU production path's `check_normal+y` MatCap with specular
+  enabled, Material color, AA Off, and the matched 640×480 orthographic cube.
+  Blender 5.2.2 used the same preset, view, world color, and enabled specular
+  layer. This fills the specular-on cell alongside the existing specular-off
+  result for this preset.
+- The display PNG foreground masks contain 111,256 Blender pixels and 111,480
+  classiCAD pixels (224 XOR; IoU 0.997991). Common-foreground display channel
+  MAE is 0.146/255 with p95 0; silhouette-band MAE is 0.389/255 versus
+  0.133/255 in the reference interior. The scene-linear full-frame channel
+  MAEs (blue, green, red) are `(0.000547, 0.000122, 0.000505)`. Edge coverage
+  remains the main measured difference.
+- This verifies one MatCap preset, view, mesh, and specular setting; other
+  presets, orientations, geometry, and AA modes remain open. Blender's
+  two-layer diffuse/specular MatCap upload is pinned in
+  [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L21-L49),
+  specular sampling/toggle in
+  [`workbench_matcap.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_matcap.bsl.hh#L27-L60),
+  and the additive composite in
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L74-L86).
+- Validation: Blender reported 5.2.2 LTS; the offscreen
+  `viewport_render_contracts` test passed (1/1); and
+  `workbench_image_compare.py` plus `workbench_pfm_compare.py` completed for
+  the matched GPU and Blender captures. This comparison-only update made no
+  C++ changes and required no rebuild.
+
 ### Matched Studio color-source captures (2026-10-14)
 
 - Extended the offscreen lighting capture contract to compare Studio Default,

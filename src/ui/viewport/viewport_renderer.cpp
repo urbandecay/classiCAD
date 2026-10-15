@@ -2944,7 +2944,23 @@ void ViewportRenderer::drawShape(QPainter &painter,
                  triangle.useWorkbenchColor)) {
                 drawWorkbenchTriangle(triangle);
             } else {
-                painter.setBrush(triangle.color);
+                QColor fallbackColor = triangle.color;
+                if (triangle.useWorkbenchColor) {
+                    const QVector3D displayColor =
+                        workbenchSceneLinearToDisplaySrgb(
+                            triangle.sceneLinearColor,
+                            shadingSettings_.colorTransform,
+                            shadingSettings_.colorExposure,
+                            shadingSettings_.colorGamma,
+                            shadingSettings_.colorLutData,
+                            shadingSettings_.colorLutMetadata);
+                    fallbackColor = QColor::fromRgbF(
+                        std::clamp(qreal(displayColor.x()), 0.0, 1.0),
+                        std::clamp(qreal(displayColor.y()), 0.0, 1.0),
+                        std::clamp(qreal(displayColor.z()), 0.0, 1.0),
+                        triangle.color.alphaF());
+                }
+                painter.setBrush(fallbackColor);
                 painter.drawPolygon(triangle.points);
             }
         }

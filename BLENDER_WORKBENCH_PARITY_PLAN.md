@@ -8514,3 +8514,12 @@ resolve remain open.
   and sorts `PassSortable` keys ascending in
   [`draw_pass.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_pass.hh).
   Build passed; no matched overlapping-image comparison has been run.
+
+### QPainter oversized-mesh color fallback (2026-10-15)
+
+- The rare raw-polygon fallback now runs Workbench scene-linear face colors
+  through the selected Standard, AgX, PBR Neutral, Filmic, or imported LUT
+  display transform before drawing. It preserves the existing flat face
+  shading and alpha. Random and Custom colors reuse the scene-linear values
+  already prepared for the normal Workbench triangle path. Build passed;
+  matched Blender image comparison remains open.

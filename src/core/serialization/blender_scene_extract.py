@@ -1360,9 +1360,9 @@ def unsupported_object_record(obj, scene, depsgraph=None):
     elif obj.type == "SURFACE":
         record["reason"] = "surface has no supported NURBS patch"
     elif obj.type == "FONT":
-        record["reason"] = "FONT objects require evaluated mode for mesh conversion; source text is not represented"
+        record["reason"] = "FONT objects require evaluated glyph conversion; source text is not represented"
     elif obj.type == "META":
-        record["reason"] = "METABALL objects require evaluated mode for mesh conversion; original metaball data is not represented"
+        record["reason"] = "METABALL objects require evaluated surface conversion; original metaball data is not represented"
     elif obj.type == "VOLUME":
         record["reason"] = "volume has no supported single-channel FLOAT grid"
     else:
@@ -1955,8 +1955,9 @@ def extract_scene(input_path, mode):
                     # Text has no original mesh representation to preserve.
                     # Import its currently visible glyphs in either mesh mode
                     # so choosing original meshes does not make text vanish.
+                    evaluated_depsgraph = depsgraph or depsgraph_for_scene(scene)
                     item = extract_mesh_object(
-                        obj, scene, "evaluated", depsgraph, output["materials"],
+                        obj, scene, "evaluated", evaluated_depsgraph, output["materials"],
                         output["unsupported_features"])
                     item["object_type"] = "MESH"
                     item["source_object_type"] = "FONT"
@@ -1987,8 +1988,9 @@ def extract_scene(input_path, mode):
                     # Metaballs have no original polygon mesh to preserve.
                     # Always import their current evaluated surface so an
                     # original-mesh choice does not make visible geometry vanish.
+                    evaluated_depsgraph = depsgraph or depsgraph_for_scene(scene)
                     item = extract_mesh_object(
-                        obj, scene, "evaluated", depsgraph, output["materials"],
+                        obj, scene, "evaluated", evaluated_depsgraph, output["materials"],
                         output["unsupported_features"])
                     item["object_type"] = "MESH"
                     item["source_object_type"] = "META"

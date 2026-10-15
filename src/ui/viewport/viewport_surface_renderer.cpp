@@ -4404,6 +4404,10 @@ bool ViewportSurfaceRenderer::renderShadowMap(
                       std::numeric_limits<float>::lowest());
     bool hasVertex = false;
     for (const DrawRange &range : ranges_) {
+        if (range.count <= 0 ||
+            (fallbackOnly && range.shadowVolumeSupported)) {
+            continue;
+        }
         const QVector3D offset(static_cast<float>(range.offset.x),
                                static_cast<float>(range.offset.y),
                                static_cast<float>(range.offset.z));

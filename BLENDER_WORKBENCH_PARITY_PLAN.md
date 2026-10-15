@@ -5701,6 +5701,19 @@ resolve remain open.
   audit, and offscreen `viewport_render_contracts` passed with the direct
   attachment readback enabled.
 
+### GPU fallback shadow-map bounds (2026-10-15)
+
+- When the GPU light-depth map runs in fallback-only mode, its orthographic
+  bounds now include only ranges that the map will draw. Previously, supported
+  shadow-volume casters could expand those bounds even though the fallback map
+  skipped them, reducing the map resolution available to unsupported casters.
+  The bounds pass now uses the same range eligibility filter as the draw pass.
+- This does not change the full-scene map used when the shadow-volume pass is
+  unavailable. The expected improvement is limited to mixed scenes where the
+  remaining fallback casters occupy less space than the volume-supported
+  geometry; a matched GPU capture of that case has not been run.
+- Validation: `cmake --build build -j4` passed. No image comparison was run.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

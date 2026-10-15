@@ -5083,6 +5083,38 @@ resolve remain open.
   audit; offscreen `viewport_render_contracts` and
   `workbench_raster_fragment_contracts` passed (2/2). No GUI was launched.
 
+### Matched Blender volume ray-march fixture (2026-10-15)
+
+- Added `tests/workbench_volume_reference.py`, a Blender 5.2.2-only background
+  reference that creates and imports a native single-grid FLOAT VDB. Its eight
+  active voxels occupy `[-1, 0]` on each axis and have distinct density values;
+  Workbench uses Flat lighting, LINEAR interpolation, Standard color
+  management, AA Off, and a 640×480 orthographic camera. The script checks the
+  Blender version and the generated VDB bounds before rendering.
+- Added an opt-in QPainter capture controlled by
+  `CLASSICAD_VIEWPORT_QPAINTER_VOLUME_CAPTURE` to
+  `viewport_render_contracts`. It uses the same sparse values, a +0.5
+  grid-to-object translation, matching object color, background, and framing.
+  This capture is diagnostic and does not run or write files by default.
+- The first paired display PNG comparison has exact foreground coverage
+  (181,476 foreground pixels in each image; IoU 1.0, XOR 0). Across their common
+  foreground, channel MAE is 6.78/255, p95 16/255, and max 22/255. The mask
+  agreement validates the fixture's camera framing and active support; the
+  color residual is still too large to call matched ray-integration parity and
+  is not yet localized to one sampling or density term.
+- Pinned Blender 5.2.2 sources show Workbench uses five texture samples per
+  axis, a Halton-3 sample offset, LINEAR hardware sampling, extinction and
+  scattering integration, and early termination at transmittance 0.01 in
+  [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc#L830-L842)
+  and
+  [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L1556-L1669).
+  Matched volume color acceptance remains open pending attribution of the
+  residual.
+- Validation: `cmake --build build -j4` passed with the 320-source dependency
+  audit; opt-in offscreen `viewport_render_contracts` passed (1/1); Blender
+  5.2.2 generated the reference PNG and VDB; `workbench_image_compare.py`
+  reported the metrics above. No GUI was launched.
+
 ### Matched GPU object-outline comparison (2026-10-14)
 
 - Fresh 640×480 background captures from Blender 5.2.2 and classiCAD use the

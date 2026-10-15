@@ -2659,6 +2659,69 @@ int main(int argc, char *argv[])
                             highRayRed > lowRayRed,
                         "QPainter scalar-volume ray marching integrates bounded scene-linear density and increases opacity with density");
 
+        const QString volumeCapturePath = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_VOLUME_CAPTURE");
+        if (!volumeCapturePath.isEmpty()) {
+            ScalarVolume3D referenceRayVolume;
+            referenceRayVolume.name = QStringLiteral("density");
+            referenceRayVolume.activeBounds = {-1, -1, -1, 0, 0, 0};
+            referenceRayVolume.expandedVoxelCount = 8;
+            referenceRayVolume.denseVoxelCount = 8;
+            referenceRayVolume.renderSpace = QStringLiteral("WORLD");
+            referenceRayVolume.interpolationMethod = QStringLiteral("LINEAR");
+            referenceRayVolume.densityScale = 1.0f;
+            referenceRayVolume.gridToObject[3] = 0.5;
+            referenceRayVolume.gridToObject[7] = 0.5;
+            referenceRayVolume.gridToObject[11] = 0.5;
+            for (int z = -1; z <= 0; ++z) {
+                for (int y = -1; y <= 0; ++y) {
+                    for (int x = -1; x <= 0; ++x) {
+                        const float value = 0.2f +
+                            0.2f * float(x + 1) +
+                            0.3f * float(y + 1) +
+                            0.4f * float(z + 1);
+                        referenceRayVolume.activeRecords.append(
+                            {x, y, z, 1, false, value});
+                    }
+                }
+            }
+            ViewportRenderObject referenceVolumeObject = sliceVolumeObject;
+            referenceVolumeObject.shape.scalarVolume = referenceRayVolume;
+            referenceVolumeObject.displayColorSceneLinear =
+                QVector4D(0.8f, 0.12f, 0.03f, 1.0f);
+            ViewportTransform referenceVolumeCamera = transform;
+            referenceVolumeCamera.setViewPreset(ViewportViewPreset::Top);
+            referenceVolumeCamera.setPerspectiveEnabled(false);
+            referenceVolumeCamera.zoom() = 28.8;
+            ViewportShadingSettings referenceVolumeSettings =
+                volumeSliceSettings;
+            referenceVolumeSettings.lightingMode = ViewportLightingMode::Flat;
+            referenceVolumeSettings.colorMode = ViewportColorMode::Object;
+            referenceVolumeSettings.colorTransform = 1;
+            referenceVolumeSettings.colorExposure = 0.0;
+            referenceVolumeSettings.colorGamma = 1.0;
+            referenceVolumeSettings.colorDitherIntensity = 0.0;
+            referenceVolumeSettings.outline = false;
+            referenceVolumeSettings.shadows = false;
+            referenceVolumeSettings.cavity = false;
+            QImage referenceVolumeImage(
+                size, QImage::Format_ARGB32_Premultiplied);
+            referenceVolumeImage.fill(Qt::transparent);
+            const bool referenceVolumeRendered =
+                compositeRasterWorkbenchSurfaces(
+                    &referenceVolumeImage, noSurfaceObjects,
+                    referenceVolumeCamera, size, 1.0, false, true,
+                    referenceVolumeSettings,
+                    QVector3D(0.05f, 0.05f, 0.05f), drawObject, nullptr, {},
+                    false, {referenceVolumeObject});
+            const bool referenceVolumeSaved =
+                referenceVolumeRendered &&
+                referenceVolumeImage.save(volumeCapturePath);
+            passed &= check(
+                referenceVolumeSaved,
+                "QPainter must write the opt-in matched Blender volume reference capture");
+        }
+
         ScalarVolume3D boundedRayVolume = sliceVolume;
         boundedRayVolume.useSlice = false;
         ViewportRenderObject boundedRayObject = sliceVolumeObject;

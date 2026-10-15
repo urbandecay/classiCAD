@@ -7512,6 +7512,15 @@ resolve remain open.
   leave the regular opaque receiver available. The C++ build passed; no
   matched Blender shadow comparison has been run for this fix.
 
+### QPainter transparent shadow visibility (2026-10-15)
+
+- Transparent QPainter fragments now retain Blender's normal-based shadow
+  lighting response without being darkened by the software caster map.
+  Opaque receivers continue to use the bounded light-depth visibility test.
+  This matches Blender's transparent accumulation path, which has no opaque
+  stencil or shadow-map visibility input. No matched image comparison has
+  been run for this change.
+
 ### Imported Blender mesh triangulation (2026-10-15)
 
 - Blender mesh extraction now carries each evaluated face's loop-triangle

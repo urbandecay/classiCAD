@@ -3505,7 +3505,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         lightDirection.normalize();
         const auto shadowFactorAt = [&](const QVector2D &lightPixel,
                                         float receiverDepth,
-                                        const QVector3D &normal) {
+                                        const QVector3D &normal,
+                                        bool applyCasterOcclusion = true) {
+            if (!applyCasterOcclusion) {
+                // Blender's transparent pass applies the normal-facing
+                // light factor without consulting opaque shadow visibility.
+                return rasterWorkbenchShadowFactor(
+                    normal, lightDirection,
+                    static_cast<float>(settings.shadowIntensity),
+                    static_cast<float>(settings.shadowOffset),
+                    static_cast<float>(settings.shadowFocus), false);
+            }
             // Approximate per-pixel shadow coverage with four receiver
             // locations. Scale the footprint to the light map: it is twice
             // the target size when the memory cap permits, and target-sized
@@ -3599,7 +3609,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const float receiverDepth = QVector3D::dotProduct(
                     position, lightDirection);
                 const float factor = shadowFactorAt(
-                    QVector2D(lightPoint), receiverDepth, normal);
+                    QVector2D(lightPoint), receiverDepth, normal, false);
                 fragment.sceneLinearRgb[0] *= factor;
                 fragment.sceneLinearRgb[1] *= factor;
                 fragment.sceneLinearRgb[2] *= factor;
@@ -3685,7 +3695,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const float transparentFactor = hasTransparentReceiver
                     ? shadowFactorAt(
                           transparentReceiverLightCoordinates[index],
-                          transparentReceiverLightDepth[index], visible.normal)
+                          transparentReceiverLightDepth[index], visible.normal,
+                          false)
                     : 1.0f;
                 const bool perFragmentTransparentChanged =
                     hasPerFragmentShadowResolve &&

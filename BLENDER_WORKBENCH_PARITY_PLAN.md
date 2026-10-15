@@ -8013,10 +8013,20 @@ resolve remain open.
 
 ### Shadow caster texture alpha status correction (2026-10-15)
 
-- This supersedes earlier Stage 2/3 notes that described QPainter shadow
-  casters as using full triangle coverage without image alpha. The GPU stencil
-  and depth-map paths still cast full geometry; QPainter's software depth map
-  now samples per-triangle image/UDIM alpha and skips texels below `0.1`.
+- Blender's shadow pass casts the full triangle geometry without sampling
+  Image Texture alpha. A previous QPainter change incorrectly applied the
+  color pass's `0.1` cutout to its software shadow map; that alpha test has now
+  been removed. GPU stencil, GPU depth-map, and QPainter software shadow paths
+  all cast the full geometry. Texture cutouts remain active in the color and
+  other applicable effect passes.
+
+### Restore Blender shadow caster coverage in QPainter (2026-10-15)
+
+- The CPU light-depth shadow map now rasterizes every in-bounds caster triangle
+  without consulting its active Image Texture alpha, matching Blender's
+  geometry-based shadow pass. The UV/image alpha sampling used by color,
+  outline, and cavity paths is unchanged. C++ build passed; matched shadow
+  comparison remains open.
 
 ### Blender mesh loose-edge overlay visibility (2026-10-15)
 

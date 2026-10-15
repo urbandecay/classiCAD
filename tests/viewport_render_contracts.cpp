@@ -7751,7 +7751,9 @@ int main(int argc, char *argv[])
                         const QVector3D *backgroundSceneLinear = nullptr,
                         const QColor *viewportBackground = nullptr,
                         const QVector<ViewportRenderObject> *sceneOverride =
-                            nullptr) {
+                            nullptr,
+                        QVector<float> *shadowFactorCapture = nullptr,
+                        QVector<quint32> *objectIdCapture = nullptr) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -8043,12 +8045,192 @@ int main(int argc, char *argv[])
                                 }
                             }
                         }
+                        if (result.rendered &&
+                            (shadowFactorCapture != nullptr ||
+                             objectIdCapture != nullptr)) {
+                            const ViewportRenderTargets &targets =
+                                sceneAaRenderer.targets();
+                            if (shadowFactorCapture != nullptr &&
+                                (!targets.isValid(
+                                     ViewportRenderTargets::ShadowMask) ||
+                                 targets.shadowMaskTexture == 0)) {
+                                sceneAaRenderer.finishSceneSample();
+                                return false;
+                            }
+                            if (objectIdCapture != nullptr &&
+                                (!targets.isValid(
+                                     ViewportRenderTargets::ObjectId) ||
+                                 targets.objectIdTexture == 0)) {
+                                sceneAaRenderer.finishSceneSample();
+                                return false;
+                            }
+                            GLint previousActive = GL_TEXTURE0;
+                            GLint previousTexture = 0;
+                            functions.glGetIntegerv(GL_ACTIVE_TEXTURE,
+                                                    &previousActive);
+                            functions.glActiveTexture(GL_TEXTURE0);
+                            functions.glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                                                    &previousTexture);
+                            if (shadowFactorCapture != nullptr) {
+                                shadowFactorCapture->resize(
+                                    glSize.width() * glSize.height());
+                                functions.glBindTexture(
+                                    GL_TEXTURE_2D, targets.shadowMaskTexture);
+                                functions.glGetTexImage(
+                                    GL_TEXTURE_2D, 0, GL_RED, GL_FLOAT,
+                                    shadowFactorCapture->data());
+                            }
+                            if (objectIdCapture != nullptr) {
+                                objectIdCapture->resize(
+                                    glSize.width() * glSize.height());
+                                functions.glBindTexture(
+                                    GL_TEXTURE_2D, targets.objectIdTexture);
+                                functions.glGetTexImage(
+                                    GL_TEXTURE_2D, 0, GL_RED_INTEGER,
+                                    GL_UNSIGNED_INT, objectIdCapture->data());
+                            }
+                            functions.glBindTexture(
+                                GL_TEXTURE_2D,
+                                static_cast<GLuint>(previousTexture));
+                            functions.glActiveTexture(
+                                static_cast<GLenum>(previousActive));
+                        }
                         sceneAaRenderer.finishSceneSample();
                         if (!result.rendered) return false;
                         functions.glFinish();
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    {
+                        ViewportRenderObject shadowFactorReceiver;
+                        shadowFactorReceiver.shape.geometryType =
+                            GeometryType::PolygonMesh;
+                        shadowFactorReceiver.shape.polygonMesh.vertices = {
+                            {-4.0, -4.0, -1.0}, {4.0, -4.0, -1.0},
+                            {4.0, 4.0, -1.0}, {-4.0, 4.0, -1.0}};
+                        shadowFactorReceiver.shape.polygonMesh.faces = {
+                            {0, 1, 2, 3}};
+                        shadowFactorReceiver.shape.polygonMesh
+                            .faceMaterialIndices = {0};
+                        shadowFactorReceiver.objectId =
+                            ObjectId::fromValue(1912);
+                        shadowFactorReceiver.geometryRevision = 1912;
+                        shadowFactorReceiver.displayName =
+                            QStringLiteral("GpuShadowFactorReceiver");
+                        shadowFactorReceiver.displayColorSceneLinear =
+                            QVector4D(0.2f, 0.4f, 0.8f, 1.0f);
+                        shadowFactorReceiver.meshMaterials = {
+                            WorkbenchMaterialData{}};
+                        ViewportRenderObject shadowFactorCaster =
+                            polygonCubeObject;
+                        shadowFactorCaster.objectId =
+                            ObjectId::fromValue(1913);
+                        shadowFactorCaster.geometryRevision = 1913;
+                        shadowFactorCaster.displayName =
+                            QStringLiteral("GpuShadowFactorCaster");
+                        const QVector<ViewportRenderObject> shadowFactorScene = {
+                            shadowFactorReceiver, shadowFactorCaster};
+                        ViewportShadingSettings shadowFactorSettings =
+                            rawFaceShading;
+                        shadowFactorSettings.colorMode =
+                            ViewportColorMode::Object;
+                        shadowFactorSettings.shadows = true;
+                        shadowFactorSettings.shadowIntensity = 0.5;
+                        shadowFactorSettings.shadowOffset = 0.1;
+                        shadowFactorSettings.shadowFocus = 0.0;
+                        QVector<float> shadowFactors;
+                        QVector<quint32> shadowObjectIds;
+                        QImage shadowFactorImage;
+                        const bool factorSceneRendered =
+                            renderCoordinatedScene(
+                                shadowFactorSettings,
+                                QByteArrayLiteral("gpu-shadow-factor-attachment"),
+                                &shadowFactorImage, nullptr, nullptr, nullptr,
+                                QString{}, nullptr, nullptr, nullptr,
+                                &shadowFactorScene, &shadowFactors,
+                                &shadowObjectIds);
+                        bool foundShadowFactorLitReceiver = false;
+                        bool foundShadowFactorShadowedReceiver = false;
+                        bool foundShadowFactorNeutralBackground = false;
+                        const QVector3D shadowWorldDirection(
+                            -shadowFactorSettings.shadowDirection.x(),
+                            shadowFactorSettings.shadowDirection.z(),
+                            -shadowFactorSettings.shadowDirection.y());
+                        const QVector3D normalizedShadowDirection =
+                            shadowWorldDirection.normalized();
+                        const QVector3D viewFacing =
+                            QVector3D(gpuTransform.viewDirection().x,
+                                      gpuTransform.viewDirection().y,
+                                      gpuTransform.viewDirection().z).normalized();
+                        const QVector3D viewUp =
+                            QVector3D(gpuTransform.viewUp().x,
+                                      gpuTransform.viewUp().y,
+                                      gpuTransform.viewUp().z).normalized();
+                        const QVector3D viewRight =
+                            QVector3D::crossProduct(viewUp, viewFacing)
+                                .normalized();
+                        const QVector3D shadowDirectionView(
+                            QVector3D::dotProduct(normalizedShadowDirection,
+                                                  viewRight),
+                            QVector3D::dotProduct(normalizedShadowDirection,
+                                                  viewUp),
+                            QVector3D::dotProduct(normalizedShadowDirection,
+                                                  viewFacing));
+                        const QVector3D receiverNormalView(
+                            viewRight.z(), viewUp.z(), viewFacing.z());
+                        const float shift = static_cast<float>(
+                            shadowFactorSettings.shadowOffset);
+                        const float focus = std::clamp(
+                            static_cast<float>(
+                                shadowFactorSettings.shadowFocus),
+                            0.0001f, 0.99999f);
+                        const float focusEdge =
+                            1.0f - focus * (1.0f - shift);
+                        const float lightFactor = -QVector3D::dotProduct(
+                            receiverNormalView, shadowDirectionView);
+                        const float smoothT = std::clamp(
+                            (lightFactor - shift) / (focusEdge - shift),
+                            0.0f, 1.0f);
+                        const float expectedLitFactor =
+                            smoothT * smoothT * (3.0f - 2.0f * smoothT) *
+                                0.5f +
+                            0.5f;
+                        if (factorSceneRendered &&
+                            shadowFactors.size() == glSize.width() *
+                                                        glSize.height() &&
+                            shadowObjectIds.size() == shadowFactors.size()) {
+                            for (int pixel = 0;
+                                 pixel < shadowFactors.size(); ++pixel) {
+                                const quint32 objectId =
+                                    shadowObjectIds[pixel];
+                                const float factor = shadowFactors[pixel];
+                                foundShadowFactorNeutralBackground |=
+                                    objectId == 0 &&
+                                    std::abs(factor - 1.0f) < 0.001f;
+                                if (objectId != quint32(
+                                        1u)) {
+                                    continue;
+                                }
+                                foundShadowFactorLitReceiver |=
+                                    std::abs(factor - expectedLitFactor) <
+                                    0.002f;
+                                foundShadowFactorShadowedReceiver |=
+                                    std::abs(factor - 0.5f) < 0.001f;
+                            }
+                        }
+                        passed &= check(
+                            factorSceneRendered,
+                            "GPU R16F shadow factor attachment render must expose valid shadow-mask and object-ID targets");
+                        passed &= check(
+                            foundShadowFactorLitReceiver,
+                            "GPU R16F shadow factor attachment must contain the Blender-derived lit receiver factor");
+                        passed &= check(
+                            foundShadowFactorShadowedReceiver,
+                            "GPU R16F shadow factor attachment must contain a fully shadowed receiver factor");
+                        passed &= check(
+                            foundShadowFactorNeutralBackground,
+                            "GPU R16F shadow factor attachment must preserve the neutral background value");
+                    }
                     if (importedMaterialGpuObject.has_value() &&
                         !qEnvironmentVariable(
                              "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_CAPTURE_DIR")

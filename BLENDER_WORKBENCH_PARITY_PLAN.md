@@ -5478,6 +5478,26 @@ resolve remain open.
   `workbench_shadow_receiver_compare.py` completed against the scene-linear
   PFM captures in `/tmp/classicad-shadow-receiver`.
 
+### GPU opaque shadow-factor attachment contract (2026-10-15)
+
+- Added an offscreen coordinated-render contract that reads the live opaque
+  `R16F` shadow-mask texture and `R32UI` object-ID texture before the AA target
+  is released. The 640×480 fixture has one flat opaque receiver and one opaque
+  cube caster, with AA Off, shadows enabled, intensity 0.5, shift 0.1, and
+  focus 0.0. It verifies an unshadowed receiver factor against Blender's
+  `smoothstep(shift, focusEdge, -dot(normal, lightDirection))` equation, a
+  fully shadowed receiver factor of 0.5, and neutral factor 1 on uncovered
+  background pixels.
+- The check exercises classiCAD's attachment population and scalar contents;
+  it does not compare the full shadow mask's shape against Blender. The
+  matched image comparison above still records its tested coverage and open
+  limits. Blender's pinned [`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh#L677-L688)
+  defines the factor equation, and pinned [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1629-L1636)
+  defines the focus edge and intensity/add terms.
+- Validation: `cmake --build build -j4` passed with the 318-source dependency
+  audit, and offscreen `viewport_render_contracts` passed with the direct
+  attachment readback enabled.
+
 ### Matched QPainter planar-receiver shadow comparison (2026-10-14)
 
 - Added a controlled 640×480 plane-and-cube scene to the Blender 5.2.2

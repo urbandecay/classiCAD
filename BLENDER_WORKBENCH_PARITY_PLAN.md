@@ -8549,6 +8549,16 @@ resolve remain open.
   payload keeps its existing premultiply-on-import and unpremultiply-on-use
   handling. Matched Image Empty comparisons remain open.
 
+### QPainter Image Empty linear-light filtering (2026-10-15)
+
+- Within the existing 16-million-pixel viewport budget, QPainter now filters
+  Image Empty source pixels as scene-linear values into the viewport raster,
+  then applies the selected display transform to the filtered pixels. Before
+  this change it transformed each source texel to display sRGB before Qt's
+  smooth image resampling, which differs from Blender's shader order. The
+  over-budget fallback retains its previous transformed-source behavior.
+  Matched Blender comparisons remain open.
+
 ### GPU scalar-volume slice bounds (2026-10-15)
 
 - GPU slice opacity now uses the selected axis extent of the transformed

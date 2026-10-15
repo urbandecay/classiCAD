@@ -55,6 +55,7 @@ constexpr qint64 kMaximumPictureProcessPixels = 16'000'000;
 
 QImage pictureImageForPainter(const Shape &picture,
                               bool deferCutoutAlphaThreshold,
+                              bool keepSceneLinear,
                               const ViewportShadingSettings &shadingSettings)
 {
     if (picture.pictureImage.isNull()) return {};
@@ -76,7 +77,11 @@ QImage pictureImageForPainter(const Shape &picture,
     if (pixelCount <= 0 || pixelCount > kMaximumPictureProcessPixels)
         return picture.pictureImage;
 
-    QImage result = picture.pictureImage.convertToFormat(QImage::Format_ARGB32);
+    const QImage sourceImage =
+        picture.pictureImage.convertToFormat(QImage::Format_ARGB32);
+    if (sourceImage.isNull()) return picture.pictureImage;
+    QImage result(sourceImage.size(), keepSceneLinear
+        ? QImage::Format_RGBA64 : QImage::Format_ARGB32);
     if (result.isNull()) return picture.pictureImage;
     const auto decodeSrgb = [](float value) {
         value = std::clamp(value, 0.0f, 1.0f);
@@ -109,9 +114,14 @@ QImage pictureImageForPainter(const Shape &picture,
         return sourceIsLinear ? encoded : decodeSrgb(encoded);
     };
     for (int y = 0; y < result.height(); ++y) {
-        auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));
+        const auto *sourceRow = reinterpret_cast<const QRgb *>(
+            sourceImage.constScanLine(y));
+        auto *row = keepSceneLinear
+            ? reinterpret_cast<QRgba64 *>(result.scanLine(y)) : nullptr;
+        auto *displayRow = keepSceneLinear
+            ? nullptr : reinterpret_cast<QRgb *>(result.scanLine(y));
         for (int x = 0; x < result.width(); ++x) {
-            const QRgb source = row[x];
+            const QRgb source = sourceRow[x];
             const qsizetype pixelOffset =
                 (qsizetype(y) * result.width() + x) * 16;
             const int sourceAlpha = qAlpha(source);
@@ -138,15 +148,26 @@ QImage pictureImageForPainter(const Shape &picture,
                 linearColor.setY(linearColor.y() * tint.y());
                 linearColor.setZ(linearColor.z() * tint.z());
             }
-            const QVector3D displayColor = workbenchSceneLinearToDisplaySrgb(
-                linearColor, shadingSettings.colorTransform,
-                shadingSettings.colorExposure, shadingSettings.colorGamma,
-                shadingSettings.colorLutData,
-                shadingSettings.colorLutMetadata);
-            const int red = qRound(std::clamp(displayColor.x(), 0.0f, 1.0f) * 255.0f);
-            const int green = qRound(std::clamp(displayColor.y(), 0.0f, 1.0f) * 255.0f);
-            const int blue = qRound(std::clamp(displayColor.z(), 0.0f, 1.0f) * 255.0f);
-            row[x] = qRgba(red, green, blue, alpha);
+            if (keepSceneLinear) {
+                const auto to16 = [](float value) {
+                    return quint16(qRound(std::clamp(value, 0.0f, 1.0f) *
+                                          65535.0f));
+                };
+                row[x] = qRgba64(to16(linearColor.x()),
+                                 to16(linearColor.y()),
+                                 to16(linearColor.z()),
+                                 quint16(qRound(alpha * 65535.0 / 255.0)));
+            } else {
+                const QVector3D displayColor = workbenchSceneLinearToDisplaySrgb(
+                    linearColor, shadingSettings.colorTransform,
+                    shadingSettings.colorExposure, shadingSettings.colorGamma,
+                    shadingSettings.colorLutData,
+                    shadingSettings.colorLutMetadata);
+                const int red = qRound(std::clamp(displayColor.x(), 0.0f, 1.0f) * 255.0f);
+                const int green = qRound(std::clamp(displayColor.y(), 0.0f, 1.0f) * 255.0f);
+                const int blue = qRound(std::clamp(displayColor.z(), 0.0f, 1.0f) * 255.0f);
+                displayRow[x] = qRgba(red, green, blue, alpha);
+            }
         }
     }
     return result;
@@ -3279,10 +3300,13 @@ void ViewportRenderer::drawShape(QPainter &painter,
             qint64(opaqueSceneDepthSize.width()) *
                 opaqueSceneDepthSize.height() <= maximumPictureDepthPixels;
         const bool rasterizePicture = imageVisible &&
-            (canUseSceneDepthRaster || canUseViewportCutoutRaster);
+            (canUseSceneDepthRaster || canUseViewportCutoutRaster ||
+             (viewportRasterPixels > 0 &&
+              viewportRasterPixels <= maximumPictureDepthPixels));
         const QImage painterImage = imageVisible
             ? pictureImageForPainter(
                   shape, rasterizePicture && !shape.pictureUseAlphaBlend,
+                  rasterizePicture,
                   shadingSettings_)
             : QImage{};
         if (imageVisible && painterImage.isNull()) return;
@@ -3442,6 +3466,34 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 }
                                 if (!visible) imageRow[x] = 0;
                             }
+                        }
+                    }
+                    for (int y = top; y < bottom; ++y) {
+                        auto *imageRow = reinterpret_cast<QRgb *>(
+                            depthMaskedImage.scanLine(y));
+                        for (int x = left; x < right; ++x) {
+                            const int alpha = qAlpha(imageRow[x]);
+                            if (alpha == 0) continue;
+                            const float inverseAlpha = 255.0f / float(alpha);
+                            const QVector3D linearColor(
+                                float(qRed(imageRow[x])) / 255.0f * inverseAlpha,
+                                float(qGreen(imageRow[x])) / 255.0f * inverseAlpha,
+                                float(qBlue(imageRow[x])) / 255.0f * inverseAlpha);
+                            const QVector3D displayColor =
+                                workbenchSceneLinearToDisplaySrgb(
+                                    linearColor,
+                                    shadingSettings_.colorTransform,
+                                    shadingSettings_.colorExposure,
+                                    shadingSettings_.colorGamma,
+                                    shadingSettings_.colorLutData,
+                                    shadingSettings_.colorLutMetadata);
+                            const int red = qRound(std::clamp(
+                                displayColor.x(), 0.0f, 1.0f) * alpha);
+                            const int green = qRound(std::clamp(
+                                displayColor.y(), 0.0f, 1.0f) * alpha);
+                            const int blue = qRound(std::clamp(
+                                displayColor.z(), 0.0f, 1.0f) * alpha);
+                            imageRow[x] = qRgba(red, green, blue, alpha);
                         }
                     }
                     depthMaskedImage.setDevicePixelRatio(

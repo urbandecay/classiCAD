@@ -714,7 +714,9 @@ def extract_image_empty(obj, scene, packed_payload_budget,
         "picture_image_path": filepath if source_exists else "",
         "picture_image_packed_data_base64": (
             base64.b64encode(packed_data).decode("ascii") if packed_data else ""),
-        "picture_opacity": finite_number(evaluated.color[3]),
+        "picture_color_linear": [finite_number(value) for value in evaluated.color],
+        "picture_use_alpha_blend": bool(getattr(
+            evaluated, "use_empty_image_alpha", False)),
         "empty_image_depth": str(getattr(evaluated, "empty_image_depth", "DEFAULT")),
         "show_empty_image_perspective": bool(
             getattr(evaluated, "show_empty_image_perspective", True)),

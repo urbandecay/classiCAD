@@ -5,17 +5,28 @@
 uniform sampler2D uPicture;
 uniform float uOpacity;
 uniform int uSceneLinearOutput;
+uniform vec4 uColor;
+uniform int uUseAlphaBlend;
 in vec2 vTextureCoordinate;
 out vec4 fragmentColor;
 
 void main()
 {
-    vec4 color = texture(uPicture, vTextureCoordinate);
-    if (uSceneLinearOutput != 0) {
-        vec3 encoded = color.rgb;
-        color.rgb = mix(encoded / 12.92,
-                        pow((encoded + 0.055) / 1.055, vec3(2.4)),
-                        step(vec3(0.04045), encoded));
-    }
-    fragmentColor = vec4(color.rgb, color.a * uOpacity);
+    vec4 texColor = texture(uPicture, vTextureCoordinate);
+    if (uUseAlphaBlend == 0 && texColor.a < 0.05) discard;
+    vec4 color = texColor;
+    vec3 encoded = color.rgb;
+    vec3 linearColor = mix(encoded / 12.92,
+                           pow((encoded + 0.055) / 1.055, vec3(2.4)),
+                           step(vec3(0.04045), encoded));
+    linearColor *= uColor.rgb;
+    color.rgb = uSceneLinearOutput != 0
+        ? linearColor
+        : mix(linearColor * 12.92,
+              1.055 * pow(linearColor, vec3(1.0 / 2.4)) - 0.055,
+              step(vec3(0.0031308), linearColor));
+    color.a *= uColor.a;
+    if (uUseAlphaBlend == 0) color.a = 1.0;
+    fragmentColor = vec4(color.rgb,
+                         color.a * uOpacity);
 }

@@ -2458,7 +2458,10 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     }
     glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
-    glEnable(GL_BLEND);
+    if (picture.pictureUseAlphaBlend || opacity < 1.0f)
+        glEnable(GL_BLEND);
+    else
+        glDisable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -2480,6 +2483,10 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     pictureProgram_.setUniformValue("uOpacity", std::clamp(opacity, 0.0f, 1.0f));
     pictureProgram_.setUniformValue("uSceneLinearOutput",
                                     sceneLinearOutput ? 1 : 0);
+    pictureProgram_.setUniformValue(
+        "uColor", picture.pictureColorSceneLinear);
+    pictureProgram_.setUniformValue("uUseAlphaBlend",
+                                    picture.pictureUseAlphaBlend ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
     pictureProgram_.release();
     pictureVertexBuffer_.release();

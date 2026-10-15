@@ -7813,9 +7813,12 @@ resolve remain open.
   The image quad follows Blender's normalized image aspect, Empty display size,
   object transform, and image offset; readable packed images and external
   files are supported with 32 MiB packed-byte and 16M decoded-pixel bounds.
-  Imported object opacity is applied to image alpha. Projection-specific
-  visibility, image side, depth modes, alpha blending rules, generated or
-  animated images, and image tint remain unsupported. The C++ build passed;
+  Projection-specific visibility, image side, depth modes, alpha blending,
+  and scene-linear object tint are retained. QPainter preprocesses tint and
+  alpha cutouts only up to 16M image pixels; larger native images keep their
+  original appearance in that fallback. Blender image premultiplication,
+  generated or animated images, and matched comparison remain unsupported.
+  The C++ build passed;
   no matched Blender image-empty comparison has been run.
 
 ### Blender metaball visibility in original mesh mode (2026-10-15)
@@ -8093,6 +8096,19 @@ resolve remain open.
   transparent surfaces; direct depth masking still treats retained transparent
   surfaces as opaque, and failed picture-texture previews remain unmasked.
   C++ build passed; matched image comparison remains open.
+
+### Blender Image Empty alpha blending and tint (2026-10-15)
+
+- Imported Image Empties now retain Blender's object RGBA color and
+  `empty_image_use_alpha_blend` setting in native shape data. The GPU shader
+  applies the tint in scene-linear color and reproduces Blender's 0.05 source
+  alpha cutout when alpha blending is off. QPainter applies the tint and
+  cutout for images up to 16M pixels; its blending happens in display space,
+  so AgX/custom-transform results remain approximate. Opaque GPU images still
+  do not write depth; that render-state gap is tracked separately below.
+  Blender's shader behavior is pinned in
+  [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl#L13-L30).
+  C++ build passed; matched comparison remains open.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 

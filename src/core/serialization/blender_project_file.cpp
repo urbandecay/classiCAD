@@ -1899,20 +1899,11 @@ bool parseBlenderPictureItem(
         setError(errorMessage, QStringLiteral("Image Empty image could not be read or exceeds its size limit"));
         return false;
     }
-    const double opacity = item.value(QStringLiteral("picture_opacity")).toDouble(1.0);
-    if (!std::isfinite(opacity) || opacity < 0.0 || opacity > 1.0) {
-        setError(errorMessage, QStringLiteral("Image Empty opacity is invalid"));
+    QVector<double> pictureColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("picture_color_linear")), 4,
+                         &pictureColor)) {
+        setError(errorMessage, QStringLiteral("Image Empty color is invalid"));
         return false;
-    }
-    image = image.convertToFormat(QImage::Format_ARGB32);
-    const int opacityByte = std::clamp(qRound(opacity * 255.0), 0, 255);
-    for (int y = 0; y < image.height(); ++y) {
-        auto *row = reinterpret_cast<QRgb *>(image.scanLine(y));
-        for (int x = 0; x < image.width(); ++x) {
-            const QRgb pixel = row[x];
-            row[x] = qRgba(qRed(pixel), qGreen(pixel), qBlue(pixel),
-                           (qAlpha(pixel) * opacityByte + 127) / 255);
-        }
     }
 
     classiCAD::SceneObject result;
@@ -1930,7 +1921,12 @@ bool parseBlenderPictureItem(
             classiCAD::worldPointToWorkPlaneFrame(corner, frame));
     }
     result.geometry.pictureImage = image;
-    result.geometry.pictureImageData = opacity >= 1.0 ? imageBytes : QByteArray{};
+    result.geometry.pictureImageData = imageBytes;
+    result.geometry.pictureColorSceneLinear = QVector4D(
+        float(pictureColor[0]), float(pictureColor[1]),
+        float(pictureColor[2]), float(pictureColor[3]));
+    result.geometry.pictureUseAlphaBlend = item.value(
+        QStringLiteral("picture_use_alpha_blend")).toBool(true);
     result.geometry.pictureShowPerspective = item.value(
         QStringLiteral("show_empty_image_perspective")).toBool(true);
     result.geometry.pictureShowOrthographic = item.value(

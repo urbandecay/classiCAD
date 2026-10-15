@@ -50,6 +50,56 @@ namespace {
 
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
+constexpr qint64 kMaximumPictureProcessPixels = 16'000'000;
+
+QImage pictureImageForPainter(const Shape &picture)
+{
+    if (picture.pictureImage.isNull()) return {};
+    const QVector4D tint = picture.pictureColorSceneLinear;
+    const bool tinted = tint != QVector4D(1.0f, 1.0f, 1.0f, 1.0f);
+    if (!tinted && picture.pictureUseAlphaBlend)
+        return picture.pictureImage;
+    const qint64 pixelCount = qint64(picture.pictureImage.width()) *
+                              picture.pictureImage.height();
+    if (pixelCount <= 0 || pixelCount > kMaximumPictureProcessPixels)
+        return picture.pictureImage;
+
+    QImage result = picture.pictureImage.convertToFormat(QImage::Format_ARGB32);
+    if (result.isNull()) return picture.pictureImage;
+    const auto decodeSrgb = [](float value) {
+        value = std::clamp(value, 0.0f, 1.0f);
+        return value <= 0.04045f
+                   ? value / 12.92f
+                   : std::pow((value + 0.055f) / 1.055f, 2.4f);
+    };
+    const auto encodeSrgb = [](float value) {
+        value = std::clamp(value, 0.0f, 1.0f);
+        return value <= 0.0031308f
+                   ? value * 12.92f
+                   : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+    };
+    for (int y = 0; y < result.height(); ++y) {
+        auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));
+        for (int x = 0; x < result.width(); ++x) {
+            const QRgb source = row[x];
+            const int sourceAlpha = qAlpha(source);
+            const int alpha = picture.pictureUseAlphaBlend
+                ? qRound(sourceAlpha * std::clamp(tint.w(), 0.0f, 1.0f))
+                : sourceAlpha < qRound(0.05 * 255.0) ? 0 : 255;
+            const int red = tinted ? qRound(encodeSrgb(
+                decodeSrgb(float(qRed(source)) / 255.0f) * tint.x()) * 255.0f)
+                                   : qRed(source);
+            const int green = tinted ? qRound(encodeSrgb(
+                decodeSrgb(float(qGreen(source)) / 255.0f) * tint.y()) * 255.0f)
+                                     : qGreen(source);
+            const int blue = tinted ? qRound(encodeSrgb(
+                decodeSrgb(float(qBlue(source)) / 255.0f) * tint.z()) * 255.0f)
+                                    : qBlue(source);
+            row[x] = qRgba(red, green, blue, alpha);
+        }
+    }
+    return result;
+}
 
 qreal workbenchViewDepth(const ViewportTransform &transform,
                          const QSize &viewportSize,
@@ -3121,6 +3171,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             !viewportPictureVisibleInView(shape, transform_, viewportSize)) {
             return;
         }
+        const QImage painterImage = pictureImageForPainter(shape);
+        if (painterImage.isNull()) return;
 
         QPolygonF sourceCorners;
         sourceCorners << QPointF(0.0, 0.0)
@@ -3165,8 +3217,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     imagePainter.setRenderHint(
                         QPainter::SmoothPixmapTransform, true);
                     imagePainter.setTransform(imageToDevice);
-                    imagePainter.drawImage(QPointF(0.0, 0.0),
-                                           shape.pictureImage);
+                    imagePainter.drawImage(QPointF(0.0, 0.0), painterImage);
                     imagePainter.end();
 
                     const Point3D cameraPosition =
@@ -3287,7 +3338,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 }
             } else {
                 painter.setTransform(imageTransform, true);
-                painter.drawImage(QPointF(0.0, 0.0), shape.pictureImage);
+                painter.drawImage(QPointF(0.0, 0.0), painterImage);
             }
             painter.restore();
         }

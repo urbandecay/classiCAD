@@ -14,6 +14,7 @@
 #include <QImage>
 #include <QPointF>
 #include <QVector>
+#include <QVector4D>
 
 namespace classiCAD {
 
@@ -65,6 +66,8 @@ struct Shape {
     bool pictureOnlyAxisAligned = false;
     PictureImageSide pictureImageSide = PictureImageSide::Both;
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
+    QVector4D pictureColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
+    bool pictureUseAlphaBlend = true;
     WorkPlane workPlane = WorkPlane::XY;
     qreal workPlaneOffset = 0.0;
     // When valid, this frame is authoritative for local 2D geometry. An

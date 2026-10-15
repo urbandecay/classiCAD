@@ -838,6 +838,13 @@ QJsonObject shapeToJson(const Shape &shape)
                       ? QStringLiteral("BACK")
                       : QStringLiteral("DEFAULT");
         object.insert(QStringLiteral("pictureImageDepth"), pictureDepth);
+        object.insert(QStringLiteral("pictureColorSceneLinear"),
+                      QJsonArray{shape.pictureColorSceneLinear.x(),
+                                 shape.pictureColorSceneLinear.y(),
+                                 shape.pictureColorSceneLinear.z(),
+                                 shape.pictureColorSceneLinear.w()});
+        object.insert(QStringLiteral("pictureUseAlphaBlend"),
+                      shape.pictureUseAlphaBlend);
         QByteArray encodedImage = shape.pictureImageData;
         if (encodedImage.isEmpty() && !shape.pictureImage.isNull()) {
             QBuffer imageBuffer(&encodedImage);
@@ -997,6 +1004,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     bool pictureOnlyAxisAligned = false;
     PictureImageSide pictureImageSide = PictureImageSide::Both;
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
+    QVector4D pictureColorSceneLinear(1.0f, 1.0f, 1.0f, 1.0f);
+    bool pictureUseAlphaBlend = true;
     if (geometryType == GeometryType::Picture) {
         const auto readBoolean = [&object](const QString &key, bool fallback,
                                            bool *destination) {
@@ -1015,6 +1024,27 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
                          &pictureShowOrthographic) ||
             !readBoolean(QStringLiteral("pictureOnlyAxisAligned"), false,
                          &pictureOnlyAxisAligned)) {
+            return false;
+        }
+        const QJsonValue pictureColorValue =
+            object.value(QStringLiteral("pictureColorSceneLinear"));
+        if (!pictureColorValue.isUndefined()) {
+            if (!pictureColorValue.isArray() ||
+                pictureColorValue.toArray().size() != 4)
+                return false;
+            const QJsonArray pictureColor = pictureColorValue.toArray();
+            for (const QJsonValue &channel : pictureColor) {
+                if (!channel.isDouble() ||
+                    !std::isfinite(channel.toDouble())) return false;
+            }
+            pictureColorSceneLinear = QVector4D(
+                float(pictureColor[0].toDouble()),
+                float(pictureColor[1].toDouble()),
+                float(pictureColor[2].toDouble()),
+                float(pictureColor[3].toDouble()));
+        }
+        if (!readBoolean(QStringLiteral("pictureUseAlphaBlend"), true,
+                         &pictureUseAlphaBlend)) {
             return false;
         }
         const QJsonValue sideValue =
@@ -1319,6 +1349,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureOnlyAxisAligned = pictureOnlyAxisAligned;
     shape->pictureImageSide = pictureImageSide;
     shape->pictureImageDepth = pictureImageDepth;
+    shape->pictureColorSceneLinear = pictureColorSceneLinear;
+    shape->pictureUseAlphaBlend = pictureUseAlphaBlend;
     shape->pictureImageData = geometryType == GeometryType::Picture
                                   ? QByteArray::fromBase64(
                                         object.value(QStringLiteral("pictureImage"))

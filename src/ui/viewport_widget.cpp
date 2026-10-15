@@ -12704,6 +12704,9 @@ protected:
                 const ViewportProjectionClipRange wireProjectionClipRange =
                     viewportProjectionClipRange(viewportTransform_,
                                                  renderFrame.viewportSize);
+                const float meshWireNdcOffsetFactor = static_cast<float>(
+                    viewportBlenderMeshWireNdcOffsetFactor(
+                        viewportTransform_, renderFrame.viewportSize));
                 const QVector<Point3D> &segments =
                     stroke.preparedDepthGeometry->preciseLineVertices;
                 const QVector<QVector4D> &endpointColors =
@@ -12805,6 +12808,27 @@ protected:
                                               (2.0f * nearClip * farClip)
                                         : endpointDepthOffset *
                                               (farClip - nearClip) * 0.5f;
+                                strokeDepth -= linearDepthOffset;
+                            }
+                            if (stroke.blenderMeshWire) {
+                                // Blender's mesh wire shader subtracts half
+                                // the view-dependent NDC factor from clip Z.
+                                // Convert that normalized depth shift back to
+                                // camera depth for the QPainter visibility test.
+                                const float normalizedDepthOffset =
+                                    meshWireNdcOffsetFactor * 0.25f;
+                                const float nearClip = float(
+                                    wireProjectionClipRange.nearPlane);
+                                const float farClip = float(
+                                    wireProjectionClipRange.farPlane);
+                                const float linearDepthOffset =
+                                    viewportTransform_.isPerspectiveEnabled()
+                                        ? normalizedDepthOffset *
+                                              (farClip - nearClip) *
+                                              strokeDepth * strokeDepth /
+                                              (nearClip * farClip)
+                                        : normalizedDepthOffset *
+                                              (farClip - nearClip);
                                 strokeDepth -= linearDepthOffset;
                             }
                             const float tolerance = std::max(

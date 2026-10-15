@@ -1376,6 +1376,8 @@ bool ViewportSceneRenderer::draw(
     }
     const QMatrix4x4 viewProjection =
         viewportViewProjection(transform, viewportSize);
+    const float blenderMeshWireNdcOffsetFactor = static_cast<float>(
+        viewportBlenderMeshWireNdcOffsetFactor(transform, viewportSize));
     QVector<float> patternOffsets = cachedPatternOffsets_;
     for (int index = 0; index < strokes.size(); ++index) {
         if (strokes[index].pointDiameter > 0.0f ||
@@ -1568,6 +1570,9 @@ bool ViewportSceneRenderer::draw(
                 stroke.blenderMeshWire && !smoothOverlayWires ? 1 : 0);
             boundProgram->setUniformValue(
                 "uBlenderMeshWire", stroke.blenderMeshWire ? 1 : 0);
+            boundProgram->setUniformValue(
+                "uBlenderMeshWireNdcOffset",
+                stroke.blenderMeshWire ? blenderMeshWireNdcOffsetFactor : 0.0f);
             boundProgram->setUniformValue(
                 "uCorrectMeshWireDepth",
                 strokeResolveActive && smoothOverlayWires && smoothWire &&

@@ -294,6 +294,51 @@ ViewportProjectionClipRange viewportProjectionClipRange(
     return {range.nearPlane, range.farPlane};
 }
 
+qreal viewportBlenderMeshWireNdcOffsetFactor(
+    const ViewportTransform &transform, const QSize &viewportSize)
+{
+    const ViewportCameraState camera = transform.cameraState();
+    const ViewportProjectionClipRange clipRange =
+        viewportProjectionClipRange(transform, viewportSize);
+    const qreal nearPlane = clipRange.nearPlane;
+    const qreal farPlane = clipRange.farPlane;
+    if (!(nearPlane > 0.0) || !(farPlane > nearPlane)) return 0.0;
+
+    if (camera.perspective) {
+        const qreal projectionZ =
+            -2.0 * farPlane * nearPlane / (farPlane - nearPlane);
+        // GPU_polygon_offset_calc halves its unit distance before applying
+        // the perspective projection's depth dependent coefficient.
+        return projectionZ * -0.00125;
+    }
+
+    qreal viewDistance = camera.gridViewDistance;
+    if (transform.hasRenderCameraProjection() &&
+        viewportSize.width() > 0 && viewportSize.height() > 0) {
+        const ViewportRenderCameraProjection &renderCamera =
+            transform.renderCameraProjection();
+        const qreal pixelAspectX = renderCamera.pixelAspectX;
+        const qreal pixelAspectY = renderCamera.pixelAspectY;
+        const qreal aspectWidth = viewportSize.width() * pixelAspectX;
+        const qreal aspectHeight = viewportSize.height() * pixelAspectY;
+        const bool fitHorizontal =
+            renderCamera.sensorFit == ViewportCameraSensorFit::Horizontal ||
+            (renderCamera.sensorFit == ViewportCameraSensorFit::Auto &&
+             aspectWidth >= aspectHeight);
+        const qreal viewFactor = fitHorizontal
+            ? viewportSize.width() : aspectHeight / pixelAspectX;
+        const qreal halfWidth = viewportSize.width() *
+            (renderCamera.orthographicScale / viewFactor) * 0.5;
+        const qreal halfHeight = viewportSize.height() *
+            (pixelAspectY / pixelAspectX) *
+            (renderCamera.orthographicScale / viewFactor) * 0.5;
+        viewDistance = std::min(halfWidth, halfHeight);
+    }
+    // Blender's orthographic GPU_polygon_offset_calc uses 1e-5 * dist *
+    // viewdist, with dist halved inside the helper.
+    return 0.000005 * viewDistance;
+}
+
 QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
                                    const QSize &viewportSize)
 {

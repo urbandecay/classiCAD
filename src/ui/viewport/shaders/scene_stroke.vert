@@ -10,6 +10,8 @@ uniform mat4 uViewProjection;
 uniform vec3 uWorldOffset;
 uniform vec2 uViewportSize;
 uniform int uApplyBlenderMeshWireOffset;
+uniform int uBlenderMeshWire;
+uniform float uBlenderMeshWireNdcOffset;
 uniform int uLinearDisplayBlend;
 out float vPatternOffsetPixels;
 out vec4 vEndpointColor;
@@ -24,6 +26,11 @@ vec3 srgbToLinear(vec3 color)
 void main()
 {
     gl_Position = uViewProjection * vec4(aWorldPosition + uWorldOffset, 1.0);
+    if (uBlenderMeshWire != 0) {
+        // Blender applies this view-dependent polygon-offset value to mesh
+        // wires with Smooth Wires both enabled and disabled.
+        gl_Position.z -= uBlenderMeshWireNdcOffset * 0.5 * gl_Position.w;
+    }
     if (uApplyBlenderMeshWireOffset != 0) {
         gl_Position.xy += aWireScreenOffset.xy * (1.0 / uViewportSize) *
                           gl_Position.w;

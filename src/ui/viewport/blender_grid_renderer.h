@@ -49,6 +49,10 @@ struct ViewportProjectionClipRange {
 ViewportProjectionClipRange viewportProjectionClipRange(
     const ViewportTransform &transform, const QSize &viewportSize);
 
+// Blender's view-dependent depth offset for its regular mesh-wire overlay.
+qreal viewportBlenderMeshWireNdcOffsetFactor(
+    const ViewportTransform &transform, const QSize &viewportSize);
+
 class BlenderGridRenderer final : protected QOpenGLFunctions_3_3_Core {
 public:
     ~BlenderGridRenderer();

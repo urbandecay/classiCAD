@@ -530,16 +530,19 @@ in ordinary free views or orthographic views is superseded by this correction.
   composites transparent colors upstream. Matched QPainter image comparison
   remains open.
 
-### Blender texture-alpha shadow cutouts in the QPainter fallback (2026-10-15)
+### QPainter texture-alpha shadow review (2026-10-15)
 
-- Software shadow casters now carry the same per-triangle UV/image data as the
-  receiver rasterizer. The light-space shadow-map rasterizer interpolates UVs
-  and skips texels below Blender's `0.1` alpha cutoff, including image and
-  UDIM-backed textures. GPU shadow depth passes already apply that cutoff.
-  C++ build and matched image comparison remain open.
-- Validation: `cmake --build build -j4` passed with the dependency audit;
-  offscreen `viewport_render_contracts` and
-  `workbench_raster_fragment_contracts` passed.
+- Texture alpha remains a color-pass cutout and does not cut holes into
+  Workbench shadow casters. Blender 5.2.2 builds geometry-based shadow volumes
+  without UV or image-alpha sampling in
+  [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh)
+  and
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc).
+  QPainter therefore keeps full-triangle shadow coverage. The GPU stencil,
+  depth-map, and QPainter shadow paths all follow this rule. An earlier entry
+  that said the QPainter shadow rasterizer used texture-alpha cutouts was
+  incorrect and has been superseded. C++ build passed; matched shadow image
+  comparison remains open.
 
 ### QPainter Workbench DOF near/far CoC weighting (2026-10-14)
 

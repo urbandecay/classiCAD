@@ -350,6 +350,20 @@ int main(int argc, char *argv[])
                         orthographicFarStep == orthographicNearStep,
                     "QPainter cavity SSAO footprint must use the projected pixel radius, shrink with perspective receiver depth, and stay fixed in orthographic views");
 
+    const QSize cavityPixelSize(16, 12);
+    passed &= check(
+        rasterWorkbenchNearestCavityPixel(QPointF(10.5, 7.5),
+                                          cavityPixelSize) == QPoint(10, 7) &&
+            rasterWorkbenchNearestCavityPixel(QPointF(11.0, 8.0),
+                                              cavityPixelSize) == QPoint(11, 7) &&
+            rasterWorkbenchNearestCavityPixel(QPointF(0.0, 0.0),
+                                              cavityPixelSize) == QPoint(0, 0) &&
+            rasterWorkbenchNearestCavityPixel(QPointF(16.0, 12.0),
+                                              cavityPixelSize) == QPoint(15, 11) &&
+            rasterWorkbenchNearestCavityPixel(QPointF(-0.001, 4.0),
+                                              cavityPixelSize) == QPoint(-1, -1),
+        "QPainter cavity taps must match GL_NEAREST floor selection, top-down Y conversion, and clamp-to-edge at viewport bounds");
+
     const QVector3D frontPrepassNormal = rasterWorkbenchPrepassNormal(
         QVector3D(0.2f, -0.3f, 0.9327379f), true,
         QVector3D(1.0f, 0.0f, 0.0f), QVector3D(0.0f, 1.0f, 0.0f),
@@ -16620,7 +16634,7 @@ int main(int argc, char *argv[])
                             QFile tapFile(qpainterCavityDiagnosticPrefix +
                                           QStringLiteral("-taps.csv"));
                             QByteArray tapData = QByteArrayLiteral(
-                                "receiver_x,receiver_y,requested,effective,tap,sample_index,sample_x,sample_y,in_bounds,neighbor_object_id,distance,cavity_dot,edge_dot,bias,attenuation,cavity_contribution,edge_contribution\n");
+                                "receiver_x,receiver_y,requested,effective,tap,sample_index,sample_x,sample_y,sample_pixel_x,sample_pixel_y,in_bounds,neighbor_object_id,distance,cavity_dot,edge_dot,bias,attenuation,cavity_contribution,edge_contribution\n");
                             for (const RasterWorkbenchCavityTap &tap :
                                  tapCapture.taps) {
                                 const auto number = [](float value) {
@@ -16636,6 +16650,8 @@ int main(int argc, char *argv[])
                                     QByteArray::number(tap.sampleIndex) + ',' +
                                     QByteArray::number(tap.sampleX) + ',' +
                                     QByteArray::number(tap.sampleY) + ',' +
+                                    number(tap.samplePixelX) + ',' +
+                                    number(tap.samplePixelY) + ',' +
                                     (tap.inBounds ? "1," : "0,") +
                                     QByteArray::number(tap.neighborObjectId) + ',' +
                                     number(tap.distance) + ',' +

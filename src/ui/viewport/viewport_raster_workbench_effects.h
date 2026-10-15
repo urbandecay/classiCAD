@@ -40,6 +40,11 @@ float rasterWorkbenchCavityStep(float baseRadiusPixels,
 int rasterWorkbenchCavitySampleCount(int requestedSamples,
                                      qsizetype coveredPixels) noexcept;
 
+// Match GL_NEAREST sampling of normalized screen coordinates expressed in
+// top-down pixel space. The texture clamps exact viewport-edge coordinates.
+QPoint rasterWorkbenchNearestCavityPixel(QPointF samplePixel,
+                                         QSize pixelSize) noexcept;
+
 // Blender's opaque Workbench prepass stores the facing-adjusted view normal
 // with normal_encode in an RG16F target, then effects decode that value.
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
@@ -81,6 +86,8 @@ struct RasterWorkbenchCavityTap {
     int sampleIndex = 0;
     int sampleX = 0;
     int sampleY = 0;
+    float samplePixelX = 0.0f;
+    float samplePixelY = 0.0f;
     bool inBounds = false;
     quint64 neighborObjectId = 0;
     float distance = 0.0f;

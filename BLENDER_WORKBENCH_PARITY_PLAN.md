@@ -7080,6 +7080,35 @@ resolve remain open.
   `viewport_render_contracts` test (1/1), and the tap comparator passed. No
   GUI was launched.
 
+### QPainter cavity nearest-texel coordinate mapping (2026-10-15)
+
+- Blender 5.2.2 samples the cavity depth texture with nearest filtering and
+  clamp-to-edge, after rejecting UV coordinates outside `[0, 1]`. The CPU
+  fallback now derives its texel from the full fractional pixel coordinate:
+  `floor(x)` for columns and `ceil(y) - 1` for top-down rows, clamping exact
+  viewport-edge coordinates to the edge texel. This matches GL's
+  `floor(uv * dimension)` selection and row orientation, including exact
+  half-pixel ties where rounding an offset is not equivalent.
+- A focused contract covers pixel centers, exact row/column boundaries,
+  viewport-edge clamp behavior, and rejection outside the viewport. The
+  capture comparator still reports 50/64 exact selected texel matches and no
+  error larger than one pixel. Aggregate GPU/QPainter factor MAE is `0.067381`
+  with p95 `0.240240` across 111,480 foreground pixels, effectively unchanged
+  from the preceding `0.067385` / `0.240255`. This is a sampling-contract
+  correction, not a measured closure of the broader cavity contribution or
+  image-parity gap.
+- A separate experiment reconstructed each nearest depth sample at its
+  fractional screen coordinate. On this matched fixture that raised factor
+  MAE to `0.074770`, so that part was removed. The QPainter raster currently
+  retains its stored neighbor position; fractional reconstruction remains an
+  open candidate requiring a better matched position/depth comparison.
+- Blender's pinned sampler and UV bounds are in
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L520-L541);
+  the classiCAD depth texture uses `GL_NEAREST` and `GL_CLAMP_TO_EDGE` in
+  `viewport_surface_renderer.cpp`. Validation: `cmake --build build -j4`, the
+  capture-enabled offscreen `viewport_render_contracts` test (1/1), and the
+  tap comparator passed. No GUI was launched.
+
 ### GPU deferred Studio local-space rotation comparison (2026-10-15)
 
 - Added `studio_paint_local_37` to the existing offscreen lighting capture

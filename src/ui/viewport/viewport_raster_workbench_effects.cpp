@@ -422,6 +422,26 @@ int rasterWorkbenchCavitySampleCount(int requestedSamples,
         budgetedCount, 1, static_cast<quint64>(requested))));
 }
 
+QPoint rasterWorkbenchNearestCavityPixel(QPointF samplePixel,
+                                         QSize pixelSize) noexcept
+{
+    if (pixelSize.width() <= 0 || pixelSize.height() <= 0 ||
+        !std::isfinite(samplePixel.x()) || !std::isfinite(samplePixel.y()) ||
+        samplePixel.x() < 0.0 || samplePixel.y() < 0.0 ||
+        samplePixel.x() > pixelSize.width() ||
+        samplePixel.y() > pixelSize.height()) {
+        return QPoint(-1, -1);
+    }
+
+    // GL_NEAREST selects floor(uv * dimension). Convert bottom-up GL rows
+    // into QPainter's top-down rows, retaining clamp-to-edge at UV 0 and 1.
+    const int x = std::clamp(static_cast<int>(std::floor(samplePixel.x())),
+                             0, pixelSize.width() - 1);
+    const int y = std::clamp(static_cast<int>(std::ceil(samplePixel.y())) - 1,
+                             0, pixelSize.height() - 1);
+    return QPoint(x, y);
+}
+
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
                                        bool frontFacing,
                                        const QVector3D &viewRight,
@@ -3135,10 +3155,20 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                         directionY * rotationX;
                 const float sampleDistance = std::max(
                     0.0f, sampleRadius + noiseRadius);
-                const int sx = x + qRound(jitteredX * sampleDistance * step);
+                const float sampleOffsetX =
+                    jitteredX * sampleDistance * step;
+                const float sampleOffsetY =
+                    -jitteredY * sampleDistance * step;
+                const float samplePixelX = x + 0.5f + sampleOffsetX;
+                const float samplePixelY = y + 0.5f + sampleOffsetY;
+                const QPointF sampleScreen(samplePixelX / dpr,
+                                           samplePixelY / dpr);
                 // Workbench's texture Y grows upward in GL coordinates;
                 // retained QPainter samples use top-down rows.
-                const int sy = y - qRound(jitteredY * sampleDistance * step);
+                const QPoint nearestSample = rasterWorkbenchNearestCavityPixel(
+                    QPointF(samplePixelX, samplePixelY), QSize(width, height));
+                const int sx = nearestSample.x();
+                const int sy = nearestSample.y();
                 RasterWorkbenchCavityTap tapCapture;
                 if (captureTaps) {
                     tapCapture.receiverX = x;
@@ -3149,10 +3179,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     tapCapture.sampleIndex = sampleIndex;
                     tapCapture.sampleX = sx;
                     tapCapture.sampleY = sy;
-                    tapCapture.inBounds = sx >= 0 && sy >= 0 &&
-                                          sx < width && sy < height;
+                    tapCapture.samplePixelX = samplePixelX;
+                    tapCapture.samplePixelY = samplePixelY;
+                    tapCapture.inBounds = sx >= 0 && sy >= 0;
                 }
-                if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
+                if (sx < 0 || sy < 0) {
                     if (captureTaps)
                         cavityTapCapture->taps.push_back(tapCapture);
                     continue;
@@ -3172,8 +3203,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                 {center.position.x(), center.position.y(),
                                  center.position.z()},
                                 towardCamera, viewRight);
-                        const QPointF sampleScreen(
-                            (sx + 0.5) / dpr, (sy + 0.5) / dpr);
                         if (isValidWorkPlaneFrame(viewPlane) &&
                             transform.screenToWorkPlane(
                                 sampleScreen, viewportSize, viewPlane,
@@ -3228,10 +3257,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
                 ++validNeighbors;
                 if (ssao) {
-                    // The shader evaluates these values in view space. A
-                    // rigid view rotation preserves vector length and dot
-                    // products, so the retained world positions/normals give
-                    // the same geometric response without inverse projection.
+                    // Keep the CPU raster's stored neighbor position until
+                    // fractional-depth reconstruction is independently
+                    // demonstrated to improve the matched fixture.
                     const QVector3D direction = neighbor.position -
                                                 center.position;
                     const float distance = direction.length();

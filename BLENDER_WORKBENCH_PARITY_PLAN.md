@@ -8253,3 +8253,7 @@ resolve remain open.
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L478-L526).
   The QPainter light-depth map and weighted rasterization remain approximate;
   no matched Blender comparison was run.
+- This update supersedes the broader shadow summaries above that said all
+  transparent receiver layers share one aggregate factor. That remains true
+  only when the compositor uses a fallback or a fragment lacks valid receiver
+  metadata.

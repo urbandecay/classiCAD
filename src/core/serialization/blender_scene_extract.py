@@ -1983,11 +1983,10 @@ def extract_scene(input_path, mode):
                     })
                 continue
             if obj.type == "META":
-                if mode != "evaluated":
-                    output["unsupported_items"].append(
-                        unsupported_object_record(obj, scene, depsgraph))
-                    continue
                 try:
+                    # Metaballs have no original polygon mesh to preserve.
+                    # Always import their current evaluated surface so an
+                    # original-mesh choice does not make visible geometry vanish.
                     item = extract_mesh_object(
                         obj, scene, "evaluated", depsgraph, output["materials"],
                         output["unsupported_features"])

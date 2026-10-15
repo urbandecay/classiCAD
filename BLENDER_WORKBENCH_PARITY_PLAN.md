@@ -7798,3 +7798,11 @@ resolve remain open.
   visibility, image side, depth modes, alpha blending rules, generated or
   animated images, and image tint remain unsupported. The C++ build passed;
   no matched Blender image-empty comparison has been run.
+
+### Blender metaball visibility in original mesh mode (2026-10-15)
+
+- Blender METABALL objects now import as their current evaluated polygon mesh
+  in either mesh import mode, so the original-mesh choice does not omit their
+  visible surface. Editable metaball data, threshold settings, and alternate
+  animation states remain unsupported and reported. The C++ build passed; no
+  matched metaball comparison has been run.

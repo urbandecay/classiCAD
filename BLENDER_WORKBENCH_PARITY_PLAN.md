@@ -8122,3 +8122,13 @@ resolve remain open.
   Blender's resolve, which computes curvature independently and multiplies it
   with the World-cavity factor. The change affects Screen and Both cavity
   modes; matched edge-pixel comparison remains open.
+
+### QPainter effects on large viewports (2026-10-15)
+
+- The software effect pass now reduces its internal depth/normal/object-ID
+  buffer resolution when the viewport exceeds one million samples, then maps
+  its effects over the full-size scene image. This keeps QPainter shadows,
+  outlines, and other enabled effects active on large displays while retaining
+  the existing one-million-sample memory bound. Large-view effect detail is
+  coarser than Blender's full-resolution GPU result; matched image comparison
+  remains open.

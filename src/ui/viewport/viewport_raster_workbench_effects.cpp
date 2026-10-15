@@ -2332,12 +2332,23 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const int outputWidth = colorImage->width();
     const int outputHeight = colorImage->height();
     const qreal colorDpr = std::max<qreal>(colorImage->devicePixelRatio(), 1.0);
-    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
-    const int width = qRound(viewportSize.width() * dpr);
-    const int height = qRound(viewportSize.height() * dpr);
+    qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    int width = qRound(viewportSize.width() * dpr);
+    int height = qRound(viewportSize.height() * dpr);
     if (width <= 0 || height <= 0 || outputWidth <= 0 || outputHeight <= 0)
         return;
-    const qint64 pixelCountWide = qint64(width) * qint64(height);
+    constexpr qint64 maximumRasterEffectPixels = 1'000'000;
+    qint64 pixelCountWide = qint64(width) * qint64(height);
+    if (pixelCountWide > maximumRasterEffectPixels) {
+        // Keep software effects enabled on large displays while bounding the
+        // depth, normal, and object-ID buffers. The final pass maps this
+        // lower-resolution result over the full-resolution scene image.
+        dpr *= std::sqrt(static_cast<qreal>(maximumRasterEffectPixels) /
+                         static_cast<qreal>(pixelCountWide));
+        width = std::max(1, qFloor(viewportSize.width() * dpr));
+        height = std::max(1, qFloor(viewportSize.height() * dpr));
+        pixelCountWide = qint64(width) * qint64(height);
+    }
     if (pixelCountWide > std::numeric_limits<int>::max()) return;
     const int pixelCount = static_cast<int>(pixelCountWide);
     const auto displayRetainedSceneLinear = [&]() {
@@ -2377,16 +2388,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         *colorImage = resolvedImage.convertToFormat(colorImage->format());
         return true;
     };
-    // This CPU path keeps multiple per-pixel depth/normal/object buffers.
-    // Bound their aggregate size to the same order as the raster surface
-    // compositor instead of letting large viewports allocate gigabytes.
-    constexpr qint64 maximumRasterEffectPixels = 1'000'000;
-    if (pixelCountWide > maximumRasterEffectPixels) {
-        // Keep a retained scene-linear surface usable even when the bounded
-        // software effects pass cannot run at this resolution.
-        (void)displayRetainedSceneLinear();
-        return;
-    }
+    // This CPU path keeps multiple per-pixel depth/normal/object buffers, so
+    // pixelCountWide is bounded above before allocating them.
     QVector<RasterSample> samples(width * height);
     QVector<RasterSample> inFrontSamples(width * height);
     QVector<RasterSample> opaqueSamples;

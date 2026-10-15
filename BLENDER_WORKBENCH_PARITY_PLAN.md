@@ -8168,6 +8168,19 @@ resolve remain open.
   No matched image
   comparison has been run.
 
+### Image Empty alpha mode and depth writes (2026-10-15)
+
+- The retained scene-depth geometry now gives Image Empties depth only for
+  Default images with alpha blending disabled and `In Front` off. Its bounded
+  conservative mask keeps cells whose source pixels all pass Blender's 5%
+  alpha cutoff; blended, Back, and Front images no longer occlude later
+  scene-depth queries. Blender separates the
+  depth-writing opaque image pass from blended passes in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1132-L1145), and applies the alpha cutoff in
+  [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl#L13-L30).
+  The 256×256 source mask remains conservative at cutout edges. C++ build
+  passed; no matched image comparison has been run.
+
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 
 - The QPainter picture path now uses retained scene depth when available.

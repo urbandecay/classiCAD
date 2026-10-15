@@ -63,9 +63,16 @@ void ViewportGeometryCache::prepareFrame(
             if (buildObserver) {
                 buildTimer.start();
             }
+            ViewportRenderObject geometrySource = object;
+            if (geometrySource.shape.geometryType == GeometryType::Picture) {
+                // Keep the cache independent of the per-view "In Front"
+                // presentation setting; that setting controls assignment
+                // below, while the reusable base geometry is for Default.
+                geometrySource.showInFront = false;
+            }
             entry.geometry =
                 QSharedPointer<ViewportDepthGeometry>::create(
-                    buildViewportDepthGeometry(object, surfaceCache,
+                    buildViewportDepthGeometry(geometrySource, surfaceCache,
                                                bool(buildObserver)));
             if (buildObserver) {
                 buildObserver(object, *entry.geometry,
@@ -73,7 +80,13 @@ void ViewportGeometryCache::prepareFrame(
             }
             cached = entries_.insert(id, std::move(entry));
         }
-        object.preparedDepthGeometry = cached->geometry;
+        if (object.shape.geometryType == GeometryType::Picture &&
+            object.showInFront) {
+            object.preparedDepthGeometry =
+                QSharedPointer<ViewportDepthGeometry>::create();
+        } else {
+            object.preparedDepthGeometry = cached->geometry;
+        }
         object.preparedGeometryRevision = cached->preparedGeometryRevision;
         object.preparedGeometryOffset = {
             cached->offset.x + object.placementTranslation.x,

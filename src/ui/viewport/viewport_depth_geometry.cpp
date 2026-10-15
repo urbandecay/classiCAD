@@ -54,6 +54,10 @@ void appendPictureDepthSurface(const Shape &shape,
                                const QVector<QPointF> &corners,
                                ViewportDepthGeometry *geometry)
 {
+    if (shape.pictureImageDepth != PictureImageDepth::Default ||
+        shape.pictureUseAlphaBlend) {
+        return;
+    }
     const QImage image = shape.pictureImage.convertToFormat(
         QImage::Format_RGBA8888);
     if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
@@ -63,22 +67,22 @@ void appendPictureDepthSurface(const Shape &shape,
     constexpr int maximumMaskDimension = 256;
     const int maskWidth = std::min(image.width(), maximumMaskDimension);
     const int maskHeight = std::min(image.height(), maximumMaskDimension);
-    QVector<uchar> fullyOpaqueCells(maskWidth * maskHeight, 1);
+    QVector<uchar> alphaPassingCells(maskWidth * maskHeight, 1);
     for (int rowIndex = 0; rowIndex < image.height(); ++rowIndex) {
         const uchar *pixels = image.constScanLine(rowIndex);
         const int maskRow = rowIndex * maskHeight / image.height();
         for (int column = 0; column < image.width(); ++column) {
-            if (pixels[column * 4 + 3] != 255) {
+            if (pixels[column * 4 + 3] < qRound(0.05 * 255.0)) {
                 const int maskColumn = column * maskWidth / image.width();
-                fullyOpaqueCells[maskRow * maskWidth + maskColumn] = 0;
+                alphaPassingCells[maskRow * maskWidth + maskColumn] = 0;
             }
         }
     }
 
-    // Build a compact mask mesh: contiguous opaque pixels in each row are
-    // merged vertically when their horizontal span matches. The bounded mask
-    // marks a cell opaque only if every source pixel in it is opaque.
-    // Partially transparent pixels therefore never write depth.
+    // Build a compact mask mesh: contiguous alpha-passing pixels in each row
+    // are merged vertically when their horizontal span matches. The bounded
+    // mask marks a cell as depth-writing only if every source pixel in it
+    // passes Blender's opaque-image alpha cutoff.
     QVector<OpaqueImageRun> activeRuns;
     QVector<OpaqueImageRun> opaqueRectangles;
     for (int rowIndex = 0; rowIndex < maskHeight; ++rowIndex) {
@@ -94,12 +98,12 @@ void appendPictureDepthSurface(const Shape &shape,
         int column = 0;
         while (column < maskWidth) {
             while (column < maskWidth &&
-                   fullyOpaqueCells[rowIndex * maskWidth + column] == 0) {
+                   alphaPassingCells[rowIndex * maskWidth + column] == 0) {
                 ++column;
             }
             const int firstOpaqueColumn = column;
             while (column < maskWidth &&
-                   fullyOpaqueCells[rowIndex * maskWidth + column] != 0) {
+                   alphaPassingCells[rowIndex * maskWidth + column] != 0) {
                 ++column;
             }
             if (firstOpaqueColumn == column) {
@@ -954,6 +958,10 @@ ViewportDepthGeometry buildViewportDepthGeometry(
     bool collectSurfaceBuildTimings)
 {
     ViewportDepthGeometry geometry;
+    if (sceneObject.shape.geometryType == GeometryType::Picture &&
+        sceneObject.showInFront) {
+        return geometry;
+    }
     CurveSampler sampler;
     const bool useCache = sceneObject.cacheable &&
                           sceneObject.objectId.isValid() &&
@@ -977,6 +985,10 @@ ViewportDepthGeometry buildViewportDepthGeometry(
 {
     ViewportDepthGeometry geometry;
     for (const ViewportRenderObject &entry : visibleSceneShapes) {
+        if (entry.shape.geometryType == GeometryType::Picture &&
+            entry.showInFront) {
+            continue;
+        }
         if (entry.preparedDepthGeometry) {
             ViewportDepthGeometry prepared = *entry.preparedDepthGeometry;
             const Point3D &offset = entry.preparedGeometryOffset;

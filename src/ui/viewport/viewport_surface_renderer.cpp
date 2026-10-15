@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_surface_renderer.h"
+#include "viewport_cavity_jitter.h"
 
-#include "viewport_cavity_blue_noise.h"
 #include "viewport_depth_geometry.h"
 #include "blender_grid_renderer.h"
 #include "viewport_line_weight.h"
@@ -467,7 +467,8 @@ bool hasPolygonMeshGeometry(const ViewportRenderObject &object)
            validatePolygonMesh(object.shape.polygonMesh);
 }
 
-constexpr int kWorkbenchCavityMaxSamples = 512;
+constexpr int kWorkbenchCavityMaxSamples =
+    detail::kWorkbenchCavityMaxSamples;
 
 quint32 blenderStringHash(const QByteArray &string)
 {
@@ -5516,42 +5517,9 @@ bool ViewportSurfaceRenderer::ensureCavityJitterTexture(int totalSamples)
         return true;
     }
 
-    const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
-        detail::kWorkbenchCavityBlueNoiseRgBase64,
-        static_cast<qsizetype>(
-            sizeof(detail::kWorkbenchCavityBlueNoiseRgBase64) - 1)));
-    constexpr int kJitterTextureSize = 64;
-    constexpr int kBlueNoiseChannelCount = 2;
-    constexpr int kExpectedBlueNoiseBytes =
-        kJitterTextureSize * kJitterTextureSize * kBlueNoiseChannelCount;
-    if (blueNoiseRg.size() != kExpectedBlueNoiseBytes) {
+    detail::WorkbenchCavityJitterPixels pixels{};
+    if (!detail::buildWorkbenchCavityJitterPixels(sampleCount, &pixels)) {
         return false;
-    }
-
-    // Blender's LUT channels are quantized to 1/256 steps. The texture is
-    // rebuilt when the total Workbench cavity sample count changes because
-    // its blue-noise radius offset is scaled by 1 / total_samples.
-    std::array<float, kJitterTextureSize * kJitterTextureSize * 3> pixels{};
-    constexpr float kInverseBlueNoiseRange = 1.0f / 256.0f;
-    constexpr double kPi = 3.14159265358979323846;
-    const float inverseSampleCount = 1.0f / static_cast<float>(sampleCount);
-    for (int pixelIndex = 0;
-         pixelIndex < kJitterTextureSize * kJitterTextureSize;
-         ++pixelIndex) {
-        const int sourceIndex = pixelIndex * kBlueNoiseChannelCount;
-        const float angleSample = static_cast<float>(
-            static_cast<unsigned char>(blueNoiseRg.at(sourceIndex))) *
-            kInverseBlueNoiseRange;
-        const float radiusSample = static_cast<float>(
-            static_cast<unsigned char>(blueNoiseRg.at(sourceIndex + 1))) *
-            kInverseBlueNoiseRange;
-        const double angle = static_cast<double>(angleSample * 2.0f) * kPi;
-        const int destinationIndex = pixelIndex * 3;
-        pixels[destinationIndex] = static_cast<float>(std::cos(angle));
-        pixels[destinationIndex + 1] = static_cast<float>(std::sin(angle));
-        pixels[destinationIndex + 2] =
-            std::clamp(radiusSample - 0.5f, -0.499f, 0.499f) *
-            inverseSampleCount;
     }
 
     GLint previousActiveTexture = GL_TEXTURE0;
@@ -5575,7 +5543,9 @@ bool ViewportSurfaceRenderer::ensureCavityJitterTexture(int totalSamples)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F,
-                 kJitterTextureSize, kJitterTextureSize, 0, GL_RGB, GL_FLOAT,
+                 detail::kWorkbenchCavityJitterTextureSize,
+                 detail::kWorkbenchCavityJitterTextureSize,
+                 0, GL_RGB, GL_FLOAT,
                  pixels.data());
     glBindTexture(GL_TEXTURE_2D,
                   static_cast<GLuint>(previousTextureBinding));

@@ -6,6 +6,8 @@
 #include "ui/viewport/viewport_shading.h"
 #include "ui/viewport/viewport_scene_renderer.h"
 #include "ui/viewport/viewport_surface_renderer.h"
+#include "ui/viewport/viewport_cavity_jitter.h"
+#include "ui/viewport/viewport_cavity_blue_noise.h"
 #include "ui/viewport/viewport_raster_workbench_effects.h"
 #include "ui/viewport/viewport_raster_workbench_volume.h"
 #include "ui/viewport/viewport_workbench_effect_scale.h"
@@ -28,6 +30,7 @@
 #include <QDebug>
 #include <QBuffer>
 #include <QColorSpace>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -81,6 +84,59 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(format);
     QGuiApplication application(argc, argv);
     bool passed = true;
+
+    if (application.arguments().contains(
+            QStringLiteral("--cavity-jitter-only"))) {
+        const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
+            detail::kWorkbenchCavityBlueNoiseRgBase64,
+            static_cast<qsizetype>(
+                sizeof(detail::kWorkbenchCavityBlueNoiseRgBase64) - 1)));
+        passed &= check(
+            blueNoiseRg.size() == 64 * 64 * 2 &&
+                QCryptographicHash::hash(blueNoiseRg,
+                                         QCryptographicHash::Sha256).toHex() ==
+                    QByteArrayLiteral(
+                        "fd9b4942a1124232212fc8226a62eb4f687532df24bcbc60db19ac9405164ec6"),
+            "Workbench cavity jitter must retain Blender 5.2.2's complete quantized 64x64 blue-noise RG LUT");
+
+        for (const int sampleCount : {1, 16, 512}) {
+            detail::WorkbenchCavityJitterPixels pixels{};
+            passed &= check(
+                detail::buildWorkbenchCavityJitterPixels(sampleCount,
+                                                          &pixels),
+                "Workbench cavity jitter texture construction must accept Blender sample counts");
+            constexpr float inverseBlueNoiseRange = 1.0f / 256.0f;
+            constexpr double pi = 3.14159265358979323846;
+            const float inverseSampleCount =
+                1.0f / static_cast<float>(sampleCount);
+            for (int pixel = 0; pixel < 64 * 64; ++pixel) {
+                const float angleSample = static_cast<float>(
+                    static_cast<unsigned char>(
+                        blueNoiseRg.at(pixel * 2))) *
+                    inverseBlueNoiseRange;
+                const float radiusSample = static_cast<float>(
+                    static_cast<unsigned char>(
+                        blueNoiseRg.at(pixel * 2 + 1))) *
+                    inverseBlueNoiseRange;
+                const double angle =
+                    static_cast<double>(angleSample * 2.0f) * pi;
+                const int output = pixel * 3;
+                const std::array<float, 3> expected{{
+                    static_cast<float>(std::cos(angle)),
+                    static_cast<float>(std::sin(angle)),
+                    std::clamp(radiusSample - 0.5f, -0.499f, 0.499f) *
+                        inverseSampleCount}};
+                for (int channel = 0; channel < 3; ++channel) {
+                    passed &= check(
+                        std::abs(pixels[output + channel] -
+                                 expected[static_cast<size_t>(channel)]) <=
+                            1.0e-7f,
+                        "Every Workbench cavity jitter RGB texel must match Blender's pinned LUT conversion and sample scaling");
+                }
+            }
+        }
+        return passed ? 0 : 1;
+    }
 
     // Blender 5.2.2 DofPass uses sample / samples_len, with no half-sample
     // offset. The gather shader combines this value with IGN and blue-noise

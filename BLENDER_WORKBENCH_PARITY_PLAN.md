@@ -5857,6 +5857,35 @@ resolve remain open.
   `workbench_effect_delta_compare.py` completed at threshold 3/255. No source
   code changed, so no rebuild was required.
 
+### GPU cavity jitter texel contract (2026-10-15)
+
+- Blender 5.2.2 constructs one 64×64 texture from EEVEE's two blue-noise
+  channels. Its red/green channels become cosine/sine rotations; its blue
+  channel is the clamped radius offset divided by the total cavity sample
+  count. Workbench uploads the texture as floating-point RGBA16F with linear
+  filtering and repeat wrapping, and its cavity shader samples one repeating
+  texel per viewport pixel. References are pinned to
+  [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L74-L98),
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L63),
+  and the
+  [EEVEE blue-noise LUT](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/eevee/eevee_lut.cc#L6190-L6200).
+- classiCAD stores the same row-major 64×64 RG LUT quantized to 1/256,
+  converts every texel through the Workbench rotation/radius equations, and
+  uploads the RGB channels as RGB16F with linear filtering and repeat
+  wrapping. The pure construction helper is shared by the renderer and its
+  focused contract. For sample counts 1, 16, and 512, the contract compares
+  all 4,096 generated texels per channel against the pinned conversion and
+  checks the full 8,192-byte LUT payload against SHA-256
+  `fd9b4942a1124232212fc8226a62eb4f687532df24bcbc60db19ac9405164ec6`.
+- This validates the CPU-side pixel construction and source LUT, not a GPU
+  texture readback or cavity output parity. Blender's unused fourth texture
+  channel is omitted; the compared RGB channels and cavity sampling behavior
+  remain the relevant shared contract. The earlier controlled GPU effect
+  comparison remains the rendered-output check, with effect-mask IoU
+  `0.959067` and union signed RGB-delta MAE `0.25031/255`.
+- Validation: `cmake --build build -j4` and the focused
+  `workbench_cavity_jitter_contracts` CTest pass. No GUI was launched.
+
 ### Matched QPainter cavity effect comparison (2026-10-14)
 
 - Repeated the same baseline-versus-World-cavity effect comparison through

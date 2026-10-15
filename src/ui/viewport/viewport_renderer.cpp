@@ -82,8 +82,10 @@ QImage pictureImageForPainter(const Shape &picture,
     case QImage::Format_A2BGR30_Premultiplied:
     case QImage::Format_A2RGB30_Premultiplied:
     case QImage::Format_RGBA64_Premultiplied:
+#if QT_VERSION >= QT_VERSION_CHECK(6, 2, 0)
     case QImage::Format_RGBA16FPx4_Premultiplied:
     case QImage::Format_RGBA32FPx4_Premultiplied:
+#endif
         qImageStorageIsPremultiplied = true;
         break;
     default:

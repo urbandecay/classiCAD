@@ -8199,3 +8199,18 @@ resolve remain open.
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L769-L794).
   The final resolved-line/scene comparison retains its separate rule. Build
   passed; runtime GPU and matched image comparisons remain unverified.
+
+### QPainter weighted transparency fragment budget (2026-10-15)
+
+- The weighted QPainter compositor now accumulates transparent fragments into
+  regular and `showInFront` per-pixel OIT buffers as each object's bounded
+  fragment list is processed. Previously, the combined scene-wide fragment
+  list stopped at four million samples and sent the whole viewport to the
+  depth-sorted painter fallback, changing transparency ordering and blending.
+  The weighted result and retained transparent depth now scale with the
+  already bounded pixel target instead of total scene fragment count.
+- Per-object fragment capture remains capped at four million samples, and
+  transparent-shadow receiver data remains capped at one million samples.
+  Those limits can still select painter fallback or omit per-fragment shadow
+  treatment for exceptionally dense scenes. No matched Blender comparison
+  was run; `cmake --build build -j4` passed.

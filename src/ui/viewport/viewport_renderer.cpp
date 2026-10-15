@@ -3287,6 +3287,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             qRound(viewportSize.height() * pictureDevicePixelRatio));
         const qint64 viewportRasterPixels =
             qint64(viewportRasterSize.width()) * viewportRasterSize.height();
+        const qint64 pictureSourcePixels =
+            qint64(shape.pictureImage.width()) * shape.pictureImage.height();
+        const bool canPrepareSceneLinearPicture = pictureSourcePixels > 0 &&
+            pictureSourcePixels <= kMaximumPictureProcessPixels;
         const bool canUseViewportCutoutRaster =
             !shape.pictureUseAlphaBlend && viewportRasterPixels > 0 &&
             viewportRasterPixels <= maximumPictureDepthPixels;
@@ -3297,16 +3301,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
             opaqueSceneDepthSize.height() > 0 &&
             opaqueSceneDepth->size() ==
                 opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height() &&
+            opaqueSceneDepthSize == viewportRasterSize &&
             qint64(opaqueSceneDepthSize.width()) *
                 opaqueSceneDepthSize.height() <= maximumPictureDepthPixels;
         const bool rasterizePicture = imageVisible &&
             (canUseSceneDepthRaster || canUseViewportCutoutRaster ||
              (viewportRasterPixels > 0 &&
               viewportRasterPixels <= maximumPictureDepthPixels));
+        const bool sceneLinearRasterPicture = rasterizePicture &&
+            canPrepareSceneLinearPicture;
         const QImage painterImage = imageVisible
             ? pictureImageForPainter(
                   shape, rasterizePicture && !shape.pictureUseAlphaBlend,
-                  rasterizePicture,
+                  sceneLinearRasterPicture,
                   shadingSettings_)
             : QImage{};
         if (imageVisible && painterImage.isNull()) return;
@@ -3326,9 +3333,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QImage depthMaskedImage;
             bool drawRasterizedPicture = false;
             if (rasterizePicture) {
-                const QSize rasterSize = canUseSceneDepthRaster
-                    ? opaqueSceneDepthSize
-                    : viewportRasterSize;
+                const QSize rasterSize = viewportRasterSize;
                 const QTransform imageToDevice =
                     imageTransform * painter.deviceTransform();
                 bool inverseValid = false;
@@ -3342,6 +3347,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 if (inverseValid) {
                     depthMaskedImage = QImage(
                         rasterSize, QImage::Format_ARGB32_Premultiplied);
+                }
+                if (inverseValid && !depthMaskedImage.isNull()) {
                     depthMaskedImage.fill(Qt::transparent);
                     QPainter imagePainter(&depthMaskedImage);
                     imagePainter.setRenderHint(
@@ -3473,7 +3480,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             depthMaskedImage.scanLine(y));
                         for (int x = left; x < right; ++x) {
                             const int alpha = qAlpha(imageRow[x]);
-                            if (alpha == 0) continue;
+                            if (alpha == 0 || !sceneLinearRasterPicture) continue;
                             const float inverseAlpha = 255.0f / float(alpha);
                             const QVector3D linearColor(
                                 float(qRed(imageRow[x])) / 255.0f * inverseAlpha,
@@ -3517,8 +3524,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         depthMaskedImage);
                 }
             } else if (imageVisible) {
+                const QImage fallbackImage = sceneLinearRasterPicture
+                    ? pictureImageForPainter(
+                          shape,
+                          rasterizePicture && !shape.pictureUseAlphaBlend,
+                          false, shadingSettings_)
+                    : painterImage;
                 painter.setTransform(imageTransform, true);
-                painter.drawImage(QPointF(0.0, 0.0), painterImage);
+                painter.drawImage(QPointF(0.0, 0.0), fallbackImage);
             }
             painter.restore();
         }

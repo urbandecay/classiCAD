@@ -8551,13 +8551,15 @@ resolve remain open.
 
 ### QPainter Image Empty linear-light filtering (2026-10-15)
 
-- Within the existing 16-million-pixel viewport budget, QPainter now filters
-  Image Empty source pixels as scene-linear values into the viewport raster,
-  then applies the selected display transform to the filtered pixels. Before
-  this change it transformed each source texel to display sRGB before Qt's
-  smooth image resampling, which differs from Blender's shader order. The
-  over-budget fallback retains its previous transformed-source behavior.
-  Matched Blender comparisons remain open.
+- When both the source image and viewport fit the existing 16-million-pixel
+  processing budgets, QPainter filters Image Empty source pixels as
+  scene-linear values into the viewport raster, then applies the selected
+  display transform to the filtered pixels. Before this change it transformed
+  each source texel to display sRGB before Qt's smooth image resampling, which
+  differs from Blender's shader order. Failed raster setup falls back to a
+  display-transformed source image; over-budget source images keep their
+  existing bounded fallback. Retained depth masking is used only when its
+  raster matches the viewport target. Matched Blender comparisons remain open.
 
 ### GPU scalar-volume slice bounds (2026-10-15)
 

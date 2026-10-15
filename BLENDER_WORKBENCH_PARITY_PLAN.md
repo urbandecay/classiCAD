@@ -436,8 +436,29 @@ in ordinary free views or orthographic views is superseded by this correction.
   and schedules the pass in [`blur2_ps_` setup](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L1065-L1076);
   the CoC gate, sampling radius, and component-wise 3x3 filter are in
   [`workbench_effect_dof_blur2_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur2_frag.glsl#L410-L540).
-  This ports the median cleanup into the full-resolution CPU approximation;
-  GPU pyramid parity and matched QPainter images remain open.
+  QPainter gathers into its full-resolution CPU buffer, then maps the median
+  cleanup to Blender's half-resolution texel centers and bilinearly samples
+  that result during the full-resolution resolve. This adapts the cleanup
+  stage without changing the separate CPU gather.
+
+### QPainter DOF half-resolution median capture (2026-10-15)
+
+- The QPainter 3x3 component-wise median now runs on a half-resolution buffer,
+  using the output-to-half texel scale for its radius offsets. The final
+  full-resolution resolve bilinearly samples the filtered half-resolution
+  buffer, matching Blender 5.2.2's blur2 and resolve scale relationship while
+  leaving classiCAD's CPU gather and optical inputs unchanged.
+- In the matched 640x480 perspective extrusion capture, the baseline remains
+  aligned with Blender (mean maximum-channel delta 0.00032; two pixels exceed
+  delta 2). With DOF enabled, mean maximum-channel delta improved from 0.604
+  to 0.591 and effect-mask IoU improved from 0.437 to 0.463 at threshold 2.
+  QPainter now changes 9,129 pixels versus Blender's 11,647. This is a small
+  measured improvement; full-frame DOF parity remains open.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  the capture-enabled offscreen `classicad_viewport_render_contracts_test`
+  passed; and `tests/workbench_dof_compare.py` completed against the Blender
+  5.2.2 baseline/effect pair. The comparison also records threshold-3
+  sensitivity (IoU 0.456). No GUI was launched.
 
 ### QPainter Workbench DOF camera-relative depth (2026-10-12)
 

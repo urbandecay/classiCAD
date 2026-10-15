@@ -2284,7 +2284,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
              settings.colorMode == ViewportColorMode::Attribute ||
              settings.colorMode == ViewportColorMode::Texture);
         if (!perFaceMaterialAlpha &&
-            objectSourceAlpha(object, settings.colorMode) <= 0.0f) {
+            objectSourceAlpha(object, settings.colorMode) <= 0.0f &&
+            !shadowEnabled) {
             continue;
         }
         const float objectAlpha = perFaceMaterialAlpha
@@ -2341,10 +2342,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         faceAlpha = object.meshMaterials[faceSlot].alpha;
                     } else if (faceSlot >= 0 && faceSlot < mesh.materialSlots.size()) {
                         faceAlpha = mesh.materialSlots[faceSlot].alpha;
-                    }
-                    if (faceAlpha <= 0.0f) {
-                        firstCorner += face.size();
-                        continue;
                     }
                     faceAlpha = saturate(faceAlpha);
                     triangleSourceAlpha = faceAlpha;
@@ -2652,6 +2649,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 // not sample the Image Texture alpha used by the color pass.
                 shadowTriangles.append(caster);
             }
+            // Zero-alpha material geometry is still a Blender shadow caster,
+            // but it must not become a visible receiver or depth sample here.
+            if (triangleSourceAlpha <= 0.0f) continue;
             const QPointF p0 = screen[0] * dpr;
             const QPointF p1 = screen[1] * dpr;
             const QPointF p2 = screen[2] * dpr;

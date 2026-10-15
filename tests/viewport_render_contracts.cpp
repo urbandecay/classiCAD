@@ -1526,8 +1526,11 @@ int main(int argc, char *argv[])
         renderTransparentCasterShadow(0.5f, true);
     const QImage lowAlphaCasterImage =
         renderTransparentCasterShadow(0.25f, true);
+    const QImage zeroAlphaCasterImage =
+        renderTransparentCasterShadow(0.0f, true);
     bool transparentCasterCastsBeyondItsVisibleFootprint = false;
     bool transparentCasterAlphaDoesNotScaleShadow = true;
+    bool zeroAlphaCasterStillCastsShadow = true;
     for (int y = 4; y < transparentCasterImage.height(); ++y) {
         for (int x = 4; x < transparentCasterImage.width(); ++x) {
             if (x >= 40 && x < 88 && y >= 40 && y < 88) continue;
@@ -1537,6 +1540,8 @@ int main(int argc, char *argv[])
                 transparentCasterCastsBeyondItsVisibleFootprint = true;
             if (transparent != lowAlphaCasterImage.pixel(x, y))
                 transparentCasterAlphaDoesNotScaleShadow = false;
+            if (transparent != zeroAlphaCasterImage.pixel(x, y))
+                zeroAlphaCasterStillCastsShadow = false;
         }
     }
     passed &= check(
@@ -1545,6 +1550,9 @@ int main(int argc, char *argv[])
     passed &= check(
         transparentCasterAlphaDoesNotScaleShadow,
         "QPainter transparent caster material alpha must not scale Blender's binary shadow-volume mask");
+    passed &= check(
+        zeroAlphaCasterStillCastsShadow,
+        "QPainter zero-alpha material geometry must still cast Blender's binary shadow-volume mask");
     ViewportShadingSettings zeroShadowSettings = shadowSettings;
     zeroShadowSettings.shadowIntensity = 0.0;
     passed &= check(renderCpuShadow(zeroShadowSettings) == noShadowImage,

@@ -3745,19 +3745,28 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
 
 - The QPainter light-depth fallback now casts from tessellated caster geometry
   without sampling material or Image Texture alpha. This matches Blender
-  5.2.2's shadow-volume behavior for these opaque casters; color and
-  object-ID/effect alpha cutouts continue to use their existing material
-  adapter and sampling contracts. The CPU light-depth shadow remains an
-  approximation of Blender's stencil volume.
+  5.2.2's shadow-volume behavior: transparent materials still submit their
+  geometry to the shadow pass, including materials with zero alpha. Zero-alpha
+  triangles are retained as casters but skipped by visible color/effect and
+  depth sampling. Color and object-ID/effect alpha cutouts continue to use
+  their existing material adapter and sampling contracts. The CPU light-depth
+  shadow remains an approximation of Blender's stencil volume.
 - Blender 5.2.2 describes its Workbench shadows as a stencil mask over opaque
   surfaces in pinned [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1111-L1123);
-  its pass submits geometry to the shadow volume without an Image Texture
-  sampling stage.
+  `ShadowPass::object_sync` selects a forced-fail material pass for transparent
+  materials but still submits their caps and shadow sides in pinned
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1720-L1790).
+  The shadow volume has no Image Texture alpha sampling stage.
 - A production QPainter contract gives an opaque-material caster a fully
   transparent Image Texture. The caster remains invisible in the color pass,
   but its geometry still darkens the opaque receiver. The former alpha-cutout
   expectation and exact 0.1 shadow-alpha boundary assertions were removed;
   the Workbench texture cutoff continues to apply to color and effect coverage.
+- The transparent receiver contract now checks material alpha 0.5, 0.25, and
+  0.0. The shadow outside the caster's visible footprint is unchanged at all
+  three values, including a zero-alpha caster. Validation: `cmake --build
+  build -j4` passed with the 317-file dependency audit; offscreen
+  `viewport_render_contracts` passed (1/1, 27.27 seconds).
 
 ## QPainter Workbench shadow focus and shift (2026-10-14)
 

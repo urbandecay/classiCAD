@@ -812,6 +812,9 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
         if (lineColorBuffer_.isCreated()) {
             lineColorBuffer_.destroy();
         }
+        if (lineWireOffsetBuffer_.isCreated()) {
+            lineWireOffsetBuffer_.destroy();
+        }
         if (vertexArray_.isCreated()) {
             vertexArray_.destroy();
         }
@@ -890,7 +893,7 @@ bool ViewportSceneRenderer::initialize()
             QStringLiteral(":/classiCAD/shaders/scene_point.frag")) ||
         !pointProgram_.link() || !vertexArray_.create() ||
         !vertexBuffer_.create() || !patternOffsetBuffer_.create() ||
-        !lineColorBuffer_.create()) {
+        !lineColorBuffer_.create() || !lineWireOffsetBuffer_.create()) {
         qWarning().noquote() << "Viewport scene stroke shader setup failed:"
                              << program_.log() << pointProgram_.log();
         return false;
@@ -1149,6 +1152,7 @@ bool ViewportSceneRenderer::draw(
         strokeRanges_.clear();
         cachedVertices_.clear();
         cachedLineColors_.clear();
+        cachedLineWireOffsets_.clear();
         cachedPatternOffsets_.clear();
         return true;
     }
@@ -1180,6 +1184,10 @@ bool ViewportSceneRenderer::draw(
         for (const QVector4D &color : stroke.lineVertexColors) {
             keyStream << color.x() << color.y() << color.z() << color.w();
         }
+        keyStream << quint32(stroke.lineVertexWireOffsets.size());
+        for (const QVector3D &offset : stroke.lineVertexWireOffsets) {
+            keyStream << offset.x() << offset.y() << offset.z();
+        }
         geometryKeys.append(std::move(key));
     }
     const bool geometryChanged = geometryKeys != strokeGeometryKeys_;
@@ -1188,6 +1196,7 @@ bool ViewportSceneRenderer::draw(
         strokeRanges_.clear();
         cachedVertices_.clear();
         cachedLineColors_.clear();
+        cachedLineWireOffsets_.clear();
         cachedPatternOffsets_.clear();
         strokeRanges_.reserve(strokes.size());
         for (int strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
@@ -1221,6 +1230,14 @@ bool ViewportSceneRenderer::draw(
                     for (int vertex = 0; vertex < vertices->size(); ++vertex) {
                         cachedLineColors_.append(
                             QVector4D(1.0f, 1.0f, 1.0f, 1.0f));
+                    }
+                }
+                if (stroke.pointDiameter <= 0.0f &&
+                    stroke.lineVertexWireOffsets.size() == vertices->size()) {
+                    cachedLineWireOffsets_ += stroke.lineVertexWireOffsets;
+                } else {
+                    for (int vertex = 0; vertex < vertices->size(); ++vertex) {
+                        cachedLineWireOffsets_.append(QVector3D());
                     }
                 }
             }
@@ -1470,6 +1487,17 @@ bool ViewportSceneRenderer::draw(
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE,
                           sizeof(QVector4D), nullptr);
     lineColorBuffer_.release();
+    if (geometryChanged) {
+        lineWireOffsetBuffer_.bind();
+        lineWireOffsetBuffer_.allocate(
+            cachedLineWireOffsets_.constData(),
+            static_cast<int>(cachedLineWireOffsets_.size() * sizeof(QVector3D)));
+        lineWireOffsetBuffer_.release();
+    }
+    lineWireOffsetBuffer_.bind();
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(QVector3D), nullptr);
+    lineWireOffsetBuffer_.release();
     QOpenGLShaderProgram *boundProgram = nullptr;
     for (int index = 0; index < strokes.size(); ++index) {
         const ViewportSceneStroke &stroke = strokes[index];
@@ -1507,6 +1535,11 @@ bool ViewportSceneRenderer::draw(
             "uWorldOffset", QVector3D(stroke.worldOffset.x,
                                        stroke.worldOffset.y,
                                        stroke.worldOffset.z));
+        if (nextProgram == &program_) {
+            boundProgram->setUniformValue(
+                "uApplyBlenderMeshWireOffset",
+                stroke.blenderMeshWire && !smoothOverlayWires ? 1 : 0);
+        }
         boundProgram->setUniformValue(
             "uColor", QVector4D(stroke.color.redF(), stroke.color.greenF(),
                                   stroke.color.blueF(),
@@ -1561,6 +1594,7 @@ bool ViewportSceneRenderer::draw(
                         next.width != stroke.width || nextRange.first != range.first + count ||
                         next.editModeWire != stroke.editModeWire ||
                         next.smoothWireCategory != stroke.smoothWireCategory ||
+                        next.blenderMeshWire != stroke.blenderMeshWire ||
                         next.writeDepth != stroke.writeDepth ||
                         QVector3D(next.worldOffset.x, next.worldOffset.y, next.worldOffset.z) != offset ||
                         viewportSceneStrokePattern(next, widthPixels).style !=

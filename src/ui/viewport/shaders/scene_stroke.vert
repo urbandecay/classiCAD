@@ -5,8 +5,11 @@
 layout(location = 0) in vec3 aWorldPosition;
 layout(location = 1) in float aPatternOffsetPixels;
 layout(location = 2) in vec4 aEndpointColor;
+layout(location = 3) in vec3 aWireScreenOffset;
 uniform mat4 uViewProjection;
 uniform vec3 uWorldOffset;
+uniform vec2 uViewportSize;
+uniform int uApplyBlenderMeshWireOffset;
 uniform int uLinearDisplayBlend;
 out float vPatternOffsetPixels;
 out vec4 vEndpointColor;
@@ -21,6 +24,11 @@ vec3 srgbToLinear(vec3 color)
 void main()
 {
     gl_Position = uViewProjection * vec4(aWorldPosition + uWorldOffset, 1.0);
+    if (uApplyBlenderMeshWireOffset != 0) {
+        gl_Position.xy += aWireScreenOffset.xy * (1.0 / uViewportSize) *
+                          gl_Position.w;
+        gl_Position.z -= aWireScreenOffset.z * gl_Position.w;
+    }
     vPatternOffsetPixels = aPatternOffsetPixels;
     vEndpointColor = aEndpointColor;
     if (uLinearDisplayBlend != 0) {

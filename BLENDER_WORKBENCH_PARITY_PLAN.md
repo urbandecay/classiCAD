@@ -7942,3 +7942,16 @@ resolve remain open.
   well. Blender's Object RNA leaves `empty_display_type` animatable.
   Geometry that is explicitly evaluated, such as text and metaballs, remains
   evaluated as before. C++ build passed; no matched Blender comparison was run.
+
+### Blender mesh wire offset with Smooth Wires disabled (2026-10-15)
+
+- Regular Blender mesh wire endpoints now receive the view-facing normal
+  offset used when Smooth Wires is disabled, capped at half a screen pixel,
+  plus Blender's tiny forward depth nudge. The GPU path applies both in clip
+  space; the ordinary QPainter fallback converts the clip depth nudge through
+  the viewport near/far range before its visibility check. Blender's optional
+  wire curvature weight is not retained by the importer, so this offset uses
+  its default `wd = 0` factor; Blender's separate NDC offset is also not yet
+  represented. Smooth Wires enabled still needs Blender's neighboring
+  scene-depth adjustment. The C++ build passed; no matched runtime comparison
+  has been run.

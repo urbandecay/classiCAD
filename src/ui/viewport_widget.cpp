@@ -10570,7 +10570,9 @@ protected:
                     const Point3D camera = viewportTransform_.cameraPosition(size());
                     const Point3D view = viewportTransform_.viewDirection();
                     QVector<QVector4D> endpointColors;
+                    QVector<QVector3D> endpointWireOffsets;
                     endpointColors.reserve(wireVertexIndices.size());
+                    endpointWireOffsets.reserve(wireVertexIndices.size());
                     for (int endpoint = 0; endpoint < wireVertexIndices.size();
                          ++endpoint) {
                         const int vertex = wireVertexIndices[endpoint];
@@ -10594,11 +10596,33 @@ protected:
                                     float(camera.z - world.z));
                             }
                             if (towardView.lengthSquared() > 1.0e-16f) {
-                                facing = std::clamp(std::abs(
+                                const float signedFacing = std::clamp(
                                     QVector3D::dotProduct(
-                                        facingNormal, towardView.normalized())),
+                                        facingNormal, towardView.normalized()),
+                                    -1.0f, 1.0f);
+                                facing = std::abs(signedFacing);
+                                const float facingRatio = std::clamp(
+                                    1.0f - signedFacing * signedFacing,
                                     0.0f, 1.0f);
+                                const float flip = signedFacing > 0.0f ? 1.0f
+                                    : signedFacing < 0.0f ? -1.0f : 0.0f;
+                                const ViewportDirectionProjection normalInView =
+                                    viewportTransform_.worldDirectionToView(
+                                        {facingNormal.x(), facingNormal.y(),
+                                         facingNormal.z()});
+                                // Blender's standard mesh wire path uses wd=0
+                                // when no wire-curvature attribute is supplied.
+                                endpointWireOffsets.append(QVector3D(
+                                    float(normalInView.horizontal) *
+                                        facingRatio * flip,
+                                    float(normalInView.vertical) *
+                                        facingRatio * flip,
+                                    facingRatio * 1.0e-6f));
+                            } else {
+                                endpointWireOffsets.append(QVector3D());
                             }
+                        } else {
+                            endpointWireOffsets.append(QVector3D());
                         }
                         const auto gamma = [](float channel) {
                             return std::pow(std::clamp(channel, 0.0f, 1.0f),
@@ -10626,6 +10650,8 @@ protected:
                     ViewportSceneStroke wireStroke;
                     wireStroke.color = wireColor;
                     wireStroke.lineVertexColors = std::move(endpointColors);
+                    wireStroke.lineVertexWireOffsets =
+                        std::move(endpointWireOffsets);
                     wireStroke.width = 1.0f;
                     wireStroke.writeDepth = true;
                     wireStroke.blenderMeshWire = true;
@@ -12675,6 +12701,9 @@ protected:
                 const Point3D cameraPosition = viewportTransform_.cameraPosition(
                     renderFrame.viewportSize);
                 const Point3D viewDirection = viewportTransform_.viewDirection();
+                const ViewportProjectionClipRange wireProjectionClipRange =
+                    viewportProjectionClipRange(viewportTransform_,
+                                                 renderFrame.viewportSize);
                 const QVector<Point3D> &segments =
                     stroke.preparedDepthGeometry->preciseLineVertices;
                 const QVector<QVector4D> &endpointColors =
@@ -12700,6 +12729,20 @@ protected:
                         !viewportTransform_.worldPointToScreenUnclipped(
                             worldSecond, renderFrame.viewportSize, &screenSecond)) {
                         continue;
+                    }
+                    if (!smoothWiresOverlay_ &&
+                        endpointColors.size() == segments.size() &&
+                        stroke.lineVertexWireOffsets.size() == segments.size()) {
+                        const qreal pixelScale =
+                            0.5 / std::max<qreal>(devicePixelRatioF(), 1.0);
+                        const QVector3D firstOffset =
+                            stroke.lineVertexWireOffsets[index];
+                        const QVector3D secondOffset =
+                            stroke.lineVertexWireOffsets[index + 1];
+                        screenFirst += QPointF(firstOffset.x() * pixelScale,
+                                               -firstOffset.y() * pixelScale);
+                        screenSecond += QPointF(secondOffset.x() * pixelScale,
+                                                -secondOffset.y() * pixelScale);
                     }
                     const qreal length = QLineF(screenFirst, screenSecond).length();
                     const int subdivisions = std::clamp(
@@ -12738,10 +12781,32 @@ protected:
                             y >= 0 && y < domainSize.height() && pixel >= 0 &&
                             pixel < domainDepth.size()) {
                             const float surfaceDepth = domainDepth[pixel];
-                            const float strokeDepth = rasterWorkbenchCameraDepth(
+                            float strokeDepth = rasterWorkbenchCameraDepth(
                                 QVector3D(float(midpoint.x), float(midpoint.y),
                                           float(midpoint.z)),
                                 cameraPosition, viewDirection);
+                            if (!smoothWiresOverlay_ &&
+                                stroke.lineVertexWireOffsets.size() ==
+                                    segments.size()) {
+                                const float endpointDepthOffset =
+                                    (stroke.lineVertexWireOffsets[index].z() *
+                                         float(1.0 - tm) +
+                                     stroke.lineVertexWireOffsets[index + 1].z() *
+                                         float(tm));
+                                const float nearClip = float(
+                                    wireProjectionClipRange.nearPlane);
+                                const float farClip = float(
+                                    wireProjectionClipRange.farPlane);
+                                const float linearDepthOffset =
+                                    viewportTransform_.isPerspectiveEnabled()
+                                        ? endpointDepthOffset *
+                                              (farClip - nearClip) *
+                                              strokeDepth * strokeDepth /
+                                              (2.0f * nearClip * farClip)
+                                        : endpointDepthOffset *
+                                              (farClip - nearClip) * 0.5f;
+                                strokeDepth -= linearDepthOffset;
+                            }
                             const float tolerance = std::max(
                                 5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
                             visible = !std::isfinite(surfaceDepth) ||

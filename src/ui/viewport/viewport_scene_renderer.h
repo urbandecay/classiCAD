@@ -18,6 +18,7 @@
 #include <QSharedPointer>
 #include <QSize>
 #include <QVector>
+#include <QVector2D>
 #include <QVector3D>
 #include <QVector4D>
 
@@ -87,6 +88,10 @@ struct ViewportSceneStroke {
     // stroke's uniform color; varying endpoint colors produce Blender-style
     // edit-wire fades along a whole edge.
     QVector<QVector4D> lineVertexColors;
+    // Per-endpoint screen-plane normal nudge for Blender mesh wire overlays.
+    // The GPU path applies this in clip space; the QPainter fallback applies
+    // the equivalent half-pixel displacement in logical screen coordinates.
+    QVector<QVector3D> lineVertexWireOffsets;
     ObjectId objectId = ObjectId::invalid();
     quint64 geometryRevision = 0;
     bool cacheableGeometry = false;
@@ -258,6 +263,7 @@ private:
     QOpenGLBuffer overlayVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer patternOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer lineColorBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer lineWireOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<qint64, PictureTexture> pictureTextures_;
@@ -279,6 +285,7 @@ private:
     QVector<QPair<int, int>> strokeRanges_;
     QVector<QVector3D> cachedVertices_;
     QVector<QVector4D> cachedLineColors_;
+    QVector<QVector3D> cachedLineWireOffsets_;
     QVector<float> cachedPatternOffsets_;
     bool initializationAttempted_ = false;
     bool initialized_ = false;

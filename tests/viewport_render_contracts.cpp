@@ -14667,6 +14667,53 @@ int main(int argc, char *argv[])
                                     qsizetype(rgb.size()) *
                                         qsizetype(sizeof(float));
                         };
+                        const auto writeRgbaChannelTexturePfm =
+                            [&](const QString &path, GLuint texture,
+                                int channel) {
+                                if (path.isEmpty()) return true;
+                                if (texture == 0 || channel < 0 || channel > 3) {
+                                    return false;
+                                }
+                                QVector<float> rgba(glSize.width() *
+                                                    glSize.height() * 4);
+                                GLint previousActiveTexture = GL_TEXTURE0;
+                                GLint previousTexture = 0;
+                                functions.glGetIntegerv(
+                                    GL_ACTIVE_TEXTURE, &previousActiveTexture);
+                                functions.glActiveTexture(GL_TEXTURE0);
+                                functions.glGetIntegerv(
+                                    GL_TEXTURE_BINDING_2D, &previousTexture);
+                                functions.glBindTexture(GL_TEXTURE_2D, texture);
+                                functions.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA,
+                                                        GL_FLOAT, rgba.data());
+                                functions.glBindTexture(
+                                    GL_TEXTURE_2D,
+                                    static_cast<GLuint>(previousTexture));
+                                functions.glActiveTexture(
+                                    static_cast<GLenum>(previousActiveTexture));
+                                QVector<float> values(glSize.width() *
+                                                      glSize.height());
+                                for (int pixel = 0;
+                                     pixel < glSize.width() * glSize.height();
+                                     ++pixel) {
+                                    values[pixel] = rgba[pixel * 4 + channel];
+                                }
+                                QFile file(path);
+                                const QByteArray header =
+                                    QByteArrayLiteral("Pf\n") +
+                                    QByteArray::number(glSize.width()) +
+                                    QByteArrayLiteral(" ") +
+                                    QByteArray::number(glSize.height()) +
+                                    QByteArrayLiteral("\n-1.0\n");
+                                return file.open(QIODevice::WriteOnly) &&
+                                    file.write(header) == header.size() &&
+                                    file.write(reinterpret_cast<const char *>(
+                                                   values.constData()),
+                                               qsizetype(values.size()) *
+                                                   qsizetype(sizeof(float))) ==
+                                        qsizetype(values.size()) *
+                                            qsizetype(sizeof(float));
+                            };
                         const auto writeDepthTexturePfm = [&](const QString &path,
                                                                GLuint texture) {
                             if (path.isEmpty()) return true;
@@ -14809,11 +14856,31 @@ int main(int argc, char *argv[])
                                     sampleCapturePrefix +
                                     QStringLiteral("-sample-") +
                                     QString::number(sample);
-                                captureSucceeded =
+                                const bool preResolveAttachmentsValid =
+                                    (result.report.populatedAttachments &
+                                     ViewportRenderTargets::CurrentSampleColor) != 0 &&
+                                    targets.isValid(ViewportRenderTargets::Depth) &&
+                                    targets.isValid(
+                                        ViewportRenderTargets::ViewSpaceNormal) &&
+                                    targets.isValid(
+                                        ViewportRenderTargets::MaterialData);
+                                captureSucceeded = preResolveAttachmentsValid &&
                                     writeRgbTexturePfm(
                                         sampleStem +
                                             QStringLiteral("-color.pfm"),
                                         targets.currentSampleColorTexture) &&
+                                    writeRgbTexturePfm(
+                                        sampleStem +
+                                            QStringLiteral("-material-base.pfm"),
+                                        targets.materialDataTexture) &&
+                                    writeRgbaChannelTexturePfm(
+                                        sampleStem +
+                                            QStringLiteral("-material-payload.pfm"),
+                                        targets.materialDataTexture, 3) &&
+                                    writeRgbTexturePfm(
+                                        sampleStem +
+                                            QStringLiteral("-view-normal.pfm"),
+                                        targets.viewSpaceNormalTexture) &&
                                     writeDepthTexturePfm(
                                         sampleStem +
                                             QStringLiteral("-depth.pfm"),
@@ -14828,7 +14895,13 @@ int main(int argc, char *argv[])
                                     sampleCapturePrefix +
                                     QStringLiteral("-sample-") +
                                     QString::number(sample);
-                                captureSucceeded = writeRgbTexturePfm(
+                                const bool postResolveAttachmentsValid =
+                                    targets.isValid(
+                                        ViewportRenderTargets::HistoryColor) &&
+                                    targets.isValid(
+                                        ViewportRenderTargets::ResolvedSceneLinearColor);
+                                captureSucceeded = postResolveAttachmentsValid &&
+                                    writeRgbTexturePfm(
                                     sampleStem +
                                         QStringLiteral("-history-log2-weighted.pfm"),
                                     targets.historyColorTexture) &&
@@ -14848,6 +14921,28 @@ int main(int argc, char *argv[])
                                 jitterFile.open(QIODevice::WriteOnly) &&
                                 jitterFile.write(sampleJitterMetadata) ==
                                     sampleJitterMetadata.size();
+                        }
+                        bool sampleCaptureManifestSaved = true;
+                        if (!sampleCapturePrefix.isEmpty() &&
+                            completedSamples == expectedSamples) {
+                            const QByteArray manifest = QByteArrayLiteral(
+                                "# classiCAD Workbench AA sample capture\n"
+                                "# Blender comparison target: v5.2.2\n"
+                                "# image: PFM, bottom-up rows, scale -1.0; RGB files are scene-linear unless noted\n"
+                                "# sample-N-color.pfm: current sample scene color after scene passes, before finishSceneSample effects/AA resolve\n"
+                                "# sample-N-material-base.pfm: opaque material-data RGB, scene-linear base color\n"
+                                "# sample-N-material-payload.pfm: opaque material-data alpha payload; mode-dependent Workbench data, not display alpha\n"
+                                "# sample-N-view-normal.pfm: opaque view-space normal XYZ; RGBA alpha omitted\n"
+                                "# sample-N-depth.pfm: current sample view depth with the existing Blender-reference camera offset\n"
+                                "# sample-N-history-log2-weighted.pfm: accumulated weighted log2 scene-linear color after sample N\n"
+                                "# sample-N-resolved.pfm: resolved scene-linear output after sample N, before display conversion\n"
+                                "# fixture settings: opaque surface, outline/shadows/cavity/DOF disabled; no transparent OIT ranges\n"
+                                "# jitter file records each sample index and render jitter in pixels\n");
+                            QFile manifestFile(sampleCapturePrefix +
+                                               QStringLiteral("-manifest.txt"));
+                            sampleCaptureManifestSaved =
+                                manifestFile.open(QIODevice::WriteOnly) &&
+                                manifestFile.write(manifest) == manifest.size();
                         }
                         const QImage image = framebuffer.toImage();
                         bool linearCaptureSaved = true;
@@ -15002,6 +15097,7 @@ int main(int argc, char *argv[])
                                 linearCaptureSaved &&
                                 depthCaptureSaved &&
                                 sampleJitterMetadataSaved &&
+                                sampleCaptureManifestSaved &&
                                 completedSamples == expectedSamples &&
                                 changedPixels > 4000 && image.save(capturePath),
                             label);

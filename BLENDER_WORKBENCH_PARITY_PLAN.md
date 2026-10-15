@@ -2522,6 +2522,22 @@ depth domain. Visual depth comparison remains open.
   are not direct internal Blender-buffer reads. The following camera-shift
   reference fixture supplies the validated comparison route without a Blender
   source build.
+- **Per-sample shading-stage attribution (2026-10-14):** the opt-in capture now
+  also writes the opaque material-data RGB and alpha payload, plus view-space
+  normal XYZ, before `finishSceneSample()`. It checks each attachment's
+  validity before reading; current-sample color is checked against the scene
+  pass report because the AA target marks that attachment valid at finish.
+  A sidecar manifest labels capture order, PFM orientation/color encoding,
+  depth conversion, and fixture effects; the existing jitter file records the
+  pixel offsets. Eight 640×480 samples produced the expected color, depth,
+  material-base, material-payload, normal, log-history, and resolved files;
+  selected buffers parsed with finite values. History remains weighted log2
+  data, and the resolved image remains post-AA scene-linear output before
+  display conversion. These are classiCAD diagnostic buffers, not direct
+  Blender internal-buffer comparisons, since Blender's installed background
+  API exposes only its final render result. Validation: full `cmake --build
+  build -j4` passed with the 316-source dependency audit; capture-enabled
+  offscreen `viewport_render_contracts` passed (1/1, 29.29 seconds).
 - The single-sample fixture now reads that jitter metadata and renders eight
   Blender AA-off camera-shift references in one background session. The camera
   translation reproduces Blender's `window_translate_m4` projection shift;

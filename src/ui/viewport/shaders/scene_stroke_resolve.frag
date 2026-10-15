@@ -75,6 +75,23 @@ void blendCandidate(inout vec4 targetColor,
     }
 }
 
+void blendNeighbor(inout vec4 targetColor,
+                   inout float targetDepth,
+                   vec4 candidateColor,
+                   float candidateDepth,
+                   float coverage)
+{
+    candidateColor *= coverage;
+    if (coverage > 0.0 && candidateDepth < targetDepth) {
+        // Blender alpha-overs only a strictly nearer neighboring wire.
+        targetColor = candidateColor + targetColor * (1.0 - candidateColor.a);
+        targetDepth = candidateDepth;
+    } else {
+        // Equal-depth samples follow Blender's alpha-under branch.
+        targetColor += candidateColor * (1.0 - targetColor.a);
+    }
+}
+
 float correctedMeshWireDepth(ivec2 pixel, vec4 record, float wireDepth)
 {
     if (record.w <= 0.0 ||
@@ -139,9 +156,9 @@ void main()
         float neighborDepth = correctedMeshWireDepth(
             neighborPixel, neighborRecord,
             texelFetch(uCandidateDepth, neighborPixel, 0).r);
-        blendCandidate(resolvedLineColor, resolvedLineDepth,
-                       texelFetch(uLineColor, neighborPixel, 0),
-                       neighborDepth, coverage);
+        blendNeighbor(resolvedLineColor, resolvedLineDepth,
+                      texelFetch(uLineColor, neighborPixel, 0),
+                      neighborDepth, coverage);
     }
 
     // Blender first folds the four neighboring line samples into the center

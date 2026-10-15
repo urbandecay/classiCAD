@@ -2109,6 +2109,19 @@ bool loadVignolaDocument(const QString &path,
             object.id = ObjectId::fromValue(nextObjectValue++);
             object.layerId = targetLayer;
         }
+        for (const int index : importReport.selectedObjectIndices) {
+            if (index >= 0 && index < objects.size()) {
+                importReport.selectedObjectIds.append(objects[index].id);
+            }
+        }
+        if (importReport.activeObjectIndex >= 0 &&
+            importReport.activeObjectIndex < objects.size()) {
+            const ObjectId activeId =
+                objects[importReport.activeObjectIndex].id;
+            if (importReport.selectedObjectIds.contains(activeId)) {
+                importReport.activeObjectId = activeId;
+            }
+        }
         snapshot.collections = std::move(collections);
         snapshot.objects = std::move(objects);
         snapshot.materials = std::move(materials);
@@ -2343,6 +2356,7 @@ bool importBlenderScene(const QString &path,
     QHash<QString, DocumentMaterial> materialsById;
     QSet<QString> importedIds;
     QHash<QString, int> importedIndexBySourceId;
+    QVector<QString> sourceObjectIdsByImportedIndex;
     QHash<QString, CollectionId> collectionIdsBySource;
     QHash<QString, QString> sceneLibraryPaths;
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
@@ -2662,7 +2676,44 @@ bool importBlenderScene(const QString &path,
         unsupportedFeatureCount += warnings.size() - warningCountBeforeItem;
         importedIds.insert(objectId);
         importedIndexBySourceId.insert(objectId, imported.size());
+        const QString sourceObjectId = item.value(
+            QStringLiteral("source_object_id")).toString();
+        sourceObjectIdsByImportedIndex.append(
+            sourceObjectId.isEmpty() ? objectId : sourceObjectId);
         imported.append(std::move(sceneObject));
+    }
+
+    QVector<int> selectedObjectIndices;
+    int activeObjectIndex = -1;
+    QString activeSourceObjectId;
+    QSet<QString> selectedSourceObjectIds;
+    for (const QJsonValue &sceneValue : importedSceneRecords) {
+        const QJsonArray viewLayers = sceneValue.toObject().value(
+            QStringLiteral("view_layers")).toArray();
+        if (viewLayers.isEmpty()) continue;
+        const QJsonObject activeViewLayer = viewLayers.first().toObject();
+        for (const QJsonValue &objectIdValue : activeViewLayer.value(
+                 QStringLiteral("selected_object_ids")).toArray()) {
+            if (objectIdValue.isString() && !objectIdValue.toString().isEmpty()) {
+                selectedSourceObjectIds.insert(objectIdValue.toString());
+            }
+        }
+        activeSourceObjectId = activeViewLayer.value(
+            QStringLiteral("active_object_id")).toString();
+        break;
+    }
+    for (int index = 0; index < sourceObjectIdsByImportedIndex.size(); ++index) {
+        const QString &sourceObjectId = sourceObjectIdsByImportedIndex[index];
+        if (selectedSourceObjectIds.contains(sourceObjectId)) {
+            selectedObjectIndices.append(index);
+        }
+        if (activeObjectIndex < 0 && sourceObjectId == activeSourceObjectId) {
+            activeObjectIndex = index;
+        }
+    }
+    if (activeObjectIndex >= 0 &&
+        !selectedObjectIndices.contains(activeObjectIndex)) {
+        activeObjectIndex = -1;
     }
 
     if (report != nullptr) {
@@ -2674,6 +2725,8 @@ bool importBlenderScene(const QString &path,
         report->warningMessage = conciseImportWarnings(
             warnings, skippedCount, unsupportedFeatureCount);
         report->scenes = importedSceneRecords;
+        report->selectedObjectIndices = selectedObjectIndices;
+        report->activeObjectIndex = activeObjectIndex;
         report->importedBlenderColorLuts = importedBlenderColorLuts;
         report->importedBlenderColorLutMetadata = importedBlenderColorLutMetadata;
     }

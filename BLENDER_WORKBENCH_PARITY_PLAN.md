@@ -7581,6 +7581,18 @@ resolve remain open.
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L60-L74).
   The C++ build passed; no matched Blender image comparison has been run.
 
+### Imported Blender object selection (2026-10-15)
+
+- The extractor records selected and active source object IDs for each Blender
+  view layer. Ordinary `.blend` open and scene import map the chosen first
+  scene/view-layer state to classiCAD object IDs after import has assigned
+  those IDs, then restore it through the existing selection model. When one
+  Blender curve or surface becomes several imported objects, all pieces
+  follow the source object's selection and its first imported piece becomes
+  primary. Unsupported objects without imported geometry are omitted. This
+  preserves initial selection state; no matched visual comparison has been
+  run.
+
 ### Blender mesh wire-over-solid import (2026-10-15)
 
 - Blender scene extraction now saves the active 3D View's

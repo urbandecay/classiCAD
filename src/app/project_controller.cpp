@@ -72,6 +72,12 @@ bool ProjectController::open(const QString &path,
     }
 
     session_.replaceDocument(std::move(candidate));
+    if (ordinaryImportReport != nullptr &&
+        !ordinaryImportReport->selectedObjectIds.isEmpty()) {
+        session_.selection().setObjectIds(
+            ordinaryImportReport->selectedObjectIds,
+            ordinaryImportReport->activeObjectId);
+    }
     if (cameraSettings != nullptr) {
         *cameraSettings = restoredCameraSettings;
     }

@@ -1651,6 +1651,14 @@ def extract_scene(input_path, mode):
             "view_layers": [{
                 "name": view_layer.name,
                 "key": view_layer_key(scene, view_layer),
+                "selected_object_ids": sorted(
+                    stable_id(obj) for obj in scene.objects
+                    if obj.select_get(view_layer=view_layer)
+                ),
+                "active_object_id": (
+                    stable_id(view_layer.objects.active)
+                    if view_layer.objects.active is not None else ""
+                ),
                 "use_pass_combined": bool(view_layer.use_pass_combined),
                 "use_pass_z": bool(view_layer.use_pass_z),
                 "collection_instances": layer_collection_records(scene, view_layer),

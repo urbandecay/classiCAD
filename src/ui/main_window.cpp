@@ -837,13 +837,34 @@ private:
                 }
             }
             transaction.setSettings(settings);
-            transaction.insertObjects(session_.document().size(), importedObjects);
+            const QVector<ObjectId> insertedObjectIds =
+                transaction.insertObjects(session_.document().size(),
+                                          importedObjects);
             if (!session_.commitTransaction(transaction)) {
                 QMessageBox::critical(
                     this,
                     QStringLiteral("Could Not Import Blender Scene"),
                     QStringLiteral("The imported Blender objects could not be added to the document."));
                 return;
+            }
+            QVector<ObjectId> selectedImportedObjectIds;
+            for (const int index : report.selectedObjectIndices) {
+                if (index >= 0 && index < insertedObjectIds.size()) {
+                    selectedImportedObjectIds.append(insertedObjectIds[index]);
+                }
+            }
+            ObjectId activeImportedObjectId = ObjectId::invalid();
+            if (report.activeObjectIndex >= 0 &&
+                report.activeObjectIndex < insertedObjectIds.size()) {
+                const ObjectId candidate =
+                    insertedObjectIds[report.activeObjectIndex];
+                if (selectedImportedObjectIds.contains(candidate)) {
+                    activeImportedObjectId = candidate;
+                }
+            }
+            if (!selectedImportedObjectIds.isEmpty()) {
+                session_.selection().setObjectIds(selectedImportedObjectIds,
+                                                  activeImportedObjectId);
             }
             if (viewport_ != nullptr) {
                 viewport_->refreshAfterProjectImport();

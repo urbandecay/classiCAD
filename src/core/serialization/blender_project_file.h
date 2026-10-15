@@ -62,6 +62,13 @@ struct BlenderSceneImportReport {
     QString importMode;
     QString warningMessage;
     QJsonArray scenes;
+    // Indices refer to the imported-object array produced by
+    // importBlenderScene(); ordinary .blend open also resolves these to the
+    // newly assigned classiCAD IDs before returning the report.
+    QVector<int> selectedObjectIndices;
+    int activeObjectIndex = -1;
+    QVector<ObjectId> selectedObjectIds;
+    ObjectId activeObjectId = ObjectId::invalid();
     QHash<QString, QByteArray> importedBlenderColorLuts;
     QHash<QString, ImportedBlenderColorLutMetadata> importedBlenderColorLutMetadata;
 };

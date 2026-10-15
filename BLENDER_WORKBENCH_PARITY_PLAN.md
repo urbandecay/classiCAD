@@ -7831,7 +7831,9 @@ resolve remain open.
   mesh from Blender's current evaluated curve. The proxy carries the source
   object identity for selection and collection-instance metadata. Surface
   settings and alternate evaluated states are not editable or retained; no
-  matched Blender curve comparison has been run.
+  matched Blender curve comparison has been run. Evaluated mesh acquisition is
+  now inside the cleanup scope, so `to_mesh_clear()` runs if mesh conversion
+  fails or returns no mesh.
 
 ### Collection-instanced Blender text and metaballs (2026-10-15)
 

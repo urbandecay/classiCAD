@@ -945,18 +945,18 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
         evaluated_obj = (evaluated_object_override
                          if evaluated_object_override is not None
                          else obj.evaluated_get(depsgraph))
-        mesh = evaluated_obj.to_mesh(preserve_all_data_layers=True,
-                                     depsgraph=depsgraph)
         transform = (transform_override if transform_override is not None
                      else evaluated_obj.matrix_world)
     else:
         evaluated_obj = None
-        mesh = obj.data
         transform = (transform_override if transform_override is not None
                      else obj.matrix_world)
-    if mesh is None:
-        raise ValueError("Blender did not provide mesh data")
     try:
+        mesh = (evaluated_obj.to_mesh(preserve_all_data_layers=True,
+                                      depsgraph=depsgraph)
+                if mode == "evaluated" else obj.data)
+        if mesh is None:
+            raise ValueError("Blender did not provide mesh data")
         item["transform_world"] = matrix_values(transform)
         item["mesh_name"] = mesh.name_full
         item["mesh_library_path"] = source_library_path(mesh)

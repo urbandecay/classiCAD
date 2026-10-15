@@ -8545,6 +8545,17 @@ resolve remain open.
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
   Runtime GPU and matched image comparisons remain open.
 
+### GPU depth-of-field final alpha resolve (2026-10-15)
+
+- The final GPU DOF resolve now keeps the blurred alpha produced by its
+  CoC-aware gather and median stages. It no longer overwrites the result with
+  the sharp source alpha. Blender 5.2.2 computes its final add/multiply resolve
+  over RGBA, so transparent film now uses the same source/blur blend amount for
+  alpha as for color. `cmake --build build -j4` passed; matched
+  transparent-film captures remain open.
+  Reference:
+  [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L304-L319).
+
 ### GPU depth-of-field CoC tap weights (2026-10-15)
 
 - DOF taps now use each sample's circle-of-confusion radius and ring coverage

@@ -6954,3 +6954,19 @@ resolve remain open.
   `QT_QPA_PLATFORM=offscreen
   ./build/classicad_viewport_render_contracts_test` both passed. No GUI was
   launched.
+
+### QPainter cavity viewport-boundary audit (2026-10-15)
+
+- Verified the proposed viewport-edge clamp against Blender 5.2.2's pinned
+  `workbench_cavity.bsl.hh`: `cavity_compute` skips a sample when its UV lies
+  outside `[0, 1]` before reading the depth texture. QPainter's bounds check
+  likewise skips that tap. The GPU texture's `GL_CLAMP_TO_EDGE` setting does
+  not affect these cavity taps because the shader rejects them first, so
+  clamping the CPU coordinates would be a parity regression.
+- No renderer change was justified. This verifies viewport-boundary sampling
+  only; the separately documented QPainter cavity-factor and full-image
+  parity gaps remain open. Blender source comparison is pinned to
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L520-L541).
+- Validation: confirmed the source behavior in Blender's v5.2.2 shader and
+  classiCAD's production fallback. No C++ change remained to build or test.
+  No GUI was launched.

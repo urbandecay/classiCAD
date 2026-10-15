@@ -67,35 +67,49 @@ quint32 blenderHashInt(quint32 value)
     return c;
 }
 
-} // namespace
-
-QColor workbenchRandomObjectColor(std::uint64_t objectId,
-                                  const QString &displayName,
-                                  const QString &libraryPath)
+qreal blenderRandomObjectHue(std::uint64_t objectId,
+                             const QString &displayName,
+                             const QString &libraryPath)
 {
     quint32 hash = 0;
-    qreal hue = 0.0;
     if (!displayName.isEmpty()) {
         hash = blenderStringHash(QByteArrayLiteral("OB") +
                                  displayName.toUtf8());
         if (!libraryPath.isEmpty()) {
             hash = (hash * 13U) ^ blenderStringHash(libraryPath.toUtf8());
         }
-        hue = static_cast<float>(blenderHashInt(hash)) /
-              static_cast<float>(0xffffffffU);
-    } else {
-        hash = static_cast<quint32>(objectId) ^
-               static_cast<quint32>(objectId >> 32);
-        hash ^= hash >> 16;
-        hash *= 0x7feb352dU;
-        hash ^= hash >> 15;
-        hash *= 0x846ca68bU;
-        hash ^= hash >> 16;
-        // Retain classiCAD's existing identity fallback for older/native-only
-        // objects that do not have a Blender object name.
-        hue = static_cast<qreal>(hash) / 4294967296.0;
+        return static_cast<float>(blenderHashInt(hash)) /
+               static_cast<float>(0xffffffffU);
     }
-    return QColor::fromHsvF(hue, 0.5, 0.8);
+
+    hash = static_cast<quint32>(objectId) ^
+           static_cast<quint32>(objectId >> 32);
+    hash ^= hash >> 16;
+    hash *= 0x7feb352dU;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bU;
+    hash ^= hash >> 16;
+    // Retain classiCAD's existing identity fallback for older/native-only
+    // objects that do not have a Blender object name.
+    return static_cast<qreal>(hash) / 4294967296.0;
+}
+
+} // namespace
+
+QColor workbenchRandomObjectColor(std::uint64_t objectId,
+                                  const QString &displayName,
+                                  const QString &libraryPath)
+{
+    return QColor::fromHsvF(
+        blenderRandomObjectHue(objectId, displayName, libraryPath), 0.5, 0.8);
+}
+
+QColor workbenchRandomObjectWireColor(std::uint64_t objectId,
+                                      const QString &displayName,
+                                      const QString &libraryPath)
+{
+    return QColor::fromHsvF(
+        blenderRandomObjectHue(objectId, displayName, libraryPath), 0.75, 0.8);
 }
 
 } // namespace classiCAD

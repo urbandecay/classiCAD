@@ -75,6 +75,7 @@
 #include "viewport/viewport_overlay.h"
 #include "viewport/viewport_erase_overlay_renderer.h"
 #include "viewport/viewport_renderer.h"
+#include "viewport/workbench_random_color.h"
 #include "viewport/viewport_raster_workbench_effects.h"
 #include "viewport/viewport_render_frame.h"
 #include "viewport/viewport_geometry_cache.h"
@@ -10468,8 +10469,8 @@ protected:
                         wireColor = QColor::fromRgbF(srgb.x(), srgb.y(), srgb.z());
                     } else if (viewportShadingSettings_.wireColorMode ==
                                ViewportWireColorMode::Random) {
-                        wireColor = workbenchRandomColor(
-                            renderObject.objectId, renderObject.displayName,
+                        wireColor = workbenchRandomObjectWireColor(
+                            renderObject.objectId.value(), renderObject.displayName,
                             workbenchRandomIdentityLibraryPath(renderObject));
                     }
                     const bool themeColorGradient =
@@ -10523,8 +10524,8 @@ protected:
                             renderObject.displayColorSceneLinear.toVector3D();
                         if (viewportShadingSettings_.wireColorMode ==
                             ViewportWireColorMode::Random) {
-                            const QColor random = workbenchRandomColor(
-                                renderObject.objectId, renderObject.displayName,
+                            const QColor random = workbenchRandomObjectWireColor(
+                                renderObject.objectId.value(), renderObject.displayName,
                                 workbenchRandomIdentityLibraryPath(renderObject));
                             sourceColor = workbenchRec709ToSceneLinear(
                                 QVector3D(random.redF(), random.greenF(),
@@ -10678,8 +10679,8 @@ protected:
                     QVector3D sourceColor =
                         renderObject.displayColorSceneLinear.toVector3D() * 0.5f;
                     if (!objectColor) {
-                        const QColor random = workbenchRandomColor(
-                            renderObject.objectId, renderObject.displayName,
+                        const QColor random = workbenchRandomObjectWireColor(
+                            renderObject.objectId.value(), renderObject.displayName,
                             workbenchRandomIdentityLibraryPath(renderObject));
                         sourceColor = workbenchRec709ToSceneLinear(
                             QVector3D(random.redF(), random.greenF(),

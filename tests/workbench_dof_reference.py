@@ -1,6 +1,6 @@
 """Render matched Blender 5.2.2 Workbench baseline and DOF captures.
 
-Usage: blender --background --python tests/workbench_dof_reference.py -- output-prefix [--aperture-blades N]
+Usage: blender --background --python tests/workbench_dof_reference.py -- output-prefix [--projection PERSPECTIVE|ORTHOGRAPHIC] [--aperture-blades N]
 
 Writes ``<prefix>-baseline.png`` and ``<prefix>-dof.png`` at 640x480. The
 camera, cube, Workbench settings, and optics match the focused classiCAD GPU
@@ -19,6 +19,15 @@ def main():
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output_prefix")
+    parser.add_argument(
+        "--projection", choices=("PERSPECTIVE", "ORTHOGRAPHIC"),
+        default="PERSPECTIVE",
+        help="matched classiCAD viewport projection (default: PERSPECTIVE)",
+    )
+    parser.add_argument(
+        "--ortho-scale", type=float, default=5.0,
+        help="orthographic horizontal camera frame width (default: 5.0)",
+    )
     parser.add_argument(
         "--aperture-blades", type=int, default=6,
         help="Workbench camera aperture blade count (default: 6)",
@@ -68,19 +77,30 @@ def main():
     direction = Vector((4.0, -6.0, 4.0)).normalized()
     # ViewportTransform starts at a 60-unit reference distance; its 17.28
     # zoom maps to 60/17.28 for this matched perspective camera.
-    camera_location = target + direction * (60.0 / 17.28)
+    camera_distance = (
+        1000.0 if args.projection == "ORTHOGRAPHIC" else 60.0 / 17.28
+    )
+    camera_location = target + direction * camera_distance
     camera_data = bpy.data.cameras.new("ReferenceCamera")
     camera = bpy.data.objects.new("ReferenceCamera", camera_data)
     scene.collection.objects.link(camera)
     camera.location = camera_location
     camera.rotation_euler = (target - camera_location).to_track_quat("-Z", "Y").to_euler()
-    camera_data.type = "PERSP"
-    camera_data.lens = 25.0
+    camera_data.type = (
+        "ORTHO" if args.projection == "ORTHOGRAPHIC" else "PERSP"
+    )
+    camera_data.ortho_scale = args.ortho_scale
+    # Orthographic lens length does not affect framing. A long lens makes the
+    # one-unit face depth offsets visible at this matched 1000-unit eye while
+    # keeping the viewport bounds unchanged.
+    camera_data.lens = 2000.0 if args.projection == "ORTHOGRAPHIC" else 25.0
     camera_data.sensor_fit = "HORIZONTAL"
     camera_data.sensor_width = 36.0
     camera_data.sensor_height = 24.0
     camera_data.clip_start = 0.01
-    camera_data.clip_end = 34.7222222
+    camera_data.clip_end = (
+        2000.0 if args.projection == "ORTHOGRAPHIC" else 34.7222222
+    )
     camera_data.dof.focus_distance = camera_location.length
     camera_data.dof.aperture_fstop = 0.1
     camera_data.dof.aperture_blades = args.aperture_blades

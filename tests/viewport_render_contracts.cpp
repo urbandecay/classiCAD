@@ -14426,18 +14426,37 @@ int main(int argc, char *argv[])
                         "CLASSICAD_VIEWPORT_GPU_DOF_CAPTURE");
                     if (!gpuDofCapturePath.isEmpty()) {
                         ViewportTransform dofCamera = gpuTransform;
-                        dofCamera.setPerspectiveEnabled(true);
+                        const bool orthographicDofCapture =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_GPU_DOF_PROJECTION")
+                                .compare(QStringLiteral("ORTHOGRAPHIC"),
+                                         Qt::CaseInsensitive) == 0;
+                        dofCamera.setPerspectiveEnabled(
+                            !orthographicDofCapture);
                         ViewportCameraPreferences dofOptics =
                             dofCamera.cameraPreferences();
                         dofOptics.sceneCameraEnabled = true;
                         // The viewport projection's 2x camera zoom makes its
                         // 50 mm preference equivalent to a 25 mm Blender
                         // camera lens for this matched 36 mm horizontal fit.
-                        dofOptics.focalLengthMillimeters = 25.0;
-                        dofOptics.focusDistance = std::sqrt(
-                            std::pow(dofCamera.cameraPosition(glSize).x, 2.0) +
-                            std::pow(dofCamera.cameraPosition(glSize).y, 2.0) +
-                            std::pow(dofCamera.cameraPosition(glSize).z, 2.0));
+                        dofOptics.focalLengthMillimeters =
+                            orthographicDofCapture ? 2000.0 : 25.0;
+                        if (orthographicDofCapture) {
+                            // The orthographic projection uses a fixed
+                            // 1000-unit eye from its target. Place the Blender
+                            // reference camera and focus plane at that same
+                            // distance; the 17.28 viewport zoom maps to a
+                            // 5-unit horizontal camera frame at 640 pixels.
+                            dofOptics.focusDistance = std::min(
+                                dofOptics.clipEnd, 1000.0);
+                        } else {
+                            const Point3D cameraPosition =
+                                dofCamera.cameraPosition(glSize);
+                            dofOptics.focusDistance = std::sqrt(
+                                std::pow(cameraPosition.x, 2.0) +
+                                std::pow(cameraPosition.y, 2.0) +
+                                std::pow(cameraPosition.z, 2.0));
+                        }
                         // Use a deliberately large aperture so this compact
                         // cube produces measurable CoC at the matched view.
                         dofOptics.fStop = 0.1;
@@ -14495,6 +14514,7 @@ int main(int argc, char *argv[])
                                 return pixel == expectedBackground;
                             };
                         int changedObjectEdgePixels = 0;
+                        int changedCapturePixels = 0;
                         if (baselineCaptured && dofCaptured) {
                             const auto channelDifference = [](
                                 const QColor &left, const QColor &right) {
@@ -14507,6 +14527,11 @@ int main(int argc, char *argv[])
                                 for (int x = 0; x < glSize.width(); ++x) {
                                     const QColor baselinePixel =
                                         dofBaselineImage.pixelColor(x, y);
+                                    if (channelDifference(
+                                            baselinePixel,
+                                            dofImage.pixelColor(x, y)) > 2) {
+                                        ++changedCapturePixels;
+                                    }
                                     if (isFixtureBackground(baselinePixel)) {
                                         continue;
                                     }
@@ -14541,11 +14566,21 @@ int main(int argc, char *argv[])
                             }
                         }
                         passed &= check(
-                            baselineCaptured && dofCaptured && gatedCaptured &&
-                                knownOpaqueBackground &&
-                                changedObjectEdgePixels > 0 &&
-                                dofGatedImage == dofBaselineImage,
-                            "GPU Workbench DOF must retain opaque background coverage, smooth high-contrast surface edges, and be bypassed when camera DOF is disabled");
+                            baselineCaptured && dofCaptured && gatedCaptured,
+                            "GPU Workbench DOF fixture must render baseline, enabled, and camera-gated captures");
+                        passed &= check(
+                            knownOpaqueBackground,
+                            "GPU Workbench DOF must retain opaque background coverage");
+                        passed &= check(
+                            orthographicDofCapture
+                                ? changedCapturePixels > 0
+                                : changedObjectEdgePixels > 0,
+                            orthographicDofCapture
+                                ? "GPU Workbench DOF must measurably affect the orthographic capture"
+                                : "GPU Workbench DOF must smooth high-contrast perspective surface edges");
+                        passed &= check(
+                            dofGatedImage == dofBaselineImage,
+                            "GPU Workbench DOF must be bypassed when camera DOF is disabled");
                     }
                     const QString qpainterDofCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_QPAINTER_DOF_CAPTURE");

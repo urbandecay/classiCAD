@@ -365,15 +365,46 @@ open.
   with the perspective formula. Its DOF shader now uses the linear near/far
   mapping for orthographic depth and retains the perspective formula for
   perspective views. Pass order remains per sample: Workbench resolves DOF
-  before anti-aliasing, and classiCAD does the same. Matched orthographic-view
-  output comparison remains pending. The offscreen GPU contract now uses a
-  known opaque background, confirms that coverage remains opaque with DOF on,
-  checks that neighboring high-contrast surface colors smooth, and verifies
+  before anti-aliasing, and classiCAD does the same. The offscreen GPU
+  contract uses a known opaque background, confirms that coverage remains
+  opaque with DOF on, checks that neighboring high-contrast surface colors
+  smooth, and verifies
   that disabling camera DOF returns the baseline image. A diagnostic Blender
-  5.2.2 Workbench cube capture also changed the backdrop with DOF enabled, so
-  the exact background behavior still needs a matched capture comparison.
+  5.2.2 Workbench cube capture also changed the backdrop with DOF enabled.
   The separate QPainter path retains its lower-resolution sampling and its own
   visual-comparison gap.
+
+### Matched GPU orthographic-view DOF comparison (2026-10-15)
+
+- Extended the opt-in production GPU capture and Blender 5.2.2 reference
+  helper with an orthographic projection. Both render the same 640×480 cube,
+  5-unit horizontal frame, 1000-unit camera/focus distance, 2000 mm lens,
+  f/0.1 aperture, six blades, 0.2 rad rotation, and 1.2 aperture ratio. The
+  long lens makes the cube's front/back depth separation visible without
+  changing orthographic framing. The contract verifies both captures, opaque
+  corner background, a measurable DOF delta, and exact baseline output when
+  camera DOF is disabled.
+- Against Blender 5.2.2, threshold-2 DOF-effect masks contain 7,052 Blender
+  pixels and 5,057 classiCAD pixels (IoU `0.685317`, 2,261 XOR); at threshold
+  3 the counts are 1,202 and 1,031 (IoU `0.555014`, 639 XOR). Mean per-pixel
+  maximum-channel effect magnitude is `0.2060/255` for Blender and
+  `0.1907/255` for classiCAD. Baseline output already differs by mean
+  `1.1368/255` with 79,758 pixels above 2; DOF output differs by
+  `1.1836/255` with 79,993 pixels above 2. The baseline contribution and
+  differing effect masks prevent attributing the full output error to the DOF
+  gather. This confirms measurable orthographic DOF and its camera gate, while
+  leaving visual parity open; no production equation change was justified.
+- Validation: `cmake --build build -j4` passed with the 317-source dependency
+  audit; capture-enabled offscreen `viewport_render_contracts` passed (1/1);
+  Blender reported 5.2.2 LTS; and `workbench_dof_compare.py` completed on the
+  paired images. Reproduce classiCAD captures with
+  `CLASSICAD_VIEWPORT_GPU_DOF_PROJECTION=ORTHOGRAPHIC
+  CLASSICAD_VIEWPORT_GPU_DOF_CAPTURE=<path>_dof.png
+  CLASSICAD_VIEWPORT_GPU_DOF_BASELINE_CAPTURE=<path>_baseline.png
+  QT_QPA_PLATFORM=offscreen ctest --test-dir build -R
+  '^viewport_render_contracts$' --output-on-failure`; render the Blender pair
+  with `tests/workbench_dof_reference.py -- <prefix> --projection
+  ORTHOGRAPHIC`.
 
 **DOF gate correction (2026-10-12):** This supersedes older summary bullets
 and the `Cavity and depth of field` matrix row below that describe GPU DOF as

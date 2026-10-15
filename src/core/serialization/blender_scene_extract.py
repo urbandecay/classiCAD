@@ -792,7 +792,7 @@ def saved_viewport_shading_record(scene):
                     overlay.show_outline_selected)
                 record["show_wireframes"] = bool(overlay.show_wireframes)
                 record["wireframe_color_type"] = str(
-                    overlay.wireframe_color_type)
+                    getattr(space.shading, "wireframe_color_type", "THEME"))
                 record["wireframe_opacity"] = finite_number(
                     overlay.wireframe_opacity)
                 record["wireframe_threshold"] = finite_number(

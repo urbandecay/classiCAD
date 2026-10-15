@@ -97,6 +97,7 @@ struct ViewportShadingSettings {
     QColor themeWireBackgroundColor = QColor(Qt::black);
     QColor themeActiveObjectColor = QColor(QStringLiteral("#ff8a00"));
     QColor themeSelectedObjectColor = QColor(QStringLiteral("#ff8a00"));
+    QColor themeTransformColor = QColor(QStringLiteral("#ff8a00"));
     QColor outlineColor = QColor(Qt::black);
     QColor customBackgroundColor = QColor::fromRgb(48, 48, 48);
     QVector3D shadowDirection = QVector3D(0.57735026f, 0.57735026f,

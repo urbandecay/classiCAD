@@ -806,7 +806,8 @@ def saved_viewport_shading_record(scene):
                                 ("theme_wire_color", "wire"),
                                 ("theme_wire_background_color", "background"),
                                 ("theme_active_object_color", "object_active"),
-                                ("theme_selected_object_color", "object_selected")):
+                                ("theme_selected_object_color", "object_selected"),
+                                ("theme_transform_color", "transform")):
                             color = getattr(view_theme, theme_key, None)
                             if color is not None:
                                 record[record_key] = vector_values(color)

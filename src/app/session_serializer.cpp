@@ -223,6 +223,8 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
                   settings.themeActiveObjectColor.name(QColor::HexArgb));
     object.insert(QStringLiteral("themeSelectedObjectColor"),
                   settings.themeSelectedObjectColor.name(QColor::HexArgb));
+    object.insert(QStringLiteral("themeTransformColor"),
+                  settings.themeTransformColor.name(QColor::HexArgb));
     object.insert(QStringLiteral("outlineColor"),
                   settings.outlineColor.name(QColor::HexArgb));
     object.insert(QStringLiteral("customBackgroundColor"),
@@ -434,6 +436,9 @@ bool viewportShadingFromJson(const QJsonValue &value,
         (object.contains(QStringLiteral("themeSelectedObjectColor")) &&
          !color(QStringLiteral("themeSelectedObjectColor"),
                 &restored.themeSelectedObjectColor)) ||
+        (object.contains(QStringLiteral("themeTransformColor")) &&
+         !color(QStringLiteral("themeTransformColor"),
+                &restored.themeTransformColor)) ||
         !color(QStringLiteral("outlineColor"), &restored.outlineColor) ||
         !color(QStringLiteral("customBackgroundColor"),
                &restored.customBackgroundColor)) {

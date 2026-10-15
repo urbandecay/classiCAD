@@ -7385,6 +7385,9 @@ public:
         if (source.contains(QStringLiteral("theme_selected_object_color")))
             parseColor(QStringLiteral("theme_selected_object_color"),
                        &settings.themeSelectedObjectColor);
+        if (source.contains(QStringLiteral("theme_transform_color")))
+            parseColor(QStringLiteral("theme_transform_color"),
+                       &settings.themeTransformColor);
         const QString wireColorType =
             source.value(QStringLiteral("wireframe_color_type")).toString();
         if (wireColorType == QLatin1String("THEME"))
@@ -9640,9 +9643,11 @@ protected:
                     ViewportSceneStroke boundsStroke;
                     if (renderObject.selected) {
                         boundsStroke.color =
-                            selection_.primaryObjectId() == objectId
-                                ? viewportShadingSettings_.themeActiveObjectColor
-                                : viewportShadingSettings_.themeSelectedObjectColor;
+                            renderObject.scalePreview || renderObject.rotatePreview
+                                ? viewportShadingSettings_.themeTransformColor
+                                : selection_.primaryObjectId() == objectId
+                                      ? viewportShadingSettings_.themeActiveObjectColor
+                                      : viewportShadingSettings_.themeSelectedObjectColor;
                     } else {
                         boundsStroke.color = viewportShadingSettings_.themeWireColor;
                     }
@@ -9671,6 +9676,12 @@ protected:
             const bool selected = renderObject.selected;
             const bool scalePreview = renderObject.scalePreview;
             const bool rotatePreview = renderObject.rotatePreview;
+            const QColor selectedThemeColor =
+                (scalePreview || rotatePreview)
+                    ? viewportShadingSettings_.themeTransformColor
+                    : selection_.primaryObjectId() == objectId
+                          ? viewportShadingSettings_.themeActiveObjectColor
+                          : viewportShadingSettings_.themeSelectedObjectColor;
             const GeometryType geometryType = visibleShape.geometryType;
             if (rasterSurfaceBatchRendered &&
                 geometryType == GeometryType::ScalarVolume) {
@@ -9724,10 +9735,7 @@ protected:
                         QColor surfaceOutlineColor =
                             viewportShadingSettings_.outlineColor;
                         if (outlineObject.selected) {
-                            surfaceOutlineColor =
-                                selection_.primaryObjectId() == objectId
-                                    ? viewportShadingSettings_.themeActiveObjectColor
-                                    : viewportShadingSettings_.themeSelectedObjectColor;
+                            surfaceOutlineColor = selectedThemeColor;
                         }
                         ViewportSceneStroke outlineStroke;
                         if (makeViewportSurfaceOutlineStroke(
@@ -10497,10 +10505,7 @@ protected:
                                          0.0, 1.0)));
                     if (themeColorGradient) {
                         if (renderObject.selected) {
-                            const QColor selectedRim =
-                                selection_.primaryObjectId() == renderObject.objectId
-                                    ? viewportShadingSettings_.themeActiveObjectColor
-                                    : viewportShadingSettings_.themeSelectedObjectColor;
+                            const QColor selectedRim = selectedThemeColor;
                             rimColor = QVector3D(float(selectedRim.redF()),
                                                  float(selectedRim.greenF()),
                                                  float(selectedRim.blueF()));
@@ -10669,10 +10674,7 @@ protected:
                     ViewportWireColorMode::Object;
                 if (themeColor) {
                     if (renderObject.selected) {
-                        const QColor selectionColor =
-                            selection_.primaryObjectId() == renderObject.objectId
-                                ? viewportShadingSettings_.themeActiveObjectColor
-                                : viewportShadingSettings_.themeSelectedObjectColor;
+                        const QColor selectionColor = selectedThemeColor;
                         rimColor = QVector3D(float(selectionColor.redF()),
                                              float(selectionColor.greenF()),
                                              float(selectionColor.blueF()));

@@ -7741,6 +7741,16 @@ resolve remain open.
   Other generated instance types remain unsupported. The C++ build passed;
   no matched Blender instance comparison has been run.
 
+### Transform theme color on selected overlays (2026-10-15)
+
+- Blender changes selected object wire and Bounds display colors to the
+  viewport theme's Transform color while an object transform is active.
+  Blender extraction now retains that theme color, and classiCAD applies it
+  to selected mesh/surface wires, surface outlines, and Bounds while scale or
+  rotate previews are active. Ordinary selection continues to use the active
+  or selected theme colors. The C++ build passed; a matched transform-preview
+  comparison remains open.
+
 ### QPainter Workbench effect and overlay ordering (2026-10-15)
 
 - When the bounded raster surface compositor succeeds, QPainter now keeps the

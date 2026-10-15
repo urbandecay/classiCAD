@@ -6406,6 +6406,10 @@ int main(int argc, char *argv[])
                     const QString importedSurfaceBlendPath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_BLEND");
+                    const bool importedSurfaceMultiSpanExpected =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_MULTI_SPAN") ==
+                        QStringLiteral("1");
                     if (!importedSurfaceBlendPath.isEmpty()) {
                         QVector<SceneObject> importedSurfaceObjects;
                         QVector<DocumentCollection> importedSurfaceCollections;
@@ -6457,10 +6461,39 @@ int main(int argc, char *argv[])
                                       importedSurfaceDocument, gpuTransform,
                                       glSize, {})
                                 : ViewportRenderFrame{};
+                        const auto activeKnotSpans = [](
+                            const NurbsSurface3D &surface, bool alongU) {
+                            const QVector<double> &knots = alongU
+                                ? surface.knotsU : surface.knotsV;
+                            const int degree = alongU
+                                ? surface.degreeU : surface.degreeV;
+                            const int count = alongU
+                                ? surface.controlVertexCountU
+                                : surface.controlVertexCountV;
+                            int spanCount = 0;
+                            for (int index = degree - 1;
+                                 index < count - 1 && index + 1 < knots.size();
+                                 ++index) {
+                                if (knots[index] < knots[index + 1]) {
+                                    ++spanCount;
+                                }
+                            }
+                            return spanCount;
+                        };
+                        const bool importedSurfaceHasMultiSpanKnots =
+                            importedSurfaceFrame.objects.size() == 1 &&
+                            activeKnotSpans(
+                                importedSurfaceFrame.objects[0]
+                                    .shape.nurbsSurface, true) > 1 &&
+                            activeKnotSpans(
+                                importedSurfaceFrame.objects[0]
+                                    .shape.nurbsSurface, false) > 1;
                         bool importedSurfaceMaterialMatches =
                             importedSurfaceFrame.objects.size() == 1 &&
                             importedSurfaceFrame.objects[0].shape.geometryType ==
                                 GeometryType::NurbsSurface &&
+                            (!importedSurfaceMultiSpanExpected ||
+                             importedSurfaceHasMultiSpanKnots) &&
                             importedSurfaceFrame.objects[0]
                                 .reverseSurfaceOrientation &&
                             importedSurfaceFrame.objects[0]

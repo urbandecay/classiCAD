@@ -1,8 +1,7 @@
-"""Verify Blender extractor output for a regular NURBS surface texture.
+"""Verify Blender extraction and render fixtures for NURBS surface materials.
 
-This checks the Blender-to-JSON extraction contract only. The matching C++
-material resolver is covered by blender_surface_material_resolution_contracts.
-
+Set CLASSICAD_SURFACE_MATERIAL_BLEND_OUTPUT to save a paired Workbench capture;
+CLASSICAD_SURFACE_MATERIAL_MULTI_SPAN=1 adds a multi-span surface fixture.
 Run with Blender 5.2.2: blender --background --python
 tests/blender_surface_material_import_contract.py
 """
@@ -58,15 +57,24 @@ surface_object = bpy.context.object
 surface_data = surface_object.data
 surface_object.name = "SurfaceMaterialObject"
 surface_data.name = "SurfaceMaterialPatch"
+if os.environ.get("CLASSICAD_SURFACE_MATERIAL_MULTI_SPAN") == "1":
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.curve.select_all(action="SELECT")
+    bpy.ops.curve.subdivide(number_cuts=1)
+    bpy.ops.object.mode_set(mode="OBJECT")
 spline = surface_data.splines[0]
 assert spline.point_count_u >= spline.order_u
 assert spline.point_count_v >= spline.order_v
+multi_span = os.environ.get("CLASSICAD_SURFACE_MATERIAL_MULTI_SPAN") == "1"
+if multi_span:
+    assert spline.point_count_u > spline.order_u
+    assert spline.point_count_v > spline.order_v
 spline.material_index = 0
 for index, point in enumerate(spline.points):
-    point.co = (float(index % spline.point_count_u) -
-                (spline.point_count_u - 1) * 0.5,
-                float(index // spline.point_count_u) -
-                (spline.point_count_v - 1) * 0.5, 0.0, 1.0)
+    point.co = (3.0 * (index % spline.point_count_u) /
+                (spline.point_count_u - 1) - 1.5,
+                3.0 * (index // spline.point_count_u) /
+                (spline.point_count_v - 1) - 1.5, 0.0, 1.0)
 surface_data.materials.append(material)
 
 materials = {}
@@ -75,6 +83,33 @@ patches = extractor.extract_surface_patches(
     surface_object, bpy.context.scene, materials, unsupported)
 assert len(patches) == 1, patches
 surface = patches[0]["surface"]
+if multi_span:
+    assert surface["control_vertex_count_u"] > surface["order_u"], surface
+    assert surface["control_vertex_count_v"] > surface["order_v"], surface
+    assert len(set(surface["knots_u"])) > 1, surface
+    assert len(set(surface["knots_v"])) > 1, surface
+    for axis in ("u", "v"):
+        order = surface["order_" + axis]
+        point_count = surface["control_vertex_count_" + axis]
+        full_knots = extractor.blender_nurbs_knots(
+            point_count, order, False, False, False)
+        active_spans = sum(
+            full_knots[index] < full_knots[index + 1]
+            for index in range(order - 1, point_count))
+        assert active_spans > 1, (axis, full_knots, active_spans)
+    bpy.context.view_layer.update()
+    evaluated = surface_object.evaluated_get(
+        bpy.context.evaluated_depsgraph_get())
+    evaluated_mesh = evaluated.to_mesh()
+    try:
+        uv_layer = evaluated_mesh.uv_layers.active
+        assert uv_layer is not None
+        for component in (0, 1):
+            values = [loop.uv[component] for loop in uv_layer.data]
+            assert math.isclose(min(values), 0.0, abs_tol=1.0e-6)
+            assert math.isclose(max(values), 1.0, abs_tol=1.0e-6)
+    finally:
+        evaluated.to_mesh_clear()
 material_id = surface["material_id"]
 assert material_id in materials, material_id
 record = materials[material_id]

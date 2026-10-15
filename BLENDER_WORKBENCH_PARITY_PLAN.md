@@ -7859,3 +7859,16 @@ resolve remain open.
   object-to-world placement. Per-scene instance, payload, record, and dense
   voxel caps bound duplicated grids. Other Volume grid types remain unsupported;
   no matched instance comparison has been run.
+
+### Blender Grease Pencil centerline import (2026-10-15)
+
+- Blender 5.2 Grease Pencil objects now import their visible, multi-point
+  strokes from each layer's current frame as classiCAD POLY curves. The
+  object's evaluated transform and each unparented layer's local transform
+  are applied before import; cyclic strokes are closed. Collection instances
+  use their instance transform. Per-scene caps limit extraction to 10,000
+  strokes and 100,000 points. Stroke width, opacity, color, fills, layer
+  effects, modifiers, animation, parented layers, and one-point dots remain
+  unsupported and are reported. This retains line paths as ordinary curves,
+  not Blender's thick Grease Pencil appearance. The C++ build passed; Blender
+  fixture and matched viewport comparisons have not been run.

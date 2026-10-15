@@ -51,6 +51,8 @@ MAX_COLLECTION_VOLUME_INSTANCES = 4
 MAX_COLLECTION_VOLUME_PAYLOAD_BYTES = 32 * 1024 * 1024
 MAX_COLLECTION_VOLUME_RECORDS = 524288
 MAX_COLLECTION_VOLUME_DENSE_VOXELS = 16 * 1024 * 1024
+MAX_GREASE_PENCIL_STROKES_PER_SCENE = 10000
+MAX_GREASE_PENCIL_POINTS_PER_SCENE = 100000
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -1380,6 +1382,8 @@ def unsupported_object_record(obj, scene, depsgraph=None):
         record["reason"] = "METABALL objects require evaluated surface conversion; original metaball data is not represented"
     elif obj.type == "VOLUME":
         record["reason"] = "volume has no supported single-channel FLOAT grid"
+    elif obj.type == "GREASEPENCIL":
+        record["reason"] = "Grease Pencil has no supported current-frame stroke centerlines"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
@@ -1511,6 +1515,80 @@ def curve_has_surface_output(obj):
          getattr(curve_data, "fill_mode", "NONE") != "NONE") or
         bool(obj.modifiers)
     )
+
+
+def extract_grease_pencil_curve_item(obj, scene, unsupported,
+                                     transform_override=None,
+                                     evaluated_obj=None,
+                                     max_strokes=MAX_GREASE_PENCIL_STROKES_PER_SCENE,
+                                     max_points=MAX_GREASE_PENCIL_POINTS_PER_SCENE):
+    """Import current-frame Grease Pencil stroke centerlines as POLY curves."""
+    from mathutils import Vector
+
+    item_id = stable_id(obj)
+    item = object_metadata(obj, scene)
+    item["object_type"] = "CURVE"
+    item["source_object_type"] = "GREASEPENCIL"
+    item["splines"] = []
+    source = evaluated_obj or obj
+    object_transform = (transform_override if transform_override is not None
+                        else source.matrix_world)
+    point_count = 0
+    stroke_count = 0
+
+    for layer in source.data.layers:
+        hidden_by_group = False
+        group = getattr(layer, "parent_group", None)
+        while group is not None:
+            if bool(getattr(group, "hide", False)):
+                hidden_by_group = True
+                break
+            group = getattr(group, "parent_group", None)
+        if (hidden_by_group or bool(getattr(layer, "hide", False)) or
+                float(getattr(layer, "opacity", 1.0)) <= 0.0):
+            continue
+        if getattr(layer, "parent", None) is not None:
+            add_unsupported(
+                unsupported, item_id, "grease_pencil_layer_parent:" + layer.name,
+                "a Grease Pencil layer with an object or bone parent was skipped because its parent transform is not represented",
+            )
+            continue
+        frame = layer.current_frame()
+        drawing = getattr(frame, "drawing", None) if frame is not None else None
+        if drawing is None or getattr(drawing, "type", "DRAWING") != "DRAWING":
+            continue
+        layer_transform = object_transform @ layer.matrix_local
+        for stroke in drawing.strokes:
+            points = stroke.points
+            if len(points) < 2:
+                # A one-point Grease Pencil dot has no curve counterpart.
+                continue
+            if stroke_count >= max_strokes:
+                raise ValueError("Grease Pencil stroke limit exceeded")
+            if point_count + len(points) > max_points:
+                raise ValueError("Grease Pencil point limit exceeded")
+            world_points = []
+            for point in points:
+                world = layer_transform @ Vector(point.position)
+                world_points.append(vector_values(world))
+            if bool(stroke.cyclic) and world_points[-1] != world_points[0]:
+                world_points.append(list(world_points[0]))
+            item["splines"].append({
+                "type": "POLY",
+                "control_points_world": world_points,
+            })
+            stroke_count += 1
+            point_count += len(points)
+
+    item["_transport_metrics"] = {
+        "stroke_count": stroke_count,
+        "point_count": point_count,
+    }
+    add_unsupported(
+        unsupported, item_id, "grease_pencil_centerline",
+        "current-frame Grease Pencil strokes were imported as POLY centerlines; stroke width, opacity, color, fills, layer effects, modifiers, and animation were not retained",
+    )
+    return item
 
 
 def curve_surface_item_id(source_item_id):
@@ -1956,6 +2034,9 @@ def extract_scene(input_path, mode):
                 "tiff_codec": render.image_settings.tiff_codec,
             },
         }
+        grease_pencil_stroke_count = 0
+        grease_pencil_point_count = 0
+        grease_pencil_limit_exceeded = False
         for obj in scene.objects:
             object_count += 1
             object_id = stable_id(obj)
@@ -1985,6 +2066,44 @@ def extract_scene(input_path, mode):
                     if image_error:
                         unsupported_item["reason"] = image_error
                     output["unsupported_items"].append(unsupported_item)
+                continue
+            if obj.type == "GREASEPENCIL":
+                try:
+                    grease_depsgraph = depsgraph or depsgraph_for_scene(scene)
+                    item = extract_grease_pencil_curve_item(
+                        obj, scene, output["unsupported_features"],
+                        evaluated_obj=obj.evaluated_get(grease_depsgraph),
+                        max_strokes=(MAX_GREASE_PENCIL_STROKES_PER_SCENE -
+                                     grease_pencil_stroke_count),
+                        max_points=(MAX_GREASE_PENCIL_POINTS_PER_SCENE -
+                                    grease_pencil_point_count))
+                    metrics = item.pop("_transport_metrics")
+                    if not item["splines"]:
+                        unsupported_item = unsupported_object_record(
+                            obj, scene, depsgraph)
+                        unsupported_item["reason"] = (
+                            "Grease Pencil has no visible multi-point stroke in the current frame")
+                        output["unsupported_items"].append(unsupported_item)
+                        continue
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                    grease_pencil_stroke_count += metrics["stroke_count"]
+                    grease_pencil_point_count += metrics["point_count"]
+                except Exception as error:
+                    if "limit exceeded" in str(error):
+                        grease_pencil_limit_exceeded = True
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene, depsgraph),
+                        "object_type": obj.type,
+                        "reason": "Grease Pencil extraction failed; whole object skipped: " + str(error),
+                    })
                 continue
             if obj.type == "CURVE":
                 curve_features = []
@@ -2205,7 +2324,7 @@ def extract_scene(input_path, mode):
                     str(getattr(source_obj, "empty_display_type", "")) == "IMAGE")
                 if source_obj.type not in {
                         "MESH", "CURVE", "SURFACE", "FONT", "META",
-                        "VOLUME"} and not is_image_empty:
+                        "VOLUME", "GREASEPENCIL"} and not is_image_empty:
                     unsupported_instance_types.add(source_obj.type)
                     continue
                 if is_image_empty:
@@ -2364,6 +2483,33 @@ def extract_scene(input_path, mode):
                         if source_obj.type == "FONT":
                             font_mesh_count += 1
                         mesh_count += 1
+                    elif source_obj.type == "GREASEPENCIL":
+                        item_features = []
+                        item = extract_grease_pencil_curve_item(
+                            source_obj, scene, item_features,
+                            transform_override=instance_transform,
+                            evaluated_obj=source_obj.evaluated_get(
+                                instance_depsgraph),
+                            max_strokes=(MAX_GREASE_PENCIL_STROKES_PER_SCENE -
+                                         grease_pencil_stroke_count),
+                            max_points=(MAX_GREASE_PENCIL_POINTS_PER_SCENE -
+                                        grease_pencil_point_count))
+                        metrics = item.pop("_transport_metrics")
+                        if not item["splines"]:
+                            unsupported_item = unsupported_object_record(
+                                source_obj, scene, instance_depsgraph)
+                            unsupported_item["object_id"] = instance_id
+                            unsupported_item["reason"] = (
+                                "Grease Pencil instance has no visible multi-point stroke in the current frame")
+                            output["unsupported_items"].append(unsupported_item)
+                            continue
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        output["items"].append(item)
+                        output["unsupported_features"].extend(item_features)
+                        grease_pencil_stroke_count += metrics["stroke_count"]
+                        grease_pencil_point_count += metrics["point_count"]
                     elif source_obj.type == "MESH":
                         item = extract_mesh_object(
                             source_obj, scene, mode, instance_depsgraph,
@@ -2433,6 +2579,8 @@ def extract_scene(input_path, mode):
                         scene_record["object_ids"].append(instance_id)
                     object_count += 1
                 except Exception as error:
+                    if "limit exceeded" in str(error):
+                        grease_pencil_limit_exceeded = True
                     output["unsupported_items"].append({
                         **object_metadata(source_obj, scene, depsgraph),
                         "object_id": instance_id,
@@ -2471,6 +2619,14 @@ def extract_scene(input_path, mode):
                     "collection or generated instances with unsupported geometry were skipped: " +
                     ", ".join(sorted(unsupported_instance_types)),
                 )
+        if grease_pencil_limit_exceeded:
+            add_unsupported(
+                output["unsupported_features"], stable_id(scene),
+                "grease_pencil_scene_limit",
+                "Grease Pencil extraction exceeded the per-scene limit of %d strokes or %d points; remaining objects were skipped" %
+                (MAX_GREASE_PENCIL_STROKES_PER_SCENE,
+                 MAX_GREASE_PENCIL_POINTS_PER_SCENE),
+            )
         output["scenes"].append(scene_record)
     output["summary"] = {
         "scene_count": len(output["scenes"]),

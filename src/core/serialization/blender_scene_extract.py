@@ -1856,11 +1856,10 @@ def extract_scene(input_path, mode):
                     })
                 continue
             if obj.type == "FONT":
-                if mode != "evaluated":
-                    output["unsupported_items"].append(
-                        unsupported_object_record(obj, scene, depsgraph))
-                    continue
                 try:
+                    # Text has no original mesh representation to preserve.
+                    # Import its currently visible glyphs in either mesh mode
+                    # so choosing original meshes does not make text vanish.
                     item = extract_mesh_object(
                         obj, scene, "evaluated", depsgraph, output["materials"],
                         output["unsupported_features"])

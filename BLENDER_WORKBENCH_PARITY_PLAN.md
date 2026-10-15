@@ -8546,6 +8546,15 @@ resolve remain open.
   payload remains unpremultiplied on its transport path as before. Matched
   Image Empty comparisons remain open.
 
+### GPU scalar-volume slice bounds (2026-10-15)
+
+- GPU slice opacity now uses the selected axis extent of the transformed
+  volume bounds in world space. The prior calculation scaled each local AABB
+  axis independently and missed the way rotation mixes the other axes into
+  Blender's world-space object dimensions. This matches Workbench's
+  `BKE_object_dimensions_get()` input to the 0.05 slice step factor; matched
+  rotated-volume images remain open.
+
 ### GPU DOF blue-noise channel (2026-10-15)
 
 - The gather angle now reads alpha from the 64×64 blue-noise LUT, matching

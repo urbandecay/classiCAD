@@ -5820,6 +5820,33 @@ edge comparison remains open.
   and GPU projection setup to
   [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L416-L465).
 
+### QPainter cavity blue-noise row orientation (2026-10-15)
+
+- The GPU derives cavity jitter coordinates from `gl_FragCoord`, so its
+  repeating blue-noise texture is addressed in bottom-up framebuffer rows.
+  QPainter's retained raster samples are top-down. The CPU now maps row `y`
+  to `height - 1 - y` before looking up the same 64×64 LUT, preserving the
+  horizontal coordinate and the existing projected-radius and perspective
+  depth scaling.
+- The offscreen `viewport_render_contracts` run passed with GPU/QPainter
+  factor and effect captures enabled. On common foreground, factor p95 moved
+  from `0.242188` to `0.240885`, while MAE changed from `0.067398` to
+  `0.067453`; cube mask IoU moved from `0.203362` to `0.201666`. On the
+  transparent overlap fixture, mask IoU moved from `0.168185` to `0.167317`
+  and full-frame scene-linear RGB effect-delta MAE from `0.00204065` to
+  `0.00203833`. These aggregate results show no material parity gain, but the
+  row conversion matches the GPU texture-coordinate convention. Cavity factor
+  and effect parity remain open; the source-derived row correction does not
+  justify any further change to the cavity accumulation equation.
+- Reproduce the factor captures with
+  `CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX` and
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_DIAGNOSTIC_PREFIX`, and run
+  `tests/workbench_qpainter_cavity_diagnostic.py`. Blender 5.2.2 source
+  references are pinned to
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L463-L585)
+  for `gl_FragCoord`-derived texture coordinates and the GPU resolve in
+  [`viewport_surface_renderer.cpp`](src/ui/viewport/viewport_surface_renderer.cpp).
+
 ### GPU per-face mesh texture-slot comparison (2026-10-14)
 
 - Added an opt-in GPU capture of the existing two-triangle planar mesh with

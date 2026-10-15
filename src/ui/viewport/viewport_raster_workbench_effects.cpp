@@ -3074,12 +3074,15 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 if (response < 0.0f) valleyResponse = -response;
                 else ridgeResponse = response;
             }
-            const float noiseAngle = rasterCavityNoise(x, y, 0) *
+            // The QPainter depth rows run top-down; Workbench's GL fragment
+            // coordinates and uploaded noise texture rows run bottom-up.
+            const int noiseY = height - 1 - y;
+            const float noiseAngle = rasterCavityNoise(x, noiseY, 0) *
                                      6.28318530718f;
             const float rotationX = std::cos(noiseAngle);
             const float rotationY = std::sin(noiseAngle);
             const float noiseRadius = std::clamp(
-                rasterCavityNoise(x, y, 1) - 0.5f, -0.499f, 0.499f) /
+                rasterCavityNoise(x, noiseY, 1) - 0.5f, -0.499f, 0.499f) /
                 static_cast<float>(requested);
             for (int i = 0; i < requested; ++i) {
                 // Match Workbench's deterministic Hammersley-like disk sample

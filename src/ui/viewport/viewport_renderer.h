@@ -90,6 +90,8 @@ public:
                           const QString &displayName = QString(),
                           const QString &libraryPath = QString(),
                           RasterWorkbenchFragmentSink *fragmentSink = nullptr,
+                          const QVector<float> *opaqueSceneDepth = nullptr,
+                          const QSize &opaqueSceneDepthSize = {},
                           const QVector<Point3D> *blenderWireVerticesWorld =
                               nullptr) const;
     void drawControlPoints(QPainter &painter,

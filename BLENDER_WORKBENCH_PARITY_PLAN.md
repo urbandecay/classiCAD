@@ -8172,6 +8172,15 @@ resolve remain open.
   depth-map path remains an approximation. C++ build passed; matched shadow
   comparison remains open.
 
+### QPainter NURBS surface wire depth testing (2026-10-15)
+
+- Committed QPainter NURBS surface and `NurbsSolid` wire segments now reuse
+  the bounded camera-depth sampling used by committed curve strokes. Hidden
+  segments are split against retained opaque scene depth, while the existing
+  depth tolerance keeps coplanar face wires visible. Preview wires retain
+  their existing draw path. Blender's Overlay wireframe uses depth-tested
+  `LESS_EQUAL`; matched edge visibility comparison remains open.
+
 ### QPainter opaque prepass coplanar depth ties (2026-10-15)
 
 - QPainter per-pixel surface samples now let a later triangle replace an

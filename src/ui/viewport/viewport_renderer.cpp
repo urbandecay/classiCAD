@@ -3152,7 +3152,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  nurbsSolidFaceReversed(shape.nurbsSolid, index),
                                  layerColor, displayColorSceneLinear,
                                  materialForFace(index), displayName, libraryPath,
-                                 fragmentSink, nullptr);
+                                 fragmentSink, opaqueSceneDepth,
+                                 opaqueSceneDepthSize, nullptr);
             }
         } else {
             for (int index = 0; index < faces.size(); ++index)
@@ -3163,7 +3164,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                                         index),
                                  layerColor, displayColorSceneLinear,
                                  materialForFace(index), displayName, libraryPath,
-                                 fragmentSink, nullptr);
+                                 fragmentSink, opaqueSceneDepth,
+                                 opaqueSceneDepthSize, nullptr);
         }
         return;
     }
@@ -3176,7 +3178,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          preparedGeometry, preparedOffset, preview, selected,
                          false, layerColor, displayColorSceneLinear,
                          workbenchMaterial, displayName, libraryPath,
-                         fragmentSink, blenderSurfaceWireVerticesWorld);
+                         fragmentSink, opaqueSceneDepth,
+                         opaqueSceneDepthSize, blenderSurfaceWireVerticesWorld);
         return;
     }
 
@@ -3868,6 +3871,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         const QString &displayName,
                                         const QString &libraryPath,
                                         RasterWorkbenchFragmentSink *fragmentSink,
+                                        const QVector<float> *opaqueSceneDepth,
+                                        const QSize &opaqueSceneDepthSize,
                                         const QVector<Point3D> *blenderWireVerticesWorld) const
 {
     Q_UNUSED(selected);
@@ -5046,6 +5051,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
     }
 
     QVector<QLineF> screenLines;
+    QVector<Point3D> depthWireVertices;
     const auto appendScreenLine = [&](const Point3D &start,
                                       const Point3D &end) {
         QPointF screenStart;
@@ -5057,6 +5063,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                                    viewportSize,
                                                    &screenEnd)) {
             screenLines.append(QLineF(screenStart, screenEnd));
+            depthWireVertices.append(start);
+            depthWireVertices.append(end);
         }
     };
 
@@ -5123,6 +5131,26 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         painter.save();
         if (!preview) {
             painter.setRenderHint(QPainter::Antialiasing, smoothWiresOverlay_);
+        }
+        if (!preview && opaqueSceneDepth != nullptr &&
+            opaqueSceneDepthSize.width() > 0 &&
+            opaqueSceneDepthSize.height() > 0 &&
+            opaqueSceneDepth->size() ==
+                opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height() &&
+            !depthWireVertices.isEmpty()) {
+            ViewportDepthGeometry surfaceWireGeometry;
+            surfaceWireGeometry.preciseLineVertices =
+                std::move(depthWireVertices);
+            const bool depthTested = drawPreparedCurveSegments(
+                painter, surfaceWireGeometry, viewportSize, opaqueSceneDepth,
+                opaqueSceneDepthSize);
+            painter.restore();
+            if (depthTested) return;
+            painter.save();
+            if (!preview) {
+                painter.setRenderHint(QPainter::Antialiasing,
+                                      smoothWiresOverlay_);
+            }
         }
         painter.drawLines(screenLines.constData(), screenLines.size());
         painter.restore();

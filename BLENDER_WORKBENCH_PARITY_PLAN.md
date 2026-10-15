@@ -8169,9 +8169,14 @@ resolve remain open.
   that image setting changes. Blender builds and enables
   image mipmaps in
   [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L2917-L2928).
-  QPainter continues to use Qt's smooth image transform without an explicit
-  mip chain, so strong minification may still differ. No matched image
-  comparison has been run.
+  For source images and viewports within the 16-million-pixel CPU budget, the
+  QPainter path now builds scene-linear mip levels with premultiplied-alpha
+  filtering and chooses the nearest integer level from the projected quad's
+  screen footprint before Qt's final smooth transform. Blender uses implicit
+  per-fragment LOD and trilinear mip blending, while QPainter uses one bounded
+  level for the whole quad; strong perspective minification can still differ.
+  Oversized inputs retain the existing fallback. No matched image comparison
+  has been run.
 
 ### QPainter Image Empty filtered alpha cutout (2026-10-15)
 

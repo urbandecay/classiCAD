@@ -6197,20 +6197,24 @@ edge comparison remains open.
   reports no completed scene passes or populated attachments. Existing valid
   opaque and transparent fixtures continue to verify successful sample-color
   and depth behavior.
-- The live viewport and offscreen Workbench render-result path both call
-  `ViewportWorkbenchScenePassCoordinator::renderSceneColor` and pass the
-  returned attachment mask to the active AA sample. The coordinator currently
-  guards and forwards the production `ViewportSurfaceRenderer::draw` call;
-  named pass sequencing remains in that renderer. The offscreen contract now
-  renders matching `fromScene` and `fromFrame` packets through separate AA
-  targets and requires identical pass masks, attachment masks, resolved
-  scene-linear Combined, depth, and display pixels. This verifies the two
-  packet builders against one coordinator contract; it does not execute the
-  viewport widget and render-result call sites independently. Allocation
-  failure injection and that broader call-site integration assertion remain
-  open, so this does not close the pass-ownership acceptance item.
-- Validation: `cmake --build build -j4` passed with the 316-file dependency
-  audit; offscreen `workbench_render_pass_capture` passed (1/1).
+- The live viewport and offscreen Workbench render-result path now use the
+  shared `renderFrameSceneColor` submission helper. It builds the frame packet
+  from the caller's presentation-adjusted draw list, active sample camera,
+  device-pixel ratio, settings, and AA targets, then forwards the returned
+  attachment mask to the active AA sample. Named pass sequencing remains in
+  `ViewportSurfaceRenderer`.
+- The offscreen contract compares a `fromScene` route against this same
+  production helper on separate AA targets and requires identical pass masks,
+  attachment masks, resolved scene-linear Combined, depth, and display pixels.
+  It deliberately gives `ViewportRenderFrame` a different stored camera to
+  prove the explicit active sample camera controls the frame submission. This
+  exercises the helper used by both production routes but does not execute the
+  widget call sites or verify their argument selection independently.
+  Allocation-failure injection and direct widget-call-site integration remain
+  open, so the broader pass-ownership acceptance item remains open.
+- Validation: `cmake --build build -j4` passed with the dependency audit
+  checking 317 source files; offscreen `workbench_render_pass_capture` passed
+  (1/1) under software GL.
 
 ### Workbench settings and material persistence matrix (2026-10-14)
 

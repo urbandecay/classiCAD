@@ -71,4 +71,22 @@ ViewportWorkbenchScenePassCoordinator::renderSceneColor(
     return result;
 }
 
+ViewportWorkbenchSceneColorPassResult
+ViewportWorkbenchScenePassCoordinator::renderFrameSceneColor(
+    ViewportSurfaceRenderer &surfaceRenderer,
+    const ViewportRenderFrame &frame,
+    const QVector<ViewportRenderObject> &drawObjects,
+    const ViewportTransform &sampleCamera,
+    qreal devicePixelRatio,
+    const ViewportShadingSettings &settings,
+    const ViewportRenderTargets *sharedTargets,
+    bool sceneLinearOutput)
+{
+    const ViewportWorkbenchScenePassPacket packet =
+        ViewportWorkbenchScenePassPacket::fromFrame(
+            frame, drawObjects, sampleCamera, devicePixelRatio, settings,
+            sharedTargets, sceneLinearOutput);
+    return renderSceneColor(surfaceRenderer, packet);
+}
+
 } // namespace classiCAD

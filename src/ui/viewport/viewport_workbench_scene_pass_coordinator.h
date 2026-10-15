@@ -54,6 +54,19 @@ struct ViewportWorkbenchSceneColorPassResult {
 
 class ViewportWorkbenchScenePassCoordinator final {
 public:
+    // Shared production entry point for both live viewport frames and the
+    // Workbench render result. The caller supplies the active sample camera
+    // and target so temporal AA uses the same immutable frame contract.
+    static ViewportWorkbenchSceneColorPassResult renderFrameSceneColor(
+        ViewportSurfaceRenderer &surfaceRenderer,
+        const ViewportRenderFrame &frame,
+        const QVector<ViewportRenderObject> &drawObjects,
+        const ViewportTransform &sampleCamera,
+        qreal devicePixelRatio,
+        const ViewportShadingSettings &settings,
+        const ViewportRenderTargets *sharedTargets,
+        bool sceneLinearOutput);
+
     static ViewportWorkbenchSceneColorPassResult renderSceneColor(
         ViewportSurfaceRenderer &surfaceRenderer,
         const ViewportWorkbenchScenePassPacket &packet);

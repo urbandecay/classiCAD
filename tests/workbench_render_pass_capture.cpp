@@ -532,6 +532,11 @@ int main(int argc, char **argv)
         ViewportRenderFrame renderFrame;
         renderFrame.viewportSize = size;
         renderFrame.objects = sceneObjects;
+        // The scene-pass helper must use the explicit active sample camera,
+        // not the frame's stored camera. Production TAA callers supply the
+        // jittered AA sample camera here.
+        renderFrame.camera = camera;
+        renderFrame.camera.setViewDirection({0.0, 1.0, 0.0});
         ViewportAaRenderer frameAa;
         frameAa.setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
         frameAa.setDisplayTransform(shading, true,
@@ -552,12 +557,10 @@ int main(int argc, char **argv)
                 transparentOverlapFixture ? 0.0f : 1.0f};
             gl.glClearBufferfv(GL_COLOR, 0, background);
             frameScenePass =
-                ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                    renderer,
-                    ViewportWorkbenchScenePassPacket::fromFrame(
-                        renderFrame, renderFrame.objects,
-                        frameAa.sampleCamera(), 1.0, shading,
-                        &frameAa.targets(), true));
+                ViewportWorkbenchScenePassCoordinator::renderFrameSceneColor(
+                    renderer, renderFrame, renderFrame.objects,
+                    frameAa.sampleCamera(), 1.0, shading,
+                    &frameAa.targets(), true);
             if (frameScenePass.rendered) {
                 frameAa.markCurrentSampleAttachmentsValid(
                     frameScenePass.report.populatedAttachments);

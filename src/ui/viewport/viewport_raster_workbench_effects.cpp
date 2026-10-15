@@ -3891,7 +3891,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     float(qRed(pixel)), float(qGreen(pixel)),
                     float(qBlue(pixel)), float(qAlpha(pixel)) / 255.0f};
             };
-            const auto sourceCocAt = [&](int x, int y) {
+            const auto sourceCocAtPixel = [&](int x, int y) {
                 const int depthX = std::clamp(
                     static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                     0, width - 1);
@@ -3908,6 +3908,38 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     ((focus - z) / std::max<qreal>(z, 1.0e-6)) *
                     outputWidth / sensorWidth;
                 return static_cast<float>(std::clamp(coc, -100.0, 100.0));
+            };
+            std::vector<float> sourceCocs(
+                static_cast<std::size_t>(outputWidth) * outputHeight);
+            for (int y = 0; y < outputHeight; ++y) {
+                for (int x = 0; x < outputWidth; ++x) {
+                    sourceCocs[static_cast<std::size_t>(y) * outputWidth + x] =
+                        sourceCocAtPixel(x, y);
+                }
+            }
+            const auto sourceCocAt = [&](qreal x, qreal y) {
+                // Blender linearly filters the signed CoC texture at each
+                // fractional gather coordinate. Interpolate the CPU CoC
+                // samples at output-pixel centers to preserve that behavior.
+                const qreal pixelX = std::clamp<qreal>(
+                    x, 0.0, outputWidth - 1.0);
+                const qreal pixelY = std::clamp<qreal>(
+                    y, 0.0, outputHeight - 1.0);
+                const int x0 = static_cast<int>(std::floor(pixelX));
+                const int y0 = static_cast<int>(std::floor(pixelY));
+                const int x1 = std::min(x0 + 1, outputWidth - 1);
+                const int y1 = std::min(y0 + 1, outputHeight - 1);
+                const qreal tx = pixelX - x0;
+                const qreal ty = pixelY - y0;
+                const auto at = [&](int px, int py) {
+                    return sourceCocs[
+                        static_cast<std::size_t>(py) * outputWidth + px];
+                };
+                const qreal top = at(x0, y0) * (1.0 - tx) +
+                    at(x1, y0) * tx;
+                const qreal bottom = at(x0, y1) * (1.0 - tx) +
+                    at(x1, y1) * tx;
+                return static_cast<float>(top * (1.0 - ty) + bottom * ty);
             };
             for (int y = 0; y < dofMips[0].height; ++y) {
                 for (int x = 0; x < dofMips[0].width; ++x) {
@@ -4116,12 +4148,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                   tapIndex * (dofKernel.size() - 1) /
                                   (dofTapCount - 1));
                         const RasterWorkbenchDofTap &tap = dofKernel[kernelIndex];
-                        const int sx = std::clamp(qRound(
-                                                      x + tap.position.x() * radius),
-                                                  0, outputWidth - 1);
-                        const int sy = std::clamp(qRound(
-                                                      y + tap.position.y() * radius),
-                                                  0, outputHeight - 1);
+                        const qreal sx = x + tap.position.x() * radius;
+                        const qreal sy = y + tap.position.y() * radius;
                         const FilteredDofPixel sample = sampleDofMip(
                             sx, sy, rasterWorkbenchDofMipLod(
                                 sourceCocAt(sx, sy),

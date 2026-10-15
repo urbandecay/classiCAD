@@ -574,6 +574,30 @@ in ordinary free views or orthographic views is superseded by this correction.
   `tests/workbench_dof_compare.py`. The build and
   `classicad_viewport_render_contracts_test` pass with the capture enabled.
 
+### QPainter DOF fractional gather coordinates (2026-10-15)
+
+- The CPU gather now preserves each aperture tap's fractional output-pixel
+  coordinate through its existing bilinear color-mip sampler. It also
+  bilinearly samples the signed CoC at that coordinate before selecting the
+  mip level. Blender 5.2.2 builds a continuous texture coordinate for each
+  aperture tap, samples the CoC texture there, and uses filtered mip sampling
+  for color in [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L395-L425);
+  its DOF setup enables linear texture filtering in
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L1002-L1032).
+- On the matched 640x480 perspective extrusion capture, mean maximum-channel
+  DOF delta improved from `0.591` to `0.579`, and effect-mask IoU improved
+  from `0.463` to `0.489` at threshold 2. The QPainter effect mask changed
+  from 9,129 to 8,173 pixels, moving farther from Blender's 11,647-pixel mask;
+  so the mask overlap improved while its total footprint did not. The opaque
+  baseline remained aligned at mean delta `0.000319` (two pixels over 2).
+  This is a measurable partial improvement, not a closure of DOF parity.
+- Validation: `cmake --build build --target
+  classicad_viewport_render_contracts_test -j4`, full `cmake --build build
+  -j4`, and the capture-enabled offscreen
+  `classicad_viewport_render_contracts_test` passed. The paired Blender
+  5.2.2 comparison completed with `tests/workbench_dof_compare.py`. No GUI was
+  launched.
+
 ### QPainter prepared perspective object depth (2026-10-15)
 
 - Corrected the QPainter prepared-geometry depth buffer's perspective sign.

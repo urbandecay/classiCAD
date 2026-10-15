@@ -3785,7 +3785,50 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     startWorld, viewportSize, &startScreen) &&
                 transform_.worldPointToScreenUnclipped(
                     endWorld, viewportSize, &endScreen)) {
-                painter.drawLine(startScreen, endScreen);
+                if (!depthAvailable) {
+                    painter.drawLine(startScreen, endScreen);
+                } else {
+                    const qreal pixelLength = std::hypot(
+                        (endScreen.x() - startScreen.x()) * depthScaleX,
+                        (endScreen.y() - startScreen.y()) * depthScaleY);
+                    const quint64 steps = static_cast<quint64>(
+                        std::clamp<qreal>(std::ceil(pixelLength * 2.0), 1.0,
+                                          1'000'000.0));
+                    const qreal startDepth = pointDepth(startWorld);
+                    const qreal endDepth = pointDepth(endWorld);
+                    QPainterPath visibleClosure;
+                    bool visibleRun = false;
+                    for (quint64 step = 0; step <= steps; ++step) {
+                        const qreal fraction = static_cast<qreal>(step) /
+                                               static_cast<qreal>(steps);
+                        qreal worldFraction = fraction;
+                        if (transform_.isPerspectiveEnabled() &&
+                            startDepth < -1.0e-9 && endDepth < -1.0e-9) {
+                            const qreal reciprocal =
+                                (1.0 - fraction) / startDepth +
+                                fraction / endDepth;
+                            if (reciprocal < -1.0e-12)
+                                worldFraction = (fraction / endDepth) / reciprocal;
+                        }
+                        const Point3D world{
+                            startWorld.x + (endWorld.x - startWorld.x) * worldFraction,
+                            startWorld.y + (endWorld.y - startWorld.y) * worldFraction,
+                            startWorld.z + (endWorld.z - startWorld.z) * worldFraction};
+                        const QPointF screen = startScreen +
+                            (endScreen - startScreen) * fraction;
+                        if (depthVisible(screen, world)) {
+                            if (!visibleRun) {
+                                visibleClosure.moveTo(screen);
+                                visibleRun = true;
+                            } else {
+                                visibleClosure.lineTo(screen);
+                            }
+                        } else {
+                            visibleRun = false;
+                        }
+                    }
+                    if (!visibleClosure.isEmpty()) painter.drawPath(visibleClosure);
+                }
             }
         }
         painter.restore();

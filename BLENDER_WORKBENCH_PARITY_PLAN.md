@@ -8291,7 +8291,10 @@ resolve remain open.
 - Committed curve strokes, prepared curve segments, Edit Mode control-cage
   edges, control-point markers, subdivision markers, and closing cage edges
   also use the viewport's near/far range. Crossing line segments are trimmed
-  in world space before screen projection. Blender's curve overlay binds the
+  in world space before screen projection. The closing rectangle/polygon cage
+  edge also uses the retained scene-depth test used by the other cage edges;
+  when QPainter has no retained depth, the documented unoccluded fallback
+  still applies. Blender's curve overlay binds the
   clipping planes in its edit-curve line and handle passes, and its screen
   projection helper clips line segments crossing near/far planes; see pinned
   [`overlay_curve.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_curve.hh#L850-L899)

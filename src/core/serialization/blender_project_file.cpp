@@ -1039,6 +1039,48 @@ bool parseBlenderMeshItem(const QJsonObject &item,
             }
         }
     }
+    const QJsonValue sourceFaceTriangles =
+        item.value(QStringLiteral("polygon_loop_triangles"));
+    if (!sourceFaceTriangles.isUndefined()) {
+        if (!sourceFaceTriangles.isArray() ||
+            sourceFaceTriangles.toArray().size() != mesh.faces.size()) {
+            setError(errorMessage,
+                     QStringLiteral("mesh loop triangles do not match polygon faces"));
+            return false;
+        }
+        mesh.faceTriangles.reserve(mesh.faces.size());
+        const QJsonArray faceTriangleArray = sourceFaceTriangles.toArray();
+        for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+            const QJsonValue faceTrianglesValue = faceTriangleArray[faceIndex];
+            if (!faceTrianglesValue.isArray()) {
+                setError(errorMessage,
+                         QStringLiteral("mesh face triangles are invalid"));
+                return false;
+            }
+            QVector<std::array<int, 3>> triangles;
+            for (const QJsonValue &triangleValue : faceTrianglesValue.toArray()) {
+                if (!triangleValue.isArray() || triangleValue.toArray().size() != 3) {
+                    setError(errorMessage,
+                             QStringLiteral("mesh loop triangle is invalid"));
+                    return false;
+                }
+                const QJsonArray corners = triangleValue.toArray();
+                std::array<int, 3> triangle{};
+                for (int corner = 0; corner < 3; ++corner) {
+                    const int cornerIndex = static_cast<int>(corner);
+                    if (!jsonInteger(corners[corner], &triangle[cornerIndex]) ||
+                        triangle[cornerIndex] < 0 ||
+                        triangle[cornerIndex] >= mesh.faces[faceIndex].size()) {
+                        setError(errorMessage,
+                                 QStringLiteral("mesh loop triangle corner is invalid"));
+                        return false;
+                    }
+                }
+                triangles.append(triangle);
+            }
+            mesh.faceTriangles.append(std::move(triangles));
+        }
+    }
     const QJsonArray materialIndices =
         item.value(QStringLiteral("polygon_material_indices")).toArray();
     mesh.faceMaterialIndices.reserve(materialIndices.size());

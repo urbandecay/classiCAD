@@ -93,7 +93,8 @@ bool buildPolygonShadowMesh(
     const bool reflected = determinant < 0.0;
     QVector<std::array<int, 3>> triangles;
     QSet<int> usedVertices;
-    for (const QVector<int> &face : mesh.faces) {
+    for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+        const QVector<int> &face = mesh.faces[faceIndex];
         if (face.size() < 3) return false;
         QVector<Point3D> localLoop;
         localLoop.reserve(face.size());
@@ -108,7 +109,7 @@ bool buildPolygonShadowMesh(
             localLoop.append(mesh.vertices[vertexIndex]);
         }
         const QVector<std::array<int, 3>> faceTriangles =
-            triangulatePolygonLoop(localLoop);
+            polygonMeshFaceTriangles(mesh, faceIndex, localLoop);
         if (faceTriangles.isEmpty()) return false;
         for (const auto &faceTriangle : faceTriangles) {
             std::array<int, 3> triangle{
@@ -2708,6 +2709,13 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 keyStream << qint32(face.size());
                 for (int index : face) keyStream << qint32(index);
             }
+            for (const auto &triangles : mesh.faceTriangles) {
+                keyStream << qint32(triangles.size());
+                for (const auto &triangle : triangles) {
+                    keyStream << qint32(triangle[0]) << qint32(triangle[1])
+                              << qint32(triangle[2]);
+                }
+            }
             for (const Point3D &normal : mesh.cornerNormals)
                 keyStream << double(normal.x) << double(normal.y) << double(normal.z);
             keyStream << mesh.activeColorAttributeName;
@@ -2837,7 +2845,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                       (matrix[8] * p.x + matrix[9] * p.y +
                                        matrix[10] * p.z + matrix[11]) / divisor});
                 }
-                const auto triangles = triangulatePolygonLoop(localLoop);
+                const auto triangles =
+                    polygonMeshFaceTriangles(mesh, faceIndex, localLoop);
                 const int faceFirstCorner = firstCorner;
                 firstCorner += face.size();
                 const int faceSlot = mesh.faceMaterialIndices.value(faceIndex, -1);

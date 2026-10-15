@@ -248,4 +248,22 @@ QVector<std::array<int, 3>> triangulatePolygonLoop(
     return result;
 }
 
+QVector<std::array<int, 3>> polygonMeshFaceTriangles(
+    const PolygonMesh3D &mesh, int faceIndex,
+    const QVector<Point3D> &loopVertices)
+{
+    if (faceIndex >= 0 && faceIndex < mesh.faceTriangles.size()) {
+        const QVector<std::array<int, 3>> &triangles =
+            mesh.faceTriangles[faceIndex];
+        bool valid = !triangles.isEmpty();
+        for (const auto &triangle : triangles) {
+            for (const int corner : triangle) {
+                valid = valid && corner >= 0 && corner < loopVertices.size();
+            }
+        }
+        if (valid) return triangles;
+    }
+    return triangulatePolygonLoop(loopVertices);
+}
+
 } // namespace classiCAD

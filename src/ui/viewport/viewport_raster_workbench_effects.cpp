@@ -2499,7 +2499,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 points.reserve(face.size());
                 for (int vertex : face) points.append(mesh.vertices[vertex]);
                 for (const std::array<int, 3> &triangle :
-                     triangulatePolygonLoop(points)) {
+                     polygonMeshFaceTriangles(mesh, faceIndex, points)) {
                     const QVector3D a = worldPoint(points[triangle[0]]);
                     const QVector3D b = worldPoint(points[triangle[1]]);
                     const QVector3D c = worldPoint(points[triangle[2]]);

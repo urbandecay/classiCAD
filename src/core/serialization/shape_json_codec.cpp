@@ -530,6 +530,17 @@ QJsonObject polygonMeshToJson(const PolygonMesh3D &mesh)
         faces.append(indices);
     }
     object.insert(QStringLiteral("faces"), faces);
+    if (!mesh.faceTriangles.isEmpty()) {
+        QJsonArray faceTriangles;
+        for (const auto &triangles : mesh.faceTriangles) {
+            QJsonArray triangleArray;
+            for (const auto &triangle : triangles) {
+                triangleArray.append(QJsonArray{triangle[0], triangle[1], triangle[2]});
+            }
+            faceTriangles.append(triangleArray);
+        }
+        object.insert(QStringLiteral("faceTriangles"), faceTriangles);
+    }
     if (!mesh.cornerNormals.isEmpty()) {
         QJsonArray normals;
         for (const Point3D &normal : mesh.cornerNormals)
@@ -612,6 +623,33 @@ bool polygonMeshFromJson(const QJsonValue &value, PolygonMesh3D *mesh)
             face.append(indexValue.toInt());
         }
         result.faces.append(face);
+    }
+    const QJsonValue faceTrianglesValue = object.value(QStringLiteral("faceTriangles"));
+    if (!faceTrianglesValue.isUndefined()) {
+        if (!faceTrianglesValue.isArray() ||
+            faceTrianglesValue.toArray().size() != result.faces.size()) return false;
+        const QJsonArray faceTriangleArray = faceTrianglesValue.toArray();
+        for (int faceIndex = 0; faceIndex < result.faces.size(); ++faceIndex) {
+            if (!faceTriangleArray[faceIndex].isArray()) return false;
+            QVector<std::array<int, 3>> triangles;
+            for (const QJsonValue &triangleValue : faceTriangleArray[faceIndex].toArray()) {
+                if (!triangleValue.isArray() || triangleValue.toArray().size() != 3)
+                    return false;
+                const QJsonArray corners = triangleValue.toArray();
+                std::array<int, 3> triangle{};
+                for (int corner = 0; corner < 3; ++corner) {
+                    const QJsonValue value = corners[corner];
+                    if (!value.isDouble() || !std::isfinite(value.toDouble()) ||
+                        std::floor(value.toDouble()) != value.toDouble()) return false;
+                    triangle[static_cast<size_t>(corner)] = value.toInt(-1);
+                    if (triangle[static_cast<size_t>(corner)] < 0 ||
+                        triangle[static_cast<size_t>(corner)] >=
+                            result.faces[faceIndex].size()) return false;
+                }
+                triangles.append(triangle);
+            }
+            result.faceTriangles.append(std::move(triangles));
+        }
     }
     const QJsonValue cornerNormalsValue = object.value(QStringLiteral("cornerNormals"));
     if (!cornerNormalsValue.isUndefined() && !cornerNormalsValue.isArray()) return false;

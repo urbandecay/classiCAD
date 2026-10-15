@@ -2886,7 +2886,8 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         int nearestComponentIndex = -1;
         if (polygonMesh) {
             const PolygonMesh3D &mesh = shape.polygonMesh;
-            for (const QVector<int> &face : mesh.faces) {
+            for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+                const QVector<int> &face = mesh.faces[faceIndex];
                 QVector<Point3D> worldLoop;
                 QVector<QPointF> screenLoop;
                 worldLoop.reserve(face.size());
@@ -2907,7 +2908,8 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
                 if (!projected) {
                     continue;
                 }
-                for (const auto &triangle : triangulatePolygonLoop(worldLoop)) {
+                for (const auto &triangle :
+                     polygonMeshFaceTriangles(mesh, faceIndex, worldLoop)) {
                     const int ia = triangle[0];
                     const int ib = triangle[1];
                     const int ic = triangle[2];

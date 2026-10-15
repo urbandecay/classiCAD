@@ -882,6 +882,15 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
             int(polygon.material_index) for polygon in mesh.polygons
         ]
         item["loop_vertex_indices"] = [int(loop.vertex_index) for loop in mesh.loops]
+        mesh.calc_loop_triangles()
+        face_triangles = [[] for _polygon in mesh.polygons]
+        for triangle in mesh.loop_triangles:
+            polygon = mesh.polygons[triangle.polygon_index]
+            face_triangles[triangle.polygon_index].append([
+                int(loop_index - polygon.loop_start)
+                for loop_index in triangle.loops
+            ])
+        item["polygon_loop_triangles"] = face_triangles
 
         source_obj = evaluated_obj if evaluated_obj is not None else obj
         slots = []

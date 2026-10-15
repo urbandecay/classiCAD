@@ -7477,3 +7477,16 @@ resolve remain open.
   shadow stencil in its composite pass. Transparent in-front samples still
   leave the regular opaque receiver available. The C++ build passed; no
   matched Blender shadow comparison has been run for this fix.
+
+### Imported Blender mesh triangulation (2026-10-15)
+
+- Blender mesh extraction now carries each evaluated face's loop-triangle
+  corner indices into the imported mesh record. classiCAD keeps the original
+  polygon loops authoritative and stores these indices as an optional derived
+  display cache; older native files and meshes built inside classiCAD continue
+  to use the existing triangulator. GPU/QPainter surface draws, shadow
+  fallbacks, software effects, snapping, and native save/load use the retained
+  indices when available. This preserves Blender's diagonal choices, which
+  affect non-planar face shading and per-corner UV/color interpolation. The
+  C++ build passed. Matched Blender mesh captures have not been run, so this
+  closes the source-level topology mismatch without claiming visual parity.

@@ -46,11 +46,13 @@ struct PolygonMeshMaterialSlot {
     float alpha = 1.0f;
 };
 
-// Authoritative local-space polygon mesh data imported from Blender. Rendering
-// triangulation and GPU buffers are derived data, never stored here.
+// Authoritative local-space polygon mesh data imported from Blender. Polygon
+// loops remain the source geometry; imported faceTriangles is an optional
+// derived display cache that preserves Blender's evaluated triangulation.
 struct PolygonMesh3D {
     QVector<Point3D> vertices;
     QVector<QVector<int>> faces;
+    QVector<QVector<std::array<int, 3>>> faceTriangles;
     // Optional custom split normals, one XYZ vector per face loop in the same
     // flattened order used by UV corner data. Empty means derive normals.
     QVector<Point3D> cornerNormals;
@@ -77,6 +79,9 @@ inline const QString &workbenchUvMapName(const PolygonMesh3D &mesh)
 
 bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error = nullptr);
 QVector<std::array<int, 3>> triangulatePolygonLoop(
+    const QVector<Point3D> &loopVertices);
+QVector<std::array<int, 3>> polygonMeshFaceTriangles(
+    const PolygonMesh3D &mesh, int faceIndex,
     const QVector<Point3D> &loopVertices);
 
 } // namespace classiCAD

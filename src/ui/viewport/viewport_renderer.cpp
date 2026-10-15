@@ -1895,7 +1895,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                               (m[8] * local.x + m[9] * local.y +
                                m[10] * local.z + m[11]) / divisor + preparedOffset.z});
             }
-            const auto faceTriangles = triangulatePolygonLoop(world);
+            const auto faceTriangles =
+                polygonMeshFaceTriangles(mesh, faceIndex, world);
             for (const std::array<int, 3> &loopTriangle : faceTriangles) {
                 MeshTriangle triangle;
                 const Point3D vertices[] = {world[loopTriangle[0]],

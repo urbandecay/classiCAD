@@ -5139,6 +5139,21 @@ resolve remain open.
   one unselected default cube only; other casters, receivers, directions,
   focus/shift settings, and QPainter shadow configurations remain open.
 
+### QPainter fully shadowed factor contract (2026-10-15)
+
+- Added a direct scalar regression contract for the fully shadowed branch of
+  `rasterWorkbenchShadowFactor`, covering intensities 0, 0.2, 0.5, 0.8, and 1
+  across three surface normals. Every result must equal `1 - intensity`.
+- This follows Blender 5.2.2's pinned
+  [`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh#L677-L688):
+  `force_shadow` zeros `shadow_mix`, then `shadow_add` remains. The pinned
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1629-L1636)
+  sets `shadow_mul` to intensity and `shadow_add` to its complement. This
+  contract checks the factor equation only; it does not measure mask coverage,
+  receiver shading, or close the QPainter shadow comparison gap above.
+- Validation: `cmake --build build -j4` and the offscreen
+  `viewport_render_contracts` test passed.
+
 ### QPainter closed-solid shadow caster contract (2026-10-14)
 
 - A source audit confirmed the software effect rasterizer already obtains

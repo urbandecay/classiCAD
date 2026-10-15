@@ -1532,6 +1532,21 @@ int main(int argc, char *argv[])
                 shadowFactorLight, 0.0f, 0.1f, 0.9f, false) ==
                 1.0f,
         "QPainter shadow focus must follow Blender's shift/focus smoothstep while shadowed and zero-intensity limits remain stable");
+    bool fullShadowIntensityContract = true;
+    for (const float intensity : {0.0f, 0.2f, 0.5f, 0.8f, 1.0f}) {
+        for (const QVector3D &normal :
+             {QVector3D(0.0f, 0.0f, 1.0f),
+              QVector3D(0.70710677f, -0.70710677f, 0.0f),
+              QVector3D(-0.26726124f, 0.53452248f, 0.80178374f)}) {
+            const float factor = rasterWorkbenchShadowFactor(
+                normal, shadowFactorLight, intensity, 0.0f, 0.0f, true);
+            fullShadowIntensityContract &=
+                std::abs(factor - (1.0f - intensity)) < 1.0e-7f;
+        }
+    }
+    passed &= check(
+        fullShadowIntensityContract,
+        "QPainter fully shadowed factor must equal Blender's 1 - shadow intensity for varied normals and intensities");
     const float unitShadowBias = rasterWorkbenchShadowDepthBias(-1.0f, 1.0f);
     const float smallShadowBias = rasterWorkbenchShadowDepthBias(-0.001f,
                                                                   0.001f);

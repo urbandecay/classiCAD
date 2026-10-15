@@ -14543,12 +14543,18 @@ int main(int argc, char *argv[])
                         ViewportCameraPreferences dofOptics =
                             dofCamera.cameraPreferences();
                         dofOptics.sceneCameraEnabled = true;
-                        dofOptics.focalLengthMillimeters = 25.0;
+                        // ViewportTransform's perspective projection divides
+                        // focal length by Blender's viewport projection zoom
+                        // factor (2). Doubling focal length matches the
+                        // helper's rendered 25 mm camera framing; scaling
+                        // f-stop by four preserves f^2 / N and its
+                        // corresponding circle-of-confusion scale.
+                        dofOptics.focalLengthMillimeters = 50.0;
                         dofOptics.focusDistance = std::sqrt(
                             std::pow(dofCamera.cameraPosition(glSize).x, 2.0) +
                             std::pow(dofCamera.cameraPosition(glSize).y, 2.0) +
                             std::pow(dofCamera.cameraPosition(glSize).z, 2.0));
-                        dofOptics.fStop = 0.1;
+                        dofOptics.fStop = 0.4;
                         dofOptics.apertureBlades = 6;
                         dofOptics.apertureRotationRadians = 0.2;
                         dofOptics.apertureRatio = 1.2;

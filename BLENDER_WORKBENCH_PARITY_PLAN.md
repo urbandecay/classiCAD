@@ -5415,10 +5415,14 @@ edge comparison remains open.
 ### Matched QPainter DOF capture audit (2026-10-14)
 
 - Captured a nonblank 640×480 cube baseline and DOF result from the QPainter
-  production path, then rendered the same documented camera optics with the
-  Blender 5.2.2 helper. Both use a 25 mm perspective camera, f/0.1, six
-  aperture blades, 0.2 rad rotation, 1.2 aperture ratio, and disabled
-  shadows, cavity, specular, and outline.
+  production path, then rendered the matching Blender 5.2.2 reference. The
+  Blender helper uses a 25 mm rendered camera at f/0.1. The classiCAD
+  `ViewportTransform` capture uses 50 mm at f/0.4: its perspective viewport
+  projection divides focal length by Blender's viewport projection zoom factor
+  of two, so this matches the rendered framing; scaling f-stop by four keeps
+  the `f²/N` circle-of-confusion scale. Both use six aperture blades, 0.2 rad
+  rotation, 1.2 aperture ratio, and disabled shadows, cavity, specular, and
+  outline.
 - At an RGB channel threshold of 2, Blender changes 11,647 pixels and QPainter
   changes 4,265; their effect-mask IoU is 0.02447 (15,152 XOR pixels). At
   threshold 3, the counts are 10,059 and 3,163 and IoU is 0.01684. However,
@@ -5428,21 +5432,19 @@ edge comparison remains open.
   to the DOF gather alone.
 - **Fixture correction and follow-up (2026-10-15):** The QPainter capture now
   explicitly disables specular highlights, as the Blender helper already
-  does. A fresh Blender 5.2.2 and QPainter pair showed no baseline improvement:
-  mean maximum-channel error is `27.781/255` with 108,869 pixels above 2, and
-  effect-mask IoU remains `0.023737` at threshold 2. The captures reveal a
-  larger scene-framing mismatch: the Blender foreground bounds are
-  `(96,76)-(510,479)`, while QPainter's are `(208,158)-(414,364)`. The
-  Blender helper renders a 25 mm camera; classiCAD's QPainter path projects
-  through `ViewportTransform`, whose perspective focal-length mapping includes
-  the viewport projection zoom factor. This indicates the DOF fixture does not
-  yet compare equivalent projected scenes. Keep the DOF kernel comparison
-  inconclusive until camera framing/projection is aligned; changing its sample
-  equations is not supported by this capture.
+  does. That setting alone did not improve the baseline. Matching the
+  `ViewportTransform` projection with equivalent 50 mm/f/0.4 optics brought
+  the Blender and QPainter foreground bounds to the same `(96,76)-(510,479)`.
+  Baseline mean maximum-channel error fell from `27.781/255` to `19.826/255`,
+  while threshold-2 effect-mask IoU rose from `0.023737` to `0.184709` (QPainter
+  changed pixels: 4,181 to 8,172; Blender: 11,647). The remaining baseline
+  error and mask disagreement show that face response and the DOF gather still
+  differ. The comparison now has matched framing, but remains insufficient to
+  justify a production DOF equation change.
 - This confirms that matched QPainter DOF image acceptance remains open. The
   existing code uses a full-resolution approximation without Blender's
-  temporal jitter and complete near/far pyramid. Align camera projection and
-  color output before using this comparison to justify a renderer change.
+  temporal jitter and complete near/far pyramid. Align face response and
+  baseline color before using this comparison to justify a renderer change.
   Blender's stage setup is pinned in
   [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L53-L85);
   its gather is pinned in

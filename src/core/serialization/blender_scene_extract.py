@@ -653,9 +653,11 @@ def object_metadata(obj, scene, depsgraph=None):
 
 
 def extract_image_empty(obj, scene, packed_payload_budget,
-                        transform_override=None):
+                        transform_override=None, depsgraph=None):
     """Extract a still Image Empty into the existing Picture geometry path."""
-    if obj.type != "EMPTY" or str(getattr(obj, "empty_display_type", "")) != "IMAGE":
+    evaluated = obj.evaluated_get(depsgraph) if depsgraph is not None else obj
+    if (obj.type != "EMPTY" or
+            str(getattr(evaluated, "empty_display_type", "")) != "IMAGE"):
         return None, ""
     image = getattr(obj, "data", None)
     if image is None or str(getattr(image, "source", "")) != "FILE":
@@ -691,31 +693,33 @@ def extract_image_empty(obj, scene, packed_payload_budget,
         aspect_x, aspect_y = 1.0, aspect_y / aspect_x
     else:
         aspect_x, aspect_y = aspect_x / aspect_y, 1.0
-    matrix = transform_override if transform_override is not None else obj.matrix_world
+    matrix = (transform_override if transform_override is not None
+              else evaluated.matrix_world)
+    display_size = float(evaluated.empty_display_size)
     half_x = (matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))) * (
-        aspect_x * float(obj.empty_display_size) * 0.5)
+        aspect_x * display_size * 0.5)
     half_y = (matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))) * (
-        aspect_y * float(obj.empty_display_size) * 0.5)
-    offset = obj.empty_image_offset
+        aspect_y * display_size * 0.5)
+    offset = evaluated.empty_image_offset
     center = matrix.translation + half_x * (2.0 * float(offset[0]) + 1.0) + \
         half_y * (2.0 * float(offset[1]) + 1.0)
     corners = [center - half_x + half_y,
                center + half_x + half_y,
                center + half_x - half_y,
                center - half_x - half_y]
-    item = object_metadata(obj, scene)
+    item = object_metadata(obj, scene, depsgraph)
     item.update({
         "object_type": "EMPTY_IMAGE",
         "picture_corners_world": [vector_values(corner) for corner in corners],
         "picture_image_path": filepath if source_exists else "",
         "picture_image_packed_data_base64": (
             base64.b64encode(packed_data).decode("ascii") if packed_data else ""),
-        "picture_opacity": finite_number(obj.color[3]),
-        "empty_image_depth": str(getattr(obj, "empty_image_depth", "DEFAULT")),
+        "picture_opacity": finite_number(evaluated.color[3]),
+        "empty_image_depth": str(getattr(evaluated, "empty_image_depth", "DEFAULT")),
         "show_empty_image_perspective": bool(
-            getattr(obj, "show_empty_image_perspective", True)),
+            getattr(evaluated, "show_empty_image_perspective", True)),
         "show_empty_image_orthographic": bool(
-            getattr(obj, "show_empty_image_orthographic", True)),
+            getattr(evaluated, "show_empty_image_orthographic", True)),
     })
     return item, ""
 
@@ -998,8 +1002,7 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
                         transform_override=None, evaluated_object_override=None,
                         mesh_payload_budget=None):
     item_id = stable_id(obj)
-    item = object_metadata(obj, scene,
-                           depsgraph if mode == "evaluated" else None)
+    item = object_metadata(obj, scene, depsgraph)
     item["object_type"] = obj.type
     item["import_mode"] = mode
     if obj.parent is not None:
@@ -1033,7 +1036,8 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
     else:
         evaluated_obj = None
         transform = (transform_override if transform_override is not None
-                     else obj.matrix_world)
+                     else obj.evaluated_get(depsgraph).matrix_world
+                     if depsgraph is not None else obj.matrix_world)
     try:
         mesh = (evaluated_obj.to_mesh(preserve_all_data_layers=True,
                                       depsgraph=depsgraph)
@@ -1500,7 +1504,8 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
     item["object_type"] = "CURVE"
     item["splines"] = []
     transform = (transform_override if transform_override is not None
-                 else obj.matrix_world)
+                 else (obj.evaluated_get(depsgraph).matrix_world
+                       if depsgraph is not None else obj.matrix_world))
     if obj.parent is not None:
         add_unsupported(unsupported, item_id, "parent_hierarchy",
                         "the object's world-space spline geometry is preserved, but its Blender parent relationship is not represented")
@@ -1621,13 +1626,14 @@ def curve_has_surface_output(obj):
 def extract_grease_pencil_curve_item(obj, scene, unsupported,
                                      transform_override=None,
                                      evaluated_obj=None,
+                                     depsgraph=None,
                                      max_strokes=MAX_GREASE_PENCIL_STROKES_PER_SCENE,
                                      max_points=MAX_GREASE_PENCIL_POINTS_PER_SCENE):
     """Import current-frame Grease Pencil stroke centerlines as POLY curves."""
     from mathutils import Vector
 
     item_id = stable_id(obj)
-    item = object_metadata(obj, scene)
+    item = object_metadata(obj, scene, depsgraph)
     item["object_type"] = "CURVE"
     item["source_object_type"] = "GREASEPENCIL"
     item["splines"] = []
@@ -1693,18 +1699,20 @@ def extract_grease_pencil_curve_item(obj, scene, unsupported,
 
 
 def extract_hair_curve_item(obj, scene, unsupported, transform_override=None,
+                            depsgraph=None,
                             max_curves=MAX_HAIR_CURVES_PER_SCENE,
                             max_points=MAX_HAIR_CURVE_POINTS_PER_SCENE):
     """Import Blender Hair Curves control paths as ordinary POLY curves."""
     from mathutils import Vector
 
     item_id = stable_id(obj)
-    item = object_metadata(obj, scene)
+    item = object_metadata(obj, scene, depsgraph)
     item["object_type"] = "CURVE"
     item["source_object_type"] = "CURVES"
     item["splines"] = []
     transform = (transform_override if transform_override is not None
-                 else obj.matrix_world)
+                 else (obj.evaluated_get(depsgraph).matrix_world
+                       if depsgraph is not None else obj.matrix_world))
     data = obj.data
     curve_count = len(data.curves)
     point_count = len(data.points)
@@ -1804,7 +1812,8 @@ def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None,
 
     source_id = stable_id(obj)
     transform = (transform_override if transform_override is not None
-                 else obj.matrix_world)
+                 else (obj.evaluated_get(depsgraph).matrix_world
+                       if depsgraph is not None else obj.matrix_world))
     if obj.parent is not None:
         add_unsupported(unsupported, source_id, "parent_hierarchy",
                         "the surface world-space control net is preserved, but its Blender parent relationship is not represented")
@@ -2106,10 +2115,10 @@ def extract_scene(input_path, mode):
             "view_layer_states": states_by_collection.get(collection_id, []),
         })
     for scene in bpy.data.scenes:
-        depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
+        # Original mode preserves source mesh data, but Blender still displays
+        # objects with their current dependency-graph world transforms.
+        depsgraph = depsgraph_for_scene(scene)
         camera_depsgraph = depsgraph
-        if camera_depsgraph is None and scene.camera is not None:
-            camera_depsgraph = depsgraph_for_scene(scene)
         render = scene.render
         scene_record = {
             "scene_id": stable_id(scene),
@@ -2213,7 +2222,8 @@ def extract_scene(input_path, mode):
                 continue
             if obj.type == "EMPTY":
                 item, image_error = extract_image_empty(
-                    obj, scene, packed_empty_image_payload_budget)
+                    obj, scene, packed_empty_image_payload_budget,
+                    depsgraph=depsgraph)
                 if item is not None:
                     item["view_layer_hidden"] = {
                         view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
@@ -2236,6 +2246,7 @@ def extract_scene(input_path, mode):
                     item = extract_grease_pencil_curve_item(
                         obj, scene, output["unsupported_features"],
                         evaluated_obj=obj.evaluated_get(grease_depsgraph),
+                        depsgraph=grease_depsgraph,
                         max_strokes=(MAX_GREASE_PENCIL_STROKES_PER_SCENE -
                                      grease_pencil_stroke_count),
                         max_points=(MAX_GREASE_PENCIL_POINTS_PER_SCENE -
@@ -2275,6 +2286,7 @@ def extract_scene(input_path, mode):
                         obj, scene, output["unsupported_features"],
                         transform_override=obj.evaluated_get(
                             hair_depsgraph).matrix_world,
+                        depsgraph=hair_depsgraph,
                         max_curves=(MAX_HAIR_CURVES_PER_SCENE -
                                     hair_curve_count),
                         max_points=(MAX_HAIR_CURVE_POINTS_PER_SCENE -
@@ -2441,7 +2453,9 @@ def extract_scene(input_path, mode):
                     item["object_type"] = "VOLUME"
                     item["import_mode"] = mode
                     volume_data = extract_scalar_volume_grid(
-                        obj, scene, volume_depsgraph)
+                        obj, scene, volume_depsgraph,
+                        transform_override=obj.evaluated_get(
+                            volume_depsgraph).matrix_world)
                     volume_data.pop("_transport_metrics", None)
                     item.update(volume_data)
                     item["view_layer_hidden"] = {
@@ -2538,7 +2552,7 @@ def extract_scene(input_path, mode):
                     continue
                 is_image_empty = (
                     source_obj.type == "EMPTY" and
-                    str(getattr(source_obj, "empty_display_type", "")) == "IMAGE")
+                    str(getattr(evaluated_obj, "empty_display_type", "")) == "IMAGE")
                 if source_obj.type not in {
                         "MESH", "CURVE", "SURFACE", "FONT", "META",
                         "VOLUME", "GREASEPENCIL", "CURVES"} and not is_image_empty:
@@ -2567,7 +2581,8 @@ def extract_scene(input_path, mode):
                     break
                 instance_records.append((
                     source_obj, parent_source, instance.matrix_world.copy(),
-                    tuple(int(value) for value in instance.persistent_id)))
+                    tuple(int(value) for value in instance.persistent_id),
+                    is_image_empty))
 
             def assign_instance_metadata(item, instance_id, source_obj,
                                          parent_source, instance_transform):
@@ -2590,7 +2605,8 @@ def extract_scene(input_path, mode):
                     if len(scene.view_layers) else ""
                 )
 
-            for source_obj, parent_source, instance_transform, persistent_id in instance_records:
+            for (source_obj, parent_source, instance_transform, persistent_id,
+                 is_image_empty) in instance_records:
                 source_id = stable_id(source_obj)
                 parent_id = stable_id(parent_source)
                 instance_key = (source_id, parent_id, persistent_id)
@@ -2603,11 +2619,11 @@ def extract_scene(input_path, mode):
                      "::" + instance_suffix)
                     .encode("utf-8")).hexdigest()
                 try:
-                    if (source_obj.type == "EMPTY" and
-                            str(getattr(source_obj, "empty_display_type", "")) == "IMAGE"):
+                    if is_image_empty:
                         item, image_error = extract_image_empty(
                             source_obj, scene, packed_empty_image_payload_budget,
-                            transform_override=instance_transform)
+                            transform_override=instance_transform,
+                            depsgraph=instance_depsgraph)
                         if item is None:
                             unsupported_item = unsupported_object_record(
                                 source_obj, scene, instance_depsgraph)
@@ -2708,6 +2724,7 @@ def extract_scene(input_path, mode):
                             transform_override=instance_transform,
                             evaluated_obj=source_obj.evaluated_get(
                                 instance_depsgraph),
+                            depsgraph=instance_depsgraph,
                             max_strokes=(MAX_GREASE_PENCIL_STROKES_PER_SCENE -
                                          grease_pencil_stroke_count),
                             max_points=(MAX_GREASE_PENCIL_POINTS_PER_SCENE -
@@ -2733,6 +2750,7 @@ def extract_scene(input_path, mode):
                         item = extract_hair_curve_item(
                             source_obj, scene, item_features,
                             transform_override=instance_transform,
+                            depsgraph=instance_depsgraph,
                             max_curves=(MAX_HAIR_CURVES_PER_SCENE -
                                         hair_curve_count),
                             max_points=(MAX_HAIR_CURVE_POINTS_PER_SCENE -

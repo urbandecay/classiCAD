@@ -7928,3 +7928,17 @@ resolve remain open.
   omitted. This is a bounded bridge using classiCAD's existing one-point
   object type; Blender POINTCLOUD remains a separate unsupported batched type.
   C++ build passed; no Blender fixture comparison was run.
+
+### Blender evaluated object transforms in original geometry mode (2026-10-15)
+
+- Original mesh mode now preserves source mesh vertices while applying each
+  object's current dependency-graph world transform, matching Blender's
+  displayed placement when constraints or animation affect the transform.
+  The same transform handling now covers source spline curves, NURBS surfaces,
+  still Image Empties, Grease Pencil paths, Hair Curves, and scalar Volumes;
+  collection instances continue to use their captured instance matrices.
+  Image Empty type, size, offset, opacity, depth, and
+  perspective/orthographic visibility now come from the evaluated object as
+  well. Blender's Object RNA leaves `empty_display_type` animatable.
+  Geometry that is explicitly evaluated, such as text and metaballs, remains
+  evaluated as before. C++ build passed; no matched Blender comparison was run.

@@ -5693,16 +5693,18 @@ edge comparison remains open.
   0.0219421387 --zero-dither`; the scene-linear capture uses
   `--linear-output` and `--linear-pfm-output`.
 
-### QPainter committed-curve opaque scene-depth visibility (2026-10-14)
+### QPainter committed-curve regular scene-depth visibility (2026-10-14)
 
-- The QPainter surface compositor now retains its nearest regular opaque
-  camera-depth value per physical target pixel. Committed NURBS curve strokes
-  use that map to split prepared tessellation segments into visible runs; when
-  prepared segments are unavailable, the renderer creates bounded sampled
-  curve segments and applies the same test. The depth check uses orthographic
-  linear depth or perspective-correct reciprocal depth and is capped at one
-  million samples per curve. Disconnected curve components start separate
-  runs.
+- The QPainter surface compositor retains regular scene depth per physical
+  target pixel by combining the nearest opaque depth with accepted regular
+  transparent fragments. Committed NURBS curve strokes use that map to split
+  prepared tessellation segments into visible runs; when prepared segments are
+  unavailable, the renderer creates bounded sampled curve segments and applies
+  the same test. The depth check uses orthographic linear depth or
+  perspective-correct reciprocal depth and is capped at one million samples
+  per curve. Disconnected curve components start separate runs. The retained
+  map excludes `showInFront` geometry and does not replace the separate opaque
+  and transparent depth data used by other effects.
 - A production-renderer contract composes an opaque surface blocker, then draws
   a valid degree-one NURBS line with a portion behind the blocker and portions
   outside it. It verifies that the prepared and direct sampled paths leave the
@@ -5710,16 +5712,19 @@ edge comparison remains open.
   exposed stroke, and that the no-depth baseline still draws through the
   blocker. The test also confirms the compositor retains finite blocker depth
   and marks an uncovered pixel as empty.
-- Blender 5.2.2's Overlay wireframe pass depth-tests committed strokes against
-  scene depth in pinned
+- Blender 5.2.2's Workbench draws the regular transparent-depth pass after
+  transparent accumulation, and Overlay wireframe depth-tests strokes against
+  the scene depth texture in pinned
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L243-L252)
+  and
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L948-L970).
-  This QPainter adaptation uses the existing software opaque-surface depth map;
-  it does not change scene geometry or the material adapter. It does not yet
-  account for transparent-surface depth, separate X-Ray depth domains, or depth
-  when the software surface compositor is unavailable or the curve exceeds its
-  sample budget. Selected component-edge overlays remain a separate path.
-- Validation: `cmake --build build -j4` passed with the 316-file dependency
-  audit; offscreen `viewport_render_contracts` passed (1/1, 27.07 seconds).
+  The production contract keeps the opaque blocker regression and no-depth
+  baseline, then verifies a translucent plane hides the curve only when nearer,
+  while the exposed stroke remains visible. `showInFront`, separate X-Ray depth
+  domains, compositor-unavailable cases, over-budget curves, and selected
+  component-edge overlays remain separate or unsupported paths.
+- Validation: `cmake --build build -j4` passed with the 317-file dependency
+  audit; offscreen `viewport_render_contracts` passed (1/1, 30.14 seconds).
   The check validates visibility behavior, not a matched full-frame Blender
   image comparison.
 

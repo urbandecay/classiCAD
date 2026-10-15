@@ -888,6 +888,8 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->sceneLinearSize = QSize();
         surfaceLayers->opaqueSceneDepth.clear();
         surfaceLayers->opaqueSceneDepthSize = QSize();
+        surfaceLayers->regularSceneDepth.clear();
+        surfaceLayers->regularSceneDepthSize = QSize();
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         surfaceLayers->opaqueColor.setDevicePixelRatio(
@@ -1643,6 +1645,17 @@ bool compositeRasterWorkbenchSurfaces(
         if (surfaceLayers != nullptr) {
             surfaceLayers->opaqueSceneDepth = opaqueSceneDepth;
             surfaceLayers->opaqueSceneDepthSize = QSize(width, height);
+            surfaceLayers->regularSceneDepth = opaqueSceneDepth;
+            for (const RasterWorkbenchLinearFragment &fragment : fragments) {
+                if (fragment.alpha <= 0.0f || fragment.x < 0 ||
+                    fragment.x >= width || fragment.y < 0 ||
+                    fragment.y >= height) continue;
+                const int index = fragment.y * width + fragment.x;
+                surfaceLayers->regularSceneDepth[index] = std::max(
+                    surfaceLayers->regularSceneDepth[index],
+                    fragment.cameraDepth);
+            }
+            surfaceLayers->regularSceneDepthSize = QSize(width, height);
         }
         return true;
     }
@@ -2116,6 +2129,15 @@ bool compositeRasterWorkbenchSurfaces(
     if (surfaceLayers != nullptr) {
         surfaceLayers->opaqueSceneDepth = opaqueSceneDepth;
         surfaceLayers->opaqueSceneDepthSize = QSize(width, height);
+        surfaceLayers->regularSceneDepth = opaqueSceneDepth;
+        for (const TransparentFragment &fragment : regularTransparentFragments) {
+            if (fragment.alpha <= 0.0f || fragment.pixelIndex < 0 ||
+                fragment.pixelIndex >= pixelCount) continue;
+            surfaceLayers->regularSceneDepth[fragment.pixelIndex] = std::max(
+                surfaceLayers->regularSceneDepth[fragment.pixelIndex],
+                fragment.depth);
+        }
+        surfaceLayers->regularSceneDepthSize = QSize(width, height);
     }
     return true;
 }

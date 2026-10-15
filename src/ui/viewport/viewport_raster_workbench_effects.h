@@ -127,6 +127,11 @@ struct RasterWorkbenchSurfaceLayers {
     // that must depth-test against the already composited surface pass.
     QVector<float> opaqueSceneDepth;
     QSize opaqueSceneDepthSize;
+    // Physical-target depth of the nearest regular opaque or transparent
+    // surface. Negative infinity marks uncovered pixels. Used by committed
+    // QPainter curve strokes after the regular transparent resolve.
+    QVector<float> regularSceneDepth;
+    QSize regularSceneDepthSize;
     // Optional pre-display resolved scene for the bounded weighted-compositor
     // outline path. Pixels are row-major physical-target samples.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearColor;

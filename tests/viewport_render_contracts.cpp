@@ -967,7 +967,9 @@ int main(int argc, char *argv[])
         occludedCurve.nurbs.weights = {1.0, 1.0};
         const ViewportDepthGeometry occludedCurveGeometry =
             buildViewportDepthGeometry(occludedCurve);
-        const auto drawOccludedCurve = [&](QImage *image, bool useSceneDepth,
+        const auto drawOccludedCurve = [&](QImage *image,
+                                           const QVector<float> *sceneDepth,
+                                           const QSize &sceneDepthSize,
                                            bool usePreparedGeometry) {
             if (image == nullptr) return false;
             QPainter painter(image);
@@ -978,9 +980,7 @@ int main(int argc, char *argv[])
                 usePreparedGeometry ? &occludedCurveGeometry : nullptr, {},
                 std::nullopt, std::nullopt, QStringLiteral("OccludedCurve"),
                 QString(), identityMeshObjectTransform, {}, nullptr, {},
-                useSceneDepth ? &curveOcclusionLayers.opaqueSceneDepth
-                              : nullptr,
-                curveOcclusionLayers.opaqueSceneDepthSize);
+                sceneDepth, sceneDepthSize);
             painter.end();
             return true;
         };
@@ -988,11 +988,15 @@ int main(int argc, char *argv[])
         QImage curveWithDepth = curveOcclusionBase;
         QImage curveWithGeneratedDepth = curveOcclusionBase;
         const bool curveWithoutDepthRendered =
-            drawOccludedCurve(&curveWithoutDepth, false, true);
+            drawOccludedCurve(&curveWithoutDepth, nullptr, {}, true);
         const bool curveWithDepthRendered =
-            drawOccludedCurve(&curveWithDepth, true, true);
+            drawOccludedCurve(&curveWithDepth,
+                              &curveOcclusionLayers.opaqueSceneDepth,
+                              curveOcclusionLayers.opaqueSceneDepthSize, true);
         const bool curveWithGeneratedDepthRendered =
-            drawOccludedCurve(&curveWithGeneratedDepth, true, false);
+            drawOccludedCurve(&curveWithGeneratedDepth,
+                              &curveOcclusionLayers.opaqueSceneDepth,
+                              curveOcclusionLayers.opaqueSceneDepthSize, false);
         const bool curveDepthSamplesValid =
             curveOcclusionLayers.opaqueSceneDepth.size() ==
                 orthographicDofSize.width() * orthographicDofSize.height() &&
@@ -1021,6 +1025,84 @@ int main(int argc, char *argv[])
                             curveWithGeneratedDepth.pixelColor(20, 64) !=
                                 curveOcclusionBase.pixelColor(20, 64),
                         "QPainter committed curve wires must remain visible outside the blocker");
+
+        const auto renderTransparentCurveBlocker =
+            [&](double height, RasterWorkbenchSurfaceLayers *layers,
+                QImage *image) {
+                if (layers == nullptr || image == nullptr) return false;
+                ViewportRenderObject blocker = makeShadowQuad(
+                    10, 40, 56, 88, 72, height);
+                blocker.hasWorkbenchMaterial = true;
+                blocker.workbenchMaterial.baseColorSceneLinear =
+                    QVector3D(0.5f, 0.5f, 0.5f);
+                blocker.workbenchMaterial.alpha = 0.5;
+                blocker.meshMaterials = {blocker.workbenchMaterial};
+                image->fill(QColor(22, 22, 22));
+                return compositeRasterWorkbenchSurfaces(
+                    image, {blocker}, orthographicDofTransform,
+                    orthographicDofSize, 1.0, false, true,
+                    curveOcclusionSettings, std::nullopt,
+                    drawCurveOcclusionBlocker, layers);
+            };
+        QImage transparentCurveBlockerBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        RasterWorkbenchSurfaceLayers transparentCurveBlockerLayers;
+        const bool transparentCurveBlockerRendered =
+            renderTransparentCurveBlocker(
+                -2.0, &transparentCurveBlockerLayers,
+                &transparentCurveBlockerBase);
+        const int centerIndex = 64 * orthographicDofSize.width() + 64;
+        const qreal lineDepth =
+            orthographicDofTransform.worldDirectionToView(
+                {0.0, 0.0, 0.0}).towardCamera;
+        const bool transparentDepthSamplesValid =
+            transparentCurveBlockerLayers.regularSceneDepth.size() ==
+                orthographicDofSize.width() * orthographicDofSize.height() &&
+            transparentCurveBlockerLayers.regularSceneDepthSize ==
+                orthographicDofSize &&
+            std::isfinite(transparentCurveBlockerLayers
+                              .regularSceneDepth[centerIndex]) &&
+            transparentCurveBlockerLayers
+                    .regularSceneDepth[centerIndex] > lineDepth;
+        QImage curveWithoutTransparentDepth = transparentCurveBlockerBase;
+        QImage curveWithTransparentDepth = transparentCurveBlockerBase;
+        const bool curveWithoutTransparentDepthRendered =
+            drawOccludedCurve(&curveWithoutTransparentDepth, nullptr, {}, true);
+        const bool curveWithTransparentDepthRendered = drawOccludedCurve(
+            &curveWithTransparentDepth,
+            &transparentCurveBlockerLayers.regularSceneDepth,
+            transparentCurveBlockerLayers.regularSceneDepthSize, true);
+        passed &= check(transparentCurveBlockerRendered &&
+                            transparentDepthSamplesValid,
+                        "QPainter transparent curve fixture must retain the nearest regular transparent scene depth");
+        passed &= check(curveWithoutTransparentDepthRendered &&
+                            curveWithTransparentDepthRendered &&
+                            curveWithoutTransparentDepth.pixelColor(64, 64) !=
+                                transparentCurveBlockerBase.pixelColor(64, 64),
+                        "QPainter committed curve must preserve its no-depth baseline through a transparent surface");
+        passed &= check(curveWithTransparentDepth.pixelColor(64, 64) ==
+                            transparentCurveBlockerBase.pixelColor(64, 64) &&
+                            curveWithTransparentDepth.pixelColor(20, 64) !=
+                                transparentCurveBlockerBase.pixelColor(20, 64),
+                        "QPainter committed curve must depth-test against nearer regular transparent surfaces while remaining visible outside them");
+
+        QImage fartherTransparentBlockerBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        RasterWorkbenchSurfaceLayers fartherTransparentBlockerLayers;
+        const bool fartherTransparentBlockerRendered =
+            renderTransparentCurveBlocker(
+                2.0, &fartherTransparentBlockerLayers,
+                &fartherTransparentBlockerBase);
+        QImage curveInFrontOfTransparentDepth = fartherTransparentBlockerBase;
+        const bool curveInFrontOfTransparentDepthRendered = drawOccludedCurve(
+            &curveInFrontOfTransparentDepth,
+            &fartherTransparentBlockerLayers.regularSceneDepth,
+            fartherTransparentBlockerLayers.regularSceneDepthSize, true);
+        passed &= check(fartherTransparentBlockerRendered &&
+                            curveInFrontOfTransparentDepthRendered &&
+                            curveInFrontOfTransparentDepth.pixelColor(64, 64) !=
+                                fartherTransparentBlockerBase.pixelColor(64, 64),
+                        "QPainter committed curve must remain visible in front of a farther transparent surface");
     }
     const auto renderCpuShadow = [&](ViewportShadingSettings shading) {
         QImage image(orthographicDofSize, QImage::Format_ARGB32_Premultiplied);

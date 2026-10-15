@@ -10420,9 +10420,9 @@ protected:
                           identityMeshObjectTransform, {}, nullptr, {},
                           rasterSurfaceBatchRendered &&
                                   !renderObject.showInFront
-                              ? &rasterSurfaceLayers.opaqueSceneDepth
+                              ? &rasterSurfaceLayers.regularSceneDepth
                               : nullptr,
-                          rasterSurfaceLayers.opaqueSceneDepthSize);
+                          rasterSurfaceLayers.regularSceneDepthSize);
             } else {
                 drawShape(scenePainter,
                           visibleShape,
@@ -10443,9 +10443,9 @@ protected:
                           identityMeshObjectTransform, {}, nullptr, {},
                           rasterSurfaceBatchRendered &&
                                   !renderObject.showInFront
-                              ? &rasterSurfaceLayers.opaqueSceneDepth
+                              ? &rasterSurfaceLayers.regularSceneDepth
                               : nullptr,
-                          rasterSurfaceLayers.opaqueSceneDepthSize);
+                          rasterSurfaceLayers.regularSceneDepthSize);
             }
         }
 
@@ -11253,9 +11253,9 @@ protected:
                                   renderObject.nurbsSolidFaceMaterials,
                                   fallbackSurfaceBatchRendered &&
                                           !renderObject.showInFront
-                                      ? &fallbackSurfaceLayers.opaqueSceneDepth
+                                      ? &fallbackSurfaceLayers.regularSceneDepth
                                       : nullptr,
-                                  fallbackSurfaceLayers.opaqueSceneDepthSize);
+                                  fallbackSurfaceLayers.regularSceneDepthSize);
                     }
                 }
             }

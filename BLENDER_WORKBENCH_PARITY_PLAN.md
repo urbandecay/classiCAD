@@ -8537,14 +8537,14 @@ resolve remain open.
   triangulation still use classiCAD's local tessellator. C++ build passed;
   malformed-input and matched color-image comparisons remain open.
 
-### QPainter Image Empty PREMUL fallback (2026-10-15)
+### QPainter Image Empty PREMUL fallback audit correction (2026-10-15)
 
-- Image sources without the optional scene-linear float payload now still
-  honor Blender's PREMUL flag. The QPainter path decodes the source color,
-  then divides scene-linear RGB by fractional alpha before the active display
-  transform, unless Qt's source storage format already caused that
-  unpremultiplication. Alpha zero and one keep Blender's bypass behavior.
-  C++ build passed; matched PREMUL Image Empty edge comparison remains open.
+- Removed a byte-image fallback divide that was based on an incorrect
+  assumption. Blender's PREMUL setting controls its converted GPU texture
+  used for filtering; it does not establish that the original byte image read
+  by QPainter is already premultiplied. The optional scene-linear float
+  payload remains unpremultiplied on its transport path as before. Matched
+  Image Empty comparisons remain open.
 
 ### GPU DOF blue-noise channel (2026-10-15)
 

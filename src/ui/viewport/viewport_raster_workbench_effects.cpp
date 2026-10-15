@@ -690,7 +690,8 @@ bool compositeRasterWorkbenchSurfaces(
     bool allowFragmentGeneratedDepth,
     const QVector<ViewportRenderObject> &scalarVolumeObjects,
     std::vector<RasterWorkbenchLinearPixel> *sceneLinearCapture,
-    std::vector<float> *cavityFactorCapture)
+    std::vector<float> *cavityFactorCapture,
+    RasterWorkbenchCavityTapCapture *cavityTapCapture)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
         (objects.isEmpty() && scalarVolumeObjects.isEmpty()) ||
@@ -1096,7 +1097,8 @@ bool compositeRasterWorkbenchSurfaces(
         }
         const auto computeCavityFactors = [&](
             const QVector<ViewportRenderObject> &domainObjects,
-            std::vector<float> *factors) {
+            std::vector<float> *factors,
+            RasterWorkbenchCavityTapCapture *tapCapture) {
             if (domainObjects.isEmpty()) return;
             QImage cavityProbe(colorImage->size(),
                                QImage::Format_ARGB32_Premultiplied);
@@ -1104,10 +1106,11 @@ bool compositeRasterWorkbenchSurfaces(
             cavityProbe.fill(Qt::white);
             (void)applyRasterWorkbenchEffects(
                 &cavityProbe, domainObjects, transform, viewportSize,
-                devicePixelRatio, cavityOnly, nullptr, factors);
+                devicePixelRatio, cavityOnly, nullptr, factors, tapCapture);
         };
-        computeCavityFactors(regularObjects, &regularCavityFactors);
-        computeCavityFactors(inFrontObjects, &inFrontCavityFactors);
+        computeCavityFactors(regularObjects, &regularCavityFactors,
+                             cavityTapCapture);
+        computeCavityFactors(inFrontObjects, &inFrontCavityFactors, nullptr);
     }
     if (cavityFactorCapture != nullptr)
         *cavityFactorCapture = regularCavityFactors;
@@ -2217,7 +2220,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  qreal devicePixelRatio,
                                  const ViewportShadingSettings &settings,
                                  RasterWorkbenchSurfaceLayers *surfaceLayers,
-                                 std::vector<float> *cavityFactors)
+                                 std::vector<float> *cavityFactors,
+                                 RasterWorkbenchCavityTapCapture *cavityTapCapture)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     if (colorImage == nullptr || colorImage->isNull() ||
@@ -3102,6 +3106,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             const float noiseRadius = std::clamp(
                 rasterCavityNoise(x, noiseY, 1) - 0.5f, -0.499f, 0.499f) /
                 static_cast<float>(requested);
+            const bool captureTaps = cavityTapCapture != nullptr &&
+                cavityTapCapture->receiverPixels.contains(QPoint(x, y));
             for (int i = 0; i < effectiveSamples; ++i) {
                 // If the bounded CPU budget reduces the sample count, spread
                 // those taps over the requested Workbench sequence instead of
@@ -3119,16 +3125,41 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<unsigned int>(sampleIndex)) * 6.28318530718f;
                 const float directionX = std::cos(angle);
                 const float directionY = std::sin(angle);
-                const float jitteredX = directionX * rotationX -
+                // GLSL's dot products with rotX=(cos,sin) and
+                // rotY=(-sin,cos) rotate the disk direction by the negative
+                // blue-noise angle. Keep the QPainter fallback on that same
+                // orientation rather than applying the inverse rotation.
+                const float jitteredX = directionX * rotationX +
                                         directionY * rotationY;
-                const float jitteredY = directionX * rotationY +
+                const float jitteredY = -directionX * rotationY +
                                         directionY * rotationX;
                 const float sampleDistance = std::max(
                     0.0f, sampleRadius + noiseRadius);
                 const int sx = x + qRound(jitteredX * sampleDistance * step);
-                const int sy = y + qRound(jitteredY * sampleDistance * step);
-                if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+                // Workbench's texture Y grows upward in GL coordinates;
+                // retained QPainter samples use top-down rows.
+                const int sy = y - qRound(jitteredY * sampleDistance * step);
+                RasterWorkbenchCavityTap tapCapture;
+                if (captureTaps) {
+                    tapCapture.receiverX = x;
+                    tapCapture.receiverY = y;
+                    tapCapture.requestedSamples = requested;
+                    tapCapture.effectiveSamples = effectiveSamples;
+                    tapCapture.tap = i;
+                    tapCapture.sampleIndex = sampleIndex;
+                    tapCapture.sampleX = sx;
+                    tapCapture.sampleY = sy;
+                    tapCapture.inBounds = sx >= 0 && sy >= 0 &&
+                                          sx < width && sy < height;
+                }
+                if (sx < 0 || sy < 0 || sx >= width || sy >= height) {
+                    if (captureTaps)
+                        cavityTapCapture->taps.push_back(tapCapture);
+                    continue;
+                }
                 const RasterSample &neighbor = opaqueSamples[sy * width + sx];
+                if (captureTaps)
+                    tapCapture.neighborObjectId = neighbor.objectId;
                 if (neighbor.objectId == 0) {
                     if (ssao) {
                         // Blender treats a background depth read as a point
@@ -3167,15 +3198,32 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             const float distanceAttenuation = 1.0f /
                                 std::max(distance * (1.0f + distance *
                                     distance * attenuation), 1.0e-8f);
-                            if (cavityDot > -bias)
+                            if (captureTaps) {
+                                tapCapture.distance = distance;
+                                tapCapture.cavityDot = cavityDot;
+                                tapCapture.edgeDot = edgeDot;
+                                tapCapture.bias = bias;
+                                tapCapture.attenuation = distanceAttenuation;
+                            }
+                            if (cavityDot > -bias) {
                                 cavityAmount += cavityDot *
                                                 distanceAttenuation;
-                            if (edgeDot > bias)
+                                if (captureTaps)
+                                    tapCapture.cavityContribution =
+                                        cavityDot * distanceAttenuation;
+                            }
+                            if (edgeDot > bias) {
                                 edgeAmount += edgeDot *
                                               distanceAttenuation;
+                                if (captureTaps)
+                                    tapCapture.edgeContribution =
+                                        edgeDot * distanceAttenuation;
+                            }
                             hadBackgroundCavitySample = true;
                         }
                     }
+                    if (captureTaps)
+                        cavityTapCapture->taps.push_back(tapCapture);
                     continue;
                 }
                 ++validNeighbors;
@@ -3194,11 +3242,28 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const float distanceAttenuation = 1.0f /
                         std::max(distance * (1.0f + distance * distance *
                                              attenuation), 1.0e-8f);
-                    if (cavityDot > -bias)
+                    if (captureTaps) {
+                        tapCapture.distance = distance;
+                        tapCapture.cavityDot = cavityDot;
+                        tapCapture.edgeDot = edgeDot;
+                        tapCapture.bias = bias;
+                        tapCapture.attenuation = distanceAttenuation;
+                    }
+                    if (cavityDot > -bias) {
                         cavityAmount += cavityDot * distanceAttenuation;
-                    if (edgeDot > bias)
+                        if (captureTaps)
+                            tapCapture.cavityContribution =
+                                cavityDot * distanceAttenuation;
+                    }
+                    if (edgeDot > bias) {
                         edgeAmount += edgeDot * distanceAttenuation;
+                        if (captureTaps)
+                            tapCapture.edgeContribution =
+                                edgeDot * distanceAttenuation;
+                    }
                 }
+                if (captureTaps)
+                    cavityTapCapture->taps.push_back(tapCapture);
             }
             if (validNeighbors == 0 && !hadBackgroundCavitySample) continue;
             cavityAmount = ssao

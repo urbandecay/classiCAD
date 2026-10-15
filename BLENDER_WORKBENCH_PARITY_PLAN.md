@@ -7047,6 +7047,39 @@ resolve remain open.
   classiCAD's production fallback. No C++ change remained to build or test.
   No GUI was launched.
 
+### QPainter cavity tap orientation and attribution (2026-10-15)
+
+- Added opt-in per-tap GPU output for the fixed 640×480 cube and a bounded
+  QPainter CSV trace for four selected receiver pixels. Each GPU tap pass
+  captures its raw signed cavity/edge contributions and normalized sample
+  coordinate; each CPU row records requested/effective counts, the raster
+  sample coordinate and object ID, distance, dot products, bias, attenuation,
+  and accepted contributions. The normal renderer keeps aggregate output and
+  does not enable this diagnostic unless the existing capture prefix is set.
+- The per-tap captures exposed two CPU coordinate-convention differences.
+  Blender 5.2.2 forms its jittered direction with dot products against
+  `(cos(angle), sin(angle))` and `(-sin(angle), cos(angle))`, which rotates by
+  the negative noise angle. QPainter had applied the inverse rotation. GPU
+  sample Y also grows upward while retained QPainter rows grow downward. The
+  CPU fallback now uses Blender's rotation and negates the projected Y offset
+  when mapping to its top-down raster.
+- The tap comparator found 50 of 64 selected receiver/tap coordinates equal
+  at the raster-texel level; the other 14 differed by one pixel, with no
+  sample farther than one pixel. On the 111,480 common foreground pixels, the
+  aggregate GPU/QPainter factor MAE changed only from `0.067453` to `0.067385`
+  and p95 from `0.240885` to `0.240255`; tap contribution differences remain
+  substantial. This fixes the source-backed sample orientation mismatch but
+  does not close the QPainter cavity-factor or full-image parity gap.
+- Reproduce the opt-in captures with
+  `CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX` and
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_DIAGNOSTIC_PREFIX`, then run
+  `python3 tests/workbench_cavity_tap_compare.py <gpu-prefix> <cpu-taps.csv>`.
+  Blender's pinned formula is in
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L503-L541).
+  Validation: `cmake --build build -j4`, the capture-enabled offscreen
+  `viewport_render_contracts` test (1/1), and the tap comparator passed. No
+  GUI was launched.
+
 ### GPU deferred Studio local-space rotation comparison (2026-10-15)
 
 - Added `studio_paint_local_37` to the existing offscreen lighting capture

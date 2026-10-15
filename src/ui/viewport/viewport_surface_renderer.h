@@ -31,6 +31,9 @@ public:
     // shader writes cavity/edge/curvature scalars instead of surface color.
     // Defaults off and is only used by opt-in offscreen captures.
     void setCavityDiagnosticOutput(bool enabled) noexcept;
+    // Select one Workbench cavity tap for opt-in per-pixel attribution.
+    // A negative value preserves the aggregate diagnostic output.
+    void setCavityDiagnosticTap(int tap) noexcept;
 
     bool draw(const QVector<ViewportRenderObject> &objects,
               const ViewportTransform &transform,
@@ -187,6 +190,7 @@ private:
     QSize objectIdFramebufferSize_;
     bool objectIdFramebufferAttempted_ = false;
     bool cavityDiagnosticOutput_ = false;
+    int cavityDiagnosticTap_ = -1;
     GLuint workbenchEffectFramebuffer_ = 0;
     GLuint frontMergeFramebuffer_ = 0;
     GLuint flatMaterialResolveFramebuffer_ = 0;

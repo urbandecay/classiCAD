@@ -9,6 +9,7 @@
 
 #include <QImage>
 #include <QPainter>
+#include <QPoint>
 #include <QSize>
 #include <QVector3D>
 
@@ -69,6 +70,32 @@ struct RasterWorkbenchDofPrefilter {
     float nearCoc = 0.0f;
     float farCoc = 0.0f;
     std::array<float, 4> colorWeights{};
+};
+
+struct RasterWorkbenchCavityTap {
+    int receiverX = 0;
+    int receiverY = 0;
+    int requestedSamples = 0;
+    int effectiveSamples = 0;
+    int tap = 0;
+    int sampleIndex = 0;
+    int sampleX = 0;
+    int sampleY = 0;
+    bool inBounds = false;
+    quint64 neighborObjectId = 0;
+    float distance = 0.0f;
+    float cavityDot = 0.0f;
+    float edgeDot = 0.0f;
+    float bias = 0.0f;
+    float attenuation = 0.0f;
+    float cavityContribution = 0.0f;
+    float edgeContribution = 0.0f;
+};
+
+// Opt-in tap trace for a small caller-selected set of receiver pixels.
+struct RasterWorkbenchCavityTapCapture {
+    QVector<QPoint> receiverPixels;
+    std::vector<RasterWorkbenchCavityTap> taps;
 };
 
 // Blender's 2x2 CoC-aware prefilter chooses far weights when available, else
@@ -184,7 +211,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  qreal devicePixelRatio,
                                  const ViewportShadingSettings &settings,
                                  RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
-                                 std::vector<float> *cavityFactors = nullptr);
+                                 std::vector<float> *cavityFactors = nullptr,
+                                 RasterWorkbenchCavityTapCapture *cavityTapCapture = nullptr);
 
 // Render surface objects into temporary color layers, use their display
 // tessellation to depth-test opaque coverage, then accumulate visible partial
@@ -207,6 +235,7 @@ bool compositeRasterWorkbenchSurfaces(
     bool allowFragmentGeneratedDepth = false,
     const QVector<ViewportRenderObject> &scalarVolumeObjects = {},
     std::vector<RasterWorkbenchLinearPixel> *sceneLinearCapture = nullptr,
-    std::vector<float> *cavityFactorCapture = nullptr);
+    std::vector<float> *cavityFactorCapture = nullptr,
+    RasterWorkbenchCavityTapCapture *cavityTapCapture = nullptr);
 
 } // namespace classiCAD

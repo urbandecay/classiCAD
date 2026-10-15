@@ -650,6 +650,11 @@ void ViewportSurfaceRenderer::setCavityDiagnosticOutput(bool enabled) noexcept
     cavityDiagnosticOutput_ = enabled;
 }
 
+void ViewportSurfaceRenderer::setCavityDiagnosticTap(int tap) noexcept
+{
+    cavityDiagnosticTap_ = tap;
+}
+
 bool ViewportSurfaceRenderer::initialize()
 {
     if (initializationAttempted_) {
@@ -852,6 +857,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseSsao;
         uniform bool uUseCurvature;
         uniform bool uCavityDiagnosticOutput;
+        uniform int uCavityDiagnosticTap;
         uniform sampler2D uCavityDepth;
         uniform sampler2D uCavityNormal;
         uniform usampler2D uCavityObjectId;
@@ -1078,8 +1084,10 @@ bool ViewportSurfaceRenderer::initialize()
         vec2 workbenchCavity(vec2 screenCoordinate,
                              float depth,
                              vec3 position,
-                             vec3 normal)
+                             vec3 normal,
+                             out vec2 diagnosticTapCoordinate)
         {
+            diagnosticTapCoordinate = vec2(-1.0);
             if (depth == 1.0 || depth == 0.0) {
                 return vec2(0.0);
             }
@@ -1093,9 +1101,15 @@ bool ViewportSurfaceRenderer::initialize()
             vec2 rotY = vec2(-rotX.y, rotX.x);
             float cavities = 0.0;
             float edges = 0.0;
+            float tapCavity = 0.0;
+            float tapEdge = 0.0;
             for (int index = uCavitySampleStart;
                  index < uCavitySampleEnd && index < 512;
                  ++index) {
+                if (uCavityDiagnosticTap >= 0 &&
+                    index != uCavityDiagnosticTap) {
+                    continue;
+                }
                 float iterationOffset =
                     float(index / uCavitySamplesPerIteration) * 0.499;
                 float radius = fract((float(index) + 0.5 + iterationOffset) /
@@ -1108,6 +1122,9 @@ bool ViewportSurfaceRenderer::initialize()
                 jitteredDirection *= radius + noise.b;
                 vec2 sampleCoordinate = screenCoordinate +
                                         jitteredDirection * offset;
+                if (index == uCavityDiagnosticTap) {
+                    diagnosticTapCoordinate = sampleCoordinate;
+                }
                 if (any(greaterThan(abs(sampleCoordinate - 0.5),
                                     vec2(0.5)))) {
                     continue;
@@ -1135,10 +1152,19 @@ bool ViewportSurfaceRenderer::initialize()
                         1.0e-8);
                 if (cavityDot > -bias) {
                     cavities += cavityDot * attenuation;
+                    if (index == uCavityDiagnosticTap) {
+                        tapCavity = cavityDot * attenuation;
+                    }
                 }
                 if (edgeDot > bias) {
                     edges += edgeDot * attenuation;
+                    if (index == uCavityDiagnosticTap) {
+                        tapEdge = edgeDot * attenuation;
+                    }
                 }
+            }
+            if (uCavityDiagnosticTap >= 0) {
+                return vec2(tapCavity, tapEdge);
             }
             cavities *= uCavitySampleCountInv;
             edges *= uCavitySampleCountInv;
@@ -1263,6 +1289,7 @@ bool ViewportSurfaceRenderer::initialize()
             float cavityAmount = 0.0;
             float edgeAmount = 0.0;
             float curvature = 0.0;
+            vec2 cavityTapCoordinate = vec2(-1.0);
             if (uUseCavity) {
                 ivec2 size = textureSize(uCavityNormal, 0);
                 vec2 screenCoordinate = gl_FragCoord.xy / vec2(size);
@@ -1277,7 +1304,7 @@ bool ViewportSurfaceRenderer::initialize()
                     vec2 cavity = workbenchCavity(
                         screenCoordinate, depth,
                         cavityViewPosition(screenCoordinate, depth),
-                        cavityNormal);
+                        cavityNormal, cavityTapCoordinate);
                     cavityAmount = cavity.x;
                     edgeAmount = cavity.y;
                 }
@@ -1286,6 +1313,12 @@ bool ViewportSurfaceRenderer::initialize()
                                 : 0.0;
             }
             if (uCavityDiagnosticOutput) {
+                if (uCavityDiagnosticTap >= 0) {
+                    fragmentColor = vec4(cavityAmount, edgeAmount,
+                                         cavityTapCoordinate);
+                    secondaryColor = vec4(0.0);
+                    return;
+                }
                 fragmentColor = vec4(cavityAmount, edgeAmount, curvature,
                     clamp((1.0 - cavityAmount) * (1.0 + edgeAmount) *
                               (1.0 + curvature),
@@ -6530,6 +6563,8 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uUseCavity", cavityAvailable);
         program_.setUniformValue("uCavityDiagnosticOutput",
                                  cavityDiagnosticOutput_);
+        program_.setUniformValue("uCavityDiagnosticTap",
+                                 cavityDiagnosticTap_);
         program_.setUniformValue("uUseSsao",
                                  cavityAvailable && ssaoEnabled &&
                                      cavityDepthReady);

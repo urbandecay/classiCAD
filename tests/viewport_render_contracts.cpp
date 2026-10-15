@@ -7848,7 +7848,8 @@ int main(int argc, char *argv[])
                         const QVector<ViewportRenderObject> *sceneOverride =
                             nullptr,
                         QVector<float> *shadowFactorCapture = nullptr,
-                        QVector<quint32> *objectIdCapture = nullptr) {
+                        QVector<quint32> *objectIdCapture = nullptr,
+                        int cavityDiagnosticTap = -1) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -7920,6 +7921,8 @@ int main(int argc, char *argv[])
                                        : QVector<ViewportRenderObject>{*renderObject});
                         gpuSurfaceRenderer.setCavityDiagnosticOutput(
                             !cavityDiagnosticPrefix.isEmpty());
+                        gpuSurfaceRenderer.setCavityDiagnosticTap(
+                            cavityDiagnosticTap);
                         const auto result =
                             ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                                 gpuSurfaceRenderer,
@@ -7928,6 +7931,7 @@ int main(int argc, char *argv[])
                                     sceneAaRenderer.sampleCamera(), glSize, 1.0,
                                     shading, &sceneAaRenderer.targets(), true));
                         gpuSurfaceRenderer.setCavityDiagnosticOutput(false);
+                        gpuSurfaceRenderer.setCavityDiagnosticTap(-1);
                         if (result.rendered) {
                             sceneAaRenderer.markCurrentSampleAttachmentsValid(
                                 result.report.populatedAttachments);
@@ -15416,6 +15420,26 @@ int main(int argc, char *argv[])
                         passed &= check(
                             cavityDiagnosticSaved,
                             "opt-in cavity diagnostic must save pre-composite amounts and shared inputs");
+                        bool cavityTapDiagnosticsSaved = true;
+                        for (int tap = 0; tap < 16; ++tap) {
+                            QImage tapDisplay;
+                            const QString tapPrefix =
+                                cavityDiagnosticPrefix +
+                                QStringLiteral("-tap-%1")
+                                    .arg(tap, 2, 10, QLatin1Char('0'));
+                            cavityTapDiagnosticsSaved &=
+                                renderCoordinatedScene(
+                                    cavityDiagnosticShading,
+                                    QByteArrayLiteral(
+                                        "polygon-cube-cavity-tap-diagnostic"),
+                                    &tapDisplay, &polygonCubeObject,
+                                    nullptr, nullptr, tapPrefix,
+                                    nullptr, nullptr, nullptr, nullptr,
+                                    nullptr, nullptr, tap);
+                        }
+                        passed &= check(
+                            cavityTapDiagnosticsSaved,
+                            "opt-in cavity diagnostic must save each of the 16 raw GPU tap maps");
                     }
                     const QString gpuDofCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_GPU_DOF_CAPTURE");
@@ -16461,7 +16485,9 @@ int main(int argc, char *argv[])
                             QVector<float> *linear,
                             const QVector<ViewportRenderObject> *objectsOverride =
                                 nullptr,
-                            std::vector<float> *cavityFactors = nullptr) {
+                            std::vector<float> *cavityFactors = nullptr,
+                            RasterWorkbenchCavityTapCapture *cavityTapCapture =
+                                nullptr) {
                             if (display == nullptr) return false;
                             const QVector<ViewportRenderObject> captureObjects =
                                 objectsOverride != nullptr
@@ -16506,7 +16532,8 @@ int main(int argc, char *argv[])
                                     display, captureObjects, gpuTransform,
                                     glSize, 1.0, false, true, captureSettings,
                                     worldBackground, drawObject, &layers,
-                                    {}, false, {}, nullptr, cavityFactors);
+                                    {}, false, {}, nullptr, cavityFactors,
+                                    cavityTapCapture);
                             if (!composed) return false;
                             applyRasterWorkbenchEffects(
                                 display, captureObjects, gpuTransform,
@@ -16551,10 +16578,15 @@ int main(int argc, char *argv[])
                             diagnosticSettings.shadows = false;
                             QImage diagnosticDisplay;
                             std::vector<float> cavityFactors;
+                            RasterWorkbenchCavityTapCapture tapCapture;
+                            tapCapture.receiverPixels = {
+                                QPoint(355, 289), QPoint(320, 240),
+                                QPoint(400, 240), QPoint(320, 180)};
                             const bool diagnosticCaptured =
                                 captureQPainterCavity(
                                     diagnosticSettings, &diagnosticDisplay,
-                                    nullptr, nullptr, &cavityFactors);
+                                    nullptr, nullptr, &cavityFactors,
+                                    &tapCapture);
                             const QByteArray factorHeader =
                                 QByteArrayLiteral("Pf\n640 480\n-1.0\n");
                             QFile factorFile(
@@ -16585,6 +16617,42 @@ int main(int argc, char *argv[])
                             passed &= check(
                                 factorSaved,
                                 "opt-in QPainter cavity diagnostic must save its pre-composite factor buffer");
+                            QFile tapFile(qpainterCavityDiagnosticPrefix +
+                                          QStringLiteral("-taps.csv"));
+                            QByteArray tapData = QByteArrayLiteral(
+                                "receiver_x,receiver_y,requested,effective,tap,sample_index,sample_x,sample_y,in_bounds,neighbor_object_id,distance,cavity_dot,edge_dot,bias,attenuation,cavity_contribution,edge_contribution\n");
+                            for (const RasterWorkbenchCavityTap &tap :
+                                 tapCapture.taps) {
+                                const auto number = [](float value) {
+                                    return QByteArray::number(
+                                        value, 'g', 9);
+                                };
+                                tapData +=
+                                    QByteArray::number(tap.receiverX) + ',' +
+                                    QByteArray::number(tap.receiverY) + ',' +
+                                    QByteArray::number(tap.requestedSamples) + ',' +
+                                    QByteArray::number(tap.effectiveSamples) + ',' +
+                                    QByteArray::number(tap.tap) + ',' +
+                                    QByteArray::number(tap.sampleIndex) + ',' +
+                                    QByteArray::number(tap.sampleX) + ',' +
+                                    QByteArray::number(tap.sampleY) + ',' +
+                                    (tap.inBounds ? "1," : "0,") +
+                                    QByteArray::number(tap.neighborObjectId) + ',' +
+                                    number(tap.distance) + ',' +
+                                    number(tap.cavityDot) + ',' +
+                                    number(tap.edgeDot) + ',' +
+                                    number(tap.bias) + ',' +
+                                    number(tap.attenuation) + ',' +
+                                    number(tap.cavityContribution) + ',' +
+                                    number(tap.edgeContribution) + '\n';
+                            }
+                            const bool tapsSaved = diagnosticCaptured &&
+                                tapCapture.taps.size() >= 16 &&
+                                tapFile.open(QIODevice::WriteOnly) &&
+                                tapFile.write(tapData) == tapData.size();
+                            passed &= check(
+                                tapsSaved,
+                                "opt-in QPainter cavity diagnostic must save selected receiver tap attribution");
                         }
                         ViewportShadingSettings qpainterCavityBaselineSettings =
                             rawFaceShading;

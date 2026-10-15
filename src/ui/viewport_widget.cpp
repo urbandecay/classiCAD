@@ -10576,6 +10576,34 @@ protected:
                     for (int endpoint = 0; endpoint < wireVertexIndices.size();
                          ++endpoint) {
                         const int vertex = wireVertexIndices[endpoint];
+                        float curvatureOffsetFactor = 1.0f;
+                        const int edgeStart = (endpoint / 2) * 2;
+                        if (edgeStart + 1 < wireVertexIndices.size()) {
+                            const int edgeFirst = wireVertexIndices[edgeStart];
+                            const int edgeSecond = wireVertexIndices[edgeStart + 1];
+                            const quint32 low = static_cast<quint32>(
+                                std::min(edgeFirst, edgeSecond));
+                            const quint32 high = static_cast<quint32>(
+                                std::max(edgeFirst, edgeSecond));
+                            const quint64 edgeKey = (quint64(low) << 32) | high;
+                            const MeshWireEdgeUse use = edgeUses.value(edgeKey);
+                            float wireData = 0.0f;
+                            if (use.faceCount == 2 && use.normalsValid) {
+                                const double cosine = std::clamp(
+                                    double(QVector3D::dotProduct(
+                                        use.firstFaceNormal,
+                                        use.secondFaceNormal)),
+                                    -1.0, 1.0);
+                                wireData = float(std::clamp(
+                                    200.0 * (cosine - 1.0) + 1.0,
+                                    0.0, 1.0) * (254.0 / 255.0));
+                            }
+                            // Blender scales its Smooth Wires-off normal offset
+                            // by (1 - wd * 0.75), where wd is derived from the
+                            // two adjacent face normals. Boundary and
+                            // non-manifold edges use the zero default.
+                            curvatureOffsetFactor = 1.0f - wireData * 0.75f;
+                        }
                         QVector3D facingNormal;
                         if (vertex >= 0 && vertex < vertexNormals.size() &&
                             vertexNormalCounts[vertex] > 0) {
@@ -10610,14 +10638,17 @@ protected:
                                     viewportTransform_.worldDirectionToView(
                                         {facingNormal.x(), facingNormal.y(),
                                          facingNormal.z()});
-                                // Blender's standard mesh wire path uses wd=0
-                                // when no wire-curvature attribute is supplied.
+                                // Match Blender's Smooth Wires-off offset;
+                                // the per-edge wd factor is applied below.
                                 endpointWireOffsets.append(QVector3D(
                                     float(normalInView.horizontal) *
-                                        facingRatio * flip,
+                                        facingRatio * flip *
+                                            curvatureOffsetFactor,
                                     float(normalInView.vertical) *
-                                        facingRatio * flip,
-                                    facingRatio * 1.0e-6f));
+                                        facingRatio * flip *
+                                            curvatureOffsetFactor,
+                                    facingRatio * 1.0e-6f *
+                                        curvatureOffsetFactor));
                             } else {
                                 endpointWireOffsets.append(QVector3D());
                             }

@@ -7950,9 +7950,9 @@ resolve remain open.
   plus Blender's tiny forward depth nudge. The GPU path applies both in clip
   space; the ordinary QPainter fallback converts the clip depth nudge through
   the viewport near/far range before its visibility check. Blender's optional
-  wire curvature weight is not retained by the importer, so this offset uses
-  its default `wd = 0` factor; Blender's separate NDC offset is implemented in
-  the following category. Blender's neighboring scene-depth adjustment for
+  wire curvature weight is reconstructed from adjacent polygon normals for
+  each edge; Blender's separate NDC offset is implemented in the following
+  category. Blender's neighboring scene-depth adjustment for
   Smooth Wires is also implemented in the following category. The C++ build passed; no matched
   runtime comparison has been run.
 
@@ -7964,7 +7964,7 @@ resolve remain open.
   before the hardware depth test, so they are not discarded before line
   composition. The resolver retains the same bounded correction for candidate
   arbitration. Multisample rendering, the QPainter fallback, Blender's mesh-wire
-  curvature weight/NDC offset, runtime shader validation, and matched visual
+  runtime shader validation, and matched visual
   comparison remain open. The C++ build passed.
 
 ### Blender mesh wire NDC depth offset (2026-10-15)
@@ -7973,7 +7973,15 @@ resolve remain open.
   offset in both GPU and QPainter paths, with the perspective and orthographic
   factor derived from the active projection and clip range. The QPainter path
   converts the normalized depth shift back to camera depth for visibility
-  testing. The importer still does not retain Blender's per-vertex wire
-  curvature weight (`wd`), so its normal-derived screen/depth offset uses the
-  Blender default of zero. Runtime shader and matched image comparison remain
-  open; the C++ build passed.
+  testing. Runtime shader and matched image comparison remain open; the C++
+  build passed.
+
+### Blender mesh wire curvature offset factor (2026-10-15)
+
+- Smooth Wires-off mesh-wire offsets now reconstruct Blender's per-edge `wd`
+  from the adjacent face normals and scale the screen and forward-depth offset
+  by `(1 - wd * 0.75)`. Boundary and non-manifold edges use Blender's zero
+  default. The same per-endpoint offset feeds GPU strokes and QPainter's
+  software visibility path. Blender's transient subdivision edge data is not
+  available in imported meshes. C++ build passed; matched image comparison
+  remains open.

@@ -6216,6 +6216,29 @@ edge comparison remains open.
   checking 317 source files; offscreen `workbench_render_pass_capture` passed
   (1/1) under software GL.
 
+### GPU transparent-film weighted OIT comparison (2026-10-14)
+
+- Captured the production GPU pass for two overlapping translucent quads at
+  640×480 with AA Off and transparent film, then compared its scene-linear
+  Combined RGB/alpha and display PNG against Blender 5.2.2's matching
+  `TRANSPARENT_OVERLAP` Workbench render. The offscreen contract passed (1/1).
+- Scene-linear alpha is exact across the frame (maximum error 0); both images
+  have center-overlap alpha `0.7646484375` and zero corner alpha. On 104,592
+  common-coverage pixels, scene-linear RGB mean maximum-channel error is
+  `0.00015772` and p95 is `0.00024414`. Display alpha is exact; display RGB
+  differs by at most `1/255`, with 0.0106/255 mean channel error and p95 0.
+- This validates final GPU OIT output for one overlapping-quad fixture and
+  view. Other transparent geometry, lighting modes, AA, and QPainter's
+  separate compositor remain open. Blender 5.2.2 accumulation and revealage
+  are pinned in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L435-L524)
+  and
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
+- Validation: Blender reported 5.2.2 LTS; software-GL CTest
+  `workbench_render_pass_capture` passed (1/1); and
+  `workbench_transparent_film_compare.py` completed within its scene-linear,
+  alpha, and display tolerances.
+
 ### Workbench settings and material persistence matrix (2026-10-14)
 
 - Expanded `workbench_persistence_contracts` to write and reopen one update

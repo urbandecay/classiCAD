@@ -7436,3 +7436,11 @@ resolve remain open.
   crossing the camera can still cast onto visible receivers, matching
   Workbench's separate shadow pass. It remains a bounded light-depth
   approximation; no matched Blender image comparison has been run.
+
+### QPainter nearest effect receiver depth (2026-10-15)
+
+- The bounded software effects pass now keeps the smallest camera depth when
+  selecting its nearest opaque receiver. Camera depth increases farther into
+  the scene, matching the GPU and transparent-fragment depth comparisons; the
+  old comparison could let a farther overlapping surface replace the nearer
+  receiver. No matched Blender image comparison has been run for this fix.

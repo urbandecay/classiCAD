@@ -2844,7 +2844,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         area < 0.0, viewRightVector, viewUpVector,
                         viewFacingVector);
                     const auto writeNearest = [&](RasterSample &target) {
-                        if (target.objectId != 0 && z <= target.depth) return;
+                        // Camera depth grows farther into the scene, so keep
+                        // the smallest depth when surfaces overlap.
+                        if (target.objectId != 0 && z >= target.depth) return;
                         target.depth = z;
                         target.position = interpolatedPosition;
                         target.normal = interpolatedNormal;

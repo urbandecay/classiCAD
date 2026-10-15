@@ -775,11 +775,8 @@ bool makeViewportSurfaceOutlineStroke(
         return false;
     }
 
-    const QColor color = object.selected
-                             ? viewportSelectionColor()
-                             : outlineColor.isValid()
-                                   ? outlineColor
-                                   : QColor(Qt::black);
+    const QColor color = outlineColor.isValid() ? outlineColor
+                                                : QColor(Qt::black);
     *sceneStroke = {nullptr,
                     color,
                     static_cast<float>(viewportLineWeightPixels(

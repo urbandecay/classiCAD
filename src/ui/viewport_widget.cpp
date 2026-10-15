@@ -9719,10 +9719,18 @@ protected:
                             // object-outline color, like the surface ID pass.
                             outlineObject.selected = false;
                         }
+                        QColor surfaceOutlineColor =
+                            viewportShadingSettings_.outlineColor;
+                        if (outlineObject.selected) {
+                            surfaceOutlineColor =
+                                selection_.primaryObjectId() == objectId
+                                    ? viewportShadingSettings_.themeActiveObjectColor
+                                    : viewportShadingSettings_.themeSelectedObjectColor;
+                        }
                         ViewportSceneStroke outlineStroke;
                         if (makeViewportSurfaceOutlineStroke(
                                 outlineObject, true,
-                                viewportShadingSettings_.outlineColor,
+                                surfaceOutlineColor,
                                 boundary, &outlineStroke)) {
                             gpuStrokes.append(std::move(outlineStroke));
                             surfaceOutlineStrokeObjectIds.insert(

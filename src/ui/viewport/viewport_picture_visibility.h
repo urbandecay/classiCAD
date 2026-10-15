@@ -9,9 +9,8 @@
 
 namespace classiCAD {
 
-inline bool viewportPictureVisibleInView(const Shape &shape,
-                                         const ViewportTransform &transform,
-                                         const QSize &viewportSize)
+inline bool viewportPictureFrameVisibleInView(
+    const Shape &shape, const ViewportTransform &transform)
 {
     if (shape.geometryType != GeometryType::Picture) return true;
     const bool perspective = transform.isPerspectiveEnabled();
@@ -19,6 +18,16 @@ inline bool viewportPictureVisibleInView(const Shape &shape,
         (!perspective && !shape.pictureShowOrthographic)) {
         return false;
     }
+    return true;
+}
+
+inline bool viewportPictureImageVisibleInView(
+    const Shape &shape, const ViewportTransform &transform,
+    const QSize &viewportSize)
+{
+    if (!viewportPictureFrameVisibleInView(shape, transform)) return false;
+    if (shape.geometryType != GeometryType::Picture) return true;
+    const bool perspective = transform.isPerspectiveEnabled();
 
     const QVector<QPointF> corners = pictureFrameCorners(shape);
     if (corners.size() != 4) return false;
@@ -71,6 +80,13 @@ inline bool viewportPictureVisibleInView(const Shape &shape,
         }
     }
     return true;
+}
+
+inline bool viewportPictureVisibleInView(const Shape &shape,
+                                         const ViewportTransform &transform,
+                                         const QSize &viewportSize)
+{
+    return viewportPictureImageVisibleInView(shape, transform, viewportSize);
 }
 
 } // namespace classiCAD

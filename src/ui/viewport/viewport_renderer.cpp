@@ -3169,8 +3169,28 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     if (shape.geometryType == GeometryType::Picture) {
         const QVector<QPointF> corners = pictureFrameCorners(shape);
-        if (shape.pictureImage.isNull() || corners.size() != 4 ||
-            !viewportPictureVisibleInView(shape, transform_, viewportSize)) {
+        if (corners.size() != 4 ||
+            !viewportPictureFrameVisibleInView(shape, transform_)) {
+            return;
+        }
+        const auto drawPictureFrame = [&] {
+            QPolygonF frame;
+            for (const QPointF &corner : corners)
+                frame.append(worldToScreen(corner, viewportSize));
+            if (frame.isEmpty()) return;
+            frame.append(frame.first());
+            painter.save();
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(curveColor,
+                                selected ? 1.5 : preview ? 1.25 : 1.0,
+                                preview ? Qt::DashLine : Qt::SolidLine));
+            painter.drawPolyline(frame);
+            painter.restore();
+        };
+        const bool imageVisible = !shape.pictureImage.isNull() &&
+            viewportPictureImageVisibleInView(shape, transform_, viewportSize);
+        if (!imageVisible) {
+            drawPictureFrame();
             return;
         }
         constexpr qint64 maximumPictureDepthPixels = 16'000'000;
@@ -3193,11 +3213,13 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height() &&
             qint64(opaqueSceneDepthSize.width()) *
                 opaqueSceneDepthSize.height() <= maximumPictureDepthPixels;
-        const bool rasterizePicture = canUseSceneDepthRaster ||
-                                      canUseViewportCutoutRaster;
-        const QImage painterImage = pictureImageForPainter(
-            shape, rasterizePicture && !shape.pictureUseAlphaBlend);
-        if (painterImage.isNull()) return;
+        const bool rasterizePicture = imageVisible &&
+            (canUseSceneDepthRaster || canUseViewportCutoutRaster);
+        const QImage painterImage = imageVisible
+            ? pictureImageForPainter(
+                  shape, rasterizePicture && !shape.pictureUseAlphaBlend)
+            : QImage{};
+        if (imageVisible && painterImage.isNull()) return;
 
         QPolygonF sourceCorners;
         sourceCorners << QPointF(0.0, 0.0)
@@ -3366,7 +3388,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (preview) {
                 painter.setOpacity(0.78);
             }
-            if (drawRasterizedPicture) {
+            if (imageVisible && drawRasterizedPicture) {
                 bool baseInverseValid = false;
                 const QTransform baseLogicalFromDevice =
                     painter.deviceTransform().inverted(&baseInverseValid);
@@ -3376,24 +3398,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         baseLogicalFromDevice.map(QPointF(0.0, 0.0)),
                         depthMaskedImage);
                 }
-            } else {
+            } else if (imageVisible) {
                 painter.setTransform(imageTransform, true);
                 painter.drawImage(QPointF(0.0, 0.0), painterImage);
             }
             painter.restore();
         }
 
-        if (selected || preview) {
-            QPolygonF outline = screenCorners;
-            outline.append(screenCorners.first());
-            painter.save();
-            painter.setBrush(Qt::NoBrush);
-            painter.setPen(QPen(curveColor,
-                                selected ? 1.5 : 1.25,
-                                preview ? Qt::DashLine : Qt::SolidLine));
-            painter.drawPolyline(outline);
-            painter.restore();
-        }
+        drawPictureFrame();
         return;
     }
 

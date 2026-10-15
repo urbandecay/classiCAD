@@ -2379,7 +2379,9 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         bool depthTest)
 {
     if (picture.geometryType != GeometryType::Picture) return false;
-    if (!viewportPictureVisibleInView(picture, transform, viewportSize))
+    if (!viewportPictureFrameVisibleInView(picture, transform))
+        return true;
+    if (!viewportPictureImageVisibleInView(picture, transform, viewportSize))
         return true;
     if (picture.pictureImage.isNull() ||
         QOpenGLContext::currentContext() == nullptr || !initializePicture()) {

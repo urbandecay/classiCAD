@@ -8412,3 +8412,15 @@ resolve remain open.
   [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl#L29-L30)
   and [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L80-L87).
   C++ build passed; matched alpha-composite comparison remains open.
+
+### Keep Image Empty frames visible when image data is filtered (2026-10-15)
+
+- Visibility now separates the frame's perspective/orthographic flags from
+  image-data side and axis-alignment checks. A disallowed view still hides
+  both; when image data is filtered or missing, the QPainter frame remains
+  visible, including for unselected objects, while image pixels are skipped.
+  This follows Blender's
+  separate `show_frame` and `show_image` checks in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh)
+  and [`object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc).
+  C++ build passed; no matched view comparison has been run.

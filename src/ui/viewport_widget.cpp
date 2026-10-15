@@ -9380,8 +9380,8 @@ protected:
         QVector<ViewportSceneStroke> gpuStrokes;
         QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
         QSet<quint64> surfaceOutlineStrokeObjectIds;
-        QSet<quint64> rasterBackPictureObjectIds;
-        QVector<const ViewportRenderObject *> rasterBackPictures;
+        QSet<quint64> rasterDeferredPictureObjectIds;
+        QVector<const ViewportRenderObject *> rasterDeferredPictures;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
         QVector<Shape> gpuExtrudePreviewCapShapes;
@@ -9473,7 +9473,7 @@ protected:
                         ? std::vector<QVector3D>{}
                         : viewportThemeBackgroundSceneLinearPixels(
                               themeBackground_, committedSceneLayer.size());
-                QVector<quint64> backPictureCandidates;
+                QVector<quint64> deferredPictureCandidates;
                 const qint64 rasterPixelCount =
                     qint64(committedSceneLayer.width()) *
                     committedSceneLayer.height();
@@ -9497,29 +9497,30 @@ protected:
                             static_cast<std::size_t>(rasterPixelCount),
                             linearFallback);
                     }
-                    QVector<const ViewportRenderObject *> backPictures;
+                    QVector<const ViewportRenderObject *> deferredPictures;
                     for (const ViewportRenderObject &object :
                          sceneDrawObjects) {
                         if (object.shape.geometryType ==
                                 GeometryType::Picture &&
-                            object.shape.pictureImageDepth ==
-                                PictureImageDepth::Back &&
-                            !object.showInFront &&
+                            (object.shape.pictureUseAlphaBlend ||
+                             object.shape.pictureImageDepth !=
+                                 PictureImageDepth::Default ||
+                             object.showInFront) &&
                             !object.shape.pictureImage.isNull()) {
-                            backPictures.append(&object);
+                            deferredPictures.append(&object);
                         }
                     }
-                    if (!backPictures.isEmpty()) {
+                    if (!deferredPictures.isEmpty()) {
                         const Point3D cameraPosition =
                             viewportTransform_.cameraPosition(size());
                         const Point3D viewDirection =
                             viewportTransform_.viewDirection();
                         QVector<QPair<qreal,
                                       const ViewportRenderObject *>>
-                            depthSortedBackPictures;
-                        depthSortedBackPictures.reserve(backPictures.size());
+                            depthSortedPictures;
+                        depthSortedPictures.reserve(deferredPictures.size());
                         for (const ViewportRenderObject *object :
-                             backPictures) {
+                             deferredPictures) {
                             qreal sortDepth =
                                 std::numeric_limits<qreal>::infinity();
                             if (object != nullptr) {
@@ -9548,37 +9549,37 @@ protected:
                                     }
                                 }
                             }
-                            depthSortedBackPictures.append(
+                            depthSortedPictures.append(
                                 qMakePair(sortDepth, object));
                         }
                         // Blender's PassSortable sorts this camera-depth key
                         // in ascending order, blending farther images first.
                         std::stable_sort(
-                            depthSortedBackPictures.begin(),
-                            depthSortedBackPictures.end(),
+                            depthSortedPictures.begin(),
+                            depthSortedPictures.end(),
                             [](const auto &left, const auto &right) {
                                 return left.first < right.first;
                             });
-                        backPictures.clear();
-                        for (const auto &entry : depthSortedBackPictures) {
-                            backPictures.append(entry.second);
+                        deferredPictures.clear();
+                        for (const auto &entry : depthSortedPictures) {
+                            deferredPictures.append(entry.second);
                         }
                     }
                     // Keep the deferred overlay work bounded just like the
                     // scene-linear background and surface buffers.
-                    constexpr qint64 maximumBackPictureWorkPixels =
+                    constexpr qint64 maximumDeferredPictureWorkPixels =
                         16'000'000;
-                    const qint64 backPictureTargetPixels =
+                    const qint64 deferredPictureTargetPixels =
                         qint64(committedSceneLayer.width()) *
                         committedSceneLayer.height();
-                    if (!backPictures.isEmpty() &&
-                        backPictureTargetPixels > 0 &&
-                        backPictureTargetPixels <=
-                            maximumBackPictureWorkPixels /
-                                backPictures.size()) {
-                        rasterBackPictures = backPictures;
-                        for (const ViewportRenderObject *object : backPictures) {
-                            backPictureCandidates.append(
+                    if (!deferredPictures.isEmpty() &&
+                        deferredPictureTargetPixels > 0 &&
+                        deferredPictureTargetPixels <=
+                            maximumDeferredPictureWorkPixels /
+                                deferredPictures.size()) {
+                        rasterDeferredPictures = deferredPictures;
+                        for (const ViewportRenderObject *object : deferredPictures) {
+                            deferredPictureCandidates.append(
                                 object->objectId.value());
                         }
                     }
@@ -9611,19 +9612,21 @@ protected:
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels,
                     false, scalarVolumeDrawObjects);
                 if (rasterSurfaceBatchRendered) {
-                    for (quint64 objectId : backPictureCandidates) {
-                        rasterBackPictureObjectIds.insert(objectId);
+                    for (quint64 objectId : deferredPictureCandidates) {
+                        rasterDeferredPictureObjectIds.insert(objectId);
                     }
                 }
-                if (rasterSurfaceBatchRendered &&
+                const bool separateWorkbenchEffects =
                     (renderShadingSettings.outline ||
                      renderShadingSettings.shadows ||
                      renderShadingSettings.depthOfField) &&
-                    !renderShadingSettings.xrayEnabled()) {
-                    // Workbench resolves scene effects before editor wires,
-                    // previews, and other QPainter overlays. Keep the surface
-                    // target separate so the later scene-linear shadow and
-                    // outline resolve cannot erase or blur those overlays.
+                    !renderShadingSettings.xrayEnabled();
+                const bool separateImageOverlays =
+                    !rasterDeferredPictures.isEmpty();
+                if (rasterSurfaceBatchRendered &&
+                    (separateWorkbenchEffects || separateImageOverlays)) {
+                    // Keep Workbench's scene/effect result separate from
+                    // later editor overlays and Image Empty passes.
                     rasterScenePainter.end();
                     rasterWorkbenchEffectLayer = committedSceneLayer.copy();
                     committedSceneLayer.fill(Qt::transparent);
@@ -11629,10 +11632,10 @@ protected:
                 // Surface color has already been depth-composited into the
                 // fallback scene layer. Continue through the loop so the
                 // existing stroke/cage collection remains active.
-            } else if (rasterBackPictureObjectIds.contains(
+            } else if (rasterDeferredPictureObjectIds.contains(
                            objectId.value())) {
-                // Back images are drawn after Workbench effects in the final
-                // color-only image overlay pass.
+                // Image Empties are drawn after Workbench effects in their
+                // color-only overlay pass.
             } else if (scalePreview || rotatePreview) {
                 drawShape(scenePainter,
                           visibleShape,
@@ -13159,7 +13162,7 @@ protected:
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
             if (rasterSurfaceBatchRendered &&
-                !rasterBackPictures.isEmpty()) {
+                !rasterDeferredPictures.isEmpty()) {
                 QImage displayOutputLayer(
                     committedSceneLayer.size(),
                     QImage::Format_ARGB32_Premultiplied);
@@ -13175,17 +13178,13 @@ protected:
                     drawOrigin(displayOutputPainter);
                 }
                 displayOutputPainter.drawImage(QPoint(0, 0), effectTarget);
-                if (rasterWorkbenchEffectsLayered) {
-                    displayOutputPainter.drawImage(
-                        QPoint(0, 0), committedSceneLayer);
-                }
                 if (!gpuViewportBackground.isNull()) {
                     displayOutputPainter.drawImage(
                         QPoint(0, 0), gpuViewportBackground);
                 }
                 displayOutputPainter.end();
                 for (const ViewportRenderObject *object :
-                     rasterBackPictures) {
+                     rasterDeferredPictures) {
                     if (object == nullptr) continue;
                     QImage pictureLayer(
                         committedSceneLayer.size(),
@@ -13196,6 +13195,10 @@ protected:
                     QPainter picturePainter(&pictureLayer);
                     picturePainter.setRenderHint(
                         QPainter::SmoothPixmapTransform, true);
+                    const bool pictureDepthTested =
+                        !object->showInFront &&
+                        object->shape.pictureImageDepth !=
+                            PictureImageDepth::Front;
                     drawShape(
                         picturePainter, object->shape, false,
                         object->selected, false, object->layerColor,
@@ -13208,11 +13211,20 @@ protected:
                         workbenchRandomIdentityLibraryPath(*object),
                         object->meshObjectTransform, object->meshMaterials,
                         nullptr, object->nurbsSolidFaceMaterials,
-                        &rasterSurfaceLayers.opaqueSceneDepth,
-                        rasterSurfaceLayers.opaqueSceneDepthSize);
+                        pictureDepthTested
+                            ? &rasterSurfaceLayers.opaqueSceneDepth
+                            : nullptr,
+                        pictureDepthTested
+                            ? rasterSurfaceLayers.opaqueSceneDepthSize
+                            : QSize());
                     picturePainter.end();
                     compositeDisplayImageLinear(
                         &displayOutputLayer, pictureLayer);
+                }
+                if (rasterWorkbenchEffectsLayered) {
+                    QPainter overlayPainter(&displayOutputLayer);
+                    overlayPainter.drawImage(
+                        QPoint(0, 0), committedSceneLayer);
                 }
                 painter.drawImage(QPoint(0, 0), displayOutputLayer);
             } else {

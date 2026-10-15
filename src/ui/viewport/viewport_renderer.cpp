@@ -53,11 +53,23 @@ constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 constexpr qint64 kMaximumPictureProcessPixels = 16'000'000;
 
+QVector3D pictureLinearToSrgb(const QVector3D &linear)
+{
+    const auto encode = [](float value) {
+        value = std::clamp(value, 0.0f, 1.0f);
+        return value <= 0.0031308f
+            ? value * 12.92f
+            : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+    };
+    return QVector3D(encode(linear.x()), encode(linear.y()), encode(linear.z()));
+}
+
 QImage pictureImageForPainter(const Shape &picture,
                               bool deferCutoutAlphaThreshold,
                               bool keepSceneLinear,
-                              const ViewportShadingSettings &shadingSettings)
+                              bool *preparedSceneLinear = nullptr)
 {
+    if (preparedSceneLinear != nullptr) *preparedSceneLinear = false;
     if (picture.pictureImage.isNull()) return {};
     const QVector4D tint = picture.pictureColorSceneLinear;
     const bool tinted = tint != QVector4D(1.0f, 1.0f, 1.0f, 1.0f);
@@ -155,11 +167,7 @@ QImage pictureImageForPainter(const Shape &picture,
                 pixel[2] = linearColor.z();
                 pixel[3] = float(alpha) / 255.0f;
             } else {
-                const QVector3D displayColor = workbenchSceneLinearToDisplaySrgb(
-                    linearColor, shadingSettings.colorTransform,
-                    shadingSettings.colorExposure, shadingSettings.colorGamma,
-                    shadingSettings.colorLutData,
-                    shadingSettings.colorLutMetadata);
+                const QVector3D displayColor = pictureLinearToSrgb(linearColor);
                 const int red = qRound(std::clamp(displayColor.x(), 0.0f, 1.0f) * 255.0f);
                 const int green = qRound(std::clamp(displayColor.y(), 0.0f, 1.0f) * 255.0f);
                 const int blue = qRound(std::clamp(displayColor.z(), 0.0f, 1.0f) * 255.0f);
@@ -167,6 +175,8 @@ QImage pictureImageForPainter(const Shape &picture,
             }
         }
     }
+    if (preparedSceneLinear != nullptr && keepSceneLinear)
+        *preparedSceneLinear = true;
     return result;
 }
 
@@ -3426,7 +3436,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             (canUseSceneDepthRaster || canUseViewportCutoutRaster ||
              (viewportRasterPixels > 0 &&
               viewportRasterPixels <= maximumPictureDepthPixels));
-        const bool sceneLinearRasterPicture = rasterizePicture &&
+        bool sceneLinearRasterPicture = rasterizePicture &&
             canPrepareSceneLinearPicture;
         QPolygonF sourceCorners;
         sourceCorners << QPointF(0.0, 0.0)
@@ -3438,11 +3448,15 @@ void ViewportRenderer::drawShape(QPainter &painter,
             screenCorners.append(worldToScreen(corner, viewportSize));
         }
 
+        bool painterImagePreparedSceneLinear = false;
         QImage painterImage = imageVisible
             ? pictureImageForPainter(
                   shape, rasterizePicture && !shape.pictureUseAlphaBlend,
-                  sceneLinearRasterPicture, shadingSettings_)
+                  sceneLinearRasterPicture,
+                  &painterImagePreparedSceneLinear)
             : QImage{};
+        sceneLinearRasterPicture = sceneLinearRasterPicture &&
+                                   painterImagePreparedSceneLinear;
         if (imageVisible && painterImage.isNull()) return;
         QTransform mipToSource;
         qreal mipLevel = 0.0;
@@ -3628,13 +3642,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 pixel[1] * inverseAlpha,
                                 pixel[2] * inverseAlpha);
                             const QVector3D displayColor =
-                                workbenchSceneLinearToDisplaySrgb(
-                                    linearColor,
-                                    shadingSettings_.colorTransform,
-                                    shadingSettings_.colorExposure,
-                                    shadingSettings_.colorGamma,
-                                    shadingSettings_.colorLutData,
-                                    shadingSettings_.colorLutMetadata);
+                                pictureLinearToSrgb(linearColor);
                             pixel[0] = std::clamp(displayColor.x(), 0.0f, 1.0f) * alpha;
                             pixel[1] = std::clamp(displayColor.y(), 0.0f, 1.0f) * alpha;
                             pixel[2] = std::clamp(displayColor.z(), 0.0f, 1.0f) * alpha;
@@ -3665,7 +3673,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     ? pictureImageForPainter(
                           shape,
                           rasterizePicture && !shape.pictureUseAlphaBlend,
-                          false, shadingSettings_)
+                          false)
                     : painterImage;
                 painter.setTransform(
                     sceneLinearRasterPicture ? imageTransform

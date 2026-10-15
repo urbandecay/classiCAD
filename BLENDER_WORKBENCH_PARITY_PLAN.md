@@ -8124,8 +8124,12 @@ resolve remain open.
   `use_empty_image_alpha` setting in native shape data. The GPU shader
   applies the tint in scene-linear color and reproduces Blender's 0.05 source
   alpha cutout when alpha blending is off. QPainter applies the tint and
-  cutout for images up to 16M pixels; its blending happens in display space,
-  so AgX/custom-transform results remain approximate.
+  cutout for images up to 16M pixels and encodes their linear image colors to
+  sRGB without applying the Workbench view transform, matching Blender's
+  overlay image shader. Under the bounded raster surface path, translucent
+  and non-default-depth images are deferred until after Workbench effects and
+  blended in linear light. Direct QPainter fallbacks still blend in encoded
+  display space.
   Blender's shader behavior is pinned in
   [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl#L13-L30).
   C++ build passed; matched comparison remains open.
@@ -8619,6 +8623,22 @@ resolve remain open.
   alpha fragments. The QPainter shadow caster therefore remains geometric to
   match Blender. See [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L348-L389)
   and [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L59).
+
+### QPainter Image Empty overlay composition (2026-10-15)
+
+- When the bounded software surface batch succeeds, QPainter now defers
+  alpha-blended and non-default-depth Image Empties to the post-Workbench
+  overlay stage, sorts them by camera depth, and composites their sRGB overlay
+  pixels with linear-light alpha arithmetic.
+  Their source color uses Blender's sRGB display encoding without the
+  Workbench view transform. Default images keep scene-depth masking; Back and
+  Front retain their separate depth behavior. Direct QPainter fallback scenes
+  still use encoded-space blending when the bounded deferred path is
+  unavailable. If scene-linear image allocation or conversion fails, QPainter
+  now switches that draw back to its encoded-image path instead of treating
+  source bytes as linear color. Front-depth and object-level In Front images
+  bypass scene depth, matching Blender's no-depth image pass. See Blender's image shader,
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1121-L1145), and [`gpu_shader_image_overlays_merge_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/shaders/gpu_shader_image_overlays_merge_frag.glsl). C++ build and matched Image Empty comparisons remain open.
 
 ### QPainter Image Empty fractional mip blend (2026-10-15)
 

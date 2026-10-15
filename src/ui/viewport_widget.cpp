@@ -11179,7 +11179,8 @@ protected:
             // emitted by drawShape; unsupported geometry and oversized targets
             // retain the legacy average-depth painter path.
             bool fallbackSurfaceBatchRendered = false;
-            RasterWorkbenchSurfaceLayers fallbackSurfaceLayers;
+            RasterWorkbenchSurfaceLayers &fallbackSurfaceLayers =
+                rasterSurfaceLayers;
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (!fallbackSurfaceObjects.isEmpty() ||
                  !fallbackVolumeObjects.isEmpty())) {
@@ -12053,7 +12054,8 @@ protected:
                     if (renderObject != nullptr) {
                         drawControlPoints(painter,
                                           *renderObject,
-                                          !gpuControlPointsDrawn);
+                                          !gpuControlPointsDrawn,
+                                          &rasterSurfaceLayers);
                     }
                 }
             }
@@ -23591,7 +23593,8 @@ private:
 
     void drawControlPoints(QPainter &painter,
                            const ViewportRenderObject &renderObject,
-                           bool drawMarkers = true)
+                           bool drawMarkers = true,
+                           const RasterWorkbenchSurfaceLayers *depthLayers = nullptr)
     {
         Shape placedShape = renderObject.shape;
         const Point3D &offset = renderObject.placementTranslation;
@@ -23624,7 +23627,64 @@ private:
                                            selectedShapeIndex_,
                                            controlPointSelectionDragActive(),
                                            controlPointIndex_,
-                                           drawMarkers);
+                                           drawMarkers,
+                                           depthLayers != nullptr
+                                               ? &depthLayers->regularSceneDepth
+                                               : nullptr,
+                                           depthLayers != nullptr
+                                               ? depthLayers->regularSceneDepthSize
+                                               : QSize(),
+                                           depthLayers != nullptr
+                                               ? &depthLayers->inFrontSceneDepth
+                                               : nullptr,
+                                           depthLayers != nullptr
+                                               ? depthLayers->inFrontSceneDepthSize
+                                               : QSize(),
+                                           renderObject.showInFront);
+        const auto controlPointDepthVisible = [&](const QPointF &screenPoint,
+                                                   const Point3D &worldPoint) {
+            if (depthLayers == nullptr ||
+                viewportShadingSettings_.xrayEnabled()) return true;
+            const bool inFront = renderObject.showInFront;
+            const QSize depthSize = inFront
+                ? depthLayers->inFrontSceneDepthSize
+                : depthLayers->regularSceneDepthSize;
+            const QVector<float> &domainDepth = inFront
+                ? depthLayers->inFrontSceneDepth
+                : depthLayers->regularSceneDepth;
+            if (depthSize.width() <= 0 || depthSize.height() <= 0 ||
+                domainDepth.size() != depthSize.width() * depthSize.height() ||
+                size().width() <= 0 || size().height() <= 0) return true;
+            const int x = qFloor(screenPoint.x() * depthSize.width() /
+                                 qreal(size().width()));
+            const int y = qFloor(screenPoint.y() * depthSize.height() /
+                                 qreal(size().height()));
+            if (x < 0 || x >= depthSize.width() ||
+                y < 0 || y >= depthSize.height()) return true;
+            const Point3D cameraPosition =
+                viewportTransform_.cameraPosition(size());
+            const Point3D viewDirection = viewportTransform_.viewDirection();
+            const qreal depth = viewportTransform_.isPerspectiveEnabled()
+                ? (worldPoint.x - cameraPosition.x) * viewDirection.x +
+                  (worldPoint.y - cameraPosition.y) * viewDirection.y +
+                  (worldPoint.z - cameraPosition.z) * viewDirection.z
+                : viewportTransform_.worldDirectionToView(worldPoint).towardCamera;
+            const qreal tolerance = std::max<qreal>(1.0e-4,
+                                                    std::abs(depth) * 1.0e-6);
+            const int pixelIndex = y * depthSize.width() + x;
+            const float surfaceDepth = domainDepth[pixelIndex];
+            if (std::isfinite(surfaceDepth) &&
+                surfaceDepth > depth + tolerance) return false;
+            if (!inFront &&
+                depthLayers->inFrontSceneDepthSize == depthSize &&
+                pixelIndex < depthLayers->inFrontSceneDepth.size()) {
+                const float inFrontDepth =
+                    depthLayers->inFrontSceneDepth[pixelIndex];
+                if (std::isfinite(inFrontDepth) &&
+                    inFrontDepth > depth + tolerance) return false;
+            }
+            return true;
+        };
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
             const QSet<int> &selectedControlPoints =
                 componentSelectionForObject(renderObject.objectId);
@@ -23644,6 +23704,8 @@ private:
                             controlPoint.second, size(), &screenPoint)) {
                         continue;
                     }
+                    if (!controlPointDepthVisible(screenPoint,
+                                                  controlPoint.second)) continue;
                     painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
                                             screenPoint + QPointF(4.0, 4.0)));
                 }

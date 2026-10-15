@@ -38,7 +38,12 @@ public:
                            ObjectId selectedObjectId,
                            bool draggingControlPoint,
                            int activeControlPointIndex,
-                           bool drawMarkers = true) const;
+                           bool drawMarkers = true,
+                           const QVector<float> *regularSceneDepth = nullptr,
+                           const QSize &regularDepthSize = {},
+                           const QVector<float> *inFrontSceneDepth = nullptr,
+                           const QSize &inFrontDepthSize = {},
+                           bool showInFront = false) const;
     void drawSubdivisionPoints(QPainter &painter,
                                const Shape &shape,
                                const QVector<double> &parameters,

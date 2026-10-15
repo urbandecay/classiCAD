@@ -53,7 +53,12 @@ void ViewportOverlay::drawControlPoints(QPainter &painter,
                                         ObjectId selectedObjectId,
                                         bool draggingControlPoint,
                                         int activeControlPointIndex,
-                                        bool drawMarkers) const
+                                        bool drawMarkers,
+                                        const QVector<float> *regularSceneDepth,
+                                        const QSize &regularDepthSize,
+                                        const QVector<float> *inFrontSceneDepth,
+                                        const QSize &inFrontDepthSize,
+                                        bool showInFront) const
 {
     renderer_.drawControlPoints(painter,
                                 shape,
@@ -62,7 +67,12 @@ void ViewportOverlay::drawControlPoints(QPainter &painter,
                                 selectedObjectId,
                                 draggingControlPoint,
                                 activeControlPointIndex,
-                                drawMarkers);
+                                drawMarkers,
+                                regularSceneDepth,
+                                regularDepthSize,
+                                inFrontSceneDepth,
+                                inFrontDepthSize,
+                                showInFront);
 }
 
 void ViewportOverlay::drawSubdivisionPoints(QPainter &painter,

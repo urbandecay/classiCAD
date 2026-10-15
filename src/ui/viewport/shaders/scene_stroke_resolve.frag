@@ -58,23 +58,6 @@ float neighborDistance(vec4 record, ivec2 offset)
     return record.z + dot(vec2(offset), -record.xy);
 }
 
-void blendCandidate(inout vec4 targetColor,
-                    inout float targetDepth,
-                    vec4 candidateColor,
-                    float candidateDepth,
-                    float coverage)
-{
-    candidateColor *= coverage;
-    if (coverage > 0.0 && candidateDepth <= targetDepth) {
-        // Premultiplied alpha-over for the nearer line candidate.
-        targetColor = candidateColor + targetColor * (1.0 - candidateColor.a);
-        targetDepth = candidateDepth;
-    } else {
-        // Alpha-under preserves the scene or nearer candidate in front.
-        targetColor += candidateColor * (1.0 - targetColor.a);
-    }
-}
-
 void blendNeighbor(inout vec4 targetColor,
                    inout float targetDepth,
                    vec4 candidateColor,
@@ -123,19 +106,23 @@ float correctedMeshWireDepth(ivec2 pixel, vec4 record, float wireDepth)
 void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    vec4 targetColor = texelFetch(uBaseColor, pixel, 0);
-    float targetDepth = texelFetch(uSceneDepth, pixel, 0).r;
+    vec4 baseColor = texelFetch(uBaseColor, pixel, 0);
+    float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
     const ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
                                      ivec2(0, 1), ivec2(0, -1));
 
     vec4 centerRecord = fetchLineRecord(pixel);
     vec4 resolvedLineColor = vec4(0.0);
-    float resolvedLineDepth = 1.0;
+    float resolvedLineDepth = sceneDepth;
+    vec4 centerRasterColor = vec4(0.0);
     if (centerRecord.w != 0.0) {
-        resolvedLineColor = texelFetch(uLineColor, pixel, 0);
+        centerRasterColor = texelFetch(uLineColor, pixel, 0);
         float centerCoverage =
             lineCoverage(centerRecord.z, centerRecord.w);
-        resolvedLineColor *= centerCoverage;
+        resolvedLineColor = centerRasterColor * centerCoverage;
+        // The opaque stroke prepass already tests center candidates against
+        // scene depth with LEQUAL. Retain that candidate as the initial AA
+        // overlay sample; neighbors are compared against its depth below.
         resolvedLineDepth = correctedMeshWireDepth(
             pixel, centerRecord, texelFetch(uCandidateDepth, pixel, 0).r);
     }
@@ -162,9 +149,9 @@ void main()
     }
 
     // Blender first folds the four neighboring line samples into the center
-    // sample, then applies its dense one-pixel-wire correction to that color.
-    // Blender gates the dense-line correction on the original scene pixel,
-    // before any line sample is blended into it.
+    // overlay sample, then applies its dense one-pixel-wire correction to
+    // that overlay color. The gate uses the original rasterized center line
+    // alpha, before coverage or neighbor blending.
     if (centerRecord.w != 0.0) {
         int validNeighborCount = 0;
         for (int index = 0; index < 4; ++index) {
@@ -175,7 +162,7 @@ void main()
             }
         }
         float lineKernelSize = abs(centerRecord.w) * 0.5 - 0.5;
-        if (texelFetch(uBaseColor, pixel, 0).a >= 1.0 &&
+        if (centerRasterColor.a >= 1.0 &&
             resolvedLineColor.a > 0.0 && lineKernelSize < 0.45 &&
             validNeighborCount > 2) {
             float blend = clamp(float(validNeighborCount) * 0.5 - 1.0,
@@ -187,13 +174,10 @@ void main()
         }
     }
 
-    blendCandidate(targetColor, targetDepth, resolvedLineColor,
-                   resolvedLineDepth, 1.0);
-
-    fragmentColor = targetColor;
-    // Write the nearest resolved line depth only where a line candidate
-    // actually contributed. Pixels without a visible candidate retain the
-    // copied scene depth. This avoids copying the expanded stroke-quad depth
-    // buffer back wholesale and lets the alpha resolve decide the depth.
-    gl_FragDepth = targetDepth;
+    // Resolve the line overlay separately, then composite it over the copied
+    // scene target. Folding all wires before a single scene-depth comparison
+    // can incorrectly place a farther wire in front of the surface.
+    fragmentColor = resolvedLineColor + baseColor *
+                    (1.0 - resolvedLineColor.a);
+    gl_FragDepth = resolvedLineDepth;
 }

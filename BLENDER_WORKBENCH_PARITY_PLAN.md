@@ -8396,12 +8396,26 @@ resolve remain open.
 ### GPU smooth-wire dense-scene alpha gate (2026-10-15)
 
 - The fullscreen wire resolve now gates Blender's dense one-pixel-line
-  correction on the original scene pixel's alpha. It previously checked the
-  wire sample's alpha, which could apply that correction over a transparent
-  scene pixel even though Blender skips it there. The check now matches the
-  `original_center_has_alpha` condition in pinned
+  correction on the original rasterized center wire's alpha. It previously
+  checked the scene pixel alpha; Blender's `color_tx` is its transparent
+  overlay-color target, separate from the scene, so this was the wrong input.
+  The check now matches `original_center_has_alpha` in pinned
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L140-L193).
   Build and matched wire-image comparisons remain open.
+
+### GPU smooth-wire depth-ordered overlay resolve (2026-10-15)
+
+- The fullscreen wire resolve now starts from the rasterized center wire,
+  alpha-composites each neighboring wire in Blender's fixed cardinal order,
+  and compares each candidate against the currently retained depth before
+  compositing the resulting overlay over the scene. Previously it combined
+  every line color first, kept only the nearest candidate depth, and compared
+  that aggregate once against the scene; a farther wire could therefore ride
+  in front of the surface because another candidate was closer. Blender's
+  resolve uses a separate transparent overlay target and updates depth as it
+  blends each neighbor in
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L763-L904).
+  C++ build and matched GPU image comparison remain open.
 
 ### Blender mesh color attribute selection (2026-10-15)
 

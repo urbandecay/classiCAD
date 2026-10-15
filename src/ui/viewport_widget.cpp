@@ -9283,7 +9283,12 @@ protected:
                 if (object.shape.geometryType == GeometryType::ScalarVolume) {
                     scalarVolumeDrawObjects.append(object);
                 } else if (hasSurfaceGeometry(object) &&
-                           !(object.shape.geometryType == GeometryType::PolygonMesh &&
+                           !(viewportShadingSettings_.mode ==
+                                 ViewportShadingMode::Solid &&
+                             (object.shape.geometryType ==
+                                  GeometryType::PolygonMesh ||
+                              object.shape.geometryType ==
+                                  GeometryType::NurbsSurface) &&
                              object.wireDisplay)) {
                     surfaceDrawObjects.append(object);
                     surfaceDrawSlots.append(objectIndex);
@@ -10069,6 +10074,7 @@ protected:
                     wireStroke.blenderMeshWire = true;
                     wireStroke.objectId = renderObject.objectId;
                     wireStroke.geometryRevision = renderObject.geometryRevision;
+                    wireStroke.cacheableGeometry = renderObject.cacheable;
                     wireStroke.preparedDepthGeometry = std::move(wireGeometry);
                     wireStroke.worldOffset = renderObject.preparedGeometryOffset;
                     gpuStrokes.append(std::move(wireStroke));
@@ -10114,6 +10120,7 @@ protected:
                 wireStroke.blenderMeshWire = true;
                 wireStroke.objectId = renderObject.objectId;
                 wireStroke.geometryRevision = renderObject.geometryRevision;
+                wireStroke.cacheableGeometry = renderObject.cacheable;
                 wireStroke.preparedDepthGeometry = std::move(wireGeometry);
                 wireStroke.worldOffset = renderObject.preparedGeometryOffset;
                 gpuStrokes.append(std::move(wireStroke));

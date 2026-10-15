@@ -7569,5 +7569,7 @@ resolve remain open.
   their fill for Blender's WIRE display and reuse the cached surface-wire
   tessellation for global, per-object, and WIRE display overlays. Blender's
   legacy surface control-net wire layout may differ from this evaluated
-  surface tessellation.
+  surface tessellation. The WIRE fill suppression also covers the ordinary
+  QPainter batch list, and GPU surface wire strokes now invalidate with the
+  object's geometry revision.
   The C++ build passed; matched Blender image comparison remains open.

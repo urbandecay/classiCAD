@@ -844,8 +844,9 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
         const GLuint strokeTextures[] = {
             strokeBaseColorTexture_, strokeSceneDepthTexture_,
             strokeLineColorTexture_, strokeLineDataTexture_,
-            strokeLineDepthTexture_, strokeWorkingDepthTexture_};
-        glDeleteTextures(6, strokeTextures);
+            strokeLineDepthTexture_, strokeLineWireFlagTexture_,
+            strokeWorkingDepthTexture_};
+        glDeleteTextures(7, strokeTextures);
         const GLuint strokeFramebuffers[] = {
             strokeBaseFramebuffer_, strokeLineFramebuffer_};
         glDeleteFramebuffers(2, strokeFramebuffers);
@@ -854,6 +855,7 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
         strokeLineColorTexture_ = 0;
         strokeLineDataTexture_ = 0;
         strokeLineDepthTexture_ = 0;
+        strokeLineWireFlagTexture_ = 0;
         strokeWorkingDepthTexture_ = 0;
         strokeBaseFramebuffer_ = 0;
         strokeLineFramebuffer_ = 0;
@@ -963,16 +965,18 @@ bool ViewportSceneRenderer::ensureStrokeResolveTargets(
     const GLuint oldTextures[] = {
         strokeBaseColorTexture_, strokeSceneDepthTexture_,
         strokeLineColorTexture_, strokeLineDataTexture_,
-        strokeLineDepthTexture_, strokeWorkingDepthTexture_};
-    glDeleteTextures(6, oldTextures);
-    GLuint newTextures[6] = {};
-    glGenTextures(6, newTextures);
+        strokeLineDepthTexture_, strokeLineWireFlagTexture_,
+        strokeWorkingDepthTexture_};
+    glDeleteTextures(7, oldTextures);
+    GLuint newTextures[7] = {};
+    glGenTextures(7, newTextures);
     strokeBaseColorTexture_ = newTextures[0];
     strokeSceneDepthTexture_ = newTextures[1];
     strokeLineColorTexture_ = newTextures[2];
     strokeLineDataTexture_ = newTextures[3];
     strokeLineDepthTexture_ = newTextures[4];
-    strokeWorkingDepthTexture_ = newTextures[5];
+    strokeLineWireFlagTexture_ = newTextures[5];
+    strokeWorkingDepthTexture_ = newTextures[6];
 
     const auto allocateTexture = [&](GLuint texture, GLenum internalFormat,
                                      GLenum format, GLenum type) {
@@ -994,6 +998,7 @@ bool ViewportSceneRenderer::ensureStrokeResolveTargets(
     allocateTexture(strokeLineDataTexture_, GL_RGBA32F,
                     GL_RGBA, GL_FLOAT);
     allocateTexture(strokeLineDepthTexture_, GL_R32F, GL_RED, GL_FLOAT);
+    allocateTexture(strokeLineWireFlagTexture_, GL_R8, GL_RED, GL_UNSIGNED_BYTE);
     allocateTexture(strokeWorkingDepthTexture_, depthInternalFormat,
                     depthTextureFormat, depthTextureType);
 
@@ -1014,11 +1019,14 @@ bool ViewportSceneRenderer::ensureStrokeResolveTargets(
                            GL_TEXTURE_2D, strokeLineDataTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
                            GL_TEXTURE_2D, strokeLineDepthTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3,
+                           GL_TEXTURE_2D, strokeLineWireFlagTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, depthAttachment,
                            GL_TEXTURE_2D, strokeWorkingDepthTexture_, 0);
     const GLenum lineDrawBuffers[] = {
-        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
-    glDrawBuffers(3, lineDrawBuffers);
+        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2,
+        GL_COLOR_ATTACHMENT3};
+    glDrawBuffers(4, lineDrawBuffers);
     const bool lineComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
@@ -1360,9 +1368,11 @@ bool ViewportSceneRenderer::draw(
         const GLfloat clearLineColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         const GLfloat clearLineRecord[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         const GLfloat clearCandidateDepth[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        const GLfloat clearLineWireFlag[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         glClearBufferfv(GL_COLOR, 0, clearLineColor);
         glClearBufferfv(GL_COLOR, 1, clearLineRecord);
         glClearBufferfv(GL_COLOR, 2, clearCandidateDepth);
+        glClearBufferfv(GL_COLOR, 3, clearLineWireFlag);
     }
     const QMatrix4x4 viewProjection =
         viewportViewProjection(transform, viewportSize);
@@ -1453,6 +1463,17 @@ bool ViewportSceneRenderer::draw(
                         GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_PROGRAM_POINT_SIZE);
 
+    GLint previousActiveTextureForStroke = GL_TEXTURE0;
+    GLint previousStrokeDepthTextureBinding = 0;
+    if (strokeResolveActive) {
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTextureForStroke);
+        glActiveTexture(GL_TEXTURE6);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                      &previousStrokeDepthTextureBinding);
+        glBindTexture(GL_TEXTURE_2D, strokeSceneDepthTexture_);
+        glActiveTexture(static_cast<GLenum>(previousActiveTextureForStroke));
+    }
+
     vertexArray_.bind();
     vertexBuffer_.bind();
     if (geometryChanged) {
@@ -1520,6 +1541,7 @@ bool ViewportSceneRenderer::draw(
                     QVector2D(pixelSize.width(), pixelSize.height()));
                 nextProgram->setUniformValue(
                     "uRecordLine", strokeResolveActive ? 1 : 0);
+                nextProgram->setUniformValue("uSceneDepth", 6);
             }
             // Move edit wires and component points a tiny amount toward the
             // camera so equal-depth surface pixels do not hide their overlays.
@@ -1536,9 +1558,22 @@ bool ViewportSceneRenderer::draw(
                                        stroke.worldOffset.y,
                                        stroke.worldOffset.z));
         if (nextProgram == &program_) {
+            const bool smoothWire =
+                stroke.smoothWireCategory ==
+                        ViewportSmoothWireCategory::EditMode
+                    ? smoothEditModeWires
+                    : smoothOverlayWires;
             boundProgram->setUniformValue(
                 "uApplyBlenderMeshWireOffset",
                 stroke.blenderMeshWire && !smoothOverlayWires ? 1 : 0);
+            boundProgram->setUniformValue(
+                "uBlenderMeshWire", stroke.blenderMeshWire ? 1 : 0);
+            boundProgram->setUniformValue(
+                "uCorrectMeshWireDepth",
+                strokeResolveActive && smoothOverlayWires && smoothWire &&
+                        stroke.blenderMeshWire
+                    ? 1
+                    : 0);
         }
         boundProgram->setUniformValue(
             "uColor", QVector4D(stroke.color.redF(), stroke.color.greenF(),
@@ -1558,12 +1593,12 @@ bool ViewportSceneRenderer::draw(
                         ViewportSmoothWireCategory::EditMode
                     ? smoothEditModeWires
                     : smoothOverlayWires;
-            // Blender gates its custom depth bias with Smooth Wires only for
-            // regular Overlay wires. Edit Mode edges use a separate fixed
-            // screen-space offset, regardless of their smoothing preference.
+            // Blender mesh wires use their own Smooth Wires depth handling;
+            // do not layer the generic constant nudge on top. Edit Mode edges
+            // keep their separate fixed offset regardless of smoothing.
             const bool depthBiasEnabled =
                 stroke.smoothWireCategory == ViewportSmoothWireCategory::EditMode ||
-                smoothOverlayWires;
+                (smoothOverlayWires && !stroke.blenderMeshWire);
             boundProgram->setUniformValue(
                 "uDepthBias", depthTest && depthBiasEnabled ? 1.0e-5f : 0.0f);
             // Antialias coverage has the same color-space meaning for curve
@@ -1625,6 +1660,12 @@ bool ViewportSceneRenderer::draw(
         boundProgram->release();
     }
     if (strokeResolveActive) {
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D,
+                      static_cast<GLuint>(previousStrokeDepthTextureBinding));
+        glActiveTexture(static_cast<GLenum>(previousActiveTextureForStroke));
+    }
+    if (strokeResolveActive) {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                           static_cast<GLuint>(originalDrawFramebuffer));
         glDisable(GL_BLEND);
@@ -1638,13 +1679,13 @@ bool ViewportSceneRenderer::draw(
         }
 
         GLint previousActiveTexture = GL_TEXTURE0;
-        GLint previousTextureBindings[5] = {};
+        GLint previousTextureBindings[6] = {};
         glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
         const GLuint resolveTextures[] = {
             strokeBaseColorTexture_, strokeLineColorTexture_,
             strokeLineDataTexture_, strokeLineDepthTexture_,
-            strokeSceneDepthTexture_};
-        for (int unit = 0; unit < 5; ++unit) {
+            strokeSceneDepthTexture_, strokeLineWireFlagTexture_};
+        for (int unit = 0; unit < 6; ++unit) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glGetIntegerv(GL_TEXTURE_BINDING_2D,
                           &previousTextureBindings[unit]);
@@ -1656,6 +1697,7 @@ bool ViewportSceneRenderer::draw(
         strokeResolveProgram_.setUniformValue("uLineRecord", 2);
         strokeResolveProgram_.setUniformValue("uCandidateDepth", 3);
         strokeResolveProgram_.setUniformValue("uSceneDepth", 4);
+        strokeResolveProgram_.setUniformValue("uLineWireFlag", 5);
         const GLint viewportSizeLocation =
             strokeResolveProgram_.uniformLocation("uViewportSize");
         glUniform2i(viewportSizeLocation, pixelSize.width(),
@@ -1664,7 +1706,7 @@ bool ViewportSceneRenderer::draw(
         glDrawArrays(GL_TRIANGLES, 0, 3);
         strokeResolveVertexArray_.release();
         strokeResolveProgram_.release();
-        for (int unit = 0; unit < 5; ++unit) {
+        for (int unit = 0; unit < 6; ++unit) {
             glActiveTexture(GL_TEXTURE0 + unit);
             glBindTexture(GL_TEXTURE_2D,
                           static_cast<GLuint>(previousTextureBindings[unit]));

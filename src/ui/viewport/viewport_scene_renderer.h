@@ -275,6 +275,7 @@ private:
     GLuint strokeLineColorTexture_ = 0;
     GLuint strokeLineDataTexture_ = 0;
     GLuint strokeLineDepthTexture_ = 0;
+    GLuint strokeLineWireFlagTexture_ = 0;
     GLuint strokeWorkingDepthTexture_ = 0;
     QSize strokeResolvePixelSize_;
     GLenum strokeResolveDepthInternalFormat_ = 0;

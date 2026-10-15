@@ -16,6 +16,9 @@ uniform int uSmoothWire;
 uniform int uEditModeWire;
 uniform int uLinearDisplayBlend;
 uniform int uRecordLine;
+uniform int uBlenderMeshWire;
+uniform int uCorrectMeshWireDepth;
+uniform sampler2D uSceneDepth;
 smooth in vec4 gEdgeColor;
 flat in float vLength;
 flat in float gPatternOffsetPixels;
@@ -26,6 +29,7 @@ flat in vec2 gStrokeDirection;
 layout(location = 0) out vec4 fragmentColor;
 layout(location = 1) out vec4 lineRecord;
 layout(location = 2) out float candidateDepth;
+layout(location = 3) out float lineWireFlag;
 
 vec3 srgbToLinear(vec3 color)
 {
@@ -36,6 +40,11 @@ vec3 srgbToLinear(vec3 color)
 
 void main()
 {
+    // Writing gl_FragDepth disables early depth testing. Keep the original
+    // value for all strokes, and adjust Smooth Wires before the depth test so
+    // Blender's neighbor-depth rule can admit fragments that would otherwise
+    // be rejected against the scene surface.
+    gl_FragDepth = gl_FragCoord.z;
     float coverage;
     if (uLineStyle == 2) {
         float patternPosition = vStrokePosition.x + gPatternOffsetPixels;
@@ -137,6 +146,33 @@ void main()
                                 0.0, 1.0);
     vec4 edgeColor = uEditModeWire != 0 ? gEdgeColor
                                        : mix(gStartColor, gEndColor, edgeParameter);
+    if (uCorrectMeshWireDepth != 0 && uBlenderMeshWire != 0 &&
+        uSmoothWire != 0) {
+        ivec2 pixel = ivec2(gl_FragCoord.xy);
+        ivec2 viewportSize = textureSize(uSceneDepth, 0);
+        bool directionHorizontal = abs(gStrokeDirection.x) >
+                                   abs(gStrokeDirection.y);
+        ivec2 offset = directionHorizontal ? ivec2(1, 0) : ivec2(0, 1);
+        float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
+        float neighborMinimum = sceneDepth;
+        ivec2 plusPixel = pixel + offset;
+        ivec2 minusPixel = pixel - offset;
+        if (all(greaterThanEqual(plusPixel, ivec2(0))) &&
+            all(lessThan(plusPixel, viewportSize))) {
+            neighborMinimum = min(neighborMinimum,
+                                  texelFetch(uSceneDepth, plusPixel, 0).r);
+        }
+        if (all(greaterThanEqual(minusPixel, ivec2(0))) &&
+            all(lessThan(minusPixel, viewportSize))) {
+            neighborMinimum = min(neighborMinimum,
+                                  texelFetch(uSceneDepth, minusPixel, 0).r);
+        }
+        float depthDelta = abs(sceneDepth - neighborMinimum);
+        if (gl_FragCoord.z < sceneDepth + depthDelta &&
+            gl_FragCoord.z > sceneDepth) {
+            gl_FragDepth = sceneDepth;
+        }
+    }
     vec3 strokeColor = uLinearDisplayBlend != 0
                            ? srgbToLinear(uColor.rgb)
                            : uColor.rgb;
@@ -145,9 +181,11 @@ void main()
         fragmentColor = vec4(strokeColor * edgeColor.rgb * alpha, alpha);
         lineRecord = vec4(gStrokeDirection, vStrokePosition.y,
                           (uSmoothWire != 0 ? 1.0 : -1.0) * uWidth);
-        candidateDepth = gl_FragCoord.z;
+        candidateDepth = gl_FragDepth;
+        lineWireFlag = uBlenderMeshWire != 0 ? 1.0 : 0.0;
         return;
     }
+    lineWireFlag = 0.0;
     fragmentColor = vec4(strokeColor * edgeColor.rgb,
                          alpha * coverage);
 }

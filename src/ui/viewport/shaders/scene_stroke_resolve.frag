@@ -7,6 +7,7 @@ uniform sampler2D uLineColor;
 uniform sampler2D uLineRecord;
 uniform sampler2D uCandidateDepth;
 uniform sampler2D uSceneDepth;
+uniform sampler2D uLineWireFlag;
 uniform ivec2 uViewportSize;
 
 layout(location = 0) out vec4 fragmentColor;
@@ -64,7 +65,7 @@ void blendCandidate(inout vec4 targetColor,
                     float coverage)
 {
     candidateColor *= coverage;
-    if (coverage > 0.0 && candidateDepth < targetDepth) {
+    if (coverage > 0.0 && candidateDepth <= targetDepth) {
         // Premultiplied alpha-over for the nearer line candidate.
         targetColor = candidateColor + targetColor * (1.0 - candidateColor.a);
         targetDepth = candidateDepth;
@@ -72,6 +73,34 @@ void blendCandidate(inout vec4 targetColor,
         // Alpha-under preserves the scene or nearer candidate in front.
         targetColor += candidateColor * (1.0 - targetColor.a);
     }
+}
+
+float correctedMeshWireDepth(ivec2 pixel, vec4 record, float wireDepth)
+{
+    if (record.w <= 0.0 ||
+        texelFetch(uLineWireFlag, pixel, 0).r < 0.5) {
+        return wireDepth;
+    }
+
+    bool directionHorizontal = abs(record.x) > abs(record.y);
+    ivec2 offset = directionHorizontal ? ivec2(1, 0) : ivec2(0, 1);
+    float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
+    float neighborMinimum = sceneDepth;
+    ivec2 plusPixel = pixel + offset;
+    ivec2 minusPixel = pixel - offset;
+    if (pixelInViewport(plusPixel)) {
+        neighborMinimum = min(
+            neighborMinimum, texelFetch(uSceneDepth, plusPixel, 0).r);
+    }
+    if (pixelInViewport(minusPixel)) {
+        neighborMinimum = min(
+            neighborMinimum, texelFetch(uSceneDepth, minusPixel, 0).r);
+    }
+    float depthDelta = abs(sceneDepth - neighborMinimum);
+    if (wireDepth < sceneDepth + depthDelta && wireDepth > sceneDepth) {
+        return sceneDepth;
+    }
+    return wireDepth;
 }
 
 void main()
@@ -109,8 +138,10 @@ void main()
                               centerColor / max(centerColor.a, 1.0e-6),
                               blend);
         }
+        float centerDepth = correctedMeshWireDepth(
+            pixel, centerRecord, texelFetch(uCandidateDepth, pixel, 0).r);
         blendCandidate(targetColor, targetDepth, centerColor,
-                       texelFetch(uCandidateDepth, pixel, 0).r, 1.0);
+                       centerDepth, 1.0);
     }
 
     for (int index = 0; index < 4; ++index) {
@@ -126,10 +157,12 @@ void main()
 
         float distanceToLine = neighborDistance(neighborRecord, offset);
         float coverage = lineCoverage(distanceToLine, neighborRecord.w);
+        float neighborDepth = correctedMeshWireDepth(
+            neighborPixel, neighborRecord,
+            texelFetch(uCandidateDepth, neighborPixel, 0).r);
         blendCandidate(targetColor, targetDepth,
                        texelFetch(uLineColor, neighborPixel, 0),
-                       texelFetch(uCandidateDepth, neighborPixel, 0).r,
-                       coverage);
+                       neighborDepth, coverage);
     }
 
     fragmentColor = targetColor;

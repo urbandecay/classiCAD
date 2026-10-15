@@ -5,10 +5,12 @@
 layout(location = 0) in vec3 aWorldPosition;
 layout(location = 1) in vec2 aTextureCoordinate;
 uniform mat4 uViewProjection;
+uniform float uDepthBias;
 out vec2 vTextureCoordinate;
 
 void main()
 {
     gl_Position = uViewProjection * vec4(aWorldPosition, 1.0);
+    gl_Position.z += uDepthBias;
     vTextureCoordinate = aTextureCoordinate;
 }

@@ -2450,15 +2450,20 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     GLboolean previousDepthWrite = GL_TRUE;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthWrite);
+    const bool writesImageDepth = depthTest &&
+        picture.pictureImageDepth == PictureImageDepth::Default &&
+        !picture.pictureUseAlphaBlend;
     if (depthTest) {
         glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LEQUAL);
+        glDepthFunc(writesImageDepth ? GL_LESS : GL_LEQUAL);
     } else {
         glDisable(GL_DEPTH_TEST);
     }
-    glDepthMask(GL_FALSE);
+    glDepthMask(writesImageDepth ? GL_TRUE : GL_FALSE);
     glDisable(GL_CULL_FACE);
-    if (picture.pictureUseAlphaBlend || opacity < 1.0f)
+    if (picture.pictureUseAlphaBlend ||
+        picture.pictureImageDepth == PictureImageDepth::Front ||
+        opacity < 1.0f)
         glEnable(GL_BLEND);
     else
         glDisable(GL_BLEND);
@@ -2479,6 +2484,12 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     pictureProgram_.bind();
     pictureProgram_.setUniformValue(
         "uViewProjection", viewportViewProjection(transform, viewportSize));
+    pictureProgram_.setUniformValue(
+        "uDepthBias",
+        picture.pictureImageDepth == PictureImageDepth::Default
+            ? static_cast<float>(viewportBlenderMeshWireNdcOffsetFactor(
+                  transform, viewportSize))
+            : 0.0f);
     pictureProgram_.setUniformValue("uPicture", 0);
     pictureProgram_.setUniformValue("uOpacity", std::clamp(opacity, 0.0f, 1.0f));
     pictureProgram_.setUniformValue("uSceneLinearOutput",

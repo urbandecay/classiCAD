@@ -12447,7 +12447,8 @@ protected:
                                                         renderFrame.viewportSize,
                                                         devicePixelRatioF(),
                                                         preview.opacity,
-                                                        aaSceneSampleActive)) {
+                                                        aaSceneSampleActive,
+                                                        true)) {
                             failedScenePicturePreviews.append(&preview.image);
                         }
                     }

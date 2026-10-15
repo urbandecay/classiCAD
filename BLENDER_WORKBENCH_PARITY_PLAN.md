@@ -8100,15 +8100,27 @@ resolve remain open.
 ### Blender Image Empty alpha blending and tint (2026-10-15)
 
 - Imported Image Empties now retain Blender's object RGBA color and
-  `empty_image_use_alpha_blend` setting in native shape data. The GPU shader
+  `use_empty_image_alpha` setting in native shape data. The GPU shader
   applies the tint in scene-linear color and reproduces Blender's 0.05 source
   alpha cutout when alpha blending is off. QPainter applies the tint and
   cutout for images up to 16M pixels; its blending happens in display space,
-  so AgX/custom-transform results remain approximate. Opaque GPU images still
-  do not write depth; that render-state gap is tracked separately below.
+  so AgX/custom-transform results remain approximate.
   Blender's shader behavior is pinned in
   [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl#L13-L30).
   C++ build passed; matched comparison remains open.
+
+### Blender Image Empty depth writes (2026-10-15)
+
+- Opaque Default-depth GPU images now use Blender's LESS comparison and write
+  depth after the shader's alpha cutoff. Blended Default and Back images use
+  LEQUAL without depth writes; Front images use no depth test or writes. This
+  follows Blender's separate passes. Default images also use its view-dependent
+  projection depth bias; Back and Front remain unbiased. See the pass states in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L78-L87)
+  and the depth-bias matrix setup in
+  [`draw_view.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_view.hh#L182-L193).
+  QPainter keeps its retained-depth masking behavior. C++ build passed; no
+  matched image comparison has been run.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 

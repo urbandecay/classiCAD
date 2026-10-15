@@ -8483,10 +8483,12 @@ resolve remain open.
   objects still hide the portions of a Back image behind them.
 - The deferred pass keeps its existing 16-million target-pixel budget across
   all Back images. The CPU blend receives display-sRGB pixels after applying
-  the image source conversion and selected viewport display transform when
-  supported; failed or over-budget conversions retain the sRGB fallback.
-  Other QPainter fallbacks continue using their existing composition. Build
-  passed; no matched Blender comparison has been run.
+  the image's scene-linear source conversion and sRGB encoding, without the
+  Workbench display transform. Its linear-light overlay blend happens after
+  the scene display transform, matching Blender's separate Image Empty pass.
+  Failed or over-budget conversions retain the sRGB fallback. Direct
+  QPainter fallbacks continue using their existing composition. Build passed;
+  no matched Blender comparison has been run.
 
 ### Blender Image Empty source color management (2026-10-15)
 
@@ -8501,13 +8503,13 @@ resolve remain open.
   fallback. Native JSON preserves the metadata and bounded payload.
 - The GPU Image Empty texture uploads supported float payloads directly as
   RGBA32F, and includes source-space/transform/payload identity in its texture
-  cache key. The QPainter path applies the active Standard, AgX, PBR Neutral,
-  Filmic, or imported LUT display transform to scene-linear pixels. Its
-  16-million-pixel processing cap still returns the original image above the
-  limit. QPainter still composites translucent Image Empties after the view
-  transform, while Blender composites in scene-linear space before it; exact
-  transparent-image parity in that fallback remains open. C++ build passed;
-  GPU runtime and matched Blender comparisons remain open.
+  cache key. The bounded QPainter overlay path encodes converted scene-linear
+  source pixels to sRGB without applying Workbench's view transform, then
+  blends them in linear display-referred space after the scene transform. Its
+  16-million-pixel processing cap retains the existing encoded-image fallback
+  above the limit. Direct QPainter fallbacks still use their older
+  composition. C++ build passed; GPU runtime and matched Blender comparisons
+  remain open.
 
 ### GPU depth-of-field alpha gather (2026-10-15)
 

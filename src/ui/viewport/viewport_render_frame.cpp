@@ -144,6 +144,8 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.showWire = sceneObject.showWire;
         entry.showAllEdges = sceneObject.showAllEdges;
         entry.wireDisplay = sceneObject.wireDisplay;
+        entry.blenderLooseMeshEdgeCompanion =
+            sceneObject.blenderLooseMeshEdgeCompanion;
         entry.displayBoundsType = sceneObject.displayBoundsType;
         entry.hasDisplayBoundsData = sceneObject.hasDisplayBoundsData;
         entry.displayBoundsMinimumLocal = sceneObject.displayBoundsMinimumLocal;

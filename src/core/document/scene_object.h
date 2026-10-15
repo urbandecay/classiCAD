@@ -122,6 +122,9 @@ struct SceneObject {
     bool showWire = false;
     bool showAllEdges = false;
     bool wireDisplay = false;
+    // Imported Blender mesh loose edges are represented by a curve companion
+    // but still follow the source mesh's overlay visibility.
+    bool blenderLooseMeshEdgeCompanion = false;
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;

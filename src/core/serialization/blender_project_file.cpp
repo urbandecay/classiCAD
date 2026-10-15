@@ -1410,6 +1410,8 @@ bool parseBlenderPolyCurveItem(
     result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
+    result.blenderLooseMeshEdgeCompanion = item.value(
+        QStringLiteral("classiCAD_loose_mesh_edge_companion")).toBool(false);
     result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
     if (!parseDisplayBoundsData(item, &result, errorMessage)) return false;
     for (const QJsonValue &collectionValue :

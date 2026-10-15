@@ -9636,6 +9636,11 @@ protected:
             if (isDimensionGeometryType(visibleShape.geometryType)) {
                 continue;
             }
+            if (renderObject.blenderLooseMeshEdgeCompanion &&
+                viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                !viewportShadingSettings_.wireOverlaysVisible) {
+                continue;
+            }
             if (!renderObject.displayBoundsType.isEmpty()) {
                 // Blender draws an object's requested Bounds display as its
                 // replacement geometry, even when optional extras are hidden.

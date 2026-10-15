@@ -738,6 +738,7 @@ def loose_edge_curve_item(obj, scene, source_item, edges_world):
     item["source_object_name"] = obj.name_full
     item["name"] = obj.name_full + " (Loose Edges)"
     item["object_type"] = "CURVE"
+    item["classiCAD_loose_mesh_edge_companion"] = True
     item["splines"] = [
         {"type": "POLY", "control_points_world": edge}
         for edge in edges_world

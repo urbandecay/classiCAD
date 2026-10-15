@@ -497,6 +497,8 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("showWire"), sceneObject.showWire);
         serializedObject.insert(QStringLiteral("showAllEdges"), sceneObject.showAllEdges);
         serializedObject.insert(QStringLiteral("wireDisplay"), sceneObject.wireDisplay);
+        serializedObject.insert(QStringLiteral("blenderLooseMeshEdgeCompanion"),
+                                sceneObject.blenderLooseMeshEdgeCompanion);
         serializedObject.insert(QStringLiteral("displayBoundsType"),
                                 sceneObject.displayBoundsType);
         serializedObject.insert(QStringLiteral("hasDisplayBoundsData"),
@@ -1396,6 +1398,8 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.showWire = serializedObject.value(QStringLiteral("showWire")).toBool(false);
         sceneObject.showAllEdges = serializedObject.value(QStringLiteral("showAllEdges")).toBool(false);
         sceneObject.wireDisplay = serializedObject.value(QStringLiteral("wireDisplay")).toBool(false);
+        sceneObject.blenderLooseMeshEdgeCompanion = serializedObject.value(
+            QStringLiteral("blenderLooseMeshEdgeCompanion")).toBool(false);
         sceneObject.displayBoundsType = serializedObject.value(
             QStringLiteral("displayBoundsType")).toString();
         const QJsonValue hasDisplayBoundsData = serializedObject.value(

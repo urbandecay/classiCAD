@@ -8002,6 +8002,21 @@ resolve remain open.
   perpendicular to the light, so caster shadows cannot extend beyond those
   projected bounds. C++ build passed; matched image comparison remains open.
 
+### Shadow caster texture alpha status correction (2026-10-15)
+
+- This supersedes earlier Stage 2/3 notes that described QPainter shadow
+  casters as using full triangle coverage without image alpha. The GPU stencil
+  and depth-map paths still cast full geometry; QPainter's software depth map
+  now samples per-triangle image/UDIM alpha and skips texels below `0.1`.
+
+### Blender mesh loose-edge overlay visibility (2026-10-15)
+
+- Imported loose mesh edge companions now retain an explicit provenance flag
+  through Blender extraction, native documents, and viewport render objects.
+  In Solid mode, classiCAD hides those curve companions when Blender's saved
+  overlays are hidden; Wireframe mode keeps them visible. Ordinary CAD curves
+  are unaffected. C++ build passed; a matched view comparison remains open.
+
 ### Blender Image Empty view visibility (2026-10-15)
 
 - Imported Image Empties now retain their perspective/orthographic display

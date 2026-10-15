@@ -7696,3 +7696,11 @@ resolve remain open.
   the imported active layer visible alongside its selection. Older extraction
   versions keep their first-scene/layer behavior. The C++ build passed;
   multi-scene Blender comparison remains open.
+
+### Edit Mode wire depth offset (2026-10-15)
+
+- GPU Edit Mode scene strokes keep their small depth offset regardless of the
+  Edit Mode Smooth Wires preference. The preference changes their edge
+  coverage only. Blender's custom Smooth Wires depth-bias switch applies to
+  the regular Overlay wire pass; edit-mesh edges use a separate fixed screen
+  offset. The C++ build passed; matched depth-crossing captures remain open.

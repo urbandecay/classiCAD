@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 using namespace classiCAD;
 
@@ -354,6 +355,36 @@ int main(int argc, char **argv)
         aa.setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
         aa.setDisplayTransform(shading, true);
         ViewportSurfaceRenderer renderer;
+        const auto rejectedPassHasNoOutputs = [&](
+            const ViewportWorkbenchScenePassPacket &packet) {
+            const ViewportWorkbenchSceneColorPassResult result =
+                ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                    renderer, packet);
+            return !result.rendered && result.report.completedPasses == 0 &&
+                   result.report.populatedAttachments == 0;
+        };
+        const ViewportWorkbenchScenePassPacket emptySizePacket =
+            ViewportWorkbenchScenePassPacket::fromScene(
+                sceneObjects, camera, QSize(), 1.0, shading, nullptr, true);
+        ViewportRenderTargets wrongSizeTargets;
+        wrongSizeTargets.pixelSize = QSize(size.width() - 1, size.height());
+        const ViewportWorkbenchScenePassPacket mismatchedTargetPacket =
+            ViewportWorkbenchScenePassPacket::fromScene(
+                sceneObjects, camera, size, 1.0, shading,
+                &wrongSizeTargets, true);
+        const ViewportWorkbenchScenePassPacket invalidDprPacket =
+            ViewportWorkbenchScenePassPacket::fromScene(
+                sceneObjects, camera, size,
+                std::numeric_limits<qreal>::quiet_NaN(), shading,
+                nullptr, true);
+        passed &= check(
+            !emptySizePacket.isValid() &&
+                rejectedPassHasNoOutputs(emptySizePacket) &&
+                !mismatchedTargetPacket.isValid() &&
+                rejectedPassHasNoOutputs(mismatchedTargetPacket) &&
+                !invalidDprPacket.isValid() &&
+                rejectedPassHasNoOutputs(invalidDprPacket),
+            "scene-pass coordinator must reject empty-size, mismatched-target, and non-finite-DPR packets without reporting passes or attachments");
         gl.glViewport(0, 0, size.width(), size.height());
         gl.glDisable(GL_FRAMEBUFFER_SRGB);
         gl.glDisable(GL_SCISSOR_TEST);

@@ -5931,3 +5931,22 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   --aa OFF --match-classicad-ortho --world-color 0.0219421387 0.0219421387
   0.0219421387 --zero-dither`, with `--linear-output` and
   `--linear-pfm-output` for scene-linear captures.
+
+### Workbench scene-pass coordinator rejection contract (2026-10-14)
+
+- Extended the offscreen GPU render-pass contract to submit packets with an
+  empty viewport size, target dimensions that do not match the viewport, and
+  a non-finite device-pixel ratio. Each packet is rejected before drawing and
+  reports no completed scene passes or populated attachments. Existing valid
+  opaque and transparent fixtures continue to verify successful sample-color
+  and depth behavior.
+- The live viewport and offscreen Workbench render-result path both call
+  `ViewportWorkbenchScenePassCoordinator::renderSceneColor` and pass the
+  returned attachment mask to the active AA sample. The coordinator currently
+  guards and forwards the production `ViewportSurfaceRenderer::draw` call;
+  named pass sequencing remains in that renderer, and there is not yet a
+  paired live-versus-render-result pixel assertion or allocation-failure
+  injection. This closes the packet-rejection contract only, not the broader
+  pass-ownership acceptance item.
+- Validation: `cmake --build build` passed with the 316-file dependency
+  audit; the offscreen `workbench_render_pass_capture` CTest passed (1/1).

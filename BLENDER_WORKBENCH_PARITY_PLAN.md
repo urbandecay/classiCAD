@@ -574,6 +574,24 @@ in ordinary free views or orthographic views is superseded by this correction.
   `tests/workbench_dof_compare.py`. The build and
   `classicad_viewport_render_contracts_test` pass with the capture enabled.
 
+### QPainter prepared perspective object depth (2026-10-15)
+
+- Corrected the QPainter prepared-geometry depth buffer's perspective sign.
+  The camera view direction points outward, so the rasterizer now negates its
+  dot product to obtain positive camera distance for reciprocal interpolation
+  and restores a negative signed depth after perspective correction. Nearer
+  values therefore compare greater in the existing max-depth resolve instead
+  of collapsing to the positive epsilon and depending on object submission
+  order.
+- Added an offscreen production-path contract with overlapping prepared NURBS
+  planes at different perspective depths. The nearer red plane wins when
+  objects are submitted in either order. This covers the controlled opaque
+  case; broader perspective scenes and transparent ordering remain separate
+  parity gaps.
+- Validation: `cmake --build build -j4` and offscreen
+  `classicad_viewport_render_contracts_test` passed. `git diff --check` passed;
+  no GUI was launched.
+
 ### Workbench Image Texture interpolation (2026-10-12)
 
 - GPU and QPainter Workbench sampling now use nearest only for `Closest` and

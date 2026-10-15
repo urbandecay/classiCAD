@@ -1001,7 +1001,12 @@ bool compositeRasterWorkbenchSurfaces(
                     break;
                 }
                 if (transform.isPerspectiveEnabled()) {
-                    viewDepth[corner] = static_cast<float>(
+                    // The view direction points outward toward the camera,
+                    // so negate its dot product to get positive camera
+                    // distance for reciprocal interpolation. The resolved
+                    // depth restores the negative sign below, where nearer
+                    // values compare greater in this buffer.
+                    viewDepth[corner] = -static_cast<float>(
                         (world.x - cameraPosition.x) * viewDirection.x +
                         (world.y - cameraPosition.y) * viewDirection.y +
                         (world.z - cameraPosition.z) * viewDirection.z);
@@ -1061,7 +1066,7 @@ bool compositeRasterWorkbenchSurfaces(
                             b1 / std::max<qreal>(viewDepth[1], 1.0e-9) +
                             b2 / std::max<qreal>(viewDepth[2], 1.0e-9);
                         if (reciprocal <= 1.0e-12) continue;
-                        z = 1.0 / reciprocal;
+                        z = -1.0 / reciprocal;
                     } else {
                         z = b0 * viewDepth[0] + b1 * viewDepth[1] +
                             b2 * viewDepth[2];

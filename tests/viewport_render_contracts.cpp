@@ -1174,6 +1174,96 @@ int main(int argc, char *argv[])
         object.shape.nurbsSurface.knotsV = {0.0, 1.0};
         return object;
     };
+    // Prepared perspective depth must compare opaque objects using a
+    // perspective-correct camera-forward value. Nearer depth is stored as a
+    // greater signed value so the compositor's max-depth selection remains
+    // consistent across the covered triangles.
+    {
+        ViewportTransform perspectiveDepthCamera;
+        perspectiveDepthCamera.setViewDirection({0.0, 0.0, 1.0});
+        perspectiveDepthCamera.zoom() = 17.28;
+        perspectiveDepthCamera.setPerspectiveEnabled(true);
+        const QSize depthSize(128, 128);
+        CurveHitTester perspectiveDepthHitTester;
+        ViewportRenderer perspectiveDepthRenderer(
+            perspectiveDepthCamera, perspectiveDepthHitTester);
+        ViewportShadingSettings perspectiveDepthSettings;
+        perspectiveDepthSettings.mode = ViewportShadingMode::Solid;
+        perspectiveDepthSettings.lightingMode = ViewportLightingMode::Flat;
+        perspectiveDepthSettings.colorMode = ViewportColorMode::Material;
+        perspectiveDepthSettings.outline = false;
+        perspectiveDepthRenderer.setShadingSettings(
+            perspectiveDepthSettings);
+        const auto makePerspectiveDepthPlane = [](quint64 id, float z,
+                                                   const QVector3D &color) {
+            ViewportRenderObject object;
+            object.shape.geometryType = GeometryType::NurbsSurface;
+            object.objectId = ObjectId::fromValue(id);
+            object.hasWorkbenchMaterial = true;
+            object.workbenchMaterial.baseColorSceneLinear = color;
+            object.meshMaterials = {object.workbenchMaterial};
+            auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+            const QVector3D a(-1.0f, -1.0f, z);
+            const QVector3D b(1.0f, -1.0f, z);
+            const QVector3D c(1.0f, 1.0f, z);
+            const QVector3D d(-1.0f, 1.0f, z);
+            geometry->surfaceVertices = {a, b, c, a, c, d};
+            geometry->surfaceNormals = QVector<QVector3D>(
+                6, QVector3D(0.0f, 0.0f, 1.0f));
+            object.preparedDepthGeometry = geometry;
+            object.shape.nurbsSurface.degreeU = 1;
+            object.shape.nurbsSurface.degreeV = 1;
+            object.shape.nurbsSurface.controlVertexCountU = 2;
+            object.shape.nurbsSurface.controlVertexCountV = 2;
+            object.shape.nurbsSurface.controlPoints = {
+                {-1.0, -1.0, z}, {-1.0, 1.0, z},
+                {1.0, -1.0, z}, {1.0, 1.0, z}};
+            object.shape.nurbsSurface.weights = {1.0, 1.0, 1.0, 1.0};
+            object.shape.nurbsSurface.knotsU = {0.0, 1.0};
+            object.shape.nurbsSurface.knotsV = {0.0, 1.0};
+            return object;
+        };
+        const ViewportRenderObject fartherBlue = makePerspectiveDepthPlane(
+            30, -0.5f, QVector3D(0.02f, 0.08f, 0.9f));
+        const ViewportRenderObject nearerRed = makePerspectiveDepthPlane(
+            31, 0.0f, QVector3D(0.9f, 0.03f, 0.02f));
+        const auto drawPerspectiveDepthObject =
+            [&perspectiveDepthRenderer, &depthSize](
+                QPainter &painter, const ViewportRenderObject &object,
+                RasterWorkbenchFragmentSink *fragmentSink) {
+                perspectiveDepthRenderer.drawShape(
+                    painter, object.shape, depthSize, false, false, true,
+                    QColor(Qt::white), QString(), 0.0, object.objectId,
+                    object.geometryRevision,
+                    object.preparedDepthGeometry.data(), {}, std::nullopt,
+                    object.workbenchMaterial, QString(), QString(), {}, {},
+                    fragmentSink);
+            };
+        const auto renderPerspectiveDepthOrder = [&](
+            const QVector<ViewportRenderObject> &objects) {
+            QImage image(depthSize, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::black);
+            std::vector<RasterWorkbenchLinearPixel> sceneLinear;
+            const bool rendered = compositeRasterWorkbenchSurfaces(
+                &image, objects, perspectiveDepthCamera, depthSize, 1.0,
+                false, true, perspectiveDepthSettings, QVector3D(),
+                drawPerspectiveDepthObject, nullptr, {}, false, {},
+                &sceneLinear);
+            const std::size_t center =
+                static_cast<std::size_t>(depthSize.height() / 2) *
+                    depthSize.width() + depthSize.width() / 2;
+            return rendered && sceneLinear.size() ==
+                    static_cast<std::size_t>(depthSize.width()) *
+                        depthSize.height() &&
+                sceneLinear[center].red > 0.75f &&
+                sceneLinear[center].green < 0.1f &&
+                sceneLinear[center].blue < 0.1f;
+        };
+        passed &= check(
+            renderPerspectiveDepthOrder({fartherBlue, nearerRed}) &&
+                renderPerspectiveDepthOrder({nearerRed, fartherBlue}),
+            "QPainter prepared perspective depth must choose the nearer opaque surface independent of object submission order");
+    }
     const QVector<ViewportRenderObject> shadowObjects{
         makeShadowQuad(11, 4, 4, 124, 124, 0.0),
         makeShadowQuad(12, 48, 48, 80, 80, 2.0)};

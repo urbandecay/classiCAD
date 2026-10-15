@@ -2250,6 +2250,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const int outputWidth = colorImage->width();
     const int outputHeight = colorImage->height();
     const qreal colorDpr = std::max<qreal>(colorImage->devicePixelRatio(), 1.0);
+    const bool hasDeferredSceneLinearOutline = surfaceLayers != nullptr &&
+        surfaceLayers->sceneLinearOutlinePending &&
+        surfaceLayers->sceneLinearSize == QSize(outputWidth, outputHeight) &&
+        surfaceLayers->sceneLinearColor.size() ==
+            static_cast<std::size_t>(outputWidth) * outputHeight &&
+        surfaceLayers->sceneLinearOutlineCoverage.size() ==
+            static_cast<std::size_t>(outputWidth) * outputHeight;
     qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     int width = qRound(viewportSize.width() * dpr);
     int height = qRound(viewportSize.height() * dpr);
@@ -2311,6 +2318,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<RasterSample> samples(width * height);
     QVector<RasterSample> inFrontSamples(width * height);
     const bool rasterWorkbenchOutlineEnabled = settings.outline &&
+        !hasDeferredSceneLinearOutline &&
         !(surfaceLayers != nullptr &&
           surfaceLayers->outlineAppliedBeforeDisplay);
     QVector<RasterOutlineSample> outlineSamples;

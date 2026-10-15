@@ -8152,6 +8152,15 @@ resolve remain open.
   and [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L367).
   C++ build passed; matched outline comparison remains open.
 
+### QPainter deferred outline fallback ownership (2026-10-15)
+
+- When the weighted or sorted compositor has retained a full-size
+  scene-linear outline mask for the later effects resolve, the generic CPU
+  outline fallback now skips drawing a second outline from its own ID buffer.
+  The fallback remains enabled if the retained scene-linear color or coverage
+  mask is missing or has the wrong size, and selected-object outlines remain
+  separate. C++ build passed; matched outline comparison remains open.
+
 ### QPainter opaque prepass coplanar depth ties (2026-10-15)
 
 - QPainter per-pixel surface samples now let a later triangle replace an

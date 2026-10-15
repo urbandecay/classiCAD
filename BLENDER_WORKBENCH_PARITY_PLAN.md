@@ -7760,3 +7760,14 @@ resolve remain open.
   both enabled. This remains limited to compositor-supported frames and is
   disabled for X-Ray. The C++ build passed; no matched Blender comparison has
   been run.
+
+### QPainter Workbench effect memory bound (2026-10-15)
+
+- The software effects pass previously allocated multiple full-resolution
+  depth, normal, and object buffers without a practical pixel limit. It now
+  skips those effects above one million target pixels and displays retained
+  scene-linear surfaces without effects when available. This bounds CPU
+  memory use but leaves shadows, cavity, outlines, and depth of field absent
+  in oversized QPainter fallback frames. Blender's GPU path does not share
+  this CPU allocation limit. The C++ build passed; matched output remains
+  open.

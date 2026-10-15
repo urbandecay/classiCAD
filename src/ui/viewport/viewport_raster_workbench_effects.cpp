@@ -2377,6 +2377,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         *colorImage = resolvedImage.convertToFormat(colorImage->format());
         return true;
     };
+    // This CPU path keeps multiple per-pixel depth/normal/object buffers.
+    // Bound their aggregate size to the same order as the raster surface
+    // compositor instead of letting large viewports allocate gigabytes.
+    constexpr qint64 maximumRasterEffectPixels = 1'000'000;
+    if (pixelCountWide > maximumRasterEffectPixels) {
+        // Keep a retained scene-linear surface usable even when the bounded
+        // software effects pass cannot run at this resolution.
+        (void)displayRetainedSceneLinear();
+        return;
+    }
     QVector<RasterSample> samples(width * height);
     QVector<RasterSample> inFrontSamples(width * height);
     QVector<RasterSample> opaqueSamples;

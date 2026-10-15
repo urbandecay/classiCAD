@@ -1292,11 +1292,11 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     qreal curveDepth = startDepth +
                         (endDepth - startDepth) * fraction;
                     if (transform_.isPerspectiveEnabled() &&
-                        startDepth > 1.0e-9 && endDepth > 1.0e-9) {
+                        startDepth < -1.0e-9 && endDepth < -1.0e-9) {
                         const qreal reciprocal =
                             (1.0 - fraction) / startDepth +
                             fraction / endDepth;
-                        if (reciprocal > 1.0e-12) {
+                        if (reciprocal < -1.0e-12) {
                             curveDepth = 1.0 / reciprocal;
                         }
                     }

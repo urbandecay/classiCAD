@@ -7444,3 +7444,13 @@ resolve remain open.
   the scene, matching the GPU and transparent-fragment depth comparisons; the
   old comparison could let a farther overlapping surface replace the nearer
   receiver. No matched Blender image comparison has been run for this fix.
+
+### QPainter perspective selected-curve depth (2026-10-15)
+
+- Selected curve visibility now uses reciprocal interpolation for perspective
+  depth with the renderer's signed negative camera-distance convention. The
+  previous positive-depth gate skipped reciprocal interpolation for visible
+  curve points, which could shift the apparent edge against an occluding
+  surface. Orthographic depth interpolation and the existing visibility test
+  are unchanged. The C++ build passed; no matched Blender image comparison has
+  been run for this fix.

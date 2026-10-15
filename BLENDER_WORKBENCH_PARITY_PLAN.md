@@ -7579,7 +7579,15 @@ resolve remain open.
   factor and square-root threshold conversion; boundary and nonmanifold edges
   remain visible, while `show_all_edges` bypasses the threshold. Blender's
   selected NURBS surface wire overlays still use classiCAD's selection color.
-  Optimal-subdivision edge flags are not represented. Mesh endpoint gradients
+  Blender's Optimal Display flag for Subdivision Surface and Multires hides
+  generated subdivision edges, but its per-edge draw mask is built in the
+  internal subdivision GPU cache and is not exposed by the public evaluated
+  `bpy.types.Mesh` API. Reading only the modifier toggle cannot identify the
+  effective mask through arbitrary modifier stacks; exact import needs a
+  Blender-side export hook or reliable edge provenance. See the pinned
+  [`subdiv_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/subdiv_mesh.cc)
+  implementation and the public [Mesh API](https://docs.blender.org/api/5.2/bpy.types.Mesh.html).
+  Mesh endpoint gradients
   use averaged imported loop normals at shared vertices and the shader's 0.35
   front-color mix. No matched Blender wire capture has been run. Loose mesh
   edges remain represented by their existing companion curves. NURBS surfaces now hide

@@ -8226,3 +8226,15 @@ resolve remain open.
 - X-Ray hidden strokes and non-depth-writing overlays do not update the depth
   buffer. No matched Blender comparison was run; `cmake --build build -j4`
   passed.
+
+### Image Texture extension-mode status (2026-10-15)
+
+- Blender Image Texture extension settings `REPEAT`, `EXTEND`, `CLIP`, and
+  `MIRROR` are imported, saved in native documents, and applied by both the GPU
+  and QPainter samplers for meshes and NURBS surfaces. Matched perspective
+  mesh captures cover all four modes in the GPU path and all four modes in the
+  QPainter path; the QPainter comparisons retain small raster-edge differences
+  (up to 17 foreground-mask pixels in the recorded CLIP fixture). These
+  results supersede older summary text that described QPainter extension
+  handling as repeat-only. Other filter settings, geometries, and views remain
+  open as recorded in the individual comparison entries above.

@@ -5739,6 +5739,28 @@ resolve remain open.
   and the offscreen `viewport_render_contracts` test passed against the
   retained depth-map implementation.
 
+### QPainter software shadow-volume experiment (2026-10-15)
+
+- Tested a bounded CPU depth-pass shadow-volume rasterizer for closed,
+  oriented, opaque imported polygon meshes against the matched 640×480
+  plane-and-cube receiver fixture. It used the nearest opaque scene depth for
+  volume testing and retained the existing light-depth path for casters that
+  did not qualify.
+- Against Blender 5.2.2, the prototype produced 4,234 cast-shadow pixels and
+  mask IoU 0.485859, compared with 4,415 pixels and IoU 0.494191 for the
+  established supersampled light-depth fallback. Mean scene-linear RGB delta
+  error on the shared receiver was 0.001332 versus 0.001333, effectively
+  unchanged. The prototype was removed because its software depth comparison
+  did not improve the isolated shadow mask and introduced a second rasterizer
+  plus per-caster path selection. The light-depth fallback remains active;
+  software stencil/winding parity is still open.
+- Validation of the prototype used Blender 5.2.2 LTS, paired captures from
+  the offscreen `viewport_render_contracts` run, and
+  `workbench_shadow_receiver_compare.py`. The prototype build and capture run
+  completed, but its measured output was rejected. After removing it,
+  `cmake --build build -j4` and the offscreen
+  `viewport_render_contracts` test passed against the retained path.
+
 ### QPainter full-frame MatCap presets (2026-10-14)
 
 - Compared the existing QPainter polygon-cube captures for `check_normal+y`

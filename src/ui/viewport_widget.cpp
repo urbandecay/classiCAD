@@ -10883,6 +10883,13 @@ protected:
                                          sceneRenderer != nullptr,
                                          &sceneStroke,
                                          &controlGuide)) {
+                if (renderObject.blenderLooseMeshEdgeCompanion &&
+                    viewportShadingSettings_.mode ==
+                        ViewportShadingMode::Solid) {
+                    sceneStroke.blenderMeshWire = true;
+                    sceneStroke.smoothWireCategory =
+                        ViewportSmoothWireCategory::Overlay;
+                }
                 const bool selectedCurveComponents =
                     selected && componentSelectionMode_ ==
                                     ComponentSelectionMode::Edge &&

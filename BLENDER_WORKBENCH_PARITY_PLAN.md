@@ -8036,6 +8036,16 @@ resolve remain open.
   overlays are hidden; Wireframe mode keeps them visible. Ordinary CAD curves
   are unaffected. C++ build passed; a matched view comparison remains open.
 
+### Blender mesh wire handling for loose edges (2026-10-15)
+
+- Visible Solid-mode loose-edge companions now use the mesh-wire stroke path in
+  both GPU and QPainter rendering. This applies Blender's mesh-wire depth/NDC
+  offsets and neighboring scene-depth correction while keeping them in the
+  Overlay category. They have no imported face-corner normals or adjacent-face
+  curvature data, so those offsets use the renderer's existing zero/default
+  behavior. Their generic curve color mapping remains a separate parity gap.
+  C++ build passed; matched image comparison remains open.
+
 ### QPainter Workbench outline composition (2026-10-15)
 
 - The QPainter outline fallback now reconstructs bounded scene-linear color

@@ -7883,3 +7883,14 @@ resolve remain open.
   segments and omits strand radius, profile, color, materials, and evaluated
   modifier output. One-point strands remain unsupported. The C++ build passed;
   Blender fixture and matched viewport comparisons have not been run.
+
+### Blender Point Cloud import gap (2026-10-15)
+
+- Blender `POINTCLOUD` objects and collection instances remain unsupported.
+  classiCAD's existing `Point` geometry stores one location; display, picking,
+  snapping, transforms, and duplication all assume one point per object. Splitting
+  a Blender point cloud into thousands of unrelated CAD objects would lose the
+  cloud's per-point radius, color, and identity while inflating the scene. The
+  importer now reports this reason directly. A useful port needs a batched
+  point-cloud geometry and display contract, including radius-aware rendering
+  and point-level picking. No point-cloud geometry was fabricated.

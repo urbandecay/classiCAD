@@ -1388,6 +1388,9 @@ def unsupported_object_record(obj, scene, depsgraph=None):
         record["reason"] = "Grease Pencil has no supported current-frame stroke centerlines"
     elif obj.type == "CURVES":
         record["reason"] = "Hair Curves has no supported strand centerlines"
+    elif obj.type == "POINTCLOUD":
+        record["reason"] = (
+            "Point Cloud needs a grouped multi-point object; classiCAD currently stores and renders points one at a time")
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record

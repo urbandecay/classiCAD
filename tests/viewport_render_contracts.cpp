@@ -14562,6 +14562,7 @@ int main(int argc, char *argv[])
                             if (image == nullptr || !dofCameraConfigured)
                                 return false;
                             ViewportShadingSettings settings = rawFaceShading;
+                            settings.specularLighting = false;
                             settings.depthOfField = enabled;
                             CurveHitTester hitTester;
                             ViewportRenderer renderer(dofCamera, hitTester);

@@ -5426,19 +5426,32 @@ edge comparison remains open.
   27.75/255, with 113,804 pixels above 2. The DOF images differ by
   27.70/255. This baseline mismatch prevents attributing the mask disagreement
   to the DOF gather alone.
+- **Fixture correction and follow-up (2026-10-15):** The QPainter capture now
+  explicitly disables specular highlights, as the Blender helper already
+  does. A fresh Blender 5.2.2 and QPainter pair showed no baseline improvement:
+  mean maximum-channel error is `27.781/255` with 108,869 pixels above 2, and
+  effect-mask IoU remains `0.023737` at threshold 2. The captures reveal a
+  larger scene-framing mismatch: the Blender foreground bounds are
+  `(96,76)-(510,479)`, while QPainter's are `(208,158)-(414,364)`. The
+  Blender helper renders a 25 mm camera; classiCAD's QPainter path projects
+  through `ViewportTransform`, whose perspective focal-length mapping includes
+  the viewport projection zoom factor. This indicates the DOF fixture does not
+  yet compare equivalent projected scenes. Keep the DOF kernel comparison
+  inconclusive until camera framing/projection is aligned; changing its sample
+  equations is not supported by this capture.
 - This confirms that matched QPainter DOF image acceptance remains open. The
   existing code uses a full-resolution approximation without Blender's
-  temporal jitter and complete near/far pyramid. Align the baseline fixture
-  and color output before using this comparison to justify a renderer change.
+  temporal jitter and complete near/far pyramid. Align camera projection and
+  color output before using this comparison to justify a renderer change.
   Blender's stage setup is pinned in
   [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L53-L85);
   its gather is pinned in
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L21-L57).
 - Validation: Blender reported 5.2.2 LTS; `cmake --build build -j4` passed
-  with the dependency audit; the rebuilt offscreen
-  `classicad_viewport_render_contracts_test` passed; and
-  `workbench_dof_compare.py` completed on both baseline/effect pairs. The
-  comparison made no renderer code changes.
+  with the dependency audit; the capture-enabled offscreen
+  `viewport_render_contracts` test passed (1/1, 27.37 seconds); and
+  `workbench_dof_compare.py` completed on the refreshed baseline/effect pairs.
+  The capture-only setting correction made no renderer code changes.
 
 ### QPainter supersampled light-depth shadow fallback (2026-10-14)
 

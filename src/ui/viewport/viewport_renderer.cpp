@@ -4316,7 +4316,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 transform_.worldDirectionToView(worldCenter).towardCamera,
                 uvs, hasUvs});
         };
-        const auto drawTriangle = [&](const SurfaceFillTriangle &triangle) {
+        const auto drawUnclippedTriangle = [&](const SurfaceFillTriangle &triangle) {
             QPointF screenA;
             QPointF screenB;
             QPointF screenC;
@@ -4787,6 +4787,105 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     targetRect.normalized(), raster);
             }
             painter.restore();
+        };
+
+        const auto drawTriangle = [&](const SurfaceFillTriangle &triangle) {
+            struct ClipVertex {
+                Point3D position;
+                QVector3D normal;
+                QPointF uv;
+            };
+            const ViewportCameraPreferences preferences =
+                transform_.cameraPreferences();
+            const Point3D target = transform_.viewTarget();
+            const Point3D camera = transform_.cameraPosition(viewportSize);
+            const qreal nearDepth = preferences.clipStart;
+            const qreal farDepth = transform_.isPerspectiveEnabled()
+                                       ? preferences.clipEnd
+                                       : 2.0 * preferences.clipEnd;
+            const auto depthOf = [&](const Point3D &position) {
+                const Point3D world{position.x + preparedOffset.x,
+                                    position.y + preparedOffset.y,
+                                    position.z + preparedOffset.z};
+                const Point3D forward{-transform_.viewDirection().x,
+                                      -transform_.viewDirection().y,
+                                      -transform_.viewDirection().z};
+                if (transform_.isPerspectiveEnabled()) {
+                    return (world.x - camera.x) * forward.x +
+                           (world.y - camera.y) * forward.y +
+                           (world.z - camera.z) * forward.z;
+                }
+                return preferences.clipEnd +
+                       (world.x - target.x) * forward.x +
+                       (world.y - target.y) * forward.y +
+                       (world.z - target.z) * forward.z;
+            };
+            QVector<ClipVertex> polygon{
+                {triangle.a, triangle.vertexNormals[0], triangle.uvs[0]},
+                {triangle.b, triangle.vertexNormals[1], triangle.uvs[1]},
+                {triangle.c, triangle.vertexNormals[2], triangle.uvs[2]}};
+            const qreal clipPlanes[] = {nearDepth, farDepth};
+            for (int planeIndex = 0; planeIndex < 2 && !polygon.isEmpty();
+                 ++planeIndex) {
+                const bool keepGreater = planeIndex == 0;
+                const qreal planeDepth = clipPlanes[planeIndex];
+                QVector<ClipVertex> clipped;
+                clipped.reserve(polygon.size() + 1);
+                ClipVertex previous = polygon.last();
+                qreal previousDepth = depthOf(previous.position);
+                bool previousInside = keepGreater
+                                          ? previousDepth >= planeDepth
+                                          : previousDepth <= planeDepth;
+                for (const ClipVertex &current : polygon) {
+                    const qreal currentDepth = depthOf(current.position);
+                    const bool currentInside = keepGreater
+                                                   ? currentDepth >= planeDepth
+                                                   : currentDepth <= planeDepth;
+                    if (currentInside != previousInside) {
+                        const qreal denominator = currentDepth - previousDepth;
+                        if (std::abs(denominator) > 1.0e-15) {
+                            const qreal t = std::clamp(
+                                (planeDepth - previousDepth) / denominator,
+                                0.0, 1.0);
+                            ClipVertex intersection;
+                            intersection.position = {
+                                previous.position.x +
+                                    (current.position.x - previous.position.x) * t,
+                                previous.position.y +
+                                    (current.position.y - previous.position.y) * t,
+                                previous.position.z +
+                                    (current.position.z - previous.position.z) * t};
+                            intersection.normal = previous.normal +
+                                (current.normal - previous.normal) *
+                                    static_cast<float>(t);
+                            intersection.uv = previous.uv +
+                                (current.uv - previous.uv) * t;
+                            clipped.append(intersection);
+                        }
+                    }
+                    if (currentInside) clipped.append(current);
+                    previous = current;
+                    previousDepth = currentDepth;
+                    previousInside = currentInside;
+                }
+                polygon = std::move(clipped);
+            }
+            for (int index = 1; index + 1 < polygon.size(); ++index) {
+                SurfaceFillTriangle clipped = triangle;
+                clipped.a = polygon[0].position;
+                clipped.b = polygon[index].position;
+                clipped.c = polygon[index + 1].position;
+                if (triangle.hasSmoothNormals) {
+                    clipped.vertexNormals = {polygon[0].normal,
+                                             polygon[index].normal,
+                                             polygon[index + 1].normal};
+                }
+                if (triangle.hasUvs) {
+                    clipped.uvs = {polygon[0].uv, polygon[index].uv,
+                                   polygon[index + 1].uv};
+                }
+                drawUnclippedTriangle(clipped);
+            }
         };
 
         painter.save();

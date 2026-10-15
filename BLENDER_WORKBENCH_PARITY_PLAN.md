@@ -8275,3 +8275,13 @@ resolve remain open.
   attribute when no default is available. Both GPU and QPainter mesh paths use
   the same preference. This fixes files where Blender's active and default
   attributes differ. No matched Blender image comparison was run.
+
+### QPainter NURBS scene clipping (2026-10-15)
+
+- The QPainter Solid path now clips each NURBS surface triangle against the
+  viewport near and far depth planes before projection. It interpolates UVs
+  and smooth normals at generated boundary vertices, and applies the same
+  path to NURBS solid faces. This prevents out-of-range geometry from drawing
+  and preserves the portion of triangles that cross a clip plane. Imported
+  polygon meshes already use a separate clipped triangle path. Build passed;
+  no matched Blender image comparison was run.

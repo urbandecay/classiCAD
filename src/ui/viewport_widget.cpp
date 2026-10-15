@@ -10197,10 +10197,7 @@ protected:
                     const bool themeColorGradient =
                         viewportShadingSettings_.wireColorMode ==
                         ViewportWireColorMode::Theme;
-                    if (renderObject.selected && !themeColorGradient) {
-                        wireColor = viewportSelectionColor();
-                    }
-                    const bool objectColorGradient = !renderObject.selected &&
+                    const bool objectColorGradient =
                         (viewportShadingSettings_.wireColorMode ==
                              ViewportWireColorMode::Object ||
                          viewportShadingSettings_.wireColorMode ==
@@ -10263,10 +10260,24 @@ protected:
                                 viewportShadingSettings_.colorLutData,
                                 viewportShadingSettings_.colorLutMetadata);
                         };
-                        const QVector3D adjustedRim = toWireDisplay(
-                            sourceColor * 0.25f);
-                        const QVector3D adjustedWire = toWireDisplay(
-                            sourceColor * 0.5f + QVector3D(0.5f, 0.5f, 0.5f));
+                        QVector3D adjustedRim = sourceColor * 0.5f;
+                        QVector3D adjustedWire = adjustedRim;
+                        if (renderObject.selected) {
+                            adjustedWire += QVector3D(1.0e-4f, 1.0e-4f,
+                                                      1.0e-4f);
+                            const float brightness = std::max(
+                                adjustedWire.x(),
+                                std::max(adjustedWire.y(), adjustedWire.z()));
+                            if (brightness > 1.0e-12f) {
+                                adjustedWire *= 0.5f / brightness;
+                            }
+                            adjustedRim += QVector3D(0.75f, 0.75f, 0.75f);
+                        } else {
+                            adjustedRim *= 0.5f;
+                            adjustedWire += QVector3D(0.5f, 0.5f, 0.5f);
+                        }
+                        adjustedRim = toWireDisplay(adjustedRim);
+                        adjustedWire = toWireDisplay(adjustedWire);
                         rimColor = adjustedRim;
                         frontWireColor = adjustedWire;
                     }

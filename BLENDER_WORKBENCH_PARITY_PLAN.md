@@ -7570,8 +7570,9 @@ resolve remain open.
   custom-LUT display transform, including exposure and gamma, after Blender's
   half-brightness adjustment. Imported Blender preferences now supply the
   Theme wire, background, active-object, and selected-object colors. Theme
-  mesh wires and unselected Object/Random mesh wires use the view-facing
-  endpoint gradient; selected Theme wires use the active/selected rim color.
+  mesh wires and Object/Random mesh wires use the view-facing endpoint
+  gradient. Selected Theme wires use the active/selected rim color; selected
+  Object/Random wires use Blender's normalized wire and brightened rim values.
   These theme colors come from the Blender installation used for import, not
   the `.blend` file, so another system can render a different theme. Polygon
   edge filtering uses Blender's face-angle

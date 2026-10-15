@@ -709,6 +709,7 @@ def workbench_shading_record(scene, shading=None):
         "show_xray": bool(shading.show_xray),
         "show_xray_wireframe": bool(shading.show_xray_wireframe),
         "xray_alpha": finite_number(shading.xray_alpha),
+        "xray_alpha_wireframe": finite_number(shading.xray_alpha_wireframe),
         "matcap_flip_x": (bool(matcap_flip_x)
                            if matcap_flip_x is not None else None),
         "use_dof": bool(shading.use_dof),

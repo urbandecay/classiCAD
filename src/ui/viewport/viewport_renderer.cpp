@@ -1344,7 +1344,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             QPen hiddenPen = painter.pen();
             QColor hiddenColor = hiddenPen.color();
             hiddenColor.setAlphaF(hiddenColor.alphaF() *
-                (1.0 - std::clamp(shadingSettings_.xrayAlpha, 0.0, 1.0)));
+                (1.0 - std::clamp(shadingSettings_.xrayAlphaForMode(), 0.0, 1.0)));
             hiddenPen.setColor(hiddenColor);
             painter.setPen(hiddenPen);
             painter.drawPath(hiddenPath);
@@ -2527,7 +2527,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.matcapFlipX);
                     }
                     if (shadingSettings_.xrayEnabled()) {
-                        pixelAlpha *= shadingSettings_.xrayAlpha;
+                        pixelAlpha *= shadingSettings_.xrayAlphaForMode();
                     }
                     const qreal fragmentAlpha = pixelAlpha;
                     pixelAlpha *= coverage;
@@ -3962,7 +3962,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const qreal alpha = std::clamp(
             sourceAlpha * (preview || !shadingSettings_.xrayEnabled()
                                ? 1.0
-                               : shadingSettings_.xrayAlpha),
+                               : shadingSettings_.xrayAlphaForMode()),
             0.0, 1.0);
         QColor baseColor = QColor::fromRgbF(
             std::clamp<qreal>(sourceColorLinear.x(), 0.0, 1.0),

@@ -216,6 +216,8 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
     object.insert(QStringLiteral("depthOfField"), settings.depthOfField);
     object.insert(QStringLiteral("cavity"), settings.cavity);
     object.insert(QStringLiteral("xrayAlpha"), settings.xrayAlpha);
+    object.insert(QStringLiteral("xrayWireframeAlpha"),
+                  settings.xrayWireframeAlpha);
     object.insert(QStringLiteral("shadowIntensity"), settings.shadowIntensity);
     object.insert(QStringLiteral("shadowOffset"), settings.shadowOffset);
     object.insert(QStringLiteral("shadowFocus"), settings.shadowFocus);
@@ -468,6 +470,8 @@ bool viewportShadingFromJson(const QJsonValue &value,
         !boolean(QStringLiteral("depthOfField"), &restored.depthOfField) ||
         !boolean(QStringLiteral("cavity"), &restored.cavity) ||
         !number(QStringLiteral("xrayAlpha"), &restored.xrayAlpha) ||
+        !optionalNumber(QStringLiteral("xrayWireframeAlpha"),
+                        &restored.xrayWireframeAlpha) ||
         !number(QStringLiteral("shadowIntensity"),
                 &restored.shadowIntensity) ||
         !number(QStringLiteral("shadowOffset"), &restored.shadowOffset) ||
@@ -488,6 +492,8 @@ bool viewportShadingFromJson(const QJsonValue &value,
          !integer(QStringLiteral("cavitySamples"), 1, 500,
                   &restored.cavitySamples)) ||
         restored.xrayAlpha < 0.0 || restored.xrayAlpha > 1.0 ||
+        restored.xrayWireframeAlpha < 0.0 ||
+        restored.xrayWireframeAlpha > 1.0 ||
         restored.shadowIntensity < 0.0 || restored.shadowIntensity > 1.0 ||
         restored.shadowOffset < 0.0 ||
         restored.cavityDistance < 0.0 || restored.cavityDistance > 100000.0 ||

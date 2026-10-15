@@ -511,7 +511,9 @@ qreal workbenchEffectiveAlpha(qreal sourceAlpha,
         return 0.5;
     }
     return std::clamp(sourceAlpha *
-                          (settings.xrayEnabled() ? settings.xrayAlpha : 1.0),
+                          (settings.xrayEnabled()
+                               ? settings.xrayAlphaForMode()
+                               : 1.0),
                       0.0, 1.0);
 }
 

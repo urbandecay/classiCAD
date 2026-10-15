@@ -104,6 +104,7 @@ struct ViewportShadingSettings {
     qreal curvatureRidgeFactor = 1.0;
     qreal curvatureValleyFactor = 1.0;
     qreal xrayAlpha = 0.5;
+    qreal xrayWireframeAlpha = 0.5;
     qreal shadowIntensity = 0.5;
     qreal shadowOffset = 0.1;
     qreal shadowFocus = 0.0;
@@ -123,6 +124,37 @@ struct ViewportShadingSettings {
         return mode == ViewportShadingMode::Wireframe
                    ? xrayWireframe
                    : xray && xrayAlpha < 1.0;
+    }
+
+    qreal xrayAlphaForMode() const noexcept
+    {
+        return mode == ViewportShadingMode::Wireframe
+                   ? xrayWireframeAlpha
+                   : xrayAlpha;
+    }
+
+    bool xrayEnabledForMode() const noexcept
+    {
+        return mode == ViewportShadingMode::Wireframe ? xrayWireframe
+                                                       : xray;
+    }
+
+    void setXrayEnabledForMode(bool enabled) noexcept
+    {
+        if (mode == ViewportShadingMode::Wireframe) {
+            xrayWireframe = enabled;
+        } else {
+            xray = enabled;
+        }
+    }
+
+    void setXrayAlphaForMode(qreal alpha) noexcept
+    {
+        if (mode == ViewportShadingMode::Wireframe) {
+            xrayWireframeAlpha = alpha;
+        } else {
+            xrayAlpha = alpha;
+        }
     }
 
     void toggleXray() noexcept

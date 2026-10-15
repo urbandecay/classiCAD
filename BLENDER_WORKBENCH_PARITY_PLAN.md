@@ -280,6 +280,12 @@ comparison remains open.
   testing in X-Ray so the separate X-Ray depth-only pass used for CAD strokes
   cannot hide rear surfaces. The transparent-depth pass then records nearest
   surface depth and object IDs for the shared viewport targets.
+- Blender's `xray_alpha` and `xray_alpha_wireframe` are now imported and kept
+  separately in viewport session state. Solid X-Ray uses the former;
+  Wireframe X-Ray uses the latter in surface, stroke, and fallback paths, and
+  the X-Ray checkbox and opacity control edit the value for the active shading
+  mode. Older classiCAD sessions default the added wireframe value to Blender's
+  0.5 default.
 - Blender 5.2.2 sets `xray_mode` from the resolved alpha and routes each X-Ray
   object to both transparent accumulation and transparent-depth passes in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L238-L250).

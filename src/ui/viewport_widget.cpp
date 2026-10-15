@@ -7344,6 +7344,8 @@ public:
         readBoolean(QStringLiteral("show_backface_culling"), &settings.backfaceCulling);
         readBoolean(QStringLiteral("show_xray"), &settings.xray);
         readBoolean(QStringLiteral("show_xray_wireframe"), &settings.xrayWireframe);
+        readNumber(QStringLiteral("xray_alpha_wireframe"), 0.0, 1.0,
+                   &settings.xrayWireframeAlpha);
         readBoolean(QStringLiteral("show_wireframes"), &settings.solidWireframes);
         readNumber(QStringLiteral("wireframe_opacity"), 0.0, 1.0,
                    &settings.wireframeOpacity);
@@ -7967,14 +7969,14 @@ protected:
         xrayLayout->addWidget(xrayAlphaLabel_);
         layout->addWidget(xrayRow);
         connect(xrayCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
-            viewportShadingSettings_.xray = enabled;
+            viewportShadingSettings_.setXrayEnabledForMode(enabled);
             refreshShadingPopover();
             update();
         });
         connect(xrayAlphaSlider_, &QSlider::valueChanged, this, [this](int value) {
-            viewportShadingSettings_.xrayAlpha = value / 1000.0;
+            viewportShadingSettings_.setXrayAlphaForMode(value / 1000.0);
             xrayAlphaLabel_->setText(QString::number(
-                viewportShadingSettings_.xrayAlpha, 'f', 3));
+                viewportShadingSettings_.xrayAlphaForMode(), 'f', 3));
             refreshShadingPopover();
             update();
         });
@@ -8390,7 +8392,7 @@ protected:
         setChecked(outline_, viewportShadingSettings_.outline);
         setChecked(specularLightingCheck_,
                    viewportShadingSettings_.specularLighting);
-        setChecked(xrayCheck_, viewportShadingSettings_.xray);
+        setChecked(xrayCheck_, viewportShadingSettings_.xrayEnabledForMode());
         setChecked(shadowsCheck_, viewportShadingSettings_.shadows);
         setChecked(depthOfFieldCheck_,
                    viewportShadingSettings_.depthOfField);
@@ -8398,12 +8400,14 @@ protected:
         {
             const QSignalBlocker blocker(xrayAlphaSlider_);
             xrayAlphaSlider_->setValue(qRound(
-                std::clamp<qreal>(viewportShadingSettings_.xrayAlpha, 0.0, 1.0) *
+                std::clamp<qreal>(viewportShadingSettings_.xrayAlphaForMode(),
+                                  0.0, 1.0) *
                 1000.0));
         }
         xrayAlphaLabel_->setText(QString::number(
-            viewportShadingSettings_.xrayAlpha, 'f', 3));
-        xrayAlphaSlider_->setEnabled(viewportShadingSettings_.xray);
+            viewportShadingSettings_.xrayAlphaForMode(), 'f', 3));
+        xrayAlphaSlider_->setEnabled(
+            viewportShadingSettings_.xrayEnabledForMode());
         {
             const QSignalBlocker blocker(shadowIntensitySlider_);
             shadowIntensitySlider_->setValue(qRound(
@@ -8412,8 +8416,8 @@ protected:
         }
         shadowIntensityLabel_->setText(QString::number(
             viewportShadingSettings_.shadowIntensity, 'f', 3));
-        const bool xrayActive = viewportShadingSettings_.xray &&
-                                viewportShadingSettings_.xrayAlpha != 1.0;
+        const bool xrayActive = viewportShadingSettings_.xrayEnabled() &&
+            viewportShadingSettings_.xrayAlphaForMode() != 1.0;
         shadowsCheck_->setEnabled(!xrayActive);
         shadowIntensitySlider_->setEnabled(viewportShadingSettings_.shadows &&
                                            !xrayActive);
@@ -11718,7 +11722,7 @@ protected:
                     const bool backWiresDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), false,
-                        1.0 - std::clamp(viewportShadingSettings_.xrayAlpha,
+                        1.0 - std::clamp(viewportShadingSettings_.xrayAlphaForMode(),
                                          0.0, 1.0),
                         smoothWiresOverlay_, smoothWiresEditMode_);
                     const bool frontWiresDrawn = sceneRenderer->draw(
@@ -12031,7 +12035,8 @@ protected:
                     };
                     if (viewportShadingSettings_.xrayEnabled()) {
                         drawPass(false, 1.0 - std::clamp(
-                            viewportShadingSettings_.xrayAlpha, 0.0, 1.0));
+                            viewportShadingSettings_.xrayAlphaForMode(),
+                            0.0, 1.0));
                     }
                     drawPass(true, 1.0);
                     painter.restore();

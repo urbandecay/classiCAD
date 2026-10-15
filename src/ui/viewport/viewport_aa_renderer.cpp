@@ -2735,7 +2735,8 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
            << shading.cavitySamples << shading.cavityRidgeFactor
            << shading.cavityValleyFactor << shading.curvatureRidgeFactor
            << shading.curvatureValleyFactor
-           << shading.xrayAlpha << shading.shadowIntensity
+           << shading.xrayAlpha << shading.xrayWireframeAlpha
+           << shading.shadowIntensity
            << shading.shadowOffset << shading.shadowFocus;
     const bool usesThemeBackground =
         shading.backgroundMode == ViewportBackgroundMode::Theme;

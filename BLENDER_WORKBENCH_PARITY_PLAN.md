@@ -8693,3 +8693,13 @@ resolve remain open.
   [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L100)
   and [`rna_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc).
   C++ build passed; matched cavity comparison remains open.
+
+### QPainter DOF prefilter color clamp (2026-10-15)
+
+- The first half-resolution scene-linear DOF prefilter now clamps RGB to
+  Blender's `[0, 3]` range before storing the image pyramid; later levels are
+  built from those bounded pixels. Without this clamp, negative or HDR RGB
+  values could bleed into the QPainter blur even though Blender clips them at
+  the prepare pass. Alpha remains in its existing `[0, 1]` range. See
+  [`workbench_effect_dof_prepare_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_prepare_frag.glsl#L405-L415).
+  C++ build passed; matched DOF output comparison remains open.

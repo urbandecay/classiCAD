@@ -4144,6 +4144,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         result.blue /= weightSum;
                         result.alpha /= weightSum;
                     }
+                    // Blender clamps its half-resolution DOF color target
+                    // before constructing the remaining mip levels.
+                    result.red = std::clamp(result.red, 0.0f, 3.0f);
+                    result.green = std::clamp(result.green, 0.0f, 3.0f);
+                    result.blue = std::clamp(result.blue, 0.0f, 3.0f);
                     dofMips[0].pixels[
                         static_cast<std::size_t>(y) * dofMips[0].width + x] = {
                             result, filtered.nearCoc, filtered.farCoc};

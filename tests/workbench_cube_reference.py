@@ -32,6 +32,7 @@ def arguments():
             "NURBS_TEXTURE_CURVED",
             "MESH_TEXTURE",
             "TRANSPARENT_OVERLAP",
+            "TRANSPARENT_CAVITY_OVERLAP",
             "TRANSPARENT_IN_FRONT",
         ),
         default="CUBE",
@@ -47,7 +48,7 @@ def arguments():
         type=float,
         help=(
             "orthographic camera distance (defaults to 8 for CUBE and 1000 "
-            "for TRANSPARENT_OVERLAP)"
+            "for transparent-overlap scenes)"
         ),
     )
     parser.add_argument("--ortho-scale", type=float, default=5.0)
@@ -482,7 +483,8 @@ def main():
     elif args.match_classicad_ortho:
         camera_data.clip_start = 0.01
         camera_data.clip_end = 2000.0
-    elif args.scene == "TRANSPARENT_OVERLAP":
+    elif args.scene in ("TRANSPARENT_OVERLAP",
+                        "TRANSPARENT_CAVITY_OVERLAP"):
         # classiCAD's free orthographic viewport uses near/far planes at
         # 0.01/2000 for its 1000-unit projection eye. Match the Blender
         # camera's linear depth so weighted-OIT colors compare fairly too.
@@ -870,7 +872,9 @@ def main():
             secondary_material.node_tree.nodes.active = secondary_node
             mesh.materials.append(secondary_material)
             mesh.polygons[1].material_index = 1
-    elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):
+    elif args.scene in ("TRANSPARENT_OVERLAP",
+                        "TRANSPARENT_CAVITY_OVERLAP",
+                        "TRANSPARENT_IN_FRONT"):
         # Two camera-facing quads provide stable, known overlap regions without
         # perspective or surface-lighting changes between captures.
         camera_rotation = camera.rotation_euler.to_quaternion()
@@ -927,12 +931,18 @@ def main():
             )
             in_front_transparent.show_in_front = True
         else:
-            add_transparent_quad(
+            rear_translucent = add_transparent_quad(
                 "RearTranslucentSurface",
                 target - direction * 0.35 - camera_right * 0.25,
                 2.4,
                 (0.08, 0.25, 0.95, 0.55),
             )
+            if args.scene == "TRANSPARENT_CAVITY_OVERLAP":
+                # Match the QPainter opaque-receiver plus front-pane cavity
+                # fixture while retaining the same transparent overlap.
+                rear_translucent.data.materials[0].diffuse_color = (
+                    0.08, 0.25, 0.95, 1.0
+                )
             add_transparent_quad(
                 "FrontTranslucentSurface",
                 target + direction * 0.35 + camera_right * 0.25,

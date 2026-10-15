@@ -3488,29 +3488,32 @@ int main(int argc, char *argv[])
         cavityReceiver.workbenchMaterial.alpha = 1.0f;
         cavityReceiver.meshMaterials = {cavityReceiver.workbenchMaterial};
         ViewportRenderObject cavityTransparent = objects[1];
-        cavityTransparent.preparedGeometryOffset.z = 0.35;
+        cavityTransparent.preparedGeometryOffset.z = -0.35;
         QVector<ViewportRenderObject> cavityObjects{
             cavityReceiver, cavityTransparent};
         QImage cavityOffImage(size, QImage::Format_ARGB32_Premultiplied);
         cavityOffImage.fill(Qt::transparent);
         RasterWorkbenchSurfaceLayers cavityOffLayers;
+        std::vector<RasterWorkbenchLinearPixel> cavityOffLinear;
         renderer.setShadingSettings(shading);
         const bool cavityOffRendered = compositeRasterWorkbenchSurfaces(
             &cavityOffImage, cavityObjects, transform, size, 1.0, false, true,
-            shading, backgroundLinear, drawObject, &cavityOffLayers);
+            shading, backgroundLinear, drawObject, &cavityOffLayers, {}, false,
+            {}, &cavityOffLinear);
         ViewportShadingSettings linearCavitySettings = shading;
         linearCavitySettings.cavity = true;
         linearCavitySettings.cavityType = ViewportCavityType::World;
-        linearCavitySettings.cavityDistance = 0.35;
+        linearCavitySettings.cavityDistance = 0.2;
         linearCavitySettings.cavitySamples = 16;
         QImage cavityOnImage(size, QImage::Format_ARGB32_Premultiplied);
         cavityOnImage.fill(Qt::transparent);
         RasterWorkbenchSurfaceLayers cavityOnLayers;
+        std::vector<RasterWorkbenchLinearPixel> cavityOnLinear;
         renderer.setShadingSettings(linearCavitySettings);
         const bool cavityOnRendered = compositeRasterWorkbenchSurfaces(
             &cavityOnImage, cavityObjects, transform, size, 1.0, false, true,
             linearCavitySettings, backgroundLinear, drawObject,
-            &cavityOnLayers);
+            &cavityOnLayers, {}, false, {}, &cavityOnLinear);
         QImage cavityPostEffectImage = cavityOnImage;
         applyRasterWorkbenchEffects(
             &cavityPostEffectImage, cavityObjects, transform, size, 1.0,
@@ -3536,6 +3539,84 @@ int main(int argc, char *argv[])
                             cavityOffImage != cavityOnImage &&
                             cavityPostEffectImage == cavityOnImage,
                         "QPainter cavity must shade the scene-linear opaque contribution before weighted transparency resolve");
+        const QString cavityTransparencyCaptureDirectory =
+            qEnvironmentVariable(
+                "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_TRANSPARENCY_CAPTURE_DIR");
+        if (!cavityTransparencyCaptureDirectory.isEmpty()) {
+            const bool directoryReady =
+                QDir().mkpath(cavityTransparencyCaptureDirectory);
+            const auto renderTransparentFilmCapture = [&] (
+                const ViewportShadingSettings &settings, QImage *display,
+                std::vector<RasterWorkbenchLinearPixel> *linear) {
+                if (display == nullptr || linear == nullptr) return false;
+                renderer.setShadingSettings(settings);
+                *display = QImage(size, QImage::Format_ARGB32_Premultiplied);
+                display->fill(Qt::transparent);
+                return compositeRasterWorkbenchSurfaces(
+                    display, cavityObjects, transform, size, 1.0, false, true,
+                    settings, std::nullopt, drawObject, nullptr, {}, false, {},
+                    linear);
+            };
+            const auto saveCavityTransparencyCapture = [&] (
+                const QString &stem, const QImage &display,
+                const std::vector<RasterWorkbenchLinearPixel> &linear) {
+                if (!directoryReady || display.size() != size ||
+                    linear.size() !=
+                        static_cast<std::size_t>(size.width() * size.height())) {
+                    return false;
+                }
+                QFile colorFile(QDir(cavityTransparencyCaptureDirectory)
+                                    .filePath(stem + QStringLiteral("-color.pfm")));
+                QFile alphaFile(QDir(cavityTransparencyCaptureDirectory)
+                                    .filePath(stem + QStringLiteral("-alpha.pfm")));
+                const QByteArray colorHeader =
+                    QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                const QByteArray alphaHeader =
+                    QByteArrayLiteral("Pf\n640 480\n-1.0\n");
+                if (!colorFile.open(QIODevice::WriteOnly) ||
+                    !alphaFile.open(QIODevice::WriteOnly) ||
+                    colorFile.write(colorHeader) != colorHeader.size() ||
+                    alphaFile.write(alphaHeader) != alphaHeader.size()) {
+                    return false;
+                }
+                for (int y = size.height() - 1; y >= 0; --y) {
+                    for (int x = 0; x < size.width(); ++x) {
+                        const RasterWorkbenchLinearPixel &pixel =
+                            linear[static_cast<std::size_t>(
+                                y * size.width() + x)];
+                        const float rgb[] = {pixel.red, pixel.green, pixel.blue};
+                        if (colorFile.write(
+                                reinterpret_cast<const char *>(rgb),
+                                sizeof(rgb)) != qsizetype(sizeof(rgb)) ||
+                            alphaFile.write(
+                                reinterpret_cast<const char *>(&pixel.alpha),
+                                sizeof(pixel.alpha)) !=
+                                qsizetype(sizeof(pixel.alpha))) {
+                            return false;
+                        }
+                    }
+                }
+                return display.save(QDir(cavityTransparencyCaptureDirectory)
+                                       .filePath(stem + QStringLiteral(".png")));
+            };
+            QImage filmBaselineDisplay;
+            QImage filmCavityDisplay;
+            std::vector<RasterWorkbenchLinearPixel> filmBaselineLinear;
+            std::vector<RasterWorkbenchLinearPixel> filmCavityLinear;
+            passed &= check(
+                renderTransparentFilmCapture(
+                    shading, &filmBaselineDisplay, &filmBaselineLinear) &&
+                    renderTransparentFilmCapture(
+                        linearCavitySettings, &filmCavityDisplay,
+                        &filmCavityLinear) &&
+                saveCavityTransparencyCapture(
+                    QStringLiteral("baseline"), filmBaselineDisplay,
+                    filmBaselineLinear) &&
+                    saveCavityTransparencyCapture(
+                        QStringLiteral("cavity"), filmCavityDisplay,
+                        filmCavityLinear),
+                "QPainter cavity plus transparent-film fixture must save matched baseline and cavity captures");
+        }
         ViewportShadingSettings sortedCavitySettings =
             linearCavitySettings;
         sortedCavitySettings.colorTransform = 0; // Blender AgX.

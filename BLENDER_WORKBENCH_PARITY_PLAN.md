@@ -6438,6 +6438,43 @@ edge comparison remains open.
   and `workbench_transparent_film_compare.py --q-painter` passed on the paired
   files.
 
+### QPainter World cavity with transparent film (2026-10-15)
+
+- Added a matching `TRANSPARENT_CAVITY_OVERLAP` Blender 5.2.2 fixture and an
+  opt-in classiCAD capture for the existing opaque-receiver plus offset
+  translucent-pane contract. The capture compares each renderer's baseline
+  and World-cavity result at 640×480, Top orthographic, Standard, Flat Material,
+  AA Off, transparent film, and zero dither. The offscreen contract also
+  requires cavity to change the opaque contribution while retaining the
+  transparent accumulation unchanged. It caught an incorrectly ordered test
+  pane; its prepared-depth offset now places it in front of the opaque
+  receiver, matching the reference fixture.
+- Blender's alpha buffer is unchanged by enabling cavity, and QPainter's alpha
+  buffer is likewise unchanged. The paired alpha buffers differ between
+  renderers only at raster-coverage boundaries (p95 absolute difference 0;
+  maximum `0.75`). Cavity RGB effect deltas remain substantially different:
+  at 3/255, Blender changes 20,751 display pixels and QPainter changes 1,200
+  (IoU `0.057829`; union signed-delta MAE `7.94354/255`, p95 `17/255`, max
+  `30/255`). At a `0.001` scene-linear threshold, mask IoU is `0.051458`, and
+  full-frame RGB effect-delta MAE is `0.00233283`. Thus the pass-order
+  contract holds, while QPainter cavity factor coverage remains an open parity
+  gap; no production shading equation changed.
+- Blender 5.2.2 source references for the interaction are pinned to
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L100),
+  [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L52-L68),
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L435-L524),
+  and [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
+- Validation: `cmake --build build -j4` passed; capture-enabled offscreen
+  `viewport_render_contracts` passed (1/1); Blender reported 5.2.2 LTS; and
+  `workbench_effect_linear_compare.py` plus
+  `workbench_effect_delta_compare.py --threshold 3` completed. Reproduce the
+  classiCAD capture with
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_TRANSPARENCY_CAPTURE_DIR`; render Blender
+  with `--scene TRANSPARENT_CAVITY_OVERLAP --effect BASELINE|CAVITY
+  --transparent-film --aa OFF --zero-dither --view-direction 0 0 1
+  --ortho-scale 5.0` and paired linear PFM outputs. This checks one opaque
+  receiver and one overlapping pane only.
+
 ### Workbench settings and material persistence matrix (2026-10-14)
 
 - Expanded `workbench_persistence_contracts` to write and reopen one update

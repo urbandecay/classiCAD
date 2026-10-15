@@ -2936,13 +2936,161 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
         QTransform imageTransform;
         if (QTransform::quadToQuad(sourceCorners, screenCorners, imageTransform)) {
+            QImage depthMaskedImage;
+            bool drawDepthMaskedImage = false;
+            constexpr qint64 maximumPictureDepthPixels = 16'000'000;
+            if (!preview && shape.pictureImageDepth != PictureImageDepth::Front &&
+                opaqueSceneDepth != nullptr &&
+                opaqueSceneDepthSize.width() > 0 &&
+                opaqueSceneDepthSize.height() > 0 &&
+                opaqueSceneDepth->size() ==
+                    opaqueSceneDepthSize.width() *
+                        opaqueSceneDepthSize.height() &&
+                qint64(opaqueSceneDepthSize.width()) *
+                    opaqueSceneDepthSize.height() <=
+                        maximumPictureDepthPixels) {
+                const QTransform imageToDevice =
+                    imageTransform * painter.deviceTransform();
+                bool inverseValid = false;
+                const QTransform deviceToImage =
+                    imageToDevice.inverted(&inverseValid);
+                const QVector<QPointF> deviceCorners{
+                    imageToDevice.map(sourceCorners[0]),
+                    imageToDevice.map(sourceCorners[1]),
+                    imageToDevice.map(sourceCorners[2]),
+                    imageToDevice.map(sourceCorners[3])};
+                if (inverseValid) {
+                    depthMaskedImage = QImage(
+                        opaqueSceneDepthSize, QImage::Format_ARGB32_Premultiplied);
+                    depthMaskedImage.fill(Qt::transparent);
+                    QPainter imagePainter(&depthMaskedImage);
+                    imagePainter.setRenderHint(
+                        QPainter::SmoothPixmapTransform, true);
+                    imagePainter.setTransform(imageToDevice);
+                    imagePainter.drawImage(QPointF(0.0, 0.0),
+                                           shape.pictureImage);
+                    imagePainter.end();
+
+                    const Point3D cameraPosition =
+                        transform_.cameraPosition(viewportSize);
+                    const Point3D viewDirection = transform_.viewDirection();
+                    const QVector<Point3D> worldCorners{
+                        shapePointToWorld(shape, corners[0]),
+                        shapePointToWorld(shape, corners[1]),
+                        shapePointToWorld(shape, corners[2]),
+                        shapePointToWorld(shape, corners[3])};
+                    const auto pictureDepthAt = [&](qreal u, qreal v) {
+                        const Point3D top{
+                            worldCorners[0].x * (1.0 - u) +
+                                worldCorners[1].x * u,
+                            worldCorners[0].y * (1.0 - u) +
+                                worldCorners[1].y * u,
+                            worldCorners[0].z * (1.0 - u) +
+                                worldCorners[1].z * u};
+                        const Point3D bottom{
+                            worldCorners[3].x * (1.0 - u) +
+                                worldCorners[2].x * u,
+                            worldCorners[3].y * (1.0 - u) +
+                                worldCorners[2].y * u,
+                            worldCorners[3].z * (1.0 - u) +
+                                worldCorners[2].z * u};
+                        const Point3D world{
+                            top.x * (1.0 - v) + bottom.x * v,
+                            top.y * (1.0 - v) + bottom.y * v,
+                            top.z * (1.0 - v) + bottom.z * v};
+                        return -((world.x - cameraPosition.x) *
+                                     viewDirection.x +
+                                 (world.y - cameraPosition.y) *
+                                     viewDirection.y +
+                                 (world.z - cameraPosition.z) *
+                                     viewDirection.z);
+                    };
+                    const int left = std::clamp(
+                        qFloor(std::min_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.x() < b.x();
+                            })->x()),
+                        0, opaqueSceneDepthSize.width());
+                    const int right = std::clamp(
+                        qCeil(std::max_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.x() < b.x();
+                            })->x()),
+                        0, opaqueSceneDepthSize.width());
+                    const int top = std::clamp(
+                        qFloor(std::min_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.y() < b.y();
+                            })->y()),
+                        0, opaqueSceneDepthSize.height());
+                    const int bottom = std::clamp(
+                        qCeil(std::max_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.y() < b.y();
+                            })->y()),
+                        0, opaqueSceneDepthSize.height());
+                    for (int y = top; y < bottom; ++y) {
+                        auto *imageRow = reinterpret_cast<QRgb *>(
+                            depthMaskedImage.scanLine(y));
+                        for (int x = left; x < right; ++x) {
+                            const QPointF source = deviceToImage.map(
+                                QPointF(x + 0.5, y + 0.5));
+                            if (source.x() < 0.0 ||
+                                source.x() >= shape.pictureImage.width() ||
+                                source.y() < 0.0 ||
+                                source.y() >= shape.pictureImage.height()) {
+                                continue;
+                            }
+                            const int depthIndex =
+                                y * opaqueSceneDepthSize.width() + x;
+                            const float sceneDepth =
+                                (*opaqueSceneDepth)[depthIndex];
+                            bool visible = !std::isfinite(sceneDepth);
+                            if (shape.pictureImageDepth ==
+                                PictureImageDepth::Back) {
+                                visible = !std::isfinite(sceneDepth);
+                            } else if (std::isfinite(sceneDepth)) {
+                                const qreal u = source.x() /
+                                    shape.pictureImage.width();
+                                const qreal v = source.y() /
+                                    shape.pictureImage.height();
+                                const qreal imageDepth =
+                                    pictureDepthAt(u, v);
+                                const qreal tolerance = std::max<qreal>(
+                                    5.0e-4, std::abs(sceneDepth) * 1.0e-5);
+                                visible = imageDepth + tolerance >= sceneDepth;
+                            }
+                            if (!visible) imageRow[x] = 0;
+                        }
+                    }
+                    depthMaskedImage.setDevicePixelRatio(
+                        painter.device()->devicePixelRatioF());
+                    drawDepthMaskedImage = true;
+                }
+            }
             painter.save();
             painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             if (preview) {
                 painter.setOpacity(0.78);
             }
-            painter.setTransform(imageTransform, true);
-            painter.drawImage(QPointF(0.0, 0.0), shape.pictureImage);
+            if (drawDepthMaskedImage) {
+                bool baseInverseValid = false;
+                const QTransform baseLogicalFromDevice =
+                    painter.deviceTransform().inverted(&baseInverseValid);
+                if (baseInverseValid) {
+                    painter.setWorldTransform(QTransform());
+                    painter.drawImage(
+                        baseLogicalFromDevice.map(QPointF(0.0, 0.0)),
+                        depthMaskedImage);
+                }
+            } else {
+                painter.setTransform(imageTransform, true);
+                painter.drawImage(QPointF(0.0, 0.0), shape.pictureImage);
+            }
             painter.restore();
         }
 

@@ -8051,3 +8051,14 @@ resolve remain open.
   The QPainter scene path and failed picture-texture fallback still do not
   reproduce all three depth modes. C++ build passed; matched image comparison
   remains open.
+
+### QPainter Image Empty scene-depth masking (2026-10-15)
+
+- The QPainter picture path now uses retained scene depth when available.
+  Default images are masked where a nearer surface is present, Back images are
+  masked wherever the retained scene has geometry, and Front images bypass the
+  mask. The original image alpha and filtering are preserved. The bounded
+  raster mask is skipped above 16 million depth pixels or when depth is
+  unavailable; retained transparent surfaces are treated as occluding, and
+  failed picture-texture previews still use the unmasked draw path. C++ build
+  passed; matched image comparison remains open.

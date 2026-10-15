@@ -7,6 +7,7 @@ uniform float uOpacity;
 uniform int uSceneLinearOutput;
 uniform vec4 uColor;
 uniform int uUseAlphaBlend;
+uniform int uPremultipliedAlpha;
 in vec2 vTextureCoordinate;
 out vec4 fragmentColor;
 
@@ -19,6 +20,10 @@ void main()
     vec3 linearColor = mix(encoded / 12.92,
                            pow((encoded + 0.055) / 1.055, vec3(2.4)),
                            step(vec3(0.04045), encoded));
+    if (uPremultipliedAlpha != 0 &&
+        texColor.a > 0.0 && texColor.a < 1.0) {
+        linearColor /= texColor.a;
+    }
     linearColor *= uColor.rgb;
     color.rgb = uSceneLinearOutput != 0
         ? linearColor

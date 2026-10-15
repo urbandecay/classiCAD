@@ -1927,6 +1927,16 @@ bool parseBlenderPictureItem(
         float(pictureColor[2]), float(pictureColor[3]));
     result.geometry.pictureUseAlphaBlend = item.value(
         QStringLiteral("picture_use_alpha_blend")).toBool(true);
+    const bool blenderPremultipliedAlpha = item.value(
+        QStringLiteral("picture_premultiplied_alpha")).toBool(false);
+    const bool qtImageIsPremultiplied =
+        QImage::toPixelFormat(image.format()).premultiplied() ==
+        QPixelFormat::Premultiplied;
+    // QImage format conversions restore premultiplied Qt pixels to straight
+    // color. Preserve Blender's flag only when the decoded pixels still need
+    // Blender's scene-linear unpremultiplication in the renderers.
+    result.geometry.picturePremultipliedAlpha =
+        blenderPremultipliedAlpha && !qtImageIsPremultiplied;
     result.geometry.pictureShowPerspective = item.value(
         QStringLiteral("show_empty_image_perspective")).toBool(true);
     result.geometry.pictureShowOrthographic = item.value(

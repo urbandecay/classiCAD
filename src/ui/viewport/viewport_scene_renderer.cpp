@@ -2498,6 +2498,8 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
         "uColor", picture.pictureColorSceneLinear);
     pictureProgram_.setUniformValue("uUseAlphaBlend",
                                     picture.pictureUseAlphaBlend ? 1 : 0);
+    pictureProgram_.setUniformValue("uPremultipliedAlpha",
+                                    picture.picturePremultipliedAlpha ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
     pictureProgram_.release();
     pictureVertexBuffer_.release();

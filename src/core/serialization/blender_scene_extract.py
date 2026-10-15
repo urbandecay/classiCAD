@@ -717,6 +717,8 @@ def extract_image_empty(obj, scene, packed_payload_budget,
         "picture_color_linear": [finite_number(value) for value in evaluated.color],
         "picture_use_alpha_blend": bool(getattr(
             evaluated, "use_empty_image_alpha", False)),
+        "picture_premultiplied_alpha": str(
+            getattr(image, "alpha_mode", "STRAIGHT")) == "PREMUL",
         "empty_image_depth": str(getattr(evaluated, "empty_image_depth", "DEFAULT")),
         "show_empty_image_perspective": bool(
             getattr(evaluated, "show_empty_image_perspective", True)),

@@ -7816,8 +7816,10 @@ resolve remain open.
   Projection-specific visibility, image side, depth modes, alpha blending,
   and scene-linear object tint are retained. QPainter preprocesses tint and
   alpha cutouts only up to 16M image pixels; larger native images keep their
-  original appearance in that fallback. Blender image premultiplication,
-  generated or animated images, and matched comparison remain unsupported.
+  original appearance in that fallback. Blender's image alpha mode is also
+  retained: GPU drawing unpremultiplies sampled linear RGB before tinting,
+  while QPainter unpremultiplies source pixels before filtering. Generated or
+  animated images and matched comparison remain unsupported.
   The C++ build passed;
   no matched Blender image-empty comparison has been run.
 
@@ -8121,6 +8123,20 @@ resolve remain open.
   [`draw_view.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_view.hh#L182-L193).
   QPainter keeps its retained-depth masking behavior. C++ build passed; no
   matched image comparison has been run.
+
+### Blender Image Empty premultiplied alpha (2026-10-15)
+
+- Image Empty import now retains whether decoded image samples still need
+  Blender's PREMUL interpretation; Qt-decoded premultiplied formats are
+  already converted to straight RGB and are not divided again. The GPU shader
+  unpremultiplies sampled scene-linear RGB for alpha strictly between zero and
+  one before tinting, matching Blender's `texture_read_as_linearrgb` path.
+  QPainter normalizes source pixels before resampling; filtering at
+  translucent edges can differ because Blender normalizes after texture
+  sampling. Blender's handling is pinned in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L301-L307)
+  and [`draw_colormanagement_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/shaders/draw_colormanagement_lib.glsl#L16-L25).
+  C++ build passed; matched comparison remains open.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 

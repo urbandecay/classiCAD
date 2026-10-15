@@ -68,6 +68,7 @@ struct Shape {
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
     QVector4D pictureColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
     bool pictureUseAlphaBlend = true;
+    bool picturePremultipliedAlpha = false;
     WorkPlane workPlane = WorkPlane::XY;
     qreal workPlaneOffset = 0.0;
     // When valid, this frame is authoritative for local 2D geometry. An

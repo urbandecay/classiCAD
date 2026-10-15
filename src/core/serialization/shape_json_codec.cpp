@@ -845,6 +845,8 @@ QJsonObject shapeToJson(const Shape &shape)
                                  shape.pictureColorSceneLinear.w()});
         object.insert(QStringLiteral("pictureUseAlphaBlend"),
                       shape.pictureUseAlphaBlend);
+        object.insert(QStringLiteral("picturePremultipliedAlpha"),
+                      shape.picturePremultipliedAlpha);
         QByteArray encodedImage = shape.pictureImageData;
         if (encodedImage.isEmpty() && !shape.pictureImage.isNull()) {
             QBuffer imageBuffer(&encodedImage);
@@ -1006,6 +1008,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
     QVector4D pictureColorSceneLinear(1.0f, 1.0f, 1.0f, 1.0f);
     bool pictureUseAlphaBlend = true;
+    bool picturePremultipliedAlpha = false;
     if (geometryType == GeometryType::Picture) {
         const auto readBoolean = [&object](const QString &key, bool fallback,
                                            bool *destination) {
@@ -1044,7 +1047,9 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
                 float(pictureColor[3].toDouble()));
         }
         if (!readBoolean(QStringLiteral("pictureUseAlphaBlend"), true,
-                         &pictureUseAlphaBlend)) {
+                         &pictureUseAlphaBlend) ||
+            !readBoolean(QStringLiteral("picturePremultipliedAlpha"), false,
+                         &picturePremultipliedAlpha)) {
             return false;
         }
         const QJsonValue sideValue =
@@ -1351,6 +1356,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureImageDepth = pictureImageDepth;
     shape->pictureColorSceneLinear = pictureColorSceneLinear;
     shape->pictureUseAlphaBlend = pictureUseAlphaBlend;
+    shape->picturePremultipliedAlpha = picturePremultipliedAlpha;
     shape->pictureImageData = geometryType == GeometryType::Picture
                                   ? QByteArray::fromBase64(
                                         object.value(QStringLiteral("pictureImage"))

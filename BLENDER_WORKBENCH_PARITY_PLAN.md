@@ -7565,5 +7565,9 @@ resolve remain open.
   does not yet filter edges, `show_all_edges` has no distinct effect while all
   polygon edges are drawn, and Blender's view-facing wire color gradient and
   exact selected-object colors are not reproduced. Loose mesh edges remain
-  represented by their existing companion curves.
+  represented by their existing companion curves. NURBS surfaces now hide
+  their fill for Blender's WIRE display and reuse the cached surface-wire
+  tessellation for global, per-object, and WIRE display overlays. Blender's
+  legacy surface control-net wire layout may differ from this evaluated
+  surface tessellation.
   The C++ build passed; matched Blender image comparison remains open.

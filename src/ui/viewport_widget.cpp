@@ -8933,7 +8933,8 @@ protected:
         visibleSurfaceShapes.reserve(visibleShapes.size());
         for (const ViewportRenderObject &object : visibleShapes) {
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
-                object.shape.geometryType == GeometryType::PolygonMesh &&
+                (object.shape.geometryType == GeometryType::PolygonMesh ||
+                 object.shape.geometryType == GeometryType::NurbsSurface) &&
                 object.wireDisplay) {
                 continue;
             }
@@ -10072,6 +10073,50 @@ protected:
                     wireStroke.worldOffset = renderObject.preparedGeometryOffset;
                     gpuStrokes.append(std::move(wireStroke));
                 }
+            }
+            const bool drawNurbsSurfaceWireOverlay =
+                viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                geometryType == GeometryType::NurbsSurface &&
+                (viewportShadingSettings_.solidWireframes ||
+                 renderObject.showWire || renderObject.wireDisplay);
+            if (drawNurbsSurfaceWireOverlay &&
+                renderObject.preparedDepthGeometry &&
+                !renderObject.preparedDepthGeometry->preciseLineVertices.isEmpty()) {
+                auto wireGeometry = QSharedPointer<ViewportDepthGeometry>::create();
+                wireGeometry->lineVertices =
+                    renderObject.preparedDepthGeometry->lineVertices;
+                wireGeometry->preciseLineVertices =
+                    renderObject.preparedDepthGeometry->preciseLineVertices;
+                QColor wireColor = viewportShadingSettings_.themeWireColor;
+                if (viewportShadingSettings_.wireColorMode ==
+                    ViewportWireColorMode::Object) {
+                    const QVector3D linear =
+                        renderObject.displayColorSceneLinear.toVector3D() * 0.5f;
+                    const QVector3D srgb = workbenchSceneLinearToDisplaySrgb(
+                        linear, viewportShadingSettings_.colorTransform,
+                        viewportShadingSettings_.colorExposure,
+                        viewportShadingSettings_.colorGamma,
+                        viewportShadingSettings_.colorLutData,
+                        viewportShadingSettings_.colorLutMetadata);
+                    wireColor = QColor::fromRgbF(srgb.x(), srgb.y(), srgb.z());
+                } else if (viewportShadingSettings_.wireColorMode ==
+                           ViewportWireColorMode::Random) {
+                    wireColor = workbenchRandomColor(
+                        renderObject.objectId, renderObject.displayName,
+                        workbenchRandomIdentityLibraryPath(renderObject));
+                }
+                wireColor.setAlphaF(std::clamp(
+                    viewportShadingSettings_.wireframeOpacity, 0.0, 1.0));
+                ViewportSceneStroke wireStroke;
+                wireStroke.color = wireColor;
+                wireStroke.width = 1.0f;
+                wireStroke.writeDepth = true;
+                wireStroke.blenderMeshWire = true;
+                wireStroke.objectId = renderObject.objectId;
+                wireStroke.geometryRevision = renderObject.geometryRevision;
+                wireStroke.preparedDepthGeometry = std::move(wireGeometry);
+                wireStroke.worldOffset = renderObject.preparedGeometryOffset;
+                gpuStrokes.append(std::move(wireStroke));
             }
             const bool drawSolidEditBoundaries =
                 viewportShadingSettings_.mode == ViewportShadingMode::Solid &&

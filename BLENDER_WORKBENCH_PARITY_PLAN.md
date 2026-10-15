@@ -5843,3 +5843,49 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   Use the Blender command in the preceding curved-alpha section, changing
   `--texture-interpolation Closest` to `--texture-interpolation Linear`, and
   render both `--texture-alpha-mode STRAIGHT` and `NONE` for each camera.
+
+### Curved NURBS Image Texture alpha interpretation modes (2026-10-14)
+
+- Extended the curved degree-2 NURBS alpha fixture with a smooth 8×8 alpha
+  ramp and separate straight and scene-linear-premultiplied RGB encodings.
+  Captures cover STRAIGHT, PREMUL, CHANNEL_PACKED, and NONE on GPU and QPainter
+  renderers in orthographic and perspective views. The production NURBS
+  surface, `WorkbenchMaterialData` adapter, and UV contracts are unchanged.
+- Internal image comparisons verify PREMUL matches its equivalent STRAIGHT
+  encoding within 2 display levels, CHANNEL_PACKED matches NONE exactly, and
+  CHANNEL_PACKED preserves substantially more coverage than STRAIGHT by
+  bypassing the image alpha cutoff. These checks pass across both renderers
+  and camera views.
+- Against Blender 5.2.2, the CHANNEL_PACKED and NONE images have exact display
+  RGB on common foreground; their orthographic masks differ by one pixel
+  (IoU `0.999971`) and perspective masks by one pixel (IoU `0.999978`) for
+  both renderers. PREMUL scene-linear RGB MAE is at most `0.000088` against
+  Blender's float EXR reference in GPU captures; display MAE on common
+  foreground is at most `0.0563/255`, with maximum `1/255`. QPainter
+  scene-linear RGB MAE is at most `0.000104` for CHANNEL_PACKED/NONE captures;
+  single boundary pixels account for the remaining silhouette XORs. This
+  measures one alpha ramp and one smooth patch; it does not establish all
+  image encodings, alpha-filter combinations, trim boundaries, or general
+  renderer parity.
+- Blender 5.2.2's pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429)
+  unpremultiplies RGB for PREMUL samples with nonzero alpha and conditionally
+  applies the alpha cutoff. Pinned
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L538-L553)
+  sets the premultiplied flag only for PREMUL and disables cutoff for Ignore
+  and Channel Packed images. Blender's pinned
+  [`colormanagement.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L2070-L2194)
+  converts byte and float image inputs through different paths, so the
+  PREMUL comparison uses scene-linear float EXR data as the reference input.
+  The results did not justify a production renderer change.
+- Validation: `cmake --build build` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1); Blender references reported 5.2.2 LTS; and paired PNG/PFM
+  comparisons completed for all four modes, renderers, and cameras. Reproduce
+  classiCAD captures with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir>
+  QT_QPA_PLATFORM=offscreen ctest --test-dir build -R
+  '^viewport_render_contracts$' --output-on-failure`. Render Blender with the
+  curved proxy and `--texture-interpolation Linear --texture-alpha-mode
+  STRAIGHT|PREMUL|CHANNEL_PACKED|NONE`, using the matched orthographic or
+  perspective camera arguments from the preceding alpha categories; use
+  `--linear-output` and `--linear-pfm-output` for scene-linear comparison.

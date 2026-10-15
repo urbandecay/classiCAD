@@ -8705,6 +8705,235 @@ int main(int argc, char *argv[])
                             curvedLinearAlphaQPainterCaptured &&
                             curvedAlphaReducesCoverage;
 
+                        // Workbench interprets PREMUL RGB as already
+                        // premultiplied in scene-linear space, then
+                        // unpremultiplies before applying the texture color.
+                        // Keep the alpha ramp common to both encodings so
+                        // STRAIGHT/PREMUL differences isolate that operation.
+                        QImage curvedPremulStraightTexture(
+                            8, 8, QImage::Format_RGBA8888);
+                        QImage curvedPremulTexture(
+                            8, 8, QImage::Format_RGBA8888);
+                        const std::array<int, 8> curvedAlphaRamp{
+                            0, 12, 25, 26, 64, 128, 192, 255};
+                        const auto sceneLinearToSrgbByte = [] (float value) {
+                            const float encoded = value <= 0.0031308f
+                                ? value * 12.92f
+                                : 1.055f * std::pow(value, 1.0f / 2.4f) -
+                                      0.055f;
+                            return qBound(0, qRound(encoded * 255.0f), 255);
+                        };
+                        const QVector3D curvedStraightLinearRgb =
+                            workbenchSrgbToSceneLinear(QVector3D(
+                                172.0f / 255.0f,
+                                104.0f / 255.0f,
+                                224.0f / 255.0f));
+                        for (int y = 0; y < 8; ++y) {
+                            for (int x = 0; x < 8; ++x) {
+                                const int alpha = curvedAlphaRamp[
+                                    static_cast<size_t>(x)];
+                                curvedPremulStraightTexture.setPixelColor(
+                                    x, y, QColor(172, 104, 224, alpha));
+                                const float alphaFactor = alpha / 255.0f;
+                                curvedPremulTexture.setPixelColor(
+                                    x, y,
+                                    QColor(
+                                        sceneLinearToSrgbByte(
+                                            curvedStraightLinearRgb.x() *
+                                            alphaFactor),
+                                        sceneLinearToSrgbByte(
+                                            curvedStraightLinearRgb.y() *
+                                            alphaFactor),
+                                        sceneLinearToSrgbByte(
+                                            curvedStraightLinearRgb.z() *
+                                            alphaFactor),
+                                        alpha));
+                            }
+                        }
+                        const QString curvedStraightEncodingPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-texture-nurbs-curved-alpha-straight-encoding.png"));
+                        const QString curvedPremulEncodingPath = QDir(
+                            lightingCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "workbench-texture-nurbs-curved-alpha-premul-encoding.png"));
+                        const bool curvedAlphaEncodingsSaved =
+                            curvedPremulStraightTexture.save(
+                                curvedStraightEncodingPath) &&
+                            curvedPremulTexture.save(curvedPremulEncodingPath);
+                        const auto makeCurvedAlphaModeObject = [&] (
+                            const QString &texturePath,
+                            const QString &alphaMode) {
+                            ViewportRenderObject object =
+                                curvedNurbsTextureObject;
+                            object.workbenchMaterial.textureImagePath =
+                                texturePath;
+                            object.workbenchMaterial
+                                .textureImagePackedDataBase64.clear();
+                            object.workbenchMaterial
+                                .textureImageSceneLinearFloatDataBase64.clear();
+                            object.workbenchMaterial
+                                .textureImageSceneLinearFloatWidth = 0;
+                            object.workbenchMaterial
+                                .textureImageSceneLinearFloatHeight = 0;
+                            object.workbenchMaterial.textureImageSrgb = true;
+                            object.workbenchMaterial.textureImageAlphaMode =
+                                alphaMode;
+                            object.workbenchMaterial.textureImageInterpolation =
+                                QStringLiteral("Linear");
+                            object.workbenchMaterial.textureImageExtension =
+                                QStringLiteral("REPEAT");
+                            return object;
+                        };
+                        const ViewportRenderObject curvedStraightRampObject =
+                            makeCurvedAlphaModeObject(
+                                curvedStraightEncodingPath,
+                                QStringLiteral("STRAIGHT"));
+                        const ViewportRenderObject curvedPremulRampObject =
+                            makeCurvedAlphaModeObject(
+                                curvedPremulEncodingPath,
+                                QStringLiteral("PREMUL"));
+                        const ViewportRenderObject curvedChannelPackedObject =
+                            makeCurvedAlphaModeObject(
+                                curvedStraightEncodingPath,
+                                QStringLiteral("CHANNEL_PACKED"));
+                        const ViewportRenderObject curvedPremulNoneObject =
+                            makeCurvedAlphaModeObject(
+                                curvedStraightEncodingPath,
+                                QStringLiteral("NONE"));
+                        const std::array<const ViewportRenderObject *, 4>
+                            curvedAlphaModeObjects{
+                                &curvedStraightRampObject,
+                                &curvedPremulRampObject,
+                                &curvedChannelPackedObject,
+                                &curvedPremulNoneObject};
+                        const std::array<QString, 4> curvedAlphaModeNames{
+                            QStringLiteral("straight"),
+                            QStringLiteral("premul"),
+                            QStringLiteral("channel_packed"),
+                            QStringLiteral("none")};
+                        bool curvedAlphaModeCaptures =
+                            curvedAlphaEncodingsSaved;
+                        for (int cameraIndex = 0; cameraIndex < 2;
+                             ++cameraIndex) {
+                            const ViewportTransform *camera = cameraIndex == 0
+                                ? nullptr : &curvedPerspectiveTransform;
+                            const QString cameraPrefix = cameraIndex == 0
+                                ? QStringLiteral("color_texture_nurbs_curved_alpha_modes_")
+                                : QStringLiteral("color_texture_nurbs_curved_perspective_alpha_modes_");
+                            for (size_t modeIndex = 0;
+                                 modeIndex < curvedAlphaModeObjects.size();
+                                 ++modeIndex) {
+                                const QString modeName =
+                                    curvedAlphaModeNames[modeIndex];
+                                const QString stem = cameraPrefix + modeName;
+                                curvedAlphaModeCaptures &=
+                                    captureCurvedAlphaGpu(
+                                        stem + QStringLiteral("_gpu"),
+                                        *curvedAlphaModeObjects[modeIndex],
+                                        camera) &&
+                                    captureCurvedQPainterTexture(
+                                        stem + QStringLiteral("_qpainter"),
+                                        cameraIndex == 0 ? gpuTransform
+                                            : curvedPerspectiveTransform,
+                                        *curvedAlphaModeObjects[modeIndex]);
+                            }
+                        }
+                        struct CurvedAlphaImageDifference {
+                            int coverageXor = -1;
+                            int maxRgbDelta = -1;
+                        };
+                        const auto compareCurvedAlphaDisplays = [&] (
+                            const QString &leftStem,
+                            const QString &rightStem) {
+                            const QImage left(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    leftStem + QStringLiteral(".png")));
+                            const QImage right(QDir(
+                                lightingCaptureDirectory).filePath(
+                                    rightStem + QStringLiteral(".png")));
+                            CurvedAlphaImageDifference difference;
+                            if (left.isNull() || right.isNull() ||
+                                left.size() != right.size()) {
+                                return difference;
+                            }
+                            difference.coverageXor = 0;
+                            difference.maxRgbDelta = 0;
+                            const QColor leftBackground =
+                                left.pixelColor(0, 0);
+                            const QColor rightBackground =
+                                right.pixelColor(0, 0);
+                            for (int y = 0; y < left.height(); ++y) {
+                                for (int x = 0; x < left.width(); ++x) {
+                                    const QColor a = left.pixelColor(x, y);
+                                    const QColor b = right.pixelColor(x, y);
+                                    const bool aCovered = a != leftBackground;
+                                    const bool bCovered = b != rightBackground;
+                                    difference.coverageXor +=
+                                        aCovered != bCovered;
+                                    if (!aCovered || !bCovered) continue;
+                                    difference.maxRgbDelta = qMax(
+                                        difference.maxRgbDelta,
+                                        qMax(qAbs(a.red() - b.red()),
+                                             qMax(qAbs(a.green() - b.green()),
+                                                  qAbs(a.blue() - b.blue()))));
+                                }
+                            }
+                            return difference;
+                        };
+                        bool curvedPremulMatchesStraight =
+                            curvedAlphaModeCaptures;
+                        bool curvedChannelPackedMatchesNone =
+                            curvedAlphaModeCaptures;
+                        bool curvedChannelPackedBypassesCutoff =
+                            curvedAlphaModeCaptures;
+                        for (int cameraIndex = 0; cameraIndex < 2;
+                             ++cameraIndex) {
+                            const QString cameraPrefix = cameraIndex == 0
+                                ? QStringLiteral("color_texture_nurbs_curved_alpha_modes_")
+                                : QStringLiteral("color_texture_nurbs_curved_perspective_alpha_modes_");
+                            for (const QString &backend :
+                                 {QStringLiteral("gpu"),
+                                  QStringLiteral("qpainter")}) {
+                                const auto stem = [&](const QString &mode) {
+                                    return cameraPrefix + mode +
+                                        QLatin1Char('_') + backend;
+                                };
+                                const CurvedAlphaImageDifference premul =
+                                    compareCurvedAlphaDisplays(
+                                        stem(QStringLiteral("straight")),
+                                        stem(QStringLiteral("premul")));
+                                const CurvedAlphaImageDifference packed =
+                                    compareCurvedAlphaDisplays(
+                                        stem(QStringLiteral("channel_packed")),
+                                        stem(QStringLiteral("none")));
+                                curvedPremulMatchesStraight &=
+                                    premul.coverageXor == 0 &&
+                                    premul.maxRgbDelta <= 2;
+                                curvedChannelPackedMatchesNone &=
+                                    packed.coverageXor == 0 &&
+                                    packed.maxRgbDelta == 0;
+                                curvedChannelPackedBypassesCutoff &=
+                                    capturedForegroundPixels(
+                                        stem(QStringLiteral("channel_packed"))) >
+                                    capturedForegroundPixels(
+                                        stem(QStringLiteral("straight"))) +
+                                        5000;
+                            }
+                        }
+                        passed &= check(
+                            curvedAlphaModeCaptures &&
+                                curvedPremulMatchesStraight &&
+                                curvedChannelPackedMatchesNone &&
+                                curvedChannelPackedBypassesCutoff,
+                            "curved NURBS PREMUL must match its scene-linear STRAIGHT equivalent and CHANNEL_PACKED must bypass texture alpha cutoff in GPU and QPainter orthographic and perspective captures");
+                        lightingCapturesSucceeded &=
+                            curvedAlphaModeCaptures &&
+                            curvedPremulMatchesStraight &&
+                            curvedChannelPackedMatchesNone &&
+                            curvedChannelPackedBypassesCutoff;
+
                         const auto makeClosedUvTrim = [](
                             const QVector<QPointF> &points, bool isHole) {
                             NurbsSurfaceTrimLoop loop;

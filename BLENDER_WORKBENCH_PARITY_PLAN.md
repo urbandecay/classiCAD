@@ -5960,12 +5960,16 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `ViewportWorkbenchScenePassCoordinator::renderSceneColor` and pass the
   returned attachment mask to the active AA sample. The coordinator currently
   guards and forwards the production `ViewportSurfaceRenderer::draw` call;
-  named pass sequencing remains in that renderer, and there is not yet a
-  paired live-versus-render-result pixel assertion or allocation-failure
-  injection. This closes the packet-rejection contract only, not the broader
-  pass-ownership acceptance item.
-- Validation: `cmake --build build` passed with the 316-file dependency
-  audit; the offscreen `workbench_render_pass_capture` CTest passed (1/1).
+  named pass sequencing remains in that renderer. The offscreen contract now
+  renders matching `fromScene` and `fromFrame` packets through separate AA
+  targets and requires identical pass masks, attachment masks, resolved
+  scene-linear Combined, depth, and display pixels. This verifies the two
+  packet builders against one coordinator contract; it does not execute the
+  viewport widget and render-result call sites independently. Allocation
+  failure injection and that broader call-site integration assertion remain
+  open, so this does not close the pass-ownership acceptance item.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; offscreen `workbench_render_pass_capture` passed (1/1).
 
 ### Workbench settings and material persistence matrix (2026-10-14)
 

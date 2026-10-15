@@ -396,15 +396,15 @@ int main(int argc, char **argv)
             false, true);
         passed &= check(sampleStarted,
                         "render-pass capture must begin its production AA sample");
+        ViewportWorkbenchSceneColorPassResult scenePass;
         if (sampleStarted) {
             const GLfloat background[4] = {0.0232f, 0.0232f, 0.0232f, 1.0f};
             gl.glClearBufferfv(GL_COLOR, 0, background);
-            const ViewportWorkbenchSceneColorPassResult scenePass =
-                ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                    renderer,
-                    ViewportWorkbenchScenePassPacket::fromScene(
-                        sceneObjects, aa.sampleCamera(), size, 1.0, shading,
-                        &aa.targets(), true));
+            scenePass = ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                renderer,
+                ViewportWorkbenchScenePassPacket::fromScene(
+                    sceneObjects, aa.sampleCamera(), size, 1.0, shading,
+                    &aa.targets(), true));
             if (scenePass.rendered) {
                 aa.markCurrentSampleAttachmentsValid(
                     scenePass.report.populatedAttachments);
@@ -504,6 +504,98 @@ int main(int argc, char **argv)
             gl.glBindTexture(GL_TEXTURE_2D,
                              static_cast<GLuint>(previousTexture));
         }
+
+        const QImage fromSceneDisplay = outputFramebuffer.toImage();
+        ViewportRenderFrame renderFrame;
+        renderFrame.viewportSize = size;
+        renderFrame.objects = sceneObjects;
+        ViewportAaRenderer frameAa;
+        frameAa.setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
+        frameAa.setDisplayTransform(shading, true);
+        gl.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                   GL_STENCIL_BUFFER_BIT);
+        const bool frameSampleStarted = frameAa.beginSceneSample(
+            size, 1.0, camera, QByteArrayLiteral("render-pass-cube-frame"),
+            false, true);
+        passed &= check(frameSampleStarted,
+                        "frame-based scene-pass packet must begin its AA sample");
+        ViewportWorkbenchSceneColorPassResult frameScenePass;
+        if (frameSampleStarted) {
+            const GLfloat background[4] = {0.0232f, 0.0232f, 0.0232f, 1.0f};
+            gl.glClearBufferfv(GL_COLOR, 0, background);
+            frameScenePass =
+                ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                    renderer,
+                    ViewportWorkbenchScenePassPacket::fromFrame(
+                        renderFrame, renderFrame.objects,
+                        frameAa.sampleCamera(), 1.0, shading,
+                        &frameAa.targets(), true));
+            if (frameScenePass.rendered) {
+                frameAa.markCurrentSampleAttachmentsValid(
+                    frameScenePass.report.populatedAttachments);
+            }
+            frameAa.finishSceneSample();
+        }
+        QVector<float> frameLinearBottomUp(linearBottomUp.size());
+        const GLuint frameColorTexture =
+            frameAa.targets().resolvedSceneLinearColorTexture;
+        GLint previousActiveTexture = GL_TEXTURE0;
+        GLint previousTexture = 0;
+        gl.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+        gl.glActiveTexture(GL_TEXTURE0);
+        gl.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+        if (frameColorTexture != 0) {
+            gl.glBindTexture(GL_TEXTURE_2D, frameColorTexture);
+            gl.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT,
+                             frameLinearBottomUp.data());
+        }
+        gl.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+        gl.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        const auto readDepthTexture = [&](GLuint texture,
+                                          QVector<float> &depth) {
+            if (texture == 0) return false;
+            GLint previousReadFramebuffer = 0;
+            GLint previousReadBuffer = GL_NONE;
+            gl.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                             &previousReadFramebuffer);
+            gl.glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
+            GLuint readFramebuffer = 0;
+            gl.glGenFramebuffers(1, &readFramebuffer);
+            gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+            gl.glFramebufferTexture2D(
+                GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                GL_TEXTURE_2D, texture, 0);
+            const bool complete = gl.glCheckFramebufferStatus(
+                GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+            if (complete) {
+                gl.glReadBuffer(GL_NONE);
+                gl.glReadPixels(0, 0, size.width(), size.height(),
+                                GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+            }
+            gl.glBindFramebuffer(
+                GL_READ_FRAMEBUFFER,
+                static_cast<GLuint>(previousReadFramebuffer));
+            gl.glReadBuffer(static_cast<GLenum>(previousReadBuffer));
+            gl.glDeleteFramebuffers(1, &readFramebuffer);
+            return complete;
+        };
+        QVector<float> fromSceneDepth(size.width() * size.height());
+        QVector<float> fromFrameDepth(size.width() * size.height());
+        const bool pairedDepthReadable =
+            readDepthTexture(aa.targets().depthTexture, fromSceneDepth) &&
+            readDepthTexture(frameAa.targets().depthTexture, fromFrameDepth);
+        passed &= check(
+            frameScenePass.rendered &&
+                frameScenePass.report.completedPasses ==
+                    scenePass.report.completedPasses &&
+                frameScenePass.report.populatedAttachments ==
+                    scenePass.report.populatedAttachments &&
+                frameAa.targets().isValid(
+                    ViewportRenderTargets::ResolvedSceneLinearColor) &&
+                frameLinearBottomUp == linearBottomUp &&
+                pairedDepthReadable && fromFrameDepth == fromSceneDepth &&
+                outputFramebuffer.toImage() == fromSceneDisplay,
+            "fromScene and fromFrame coordinator routes must produce identical named passes, attachment masks, scene-linear Combined, depth, and display pixels");
 
         QVector<float> depthBottomUp(size.width() * size.height());
         outputFramebuffer.bind();

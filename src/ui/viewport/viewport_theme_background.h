@@ -4,7 +4,6 @@
 
 #include <QColor>
 #include <QImage>
-#include <QLinearGradient>
 #include <QPainter>
 #include <QRect>
 
@@ -51,67 +50,48 @@ inline void paintViewportThemeBackground(
         return;
     }
 
-    QGradientStops stops;
-    constexpr int stopCount = 32;
-    for (int stopIndex = 0; stopIndex <= stopCount; ++stopIndex) {
-        const qreal factor = static_cast<qreal>(stopIndex) / stopCount;
-        const auto blendChannel = [factor](qreal highChannel,
-                                           qreal lowChannel) {
-            constexpr qreal gamma = 2.2;
-            return std::pow(std::pow(highChannel, 1.0 / gamma) *
-                                (1.0 - factor) +
-                            std::pow(lowChannel, 1.0 / gamma) * factor,
-                            gamma);
-        };
-        stops.append({factor, QColor::fromRgbF(
-            blendChannel(high.redF(), low.redF()),
-            blendChannel(high.greenF(), low.greenF()),
-            blendChannel(high.blueF(), low.blueF()))});
-    }
-
-    if (themeBackground.style == ViewportThemeBackgroundStyle::Linear) {
-        QLinearGradient gradient(QPointF(bounds.left(), bounds.top()),
-                                 QPointF(bounds.left(), bounds.bottom()));
-        gradient.setStops(stops);
-        painter.fillRect(bounds, gradient);
-    } else {
-        const qreal devicePixelRatio = painter.device()
-            ? std::max<qreal>(painter.device()->devicePixelRatioF(), 1.0)
-            : 1.0;
-        const QSize physicalSize(
-            qRound(bounds.width() * devicePixelRatio),
-            qRound(bounds.height() * devicePixelRatio));
-        QImage radial(physicalSize, QImage::Format_RGB32);
-        radial.setDevicePixelRatio(devicePixelRatio);
-        const qreal width = std::max(1, physicalSize.width());
-        const qreal height = std::max(1, physicalSize.height());
-        for (int y = 0; y < radial.height(); ++y) {
-            auto *line = reinterpret_cast<QRgb *>(radial.scanLine(y));
-            const qreal centeredY =
-                (static_cast<qreal>(y) + 0.5) / height - 0.5;
-            for (int x = 0; x < radial.width(); ++x) {
-                const qreal centeredX =
-                    (static_cast<qreal>(x) + 0.5) / width - 0.5;
-                const qreal factor = std::clamp(
+    const qreal devicePixelRatio = painter.device()
+        ? std::max<qreal>(painter.device()->devicePixelRatioF(), 1.0)
+        : 1.0;
+    const QSize physicalSize(
+        qRound(bounds.width() * devicePixelRatio),
+        qRound(bounds.height() * devicePixelRatio));
+    QImage gradientImage(physicalSize, QImage::Format_RGB32);
+    gradientImage.setDevicePixelRatio(devicePixelRatio);
+    const qreal width = std::max(1, physicalSize.width());
+    const qreal height = std::max(1, physicalSize.height());
+    for (int y = 0; y < gradientImage.height(); ++y) {
+        auto *line = reinterpret_cast<QRgb *>(gradientImage.scanLine(y));
+        const qreal centeredY =
+            (static_cast<qreal>(y) + 0.5) / height - 0.5;
+        for (int x = 0; x < gradientImage.width(); ++x) {
+            const qreal centeredX =
+                (static_cast<qreal>(x) + 0.5) / width - 0.5;
+            const qreal factor = themeBackground.style ==
+                    ViewportThemeBackgroundStyle::Linear
+                ? std::clamp((static_cast<qreal>(y) + 0.5) / height,
+                             0.0, 1.0)
+                : std::clamp(
                     std::hypot(centeredX, centeredY) * std::sqrt(2.0),
                     0.0, 1.0);
-                const auto blendChannel = [factor](int highChannel,
-                                                   int lowChannel) {
-                    constexpr qreal gamma = 2.2;
-                    const qreal highValue = highChannel / 255.0;
-                    const qreal lowValue = lowChannel / 255.0;
-                    return qRound(std::pow(
-                        std::pow(highValue, 1.0 / gamma) * (1.0 - factor) +
-                            std::pow(lowValue, 1.0 / gamma) * factor,
-                        gamma) * 255.0);
-                };
-                line[x] = qRgb(blendChannel(high.red(), low.red()),
-                               blendChannel(high.green(), low.green()),
-                               blendChannel(high.blue(), low.blue()));
-            }
+            const auto blendChannel = [factor](int highChannel,
+                                               int lowChannel) {
+                // Keep the fallback aligned with the viewport background's
+                // direct-to-display shader path at every physical pixel.
+                constexpr qreal gamma = 2.2;
+                const qreal highValue = highChannel / 255.0;
+                const qreal lowValue = lowChannel / 255.0;
+                return qRound(std::pow(
+                    std::pow(highValue, 1.0 / gamma) * (1.0 - factor) +
+                        std::pow(lowValue, 1.0 / gamma) * factor,
+                    gamma) * 255.0);
+            };
+            line[x] = qRgb(blendChannel(high.red(), low.red()),
+                           blendChannel(high.green(), low.green()),
+                           blendChannel(high.blue(), low.blue()));
         }
-        painter.drawImage(bounds.topLeft(), radial);
     }
+    painter.drawImage(bounds.topLeft(), gradientImage);
 }
 
 } // namespace classiCAD

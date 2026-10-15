@@ -2892,6 +2892,21 @@ depth domain. Visual depth comparison remains open.
   `CLASSICAD_VIEWPORT_QPAINTER_FAILURE_FALLBACK_CAPTURE`. A forced live GPU
   failure capture remains open.
 
+**Theme gradient fallback sampling (2026-10-15):** The QPainter Theme fallback
+now evaluates Linear and Radial gradients at every physical pixel center using
+the same display-space `gamma 2.2` interpolation as classiCAD's direct-display
+background shader. Linear gradients no longer approximate the ramp with 32
+stops. A high-contrast 101×101 contract checks every row against that equation
+within one display code value; the existing full-frame CPU/GPU comparison
+continues to cover Single, Linear, and Radial backgrounds at 1× DPR and Radial
+at 2× DPR. This improves consistency when the native background shader cannot
+draw; the scene-linear QPainter compositor continues to decode sRGB endpoints
+with the exact transfer function described above. The direct-display formula
+is in
+[`viewport_background.frag`](src/ui/viewport/shaders/viewport_background.frag);
+the scene-linear comparison remains tied to Blender's 5.2.2 Workbench
+background behavior documented in the Theme integration entry above.
+
 ### QPainter cavity and outline order (2026-10-13)
 
 - The CPU effects path now applies cavity before the object outline, matching

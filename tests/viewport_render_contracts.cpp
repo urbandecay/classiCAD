@@ -4308,6 +4308,35 @@ int main(int argc, char *argv[])
                         radialThemeCornerPixel.red() < 30 &&
                         radialThemeCornerPixel.blue() > 55,
                     "QPainter Theme backgrounds must render known Single, top-to-bottom Linear, and center-to-edge Radial pixels");
+    const ViewportThemeBackground highContrastLinear{
+        ViewportThemeBackgroundStyle::Linear,
+        QColor(16, 90, 210), QColor(230, 120, 12)};
+    QImage highContrastLinearImage(101, 101, QImage::Format_RGB32);
+    {
+        QPainter painter(&highContrastLinearImage);
+        paintViewportThemeBackground(painter, highContrastLinearImage.rect(),
+                                     highContrastLinear);
+    }
+    int maximumLinearFallbackError = 0;
+    for (int y = 0; y < highContrastLinearImage.height(); ++y) {
+        const qreal factor = (static_cast<qreal>(y) + 0.5) /
+                             highContrastLinearImage.height();
+        const auto expectedChannel = [factor](int high, int low) {
+            constexpr qreal gamma = 2.2;
+            return qRound(std::pow(
+                std::pow(high / 255.0, 1.0 / gamma) * (1.0 - factor) +
+                    std::pow(low / 255.0, 1.0 / gamma) * factor,
+                gamma) * 255.0);
+        };
+        const QColor actual = highContrastLinearImage.pixelColor(50, y);
+        maximumLinearFallbackError = std::max(
+            {maximumLinearFallbackError,
+             std::abs(actual.red() - expectedChannel(16, 230)),
+             std::abs(actual.green() - expectedChannel(90, 120)),
+             std::abs(actual.blue() - expectedChannel(210, 12))});
+    }
+    passed &= check(maximumLinearFallbackError <= 1,
+                    "QPainter linear Theme fallback must evaluate the display gradient at pixel centers without 32-stop banding");
     const QColor hdrWorldFallback = workbenchWorldBackgroundDisplayColor(
         QVector3D(1.0f, 0.25f, 0.04f), 1, 2.0, 1.0);
     passed &= check(hdrWorldFallback.red() == 255 &&

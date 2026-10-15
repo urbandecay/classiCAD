@@ -2745,7 +2745,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         1.0 / std::max<qreal>(cameraDepth, 1.0e-9);
                 }
             }
-            if (!valid) continue;
             const float triangleSourceAlpha = triangleIndex < triangleAlphas.size()
                 ? triangleAlphas[triangleIndex] : objectAlpha;
             if (shadowEnabled) {
@@ -2756,6 +2755,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 // not sample the Image Texture alpha used by the color pass.
                 shadowTriangles.append(caster);
             }
+            // Shadow casters are submitted from world geometry independently
+            // of whether their vertices can be projected by the camera.
+            if (!valid) continue;
             // Zero-alpha material geometry is still a Blender shadow caster,
             // but it must not become a visible receiver or depth sample here.
             if (triangleSourceAlpha <= 0.0f) continue;

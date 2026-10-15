@@ -7426,3 +7426,11 @@ resolve remain open.
   its surface area. This prevents densely tessellated regions from steering
   painter order more than equally sized sparse regions; it remains an
   object-level approximation and does not replace Blender's per-pixel sorting.
+
+### QPainter camera-independent shadow casters (2026-10-15)
+
+- The software shadow pass now submits caster triangles from their world
+  geometry before the camera-projection validity check. A triangle behind or
+  crossing the camera can still cast onto visible receivers, matching
+  Workbench's separate shadow pass. It remains a bounded light-depth
+  approximation; no matched Blender image comparison has been run.

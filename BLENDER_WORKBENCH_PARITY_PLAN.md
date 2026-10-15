@@ -4727,6 +4727,21 @@ algorithm is justified by the current source. This CPU approximation still
 does not reproduce Blender 5.2.2's later GPU AA pass; matched full-frame mesh
 edge comparison remains open.
 
+**QPainter mesh AA mode re-audit (2026-10-15):** Rechecked the production
+callers in `viewport_renderer.cpp` after the pixel-center-only fallback was
+raised again. They pass one sample per pixel when AA is Off and four samples
+per axis when a non-Off raster AA mode is active. The shared helper applies
+those requested sample counts, while the mesh/NURBS coverage contract checks
+their matching edge profiles at DPR 1, 1.25, 1.5, and 2 and verifies the
+enabled-mode alpha remains in 1/16 coverage steps. Thus the fallback is
+center-sampled in AA-Off by design and estimates fractional coverage for
+enabled modes; replacing AA-Off with 4×4 coverage would conflict with Blender
+5.2.2's centered single sample. No renderer change was justified by this
+candidate. Validation: `QT_QPA_PLATFORM=offscreen
+./build/classicad_workbench_raster_fragment_contracts_test` passed. Full-frame
+comparisons of the enabled QPainter fallback against Blender's later GPU AA
+resolve remain open.
+
 ### QPainter textured NURBS fractional-edge resolve (2026-10-14)
 
 - The prepared QPainter NURBS coverage resolve now supports a single regular

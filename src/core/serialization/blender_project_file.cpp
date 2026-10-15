@@ -1589,6 +1589,78 @@ bool parseBlenderPolyCurveItem(
     return true;
 }
 
+bool parseBlenderPointItem(
+    const QJsonObject &item,
+    const QHash<QString, classiCAD::CollectionId> &collectionIds,
+    const QString &blenderVersion,
+    const QString &importMode,
+    classiCAD::SceneObject *sceneObject,
+    QString *errorMessage)
+{
+    if (sceneObject == nullptr ||
+        item.value(QStringLiteral("object_type")).toString() !=
+            QLatin1String("POINT")) {
+        setError(errorMessage, QStringLiteral("object is not a Blender loose vertex"));
+        return false;
+    }
+    QVector<double> worldPoint;
+    if (!jsonNumberArray(item.value(QStringLiteral("point_world")), 3,
+                         &worldPoint)) {
+        setError(errorMessage, QStringLiteral("loose vertex position is invalid"));
+        return false;
+    }
+
+    classiCAD::SceneObject result;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath =
+        item.value(QStringLiteral("workbench_random_library_path")).toString();
+    result.blenderSourceVersion = blenderVersion;
+    result.blenderMeshImportMode = importMode;
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    for (const QJsonValue &collectionValue :
+         item.value(QStringLiteral("collection_ids")).toArray()) {
+        const QString sourceId = collectionValue.toString();
+        if (sourceId.isEmpty() || !collectionIds.contains(sourceId)) {
+            setError(errorMessage,
+                     QStringLiteral("loose vertex references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(sourceId));
+    }
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
+                         &objectColor)) {
+        setError(errorMessage, QStringLiteral("object display color is invalid"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(
+        static_cast<float>(objectColor[0]), static_cast<float>(objectColor[1]),
+        static_cast<float>(objectColor[2]), static_cast<float>(objectColor[3]));
+
+    result.geometry.geometryType = classiCAD::GeometryType::Point;
+    result.geometry.points.append(QPointF(0.0, 0.0));
+    const classiCAD::Point3D origin{
+        worldPoint[0], worldPoint[1], worldPoint[2]};
+    result.geometry.workPlaneFrame = classiCAD::makeWorkPlaneFrameFromNormal(
+        origin, {0.0, 0.0, 1.0});
+    if (!classiCAD::isValidWorkPlaneFrame(result.geometry.workPlaneFrame)) {
+        setError(errorMessage, QStringLiteral("loose vertex work frame is invalid"));
+        return false;
+    }
+    const QJsonObject visibility =
+        item.value(QStringLiteral("visibility")).toObject();
+    result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
+    result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
+    result.hiddenInViewport =
+        visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+    result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
+    result.viewLayerHidden =
+        item.value(QStringLiteral("view_layer_hidden")).toObject();
+    *sceneObject = std::move(result);
+    return true;
+}
+
 bool parseBlenderSurfaceItem(
     const QJsonObject &item,
     const QHash<QString, classiCAD::CollectionId> &collectionIds,
@@ -2819,6 +2891,7 @@ bool importBlenderScene(const QString &path,
             (objectType != QLatin1String("MESH") &&
              objectType != QLatin1String("CURVE") &&
              objectType != QLatin1String("SURFACE") &&
+             objectType != QLatin1String("POINT") &&
              objectType != QLatin1String("EMPTY_IMAGE") &&
              objectType != QLatin1String("VOLUME"))) {
             ++skippedCount;
@@ -2869,6 +2942,11 @@ bool importBlenderScene(const QString &path,
                   item, collectionIdsBySource, materialsById,
                   source.value(QStringLiteral("blender_version")).toString(),
                   mode, &sceneObject, &warnings, &itemError)
+            : objectType == QLatin1String("POINT")
+                ? parseBlenderPointItem(
+                      item, collectionIdsBySource,
+                      source.value(QStringLiteral("blender_version")).toString(),
+                      mode, &sceneObject, &itemError)
             : objectType == QLatin1String("SURFACE")
                 ? parseBlenderSurfaceItem(item, collectionIdsBySource,
                                           materialsById,

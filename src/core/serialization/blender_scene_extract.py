@@ -61,6 +61,8 @@ MAX_HAIR_CURVE_POINTS_PER_SCENE = 100000
 MAX_MESH_OBJECT_ESTIMATED_BYTES = 32 * 1024 * 1024
 MAX_MESH_SCENE_ESTIMATED_BYTES = 128 * 1024 * 1024
 MAX_EXTRACTION_JSON_BYTES = 256 * 1024 * 1024
+MAX_LOOSE_VERTICES_PER_OBJECT = 10000
+MAX_LOOSE_VERTEX_POINTS_PER_SCENE = 50000
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -737,6 +739,37 @@ def loose_edge_curve_item(obj, scene, source_item, edges_world):
     return item
 
 
+def loose_vertex_point_items(source_item, points_world):
+    """Build bounded Point records for mesh vertices with no incident edge."""
+    source_id = source_item["object_id"]
+    records = []
+    metadata_fields = (
+        "library_path", "workbench_random_library_path", "library_path_exists",
+        "scene_name", "parent_id", "collection_ids", "visibility",
+        "showInFront", "show_wire", "show_all_edges", "wire_display",
+        "display_color_linear", "view_layer_hidden",
+        "default_view_layer_key")
+    for vertex_index, world_point in points_world:
+        derived_id = hashlib.sha256(
+            (source_id + "::loose-vertex::" + str(vertex_index))
+            .encode("utf-8")).hexdigest()
+        item = {field: source_item[field] for field in metadata_fields
+                if field in source_item}
+        item.update({
+            "object_id": "classiCAD::derived::loose-vertex::" + derived_id,
+            "source_object_id": source_id,
+            "source_object_name": source_item["name"],
+            # Keep Blender's source ID name so Workbench Random uses the same
+            # color for its mesh and derived loose-vertex marker.
+            "name": source_item["name"],
+            "source_vertex_index": vertex_index,
+            "object_type": "POINT",
+            "point_world": world_point,
+        })
+        records.append(item)
+    return records
+
+
 def scene_camera_record(scene, depsgraph=None):
     camera = scene.camera
     if camera is None:
@@ -1041,18 +1074,26 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
             not in polygon_edges
         ]
         edge_vertices = {vertex_index for edge in mesh_edges for vertex_index in edge}
-        isolated_vertex_count = sum(
-            1 for vertex in mesh.vertices
+        isolated_vertex_indices = [
+            int(vertex.index) for vertex in mesh.vertices
             if int(vertex.index) not in polygon_vertices and
             int(vertex.index) not in edge_vertices
-        )
-        if isolated_vertex_count:
-            add_unsupported(
-                unsupported, item_id, "isolated_vertices",
-                "Blender mesh contains %d isolated vertex/vertices; "
-                "classiCAD scene import has no point-item path for them" %
-                isolated_vertex_count,
-            )
+        ]
+        if isolated_vertex_indices and obj.type == "MESH" and not item[
+                "bounds_display_type"] and mesh_payload_budget is not None:
+            isolated_count = len(isolated_vertex_indices)
+            if (isolated_count > MAX_LOOSE_VERTICES_PER_OBJECT or
+                    mesh_payload_budget["loose_vertex_point_count"] +
+                    isolated_count > MAX_LOOSE_VERTEX_POINTS_PER_SCENE):
+                mesh_payload_budget["loose_vertex_limit_exceeded"] = True
+                item["_loose_vertices_omitted"] = isolated_count
+            else:
+                mesh_payload_budget["loose_vertex_point_count"] += isolated_count
+                item["_loose_vertices_world"] = [
+                    (vertex_index,
+                     vector_values(transform @ mesh.vertices[vertex_index].co))
+                    for vertex_index in isolated_vertex_indices
+                ]
         # PolygonMesh3D stores faces only. Preserve true loose edges as a
         # companion CURVE transport item, using world points so evaluated
         # object transforms are baked exactly once by the existing curve
@@ -2153,7 +2194,12 @@ def extract_scene(input_path, mode):
         hair_curve_count = 0
         hair_curve_point_count = 0
         hair_curve_limit_exceeded = False
-        mesh_payload_budget = {"estimated_bytes": 0, "limit_exceeded": False}
+        mesh_payload_budget = {
+            "estimated_bytes": 0,
+            "limit_exceeded": False,
+            "loose_vertex_point_count": 0,
+            "loose_vertex_limit_exceeded": False,
+        }
         for obj in scene.objects:
             object_count += 1
             object_id = stable_id(obj)
@@ -2433,6 +2479,8 @@ def extract_scene(input_path, mode):
                     if len(scene.view_layers) else ""
                 )
                 loose_edges_world = item.pop("_loose_edges_world", [])
+                loose_vertices_world = item.pop("_loose_vertices_world", [])
+                omitted_vertices = item.pop("_loose_vertices_omitted", 0)
                 loose_edges_item = (
                     loose_edge_curve_item(obj, scene, item, loose_edges_world)
                     if loose_edges_world and not item["bounds_display_type"] else None
@@ -2441,6 +2489,15 @@ def extract_scene(input_path, mode):
                 mesh_count += 1
                 if loose_edges_item is not None:
                     output["items"].append(loose_edges_item)
+                output["items"].extend(
+                    loose_vertex_point_items(item, loose_vertices_world))
+                if omitted_vertices:
+                    add_unsupported(
+                        output["unsupported_features"], item["object_id"],
+                        "loose_vertex_point_limit",
+                        "%d isolated mesh vertices were omitted because the per-object limit is %d or the per-scene limit is %d" %
+                        (omitted_vertices, MAX_LOOSE_VERTICES_PER_OBJECT,
+                         MAX_LOOSE_VERTEX_POINTS_PER_SCENE))
             except Exception as error:
                 output["unsupported_items"].append({
                     **object_metadata(obj, scene, depsgraph),
@@ -2710,6 +2767,10 @@ def extract_scene(input_path, mode):
                             item, instance_id, source_obj, parent_source,
                             instance_transform)
                         loose_edges_world = item.pop("_loose_edges_world", [])
+                        loose_vertices_world = item.pop(
+                            "_loose_vertices_world", [])
+                        omitted_vertices = item.pop(
+                            "_loose_vertices_omitted", 0)
                         loose_edges_item = (
                             loose_edge_curve_item(
                                 source_obj, scene, item, loose_edges_world)
@@ -2719,6 +2780,16 @@ def extract_scene(input_path, mode):
                         output["items"].append(item)
                         if loose_edges_item is not None:
                             output["items"].append(loose_edges_item)
+                        output["items"].extend(
+                            loose_vertex_point_items(item, loose_vertices_world))
+                        if omitted_vertices:
+                            add_unsupported(
+                                output["unsupported_features"], instance_id,
+                                "loose_vertex_point_limit",
+                                "%d isolated mesh vertices were omitted because the per-object limit is %d or the per-scene limit is %d" %
+                                (omitted_vertices,
+                                 MAX_LOOSE_VERTICES_PER_OBJECT,
+                                 MAX_LOOSE_VERTEX_POINTS_PER_SCENE))
                         mesh_count += 1
                     elif source_obj.type == "CURVE":
                         curve_features = []
@@ -2834,6 +2905,14 @@ def extract_scene(input_path, mode):
                 "mesh extraction exceeded the per-object limit of %d estimated bytes or the per-scene limit of %d estimated bytes; remaining oversized meshes and instances were skipped" %
                 (MAX_MESH_OBJECT_ESTIMATED_BYTES,
                  MAX_MESH_SCENE_ESTIMATED_BYTES),
+            )
+        if mesh_payload_budget["loose_vertex_limit_exceeded"]:
+            add_unsupported(
+                output["unsupported_features"], stable_id(scene),
+                "loose_vertex_scene_limit",
+                "isolated mesh vertices exceeded the per-object limit of %d Point items or the per-scene limit of %d; over-limit point sets were omitted" %
+                (MAX_LOOSE_VERTICES_PER_OBJECT,
+                 MAX_LOOSE_VERTEX_POINTS_PER_SCENE),
             )
         output["scenes"].append(scene_record)
     output["summary"] = {

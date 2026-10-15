@@ -7872,3 +7872,14 @@ resolve remain open.
   unsupported and are reported. This retains line paths as ordinary curves,
   not Blender's thick Grease Pencil appearance. The C++ build passed; Blender
   fixture and matched viewport comparisons have not been run.
+
+### Blender Hair Curves centerline import (2026-10-15)
+
+- Blender Hair Curves objects and collection instances now import their
+  multi-point strand control paths as classiCAD POLY curves. Source point
+  offsets are validated, object or instance transforms are applied, and
+  per-scene limits cap extraction at 10,000 strands and 100,000 points. This
+  preserves path locations, but turns curved interpolation into straight
+  segments and omits strand radius, profile, color, materials, and evaluated
+  modifier output. One-point strands remain unsupported. The C++ build passed;
+  Blender fixture and matched viewport comparisons have not been run.

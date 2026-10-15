@@ -53,6 +53,8 @@ MAX_COLLECTION_VOLUME_RECORDS = 524288
 MAX_COLLECTION_VOLUME_DENSE_VOXELS = 16 * 1024 * 1024
 MAX_GREASE_PENCIL_STROKES_PER_SCENE = 10000
 MAX_GREASE_PENCIL_POINTS_PER_SCENE = 100000
+MAX_HAIR_CURVES_PER_SCENE = 10000
+MAX_HAIR_CURVE_POINTS_PER_SCENE = 100000
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -1384,6 +1386,8 @@ def unsupported_object_record(obj, scene, depsgraph=None):
         record["reason"] = "volume has no supported single-channel FLOAT grid"
     elif obj.type == "GREASEPENCIL":
         record["reason"] = "Grease Pencil has no supported current-frame stroke centerlines"
+    elif obj.type == "CURVES":
+        record["reason"] = "Hair Curves has no supported strand centerlines"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
@@ -1588,6 +1592,57 @@ def extract_grease_pencil_curve_item(obj, scene, unsupported,
         unsupported, item_id, "grease_pencil_centerline",
         "current-frame Grease Pencil strokes were imported as POLY centerlines; stroke width, opacity, color, fills, layer effects, modifiers, and animation were not retained",
     )
+    return item
+
+
+def extract_hair_curve_item(obj, scene, unsupported, transform_override=None,
+                            max_curves=MAX_HAIR_CURVES_PER_SCENE,
+                            max_points=MAX_HAIR_CURVE_POINTS_PER_SCENE):
+    """Import Blender Hair Curves control paths as ordinary POLY curves."""
+    from mathutils import Vector
+
+    item_id = stable_id(obj)
+    item = object_metadata(obj, scene)
+    item["object_type"] = "CURVE"
+    item["source_object_type"] = "CURVES"
+    item["splines"] = []
+    transform = (transform_override if transform_override is not None
+                 else obj.matrix_world)
+    data = obj.data
+    curve_count = len(data.curves)
+    point_count = len(data.points)
+    if curve_count > max_curves:
+        raise ValueError("Hair Curves strand limit exceeded")
+    if point_count > max_points:
+        raise ValueError("Hair Curves point limit exceeded")
+    offsets = [int(value.value) for value in data.curve_offset_data]
+    if (len(offsets) != curve_count + 1 or not offsets or offsets[0] != 0 or
+            offsets[-1] != point_count or
+            any(first > second for first, second in zip(offsets, offsets[1:]))):
+        raise ValueError("Hair Curves has inconsistent point offsets")
+
+    for curve_index in range(curve_count):
+        first = offsets[curve_index]
+        end = offsets[curve_index + 1]
+        if end - first < 2:
+            continue
+        points = []
+        for point_index in range(first, end):
+            world = transform @ Vector(data.points[point_index].position)
+            points.append(vector_values(world))
+        item["splines"].append({
+            "type": "POLY",
+            "control_points_world": points,
+        })
+    item["_transport_metrics"] = {
+        "curve_count": curve_count,
+        "point_count": point_count,
+    }
+    if item["splines"]:
+        add_unsupported(
+            unsupported, item_id, "hair_curve_centerlines",
+            "Hair Curves control points were imported as straight POLY centerlines; curve interpolation, strand radius, profile, color, material effects, and modifier results were not retained",
+        )
     return item
 
 
@@ -2037,6 +2092,9 @@ def extract_scene(input_path, mode):
         grease_pencil_stroke_count = 0
         grease_pencil_point_count = 0
         grease_pencil_limit_exceeded = False
+        hair_curve_count = 0
+        hair_curve_point_count = 0
+        hair_curve_limit_exceeded = False
         for obj in scene.objects:
             object_count += 1
             object_id = stable_id(obj)
@@ -2078,6 +2136,8 @@ def extract_scene(input_path, mode):
                         max_points=(MAX_GREASE_PENCIL_POINTS_PER_SCENE -
                                     grease_pencil_point_count))
                     metrics = item.pop("_transport_metrics")
+                    hair_curve_count += metrics["curve_count"]
+                    hair_curve_point_count += metrics["point_count"]
                     if not item["splines"]:
                         unsupported_item = unsupported_object_record(
                             obj, scene, depsgraph)
@@ -2103,6 +2163,40 @@ def extract_scene(input_path, mode):
                         **object_metadata(obj, scene, depsgraph),
                         "object_type": obj.type,
                         "reason": "Grease Pencil extraction failed; whole object skipped: " + str(error),
+                    })
+                continue
+            if obj.type == "CURVES":
+                try:
+                    item = extract_hair_curve_item(
+                        obj, scene, output["unsupported_features"],
+                        max_curves=(MAX_HAIR_CURVES_PER_SCENE -
+                                    hair_curve_count),
+                        max_points=(MAX_HAIR_CURVE_POINTS_PER_SCENE -
+                                    hair_curve_point_count))
+                    metrics = item.pop("_transport_metrics")
+                    if not item["splines"]:
+                        unsupported_item = unsupported_object_record(
+                            obj, scene, depsgraph)
+                        unsupported_item["reason"] = (
+                            "Hair Curves has no multi-point strand in its source geometry")
+                        output["unsupported_items"].append(unsupported_item)
+                        continue
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                except Exception as error:
+                    if "limit exceeded" in str(error):
+                        hair_curve_limit_exceeded = True
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene, depsgraph),
+                        "object_type": obj.type,
+                        "reason": "Hair Curves extraction failed; whole object skipped: " + str(error),
                     })
                 continue
             if obj.type == "CURVE":
@@ -2324,7 +2418,7 @@ def extract_scene(input_path, mode):
                     str(getattr(source_obj, "empty_display_type", "")) == "IMAGE")
                 if source_obj.type not in {
                         "MESH", "CURVE", "SURFACE", "FONT", "META",
-                        "VOLUME", "GREASEPENCIL"} and not is_image_empty:
+                        "VOLUME", "GREASEPENCIL", "CURVES"} and not is_image_empty:
                     unsupported_instance_types.add(source_obj.type)
                     continue
                 if is_image_empty:
@@ -2495,6 +2589,8 @@ def extract_scene(input_path, mode):
                             max_points=(MAX_GREASE_PENCIL_POINTS_PER_SCENE -
                                         grease_pencil_point_count))
                         metrics = item.pop("_transport_metrics")
+                        hair_curve_count += metrics["curve_count"]
+                        hair_curve_point_count += metrics["point_count"]
                         if not item["splines"]:
                             unsupported_item = unsupported_object_record(
                                 source_obj, scene, instance_depsgraph)
@@ -2510,6 +2606,29 @@ def extract_scene(input_path, mode):
                         output["unsupported_features"].extend(item_features)
                         grease_pencil_stroke_count += metrics["stroke_count"]
                         grease_pencil_point_count += metrics["point_count"]
+                    elif source_obj.type == "CURVES":
+                        item_features = []
+                        item = extract_hair_curve_item(
+                            source_obj, scene, item_features,
+                            transform_override=instance_transform,
+                            max_curves=(MAX_HAIR_CURVES_PER_SCENE -
+                                        hair_curve_count),
+                            max_points=(MAX_HAIR_CURVE_POINTS_PER_SCENE -
+                                        hair_curve_point_count))
+                        metrics = item.pop("_transport_metrics")
+                        if not item["splines"]:
+                            unsupported_item = unsupported_object_record(
+                                source_obj, scene, instance_depsgraph)
+                            unsupported_item["object_id"] = instance_id
+                            unsupported_item["reason"] = (
+                                "Hair Curves instance has no multi-point strand in its source geometry")
+                            output["unsupported_items"].append(unsupported_item)
+                            continue
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        output["items"].append(item)
+                        output["unsupported_features"].extend(item_features)
                     elif source_obj.type == "MESH":
                         item = extract_mesh_object(
                             source_obj, scene, mode, instance_depsgraph,
@@ -2581,6 +2700,8 @@ def extract_scene(input_path, mode):
                 except Exception as error:
                     if "limit exceeded" in str(error):
                         grease_pencil_limit_exceeded = True
+                    if "Hair Curves" in str(error) and "limit exceeded" in str(error):
+                        hair_curve_limit_exceeded = True
                     output["unsupported_items"].append({
                         **object_metadata(source_obj, scene, depsgraph),
                         "object_id": instance_id,
@@ -2626,6 +2747,14 @@ def extract_scene(input_path, mode):
                 "Grease Pencil extraction exceeded the per-scene limit of %d strokes or %d points; remaining objects were skipped" %
                 (MAX_GREASE_PENCIL_STROKES_PER_SCENE,
                  MAX_GREASE_PENCIL_POINTS_PER_SCENE),
+            )
+        if hair_curve_limit_exceeded:
+            add_unsupported(
+                output["unsupported_features"], stable_id(scene),
+                "hair_curve_scene_limit",
+                "Hair Curves extraction exceeded the per-scene limit of %d strands or %d points; remaining objects were skipped" %
+                (MAX_HAIR_CURVES_PER_SCENE,
+                 MAX_HAIR_CURVE_POINTS_PER_SCENE),
             )
         output["scenes"].append(scene_record)
     output["summary"] = {

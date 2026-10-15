@@ -569,6 +569,10 @@ bool ViewportAaRenderer::initialize()
         {
             return max(min(a, b), min(max(a, b), c));
         }
+        float median3(float a, float b, float c)
+        {
+            return max(min(a, b), min(max(a, b), c));
+        }
         vec4 dofGather(vec2 uv)
         {
             // CoC-aware 2x2 downsample: retain the largest blur footprint
@@ -576,12 +580,12 @@ bool ViewportAaRenderer::initialize()
             vec2 halfPixel = 0.5 * uPixelSize;
             vec2 offsets[4] = vec2[4](vec2(-1.0, -1.0), vec2(1.0, -1.0),
                                       vec2(-1.0, 1.0), vec2(1.0, 1.0));
-            vec3 downsampled = vec3(0.0);
+            vec4 downsampled = vec4(0.0);
             float radius = 0.0;
             for (int j = 0; j < 4; ++j) {
                 vec2 tapUv = clamp(uv + offsets[j] * halfPixel,
                                    halfPixel, vec2(1.0) - halfPixel);
-                downsampled += texture(uSource, tapUv).rgb * 0.25;
+                downsampled += texture(uSource, tapUv) * 0.25;
                 radius = max(radius, cocRadius(tapUv));
             }
             if (radius < 0.75) return texture(uSource, uv);
@@ -601,7 +605,9 @@ bool ViewportAaRenderer::initialize()
                 sum += texture(uSource, sampleUv);
                 weight += 1.0;
             }
-            vec3 gathered = weight > 0.0 ? (sum / weight).rgb : downsampled;
+            vec4 gatheredSample = weight > 0.0
+                ? sum / weight : downsampled;
+            vec3 gathered = gatheredSample.rgb;
             // Three-tap median cleanup suppresses isolated gather outliers.
             vec3 medianColor = median3(
                 gathered,
@@ -609,9 +615,16 @@ bool ViewportAaRenderer::initialize()
                                        halfPixel, vec2(1.0) - halfPixel)).rgb,
                 texture(uSource, clamp(uv - vec2(uPixelSize.x, 0.0),
                                        halfPixel, vec2(1.0) - halfPixel)).rgb);
+            float medianAlpha = median3(
+                gatheredSample.a,
+                texture(uSource, clamp(uv + vec2(uPixelSize.x, 0.0),
+                                       halfPixel, vec2(1.0) - halfPixel)).a,
+                texture(uSource, clamp(uv - vec2(uPixelSize.x, 0.0),
+                                       halfPixel, vec2(1.0) - halfPixel)).a);
             vec4 original = texture(uSource, uv);
             float cocMix = clamp(radius / 6.0, 0.0, 1.0);
-            return vec4(mix(original.rgb, medianColor, cocMix), original.a);
+            return vec4(mix(original.rgb, medianColor, cocMix),
+                        mix(original.a, medianAlpha, cocMix));
         }
         vec3 linearToSrgb(vec3 color)
         {

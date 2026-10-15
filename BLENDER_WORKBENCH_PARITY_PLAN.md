@@ -8442,3 +8442,16 @@ resolve remain open.
   Blender image color-space metadata is not retained by this path. Other
   QPainter fallbacks continue using their existing composition. Build passed;
   no matched Blender comparison has been run.
+
+### GPU depth-of-field alpha gather (2026-10-15)
+
+- The GPU DOF gather now carries alpha through its CoC-aware 2×2 downsample
+  and 12-tap blur, then mixes the gathered alpha with the original pixel using
+  the same CoC amount as color. The median cleanup now also filters alpha
+  alongside RGB. Previously RGB blurred while alpha stayed sharp, leaving
+  inconsistent transparent edges. Blender's DOF resolve, blur, and median
+  passes process RGBA in
+  [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl)
+  and
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
+  Runtime GPU and matched image comparisons remain open.

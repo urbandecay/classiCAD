@@ -8456,6 +8456,19 @@ resolve remain open.
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
   Runtime GPU and matched image comparisons remain open.
 
+### GPU depth-of-field CoC tap weights (2026-10-15)
+
+- DOF taps now use each sample's circle-of-confusion radius and ring coverage
+  weight. CoC uses Blender's half-aperture factor and is measured in viewport
+  pixels; inverse viewport size is applied only when moving a tap in UV space.
+  The gather no longer hard-rejects every sample with nearer depth, which
+  suppressed foreground bokeh at depth edges. Blender derives each tap's weight
+  from its CoC and sample-ring radius in
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
+  classiCAD keeps its bounded 12-tap gather; Blender's signed near/far CoC,
+  mip selection, and full sample pattern are still more detailed. Runtime GPU
+  and matched foreground-edge comparisons remain open; C++ build passed.
+
 ### QPainter Back Image depth ordering (2026-10-15)
 
 - The deferred QPainter Back-image list now sorts by image-plane center depth

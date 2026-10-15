@@ -560,9 +560,11 @@ bool ViewportAaRenderer::initialize()
             float f = uFocalLengthMillimeters * millimetersToSceneUnits;
             float sensorSize = uOpticalSensorSizeMillimeters * millimetersToSceneUnits;
             float focus = uFocusDistance;
-            float coc = abs((f * f / max(uFStop * abs(focus - f), 1e-6)) *
-                            ((z - focus) / max(z, 1e-6)));
-            return clamp(coc * (uPixelSize.x / max(sensorSize, 1e-6)),
+            float coc = abs((0.5 * f * f /
+                             max(uFStop * abs(focus - f), 1e-6)) *
+                            ((focus - z) / max(z, 1e-6)));
+            return clamp(coc * (1.0 / max(uPixelSize.x, 1e-6)) /
+                             max(sensorSize, 1e-6),
                          0.0, 12.0);
         }
         vec3 median3(vec3 a, vec3 b, vec3 c)
@@ -599,11 +601,13 @@ bool ViewportAaRenderer::initialize()
             for (int i = 0; i < 12; ++i) {
                 vec2 sampleUv = clamp(uv + disk[i] * radius * uPixelSize,
                                       uPixelSize * 0.5, vec2(1.0) - uPixelSize * 0.5);
-                float centerDepth = texture(uDepth, uv).r;
-                float sampleDepth = texture(uDepth, sampleUv).r;
-                if (sampleDepth < centerDepth - 0.002) continue;
-                sum += texture(uSource, sampleUv);
-                weight += 1.0;
+                float sampleRadius = cocRadius(sampleUv);
+                float sampleRingRadius = length(disk[i]) * radius;
+                float sampleWeight = sampleRadius * smoothstep(
+                    sampleRingRadius - 0.5, sampleRingRadius + 0.5,
+                    sampleRadius);
+                sum += texture(uSource, sampleUv) * sampleWeight;
+                weight += sampleWeight;
             }
             vec4 gatheredSample = weight > 0.0
                 ? sum / weight : downsampled;

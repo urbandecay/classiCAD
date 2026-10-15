@@ -8146,23 +8146,26 @@ resolve remain open.
 ### Blender Image Empty premultiplied alpha (2026-10-15)
 
 - Image Empty import now retains Blender's PREMUL setting as an image semantic,
-  independent of Qt's decoded pixel format. Both renderers first convert
-  premultiplied QImage storage to straight RGB when needed. The GPU path then
-  converts RGB to scene-linear, premultiplies it when Blender requests PREMUL,
-  and unpremultiplies the filtered sample before tinting. This matches the
-  premultiply-on-upload and `texture_read_as_linearrgb` shader stages in
-  Blender's path, pinned in
+  independent of Qt's decoded pixel format. The GPU byte path now premultiplies
+  source RGB bytes before upload, uses an sRGB texture for sRGB inputs, and
+  unpremultiplies the decoded filtered sample before tinting. Known linear and
+  Non-Color byte sources use a linear texture; other OCIO spaces normally use
+  the imported scene-linear float payload. If that payload is absent, the
+  bounded byte fallback assumes sRGB. This follows Blender's
+  byte/float upload branches and `texture_read_as_linearrgb`, pinned in
   [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L301-L307)
+  [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L755-L786),
+  [`colormanagement.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L1924-L1965),
   and [`draw_colormanagement_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/shaders/draw_colormanagement_lib.glsl#L16-L25).
-  C++ build passed; matched comparison remains open.
+  Matched comparison remains open.
 
 ### Blender Image Empty mipmapped minification (2026-10-15)
 
-- The GPU Image Empty texture now builds a mip chain after upload and uses
-  trilinear minification with linear magnification. Its decoded sRGB RGB
-  bytes are converted to scene-linear values before upload so mip reduction
-  averages light rather than encoded display values; PREMUL images are
-  premultiplied before mip generation, and the texture cache refreshes when
+- The GPU Image Empty texture builds the mip chain from the Blender-compatible
+  byte/float texture upload and uses trilinear minification with linear
+  magnification. sRGB byte inputs use `GL_SRGB8_ALPHA8`; linear/data byte
+  inputs use `GL_RGBA8`; float payloads use `GL_RGBA32F`. PREMUL byte images
+  are premultiplied before mip generation, and the texture cache refreshes when
   that image setting changes. Blender builds and enables
   image mipmaps in
   [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L2917-L2928).
@@ -8543,8 +8546,8 @@ resolve remain open.
   assumption. Blender's PREMUL setting controls its converted GPU texture
   used for filtering; it does not establish that the original byte image read
   by QPainter is already premultiplied. The optional scene-linear float
-  payload remains unpremultiplied on its transport path as before. Matched
-  Image Empty comparisons remain open.
+  payload keeps its existing premultiply-on-import and unpremultiply-on-use
+  handling. Matched Image Empty comparisons remain open.
 
 ### GPU scalar-volume slice bounds (2026-10-15)
 

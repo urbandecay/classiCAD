@@ -2422,27 +2422,48 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
         uploadData = sceneLinearPixels.constData();
     } else {
         const QString colorSpace = picture.pictureColorSpace.trimmed();
-        const bool sourceIsLinear = colorSpace.startsWith(
-            QStringLiteral("Linear"), Qt::CaseInsensitive) ||
+        const bool sourceIsSrgb = colorSpace.compare(
+            QStringLiteral("sRGB"), Qt::CaseInsensitive) == 0;
+        const bool sourceIsLinearByte =
+            colorSpace.compare(QStringLiteral("Linear Rec.709"),
+                               Qt::CaseInsensitive) == 0 ||
             colorSpace.compare(QStringLiteral("Non-Color"),
                                Qt::CaseInsensitive) == 0;
-        // Blender builds mipmaps after source-to-scene-linear conversion.
-        // Preserve known linear byte sources and decode sRGB before filtering.
+        const bool sourceHasNativeBytePath =
+            sourceIsSrgb || sourceIsLinearByte;
+        // Blender premultiplies byte texels before upload. Keep sRGB bytes in
+        // an sRGB texture so sampling decodes them after that multiplication;
+        // linear and Non-Color sources stay in a linear byte texture.
+        internalFormat = sourceIsSrgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
         for (int y = 0; y < image.height(); ++y) {
             uchar *row = image.scanLine(y);
             for (int x = 0; x < image.width(); ++x) {
                 uchar *pixel = row + x * 4;
+                if (!picture.picturePremultipliedAlpha ||
+                    !sourceHasNativeBytePath) continue;
                 for (int channel = 0; channel < 3; ++channel) {
-                    const float encoded = float(pixel[channel]) / 255.0f;
-                    float linear = sourceIsLinear ? encoded
-                        : encoded <= 0.04045f
+                    pixel[channel] = static_cast<uchar>(
+                        (quint16(pixel[channel]) * quint16(pixel[3])) >> 8);
+                }
+            }
+        }
+        if (!sourceIsSrgb && !sourceIsLinearByte) {
+            // Other OCIO spaces normally arrive in the scene-linear float
+            // payload. Keep a bounded sRGB-decoded fallback if it is absent.
+            for (int y = 0; y < image.height(); ++y) {
+                uchar *row = image.scanLine(y);
+                for (int x = 0; x < image.width(); ++x) {
+                    uchar *pixel = row + x * 4;
+                    for (int channel = 0; channel < 3; ++channel) {
+                        const float encoded = float(pixel[channel]) / 255.0f;
+                        const float linear = encoded <= 0.04045f
                             ? encoded / 12.92f
                             : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
-                    if (picture.picturePremultipliedAlpha) {
-                        linear *= float(pixel[3]) / 255.0f;
+                        const float alpha = picture.picturePremultipliedAlpha
+                            ? float(pixel[3]) / 255.0f : 1.0f;
+                        pixel[channel] = static_cast<uchar>(qRound(
+                            std::clamp(linear * alpha, 0.0f, 1.0f) * 255.0f));
                     }
-                    pixel[channel] = static_cast<uchar>(
-                        qRound(std::clamp(linear, 0.0f, 1.0f) * 255.0f));
                 }
             }
         }

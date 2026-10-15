@@ -71,6 +71,9 @@ struct ViewportSceneStroke {
     // Opt-in for committed Solid-mode CAD wires that participate in the
     // depth-writing Overlay wire pass. Transient/edit overlays stay disabled.
     bool writeDepth = false;
+    // Marks Blender mesh wire-over-Solid strokes for the ordinary QPainter
+    // fallback, which does not replay the complete GPU scene-stroke list.
+    bool blenderMeshWire = false;
     // Determines which Smooth Wires preference controls coverage. This is
     // independent from editModeWire, which selects the geometry/color style.
     ViewportSmoothWireCategory smoothWireCategory =

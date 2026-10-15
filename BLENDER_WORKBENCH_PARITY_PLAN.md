@@ -7556,9 +7556,11 @@ resolve remain open.
   documents preserve those object flags. The viewport draws deduplicated
   polygon-loop edges over Solid mesh fills when the saved global overlay or
   an object's wire flag enables them. Theme, Object (half-brightness), and
-  Blender Random colors are supported, and strokes depth-test through the
-  existing GPU and QPainter prepared-stroke paths.
+  Blender Random colors are supported. GPU strokes and the ordinary QPainter
+  path depth-test against their retained scene layers. Blender's WIRE display
+  hides mesh fills while keeping the edge overlay visible in both paths.
 - This is a partial port: the imported threshold does not yet filter edges,
-  and `display_type == WIRE` enables the overlay but does not hide the fill.
-  Loose mesh edges remain represented by their existing companion curves.
+  and Blender's view-facing wire color gradient and exact selected-object
+  colors are not reproduced. Loose mesh edges remain represented by their
+  existing companion curves.
   The C++ build passed; matched Blender image comparison remains open.

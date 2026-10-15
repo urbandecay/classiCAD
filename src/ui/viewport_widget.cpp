@@ -8929,6 +8929,15 @@ protected:
         // imported scene settings through applyImportedRenderColorManagement.
         viewportRenderer_.setShadingSettings(renderShadingSettings);
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
+        QVector<ViewportRenderObject> visibleSurfaceShapes;
+        visibleSurfaceShapes.reserve(visibleShapes.size());
+        for (const ViewportRenderObject &object : visibleShapes) {
+            if (object.shape.geometryType == GeometryType::PolygonMesh &&
+                object.wireDisplay) {
+                continue;
+            }
+            visibleSurfaceShapes.append(object);
+        }
         QHash<quint64, QSet<int>> weldedVertexSelections;
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
             struct WeldedEndpoint {
@@ -9271,7 +9280,9 @@ protected:
                     sceneDrawObjects.at(objectIndex);
                 if (object.shape.geometryType == GeometryType::ScalarVolume) {
                     scalarVolumeDrawObjects.append(object);
-                } else if (hasSurfaceGeometry(object)) {
+                } else if (hasSurfaceGeometry(object) &&
+                           !(object.shape.geometryType == GeometryType::PolygonMesh &&
+                             object.wireDisplay)) {
                     surfaceDrawObjects.append(object);
                     surfaceDrawSlots.append(objectIndex);
                 }
@@ -10048,6 +10059,7 @@ protected:
                     wireStroke.color = wireColor;
                     wireStroke.width = 1.0f;
                     wireStroke.writeDepth = true;
+                    wireStroke.blenderMeshWire = true;
                     wireStroke.objectId = renderObject.objectId;
                     wireStroke.geometryRevision = renderObject.geometryRevision;
                     wireStroke.preparedDepthGeometry = std::move(wireGeometry);
@@ -10512,10 +10524,12 @@ protected:
                 }
                 continue;
             }
-            if (rasterSurfaceBatchRendered &&
+            if ((geometryType == GeometryType::PolygonMesh &&
+                 renderObject.wireDisplay) ||
+                (rasterSurfaceBatchRendered &&
                 (geometryType == GeometryType::NurbsSurface ||
                  geometryType == GeometryType::NurbsSolid ||
-                 geometryType == GeometryType::PolygonMesh)) {
+                 geometryType == GeometryType::PolygonMesh))) {
                 // Surface color has already been depth-composited into the
                 // fallback scene layer. Continue through the loop so the
                 // existing stroke/cage collection remains active.
@@ -11228,7 +11242,8 @@ protected:
         bool gpuArcOverlayRendered = false;
         QVector<const Shape *> failedScenePicturePreviews;
         const auto drawNativeSurfaceFailureFallback = [&]() {
-            QVector<ViewportRenderObject> fallbackDrawObjects = visibleShapes;
+            QVector<ViewportRenderObject> fallbackDrawObjects =
+                visibleSurfaceShapes;
             QVector<ViewportRenderObject> fallbackSurfaceObjects;
             const auto averageViewDepth = [this](
                 const ViewportRenderObject &object) {
@@ -11482,7 +11497,8 @@ protected:
                         }
                     }
                 }
-                QVector<ViewportRenderObject> surfaceDrawObjects = visibleShapes;
+                QVector<ViewportRenderObject> surfaceDrawObjects =
+                    visibleSurfaceShapes;
                 for (ViewportRenderObject &object : surfaceDrawObjects) {
                     object.outlineHandledBySceneStroke =
                         surfaceOutlineStrokeObjectIds.contains(
@@ -11535,7 +11551,7 @@ protected:
             if (aaRenderer != nullptr || nativeSurfacePassFailed) {
                 nativeRenderer->renderUnjitteredSceneDepthToCurrentFramebuffer(
                     overlayCamera, renderFrame.viewportSize,
-                    devicePixelRatioF(), visibleShapes);
+                    devicePixelRatioF(), visibleSurfaceShapes);
             }
             // Selected-face highlighting is also an edit-mode overlay. Draw it
             // after resolve/history presentation against the unjittered scene
@@ -11580,7 +11596,7 @@ protected:
             }
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 overlayCamera, renderFrame.viewportSize,
-                devicePixelRatioF(), visibleShapes, baseGridStep,
+                devicePixelRatioF(), visibleSurfaceShapes, baseGridStep,
                 gridAppearance_);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
@@ -11912,7 +11928,7 @@ protected:
             QImage &effectTarget = rasterWorkbenchEffectsLayered
                 ? rasterWorkbenchEffectLayer : committedSceneLayer;
             applyRasterWorkbenchEffects(
-                &effectTarget, visibleShapes, viewportTransform_,
+                &effectTarget, visibleSurfaceShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
@@ -11929,6 +11945,118 @@ protected:
             }
             if (!gpuViewportBackground.isNull()) {
                 painter.drawImage(QPoint(0, 0), gpuViewportBackground);
+            }
+
+            // The ordinary QPainter scene path does not replay all GPU scene
+            // strokes. Draw imported mesh wire overlays here with the same
+            // retained opaque depth domains used by the other raster edges.
+            for (const ViewportSceneStroke &stroke : gpuStrokes) {
+                if (!stroke.blenderMeshWire ||
+                    !stroke.preparedDepthGeometry) {
+                    continue;
+                }
+                const ViewportRenderObject *renderObject =
+                    renderFrame.find(stroke.objectId);
+                if (renderObject == nullptr) continue;
+                const QSize regularSize =
+                    rasterSurfaceLayers.regularSceneDepthSize;
+                const QSize frontSize =
+                    rasterSurfaceLayers.inFrontSceneDepthSize;
+                const bool hasRegularDepth =
+                    regularSize == committedSceneLayer.size() &&
+                    rasterSurfaceLayers.regularSceneDepth.size() ==
+                        regularSize.width() * regularSize.height();
+                const bool hasFrontDepth =
+                    frontSize == committedSceneLayer.size() &&
+                    rasterSurfaceLayers.inFrontSceneDepth.size() ==
+                        frontSize.width() * frontSize.height();
+                const Point3D cameraPosition = viewportTransform_.cameraPosition(
+                    renderFrame.viewportSize);
+                const Point3D viewDirection = viewportTransform_.viewDirection();
+                const QVector<Point3D> &segments =
+                    stroke.preparedDepthGeometry->preciseLineVertices;
+                painter.save();
+                painter.setRenderHint(QPainter::Antialiasing,
+                                      smoothWiresOverlay_);
+                QPen pen(stroke.color);
+                pen.setWidthF(std::max<qreal>(1.0, stroke.width));
+                pen.setCapStyle(Qt::RoundCap);
+                painter.setPen(pen);
+                for (int index = 0; index + 1 < segments.size(); index += 2) {
+                    const Point3D &first = segments[index];
+                    const Point3D &second = segments[index + 1];
+                    const Point3D worldFirst{
+                        first.x + stroke.worldOffset.x,
+                        first.y + stroke.worldOffset.y,
+                        first.z + stroke.worldOffset.z};
+                    const Point3D worldSecond{
+                        second.x + stroke.worldOffset.x,
+                        second.y + stroke.worldOffset.y,
+                        second.z + stroke.worldOffset.z};
+                    QPointF screenFirst;
+                    QPointF screenSecond;
+                    if (!viewportTransform_.worldPointToScreenUnclipped(
+                            worldFirst, renderFrame.viewportSize, &screenFirst) ||
+                        !viewportTransform_.worldPointToScreenUnclipped(
+                            worldSecond, renderFrame.viewportSize, &screenSecond)) {
+                        continue;
+                    }
+                    const qreal length = QLineF(screenFirst, screenSecond).length();
+                    const int subdivisions = std::clamp(
+                        qCeil(length * std::max<qreal>(devicePixelRatioF(), 1.0)),
+                        1, 8192);
+                    for (int sample = 0; sample < subdivisions; ++sample) {
+                        const qreal t0 = qreal(sample) / subdivisions;
+                        const qreal t1 = qreal(sample + 1) / subdivisions;
+                        const qreal tm = (t0 + t1) * 0.5;
+                        const QPointF a = screenFirst +
+                            (screenSecond - screenFirst) * t0;
+                        const QPointF b = screenFirst +
+                            (screenSecond - screenFirst) * t1;
+                        const Point3D midpoint{
+                            worldFirst.x + (worldSecond.x - worldFirst.x) * tm,
+                            worldFirst.y + (worldSecond.y - worldFirst.y) * tm,
+                            worldFirst.z + (worldSecond.z - worldFirst.z) * tm};
+                        bool visible = true;
+                        const QSize domainSize = renderObject->showInFront
+                            ? frontSize : regularSize;
+                        const qreal scaleX = domainSize.width() > 0
+                            ? qreal(domainSize.width()) /
+                                  renderFrame.viewportSize.width() : 1.0;
+                        const qreal scaleY = domainSize.height() > 0
+                            ? qreal(domainSize.height()) /
+                                  renderFrame.viewportSize.height() : 1.0;
+                        const int x = qRound((a.x() + b.x()) * 0.5 * scaleX);
+                        const int y = qRound((a.y() + b.y()) * 0.5 * scaleY);
+                        const int pixel = y * domainSize.width() + x;
+                        const QVector<float> &domainDepth = renderObject->showInFront
+                            ? rasterSurfaceLayers.inFrontSceneDepth
+                            : rasterSurfaceLayers.regularSceneDepth;
+                        const bool domainAvailable = renderObject->showInFront
+                            ? hasFrontDepth : hasRegularDepth;
+                        if (domainAvailable && x >= 0 && x < domainSize.width() &&
+                            y >= 0 && y < domainSize.height() && pixel >= 0 &&
+                            pixel < domainDepth.size()) {
+                            const float surfaceDepth = domainDepth[pixel];
+                            const float strokeDepth = rasterWorkbenchCameraDepth(
+                                QVector3D(float(midpoint.x), float(midpoint.y),
+                                          float(midpoint.z)),
+                                cameraPosition, viewDirection);
+                            const float tolerance = std::max(
+                                5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
+                            visible = !std::isfinite(surfaceDepth) ||
+                                strokeDepth >= surfaceDepth - tolerance;
+                            if (visible && !renderObject->showInFront &&
+                                hasFrontDepth && pixel <
+                                    rasterSurfaceLayers.inFrontSceneDepth.size()) {
+                                visible = !std::isfinite(
+                                    rasterSurfaceLayers.inFrontSceneDepth[pixel]);
+                            }
+                        }
+                        if (visible) painter.drawLine(a, b);
+                    }
+                }
+                painter.restore();
             }
 
             // The raster Workbench renderer does not replay the GPU scene

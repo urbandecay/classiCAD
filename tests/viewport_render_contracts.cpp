@@ -6617,7 +6617,9 @@ int main(int argc, char *argv[])
                         const QString &cavityDiagnosticPrefix = QString{},
                         QVector<float> *sceneLinearCapture = nullptr,
                         const QVector3D *backgroundSceneLinear = nullptr,
-                        const QColor *viewportBackground = nullptr) {
+                        const QColor *viewportBackground = nullptr,
+                        const QVector<ViewportRenderObject> *sceneOverride =
+                            nullptr) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -6682,9 +6684,11 @@ int main(int argc, char *argv[])
                             return false;
                         }
                         const QVector<ViewportRenderObject> renderObjects =
-                            renderObject == nullptr
-                                ? QVector<ViewportRenderObject>{surfaceObject}
-                                : QVector<ViewportRenderObject>{*renderObject};
+                            sceneOverride != nullptr
+                                ? *sceneOverride
+                                : (renderObject == nullptr
+                                       ? QVector<ViewportRenderObject>{surfaceObject}
+                                       : QVector<ViewportRenderObject>{*renderObject});
                         gpuSurfaceRenderer.setCavityDiagnosticOutput(
                             !cavityDiagnosticPrefix.isEmpty());
                         const auto result =
@@ -13739,6 +13743,99 @@ int main(int argc, char *argv[])
                         passed &= check(
                             comboCapturesSaved,
                             "matched polygon cube outline/cavity combination captures must save display and scene-linear output");
+                    }
+                    const QString gpuShadowReceiverPrefix =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_GPU_SHADOW_RECEIVER_PREFIX");
+                    if (!gpuShadowReceiverPrefix.isEmpty()) {
+                        ViewportRenderObject shadowReceiver;
+                        shadowReceiver.shape.geometryType =
+                            GeometryType::PolygonMesh;
+                        shadowReceiver.shape.polygonMesh.vertices = {
+                            {-4.0, -4.0, -1.0}, {4.0, -4.0, -1.0},
+                            {4.0, 4.0, -1.0}, {-4.0, 4.0, -1.0}};
+                        shadowReceiver.shape.polygonMesh.faces = {
+                            {0, 1, 2, 3}};
+                        shadowReceiver.shape.polygonMesh.faceMaterialIndices =
+                            {0};
+                        shadowReceiver.objectId = ObjectId::fromValue(1912);
+                        shadowReceiver.geometryRevision = 1912;
+                        shadowReceiver.displayName =
+                            QStringLiteral("GpuShadowReceiver");
+                        shadowReceiver.displayColorSceneLinear =
+                            QVector4D(0.2f, 0.4f, 0.8f, 1.0f);
+                        shadowReceiver.meshMaterials = {
+                            WorkbenchMaterialData{}};
+                        ViewportRenderObject shadowCaster = polygonCubeObject;
+                        shadowCaster.objectId = ObjectId::fromValue(1913);
+                        shadowCaster.geometryRevision = 1913;
+                        shadowCaster.displayName =
+                            QStringLiteral("GpuShadowCaster");
+                        shadowCaster.displayColorSceneLinear =
+                            QVector4D(0.8f, 0.3f, 0.2f, 1.0f);
+                        const QVector<ViewportRenderObject> casterScene = {
+                            shadowReceiver, shadowCaster};
+                        const QVector<ViewportRenderObject> receiverOnlyScene = {
+                            shadowReceiver};
+                        ViewportShadingSettings receiverBaselineShading =
+                            rawFaceShading;
+                        receiverBaselineShading.colorMode =
+                            ViewportColorMode::Object;
+                        receiverBaselineShading.shadows = false;
+                        ViewportShadingSettings receiverShadowShading =
+                            receiverBaselineShading;
+                        receiverShadowShading.shadows = true;
+                        receiverShadowShading.shadowIntensity = 0.5;
+                        receiverShadowShading.shadowOffset = 0.1;
+                        receiverShadowShading.shadowFocus = 0.0;
+                        const struct ShadowReceiverCapture {
+                            const char *suffix;
+                            const QVector<ViewportRenderObject> *objects;
+                            bool shadows;
+                        } captures[] = {
+                            {"baseline", &casterScene, false},
+                            {"effect", &casterScene, true},
+                            {"receiver-only-baseline", &receiverOnlyScene,
+                             false},
+                            {"receiver-only-effect", &receiverOnlyScene,
+                             true},
+                        };
+                        const auto saveLinearCapture = [&] (
+                            const QString &path,
+                            const QVector<float> &pixels) {
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            return pixels.size() == 640 * 480 * 3 &&
+                                file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               pixels.constData()),
+                                           pixels.size() * qsizetype(sizeof(float))) ==
+                                    pixels.size() * qsizetype(sizeof(float));
+                        };
+                        bool capturesSaved = true;
+                        for (const ShadowReceiverCapture &capture : captures) {
+                            ViewportShadingSettings settings =
+                                capture.shadows ? receiverShadowShading
+                                                : receiverBaselineShading;
+                            QImage image;
+                            QVector<float> linear;
+                            const QString path = gpuShadowReceiverPrefix +
+                                QStringLiteral("-") +
+                                QString::fromLatin1(capture.suffix) +
+                                QStringLiteral(".pfm");
+                            capturesSaved &= renderCoordinatedScene(
+                                settings,
+                                QByteArrayLiteral("gpu-shadow-receiver-") +
+                                    QByteArray(capture.suffix),
+                                &image, nullptr, nullptr, nullptr, QString{},
+                                &linear, nullptr, nullptr, capture.objects) &&
+                                saveLinearCapture(path, linear);
+                        }
+                        passed &= check(
+                            capturesSaved,
+                            "matched GPU shadow receiver and receiver-only scene-linear captures must save");
                     }
                     const QString polygonCubeCavityCapturePath =
                         qEnvironmentVariable(

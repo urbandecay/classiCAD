@@ -127,6 +127,8 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.objectId = sceneObject.id;
         entry.displayName = sceneObject.displayName;
         entry.libraryPath = sceneObject.libraryPath;
+        entry.workbenchRandomLibraryPath =
+            sceneObject.workbenchRandomLibraryPath;
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());

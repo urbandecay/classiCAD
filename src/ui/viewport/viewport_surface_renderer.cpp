@@ -2739,7 +2739,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.effectObjectId = static_cast<quint32>(objectIndex + 1) &
                                    0x7fffffffu;
             range.displayName = object.displayName;
-            range.libraryPath = object.libraryPath;
+            range.libraryPath = workbenchRandomIdentityLibraryPath(object);
             range.outlineHandledBySceneStroke =
                 object.outlineHandledBySceneStroke;
             return range;
@@ -5681,7 +5681,8 @@ bool ViewportSurfaceRenderer::renderScalarVolumes(
             break;
         case ViewportColorMode::Random: {
             const QColor randomColor = workbenchRandomColor(
-                object.objectId.value(), object.displayName, object.libraryPath);
+                object.objectId.value(), object.displayName,
+                workbenchRandomIdentityLibraryPath(object));
             baseColor = workbenchRec709ToSceneLinear(
                 QVector3D(randomColor.redF(), randomColor.greenF(),
                           randomColor.blueF()));

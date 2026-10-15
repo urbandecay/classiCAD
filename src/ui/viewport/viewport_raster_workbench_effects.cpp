@@ -756,7 +756,8 @@ bool compositeRasterWorkbenchSurfaces(
             break;
         case ViewportColorMode::Random: {
             const QColor randomColor = workbenchRandomColor(
-                object.objectId, object.displayName, object.libraryPath);
+                object.objectId, object.displayName,
+                workbenchRandomIdentityLibraryPath(object));
             baseColor = workbenchRec709ToSceneLinear(QVector3D(
                 randomColor.redF(), randomColor.greenF(), randomColor.blueF()));
             break;

@@ -9287,7 +9287,8 @@ protected:
                                   object.preparedGeometryOffset,
                                   object.displayColorSceneLinear,
                                   object.workbenchMaterial,
-                                  object.displayName, object.libraryPath,
+                                  object.displayName,
+                                  workbenchRandomIdentityLibraryPath(object),
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
@@ -10413,7 +10414,7 @@ protected:
                           renderObject.displayColorSceneLinear,
                           renderObject.workbenchMaterial,
                           renderObject.displayName,
-                          renderObject.libraryPath,
+                          workbenchRandomIdentityLibraryPath(renderObject),
                           identityMeshObjectTransform, {}, nullptr, {},
                           rasterSurfaceBatchRendered
                               ? (renderObject.showInFront
@@ -10439,7 +10440,7 @@ protected:
                           renderObject.displayColorSceneLinear,
                           renderObject.workbenchMaterial,
                           renderObject.displayName,
-                          renderObject.libraryPath,
+                          workbenchRandomIdentityLibraryPath(renderObject),
                           identityMeshObjectTransform, {}, nullptr, {},
                           rasterSurfaceBatchRendered
                               ? (renderObject.showInFront
@@ -11212,7 +11213,8 @@ protected:
                                   object.preparedGeometryOffset,
                                   object.displayColorSceneLinear,
                                   object.workbenchMaterial,
-                                  object.displayName, object.libraryPath,
+                                  object.displayName,
+                                  workbenchRandomIdentityLibraryPath(object),
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
@@ -11250,7 +11252,7 @@ protected:
                                   renderObject.displayColorSceneLinear,
                                   renderObject.workbenchMaterial,
                                   renderObject.displayName,
-                                  renderObject.libraryPath,
+                          workbenchRandomIdentityLibraryPath(renderObject),
                                   renderObject.meshObjectTransform,
                                   renderObject.meshMaterials, nullptr,
                                   renderObject.nurbsSolidFaceMaterials,

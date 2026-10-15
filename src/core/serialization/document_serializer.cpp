@@ -307,7 +307,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 21);
+    serialized.insert(QStringLiteral("version"), 22);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -462,6 +462,8 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("defaultViewLayerKey"), sceneObject.defaultViewLayerKey);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
         serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
+        serializedObject.insert(QStringLiteral("workbenchRandomLibraryPath"),
+                                sceneObject.workbenchRandomLibraryPath);
         serializedObject.insert(QStringLiteral("blenderSourceVersion"),
                                 sceneObject.blenderSourceVersion);
         serializedObject.insert(QStringLiteral("blenderMeshImportMode"),
@@ -559,7 +561,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 21) {
+    if (version < 1 || version > 22) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1325,6 +1327,18 @@ bool documentFromJson(const QJsonValue &value,
             }
             sceneObject.displayName = displayName.toString();
             sceneObject.libraryPath = libraryPath.toString();
+            if (version >= 22) {
+                const QJsonValue randomLibraryPath =
+                    serializedObject.value(
+                        QStringLiteral("workbenchRandomLibraryPath"));
+                if (!randomLibraryPath.isString()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Workbench Random identity path"));
+                    return false;
+                }
+                sceneObject.workbenchRandomLibraryPath =
+                    randomLibraryPath.toString();
+            }
         }
         if (version >= 9) {
             const QJsonValue sourceVersion =

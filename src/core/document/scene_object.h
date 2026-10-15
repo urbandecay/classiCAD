@@ -124,6 +124,9 @@ struct SceneObject {
     // objects retain the source library path when the importer provides it.
     QString displayName;
     QString libraryPath;
+    // Blender's in-memory linked ID filepath used by Workbench's Random hash.
+    // This may be absolute even when libraryPath retains Blender's // form.
+    QString workbenchRandomLibraryPath;
     Shape geometry;
     // World-space translation applied after evaluating spatial NURBS surface
     // or solid geometry. Planar curves keep their existing workplane mapping.

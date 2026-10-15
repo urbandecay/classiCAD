@@ -8255,12 +8255,17 @@ int main(int argc, char *argv[])
                                 : ViewportRenderFrame{};
                         QHash<QString, QString> importedLinkedRandomNames;
                         QHash<QString, quint64> importedLinkedRandomIds;
+                        QHash<QString, QString>
+                            importedLinkedRandomHashPaths;
                         for (const ViewportRenderObject &object :
                              importedLinkedRandomFrame.objects) {
                             importedLinkedRandomNames.insert(
                                 object.libraryPath, object.displayName);
                             importedLinkedRandomIds.insert(
                                 object.libraryPath, object.objectId.value());
+                            importedLinkedRandomHashPaths.insert(
+                                object.libraryPath,
+                                workbenchRandomIdentityLibraryPath(object));
                         }
                         QSet<QString> linkedRandomLibraryPaths;
                         QSet<quint64> linkedRandomObjectIds;
@@ -8281,6 +8286,10 @@ int main(int argc, char *argv[])
                                 importedLinkedRandomIds.value(
                                     object.libraryPath) ==
                                     object.objectId.value() &&
+                                !object.workbenchRandomLibraryPath.isEmpty() &&
+                                importedLinkedRandomHashPaths.value(
+                                    object.libraryPath) ==
+                                    object.workbenchRandomLibraryPath &&
                                 object.shape.geometryType ==
                                     GeometryType::PolygonMesh;
                             linkedRandomLibraryPaths.insert(
@@ -8317,7 +8326,7 @@ int main(int argc, char *argv[])
                              linkedRandomFrame.objects) {
                             const QColor randomColor = workbenchRandomColor(
                                 object.objectId, object.displayName,
-                                object.libraryPath);
+                                workbenchRandomIdentityLibraryPath(object));
                             const QVector3D expectedColor =
                                 workbenchRec709ToSceneLinear(QVector3D(
                                     randomColor.redF(), randomColor.greenF(),
@@ -8340,7 +8349,8 @@ int main(int argc, char *argv[])
                                     ? std::optional<WorkbenchMaterialData>(
                                           object.workbenchMaterial)
                                     : std::nullopt,
-                                object.displayName, object.libraryPath,
+                                object.displayName,
+                                workbenchRandomIdentityLibraryPath(object),
                                 object.meshObjectTransform,
                                 object.meshMaterials, &fragments);
                             qPainter.end();
@@ -8398,6 +8408,289 @@ int main(int argc, char *argv[])
                                       .arg(linkedRandomImportError.isEmpty()
                                                ? linkedRandomPersistenceError
                                                : linkedRandomImportError)));
+
+                        const QString linkedRandomReferencePath =
+                            QFileInfo(linkedRandomBlendPath).dir().filePath(
+                                QStringLiteral("linked-random-reference.png"));
+                        const bool linkedRandomReferenceExists =
+                            QFileInfo::exists(linkedRandomReferencePath);
+                        passed &= check(
+                            linkedRandomReferenceExists,
+                            qPrintable(QStringLiteral(
+                                "linked Blender Random paired render reference is missing: %1")
+                                .arg(linkedRandomReferencePath)));
+                        if (linkedRandomReferenceExists) {
+                            QImage linkedRandomReference(
+                                linkedRandomReferencePath);
+                            ViewportShadingSettings pairedRandomSettings =
+                                linkedRandomImportedSettings;
+                            pairedRandomSettings.colorTransform = 0;
+                            const QVector3D pairedBackground =
+                                workbenchSrgbToSceneLinear(QVector3D(
+                                    34.0f / 255.0f, 34.0f / 255.0f,
+                                    34.0f / 255.0f));
+                            QImage linkedRandomGpuImage;
+                            const bool linkedRandomGpuImageRendered =
+                                renderCoordinatedScene(
+                                    pairedRandomSettings,
+                                    QByteArrayLiteral(
+                                        "linked-random-blender-paired"),
+                                    &linkedRandomGpuImage, nullptr, nullptr,
+                                    nullptr, QString{}, nullptr,
+                                    &pairedBackground, nullptr,
+                                    &linkedRandomFrame.objects);
+
+                            CurveHitTester pairedRandomHitTester;
+                            ViewportRenderer pairedRandomQPainterRenderer(
+                                gpuTransform, pairedRandomHitTester);
+                            pairedRandomQPainterRenderer.setShadingSettings(
+                                pairedRandomSettings);
+                            pairedRandomQPainterRenderer
+                                .setWorkbenchRasterAntialiasingEnabled(false);
+                            QImage linkedRandomQPainterImage(
+                                glSize,
+                                QImage::Format_ARGB32_Premultiplied);
+                            linkedRandomQPainterImage.fill(Qt::transparent);
+                            const auto drawPairedRandomObject =
+                                [&pairedRandomQPainterRenderer, &glSize](
+                                    QPainter &painter,
+                                    const ViewportRenderObject &object,
+                                    RasterWorkbenchFragmentSink *sink) {
+                                pairedRandomQPainterRenderer.drawShape(
+                                    painter, object.shape, glSize, false,
+                                    object.selected, true, object.layerColor,
+                                    object.layerLineType,
+                                    object.layerLineWeightMm,
+                                    object.objectId,
+                                    object.geometryRevision,
+                                    object.preparedDepthGeometry.data(),
+                                    object.preparedGeometryOffset,
+                                    object.displayColorSceneLinear,
+                                    object.hasWorkbenchMaterial
+                                        ? std::optional<WorkbenchMaterialData>(
+                                              object.workbenchMaterial)
+                                        : std::nullopt,
+                                    object.displayName,
+                                    workbenchRandomIdentityLibraryPath(object),
+                                    object.meshObjectTransform,
+                                    object.meshMaterials, sink);
+                            };
+                            const bool linkedRandomQPainterImageRendered =
+                                compositeRasterWorkbenchSurfaces(
+                                    &linkedRandomQPainterImage,
+                                    linkedRandomFrame.objects, gpuTransform,
+                                    glSize, 1.0, false, true,
+                                    pairedRandomSettings, pairedBackground,
+                                    drawPairedRandomObject,
+                                    nullptr, {}, true);
+
+                            const auto compareRandomProbe = [&] (
+                                const QImage &actual, int centerX,
+                                int centerY, int *maximumError) {
+                                if (actual.size() != glSize ||
+                                    linkedRandomReference.size() != glSize ||
+                                    maximumError == nullptr) {
+                                    return false;
+                                }
+                                int maximum = 0;
+                                for (int y = centerY - 4;
+                                     y <= centerY + 4; ++y) {
+                                    for (int x = centerX - 4;
+                                         x <= centerX + 4; ++x) {
+                                        if (x < 0 || y < 0 ||
+                                            x >= glSize.width() ||
+                                            y >= glSize.height()) {
+                                            return false;
+                                        }
+                                        const QColor expected =
+                                            linkedRandomReference.pixelColor(
+                                                x, y);
+                                        const QColor observed =
+                                            actual.pixelColor(x, y);
+                                        maximum = std::max({
+                                            maximum,
+                                            std::abs(expected.red() -
+                                                     observed.red()),
+                                            std::abs(expected.green() -
+                                                     observed.green()),
+                                            std::abs(expected.blue() -
+                                                     observed.blue())});
+                                    }
+                                }
+                                *maximumError = maximum;
+                                return true;
+                            };
+                            QVector<QPointF> linkedRandomCenters;
+                            for (const ViewportRenderObject &object :
+                                 linkedRandomFrame.objects) {
+                                if (object.shape.geometryType !=
+                                        GeometryType::PolygonMesh ||
+                                    object.shape.polygonMesh.vertices.isEmpty()) {
+                                    continue;
+                                }
+                                Point3D localCenter;
+                                for (const Point3D &vertex :
+                                     object.shape.polygonMesh.vertices) {
+                                    localCenter.x += vertex.x;
+                                    localCenter.y += vertex.y;
+                                    localCenter.z += vertex.z;
+                                }
+                                const qreal inverseVertexCount = 1.0 /
+                                    object.shape.polygonMesh.vertices.size();
+                                localCenter.x *= inverseVertexCount;
+                                localCenter.y *= inverseVertexCount;
+                                localCenter.z *= inverseVertexCount;
+                                const auto &matrix = object.meshObjectTransform;
+                                const qreal homogeneous = matrix[12] *
+                                        localCenter.x + matrix[13] *
+                                        localCenter.y + matrix[14] *
+                                        localCenter.z + matrix[15];
+                                const qreal divisor =
+                                    std::abs(homogeneous) > 1.0e-12
+                                        ? homogeneous : 1.0;
+                                const Point3D worldCenter{
+                                    (matrix[0] * localCenter.x +
+                                     matrix[1] * localCenter.y +
+                                     matrix[2] * localCenter.z + matrix[3]) /
+                                            divisor +
+                                        object.preparedGeometryOffset.x,
+                                    (matrix[4] * localCenter.x +
+                                     matrix[5] * localCenter.y +
+                                     matrix[6] * localCenter.z + matrix[7]) /
+                                            divisor +
+                                        object.preparedGeometryOffset.y,
+                                    (matrix[8] * localCenter.x +
+                                     matrix[9] * localCenter.y +
+                                     matrix[10] * localCenter.z + matrix[11]) /
+                                            divisor +
+                                        object.preparedGeometryOffset.z};
+                                QPointF screenCenter;
+                                if (gpuTransform.worldPointToScreenUnclipped(
+                                        worldCenter, glSize, &screenCenter)) {
+                                    linkedRandomCenters.append(screenCenter);
+                                }
+                            }
+                            std::sort(linkedRandomCenters.begin(),
+                                      linkedRandomCenters.end(),
+                                      [](const QPointF &left,
+                                         const QPointF &right) {
+                                          return left.x() < right.x();
+                                      });
+                            const bool linkedRandomCentersProjected =
+                                linkedRandomCenters.size() == 2;
+                            const QPointF linkedRandomCenterA =
+                                linkedRandomCentersProjected
+                                    ? linkedRandomCenters[0] : QPointF();
+                            const QPointF linkedRandomCenterB =
+                                linkedRandomCentersProjected
+                                    ? linkedRandomCenters[1] : QPointF();
+                            int gpuRandomErrorA = 256;
+                            int gpuRandomErrorB = 256;
+                            int qPainterRandomErrorA = 256;
+                            int qPainterRandomErrorB = 256;
+                            const bool pairedRandomProbesMatch =
+                                linkedRandomCentersProjected &&
+                                compareRandomProbe(
+                                    linkedRandomGpuImage,
+                                    qRound(linkedRandomCenterA.x()),
+                                    qRound(linkedRandomCenterA.y()),
+                                    &gpuRandomErrorA) &&
+                                compareRandomProbe(
+                                    linkedRandomGpuImage,
+                                    qRound(linkedRandomCenterB.x()),
+                                    qRound(linkedRandomCenterB.y()),
+                                    &gpuRandomErrorB) &&
+                                compareRandomProbe(
+                                    linkedRandomQPainterImage,
+                                    qRound(linkedRandomCenterA.x()),
+                                    qRound(linkedRandomCenterA.y()),
+                                    &qPainterRandomErrorA) &&
+                                compareRandomProbe(
+                                    linkedRandomQPainterImage,
+                                    qRound(linkedRandomCenterB.x()),
+                                    qRound(linkedRandomCenterB.y()),
+                                    &qPainterRandomErrorB);
+                            const QColor referenceColorA =
+                                linkedRandomReference.pixelColor(
+                                    qRound(linkedRandomCenterA.x()),
+                                    qRound(linkedRandomCenterA.y()));
+                            const QColor referenceColorB =
+                                linkedRandomReference.pixelColor(
+                                    qRound(linkedRandomCenterB.x()),
+                                    qRound(linkedRandomCenterB.y()));
+                            const QColor gpuColorA =
+                                linkedRandomGpuImage.pixelColor(
+                                    qRound(linkedRandomCenterA.x()),
+                                    qRound(linkedRandomCenterA.y()));
+                            const QColor gpuColorB =
+                                linkedRandomGpuImage.pixelColor(
+                                    qRound(linkedRandomCenterB.x()),
+                                    qRound(linkedRandomCenterB.y()));
+                            const QColor qPainterColorA =
+                                linkedRandomQPainterImage.pixelColor(
+                                    qRound(linkedRandomCenterA.x()),
+                                    qRound(linkedRandomCenterA.y()));
+                            const QColor qPainterColorB =
+                                linkedRandomQPainterImage.pixelColor(
+                                    qRound(linkedRandomCenterB.x()),
+                                    qRound(linkedRandomCenterB.y()));
+                            const bool linkedRandomReferenceSeparatesObjects =
+                                std::abs(referenceColorA.red() -
+                                         referenceColorB.red()) > 8 ||
+                                std::abs(referenceColorA.green() -
+                                         referenceColorB.green()) > 8 ||
+                                std::abs(referenceColorA.blue() -
+                                         referenceColorB.blue()) > 8;
+                            passed &= check(
+                                linkedRandomReference.size() == glSize &&
+                                    linkedRandomGpuImageRendered &&
+                                    linkedRandomQPainterImageRendered &&
+                                    pairedRandomProbesMatch &&
+                                    linkedRandomReferenceSeparatesObjects &&
+                                    gpuRandomErrorA <= 3 &&
+                                    gpuRandomErrorB <= 3 &&
+                                    qPainterRandomErrorA <= 3 &&
+                                    qPainterRandomErrorB <= 3,
+                                qPrintable(QStringLiteral(
+                                    "linked Blender Random render probes must match in GPU and QPainter (GPU max errors %1/%2; QPainter %3/%4; ref %5,%6,%7 / %8,%9,%10; GPU %11,%12,%13 / %14,%15,%16 alpha %23/%24; QPainter %17,%18,%19 / %20,%21,%22 alpha %25/%26)")
+                                    .arg(gpuRandomErrorA)
+                                    .arg(gpuRandomErrorB)
+                                    .arg(qPainterRandomErrorA)
+                                    .arg(qPainterRandomErrorB)
+                                    .arg(referenceColorA.red())
+                                    .arg(referenceColorA.green())
+                                    .arg(referenceColorA.blue())
+                                    .arg(referenceColorB.red())
+                                    .arg(referenceColorB.green())
+                                    .arg(referenceColorB.blue())
+                                    .arg(gpuColorA.red())
+                                    .arg(gpuColorA.green())
+                                    .arg(gpuColorA.blue())
+                                    .arg(gpuColorB.red())
+                                    .arg(gpuColorB.green())
+                                    .arg(gpuColorB.blue())
+                                    .arg(qPainterColorA.red())
+                                    .arg(qPainterColorA.green())
+                                    .arg(qPainterColorA.blue())
+                                    .arg(qPainterColorB.red())
+                                    .arg(qPainterColorB.green())
+                                    .arg(qPainterColorB.blue())
+                                    .arg(gpuColorA.alpha())
+                                    .arg(gpuColorB.alpha())
+                                    .arg(qPainterColorA.alpha())
+                                    .arg(qPainterColorB.alpha()) +
+                                    QStringLiteral("; identities %1 | %2")
+                                        .arg(linkedRandomFrame.objects.size() > 0
+                                                 ? linkedRandomFrame.objects[0].displayName +
+                                                       QStringLiteral(" @ ") +
+                                                       linkedRandomFrame.objects[0].libraryPath
+                                                 : QStringLiteral("missing"))
+                                        .arg(linkedRandomFrame.objects.size() > 1
+                                                 ? linkedRandomFrame.objects[1].displayName +
+                                                       QStringLiteral(" @ ") +
+                                                       linkedRandomFrame.objects[1].libraryPath
+                                                 : QStringLiteral("missing"))));
+                        }
                     }
                     {
                         ViewportRenderObject shadowFactorReceiver;

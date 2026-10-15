@@ -66,6 +66,7 @@ struct ViewportRenderObject {
     ObjectId objectId = ObjectId::invalid();
     QString displayName;
     QString libraryPath;
+    QString workbenchRandomLibraryPath;
     int objectIndex = -1;
     quint64 geometryRevision = 0;
     bool cacheable = true;
@@ -100,6 +101,14 @@ struct ViewportRenderObject {
         return selected || scalePreview || rotatePreview;
     }
 };
+
+inline QString workbenchRandomIdentityLibraryPath(
+    const ViewportRenderObject &object)
+{
+    return object.workbenchRandomLibraryPath.isEmpty()
+               ? object.libraryPath
+               : object.workbenchRandomLibraryPath;
+}
 
 struct ViewportRenderFrame {
     ViewportTransform camera;

@@ -586,13 +586,19 @@ def visibility_metadata(obj):
 
 def object_metadata(obj, scene):
     parent = obj.parent
+    library_path = source_library_path(obj)
     return {
         "object_id": stable_id(obj),
         # Workbench Random hashes ID.name, which is obj.name in Blender's
         # Python API. name_full adds a linked-library suffix and would change
         # the Workbench color before the separate library path is mixed in.
         "name": obj.name,
-        "library_path": source_library_path(obj),
+        "library_path": library_path,
+        # Blender resolves a linked ID's relative filepath before Workbench
+        # hashes it; preserve that render identity beside the source path.
+        "workbench_random_library_path": (
+            bpy.path.abspath(library_path) if library_path else ""
+        ),
         "library_path_exists": source_library_exists(obj),
         "scene_name": scene.name_full,
         "parent_id": stable_id(parent) if parent is not None else "",

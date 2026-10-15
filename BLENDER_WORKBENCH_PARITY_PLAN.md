@@ -6894,6 +6894,37 @@ resolve remain open.
   5.2.2 host fixture. This covers linked identity persistence and both
   renderer paths, not a paired full-frame render comparison.
 
+### Linked Blender Random paired render probes (2026-10-15)
+
+- Extended the Blender 5.2.2 linked-object fixture to render two same-named
+  cubes from separate libraries with Flat Random shading, AgX, AA Off, and a
+  matched 640x480 orthographic camera. The contract compares 9x9 interior
+  probes at both linked-object centers in the Blender PNG, classiCAD GPU
+  output, and QPainter output; maximum RGB error is limited to 3/255 per
+  renderer and probe.
+- The paired render exposed that Blender's runtime Workbench Random hash uses
+  the resolved linked-library filepath, even when the imported source record
+  retains a relative `//` path. Scene extraction now carries that resolved
+  hash input separately from the original library path, and classiCAD's
+  document serializer and viewport render frame preserve it. Local objects
+  and older projects without the field continue to use the existing path
+  fallback. Blender 5.2.2's name/path hash equation is pinned in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L33).
+- The QPainter compositor requires depth triangles for prepared geometry. The
+  imported polygon mesh has no NURBS depth cache, so this fixture exercises
+  the existing fragment-generated-depth fallback rather than treating an
+  early compositor rejection as a rendered image. Both renderer probes now
+  match the Blender reference within the stated tolerance. This is a two-object
+  interior color check, not full-frame coverage or edge parity; other linked
+  object types and file relocation behavior remain open.
+- Validation: Blender reported 5.2.2 LTS; `cmake --build build -j4` passed
+  with the source dependency audit; the linked-fixture
+  `classicad_viewport_render_contracts_test` passed with
+  `CLASSICAD_VIEWPORT_LINKED_RANDOM_BLEND` set to the generated host file; and
+  offscreen CTest `workbench_persistence_contracts`,
+  `viewport_render_contracts`, and `vignola_file` passed (3/3). No GUI was
+  launched.
+
 ### QPainter cavity sample range and bounded work (2026-10-15)
 
 - The QPainter World-cavity loop previously clamped `cavitySamples` to 32,

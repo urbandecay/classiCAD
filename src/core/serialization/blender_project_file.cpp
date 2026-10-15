@@ -915,6 +915,8 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.geometry = shape;
     result.displayName = item.value(QStringLiteral("name")).toString();
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath =
+        item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.blenderSourceVersion = blenderVersion;
     result.blenderMeshImportMode = importMode;
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
@@ -1296,6 +1298,8 @@ bool parseBlenderPolyCurveItem(
     classiCAD::SceneObject result;
     result.displayName = item.value(QStringLiteral("name")).toString();
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath =
+        item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
@@ -1534,6 +1538,8 @@ bool parseBlenderSurfaceItem(
     classiCAD::SceneObject result;
     result.displayName = item.value(QStringLiteral("name")).toString();
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath =
+        item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
@@ -1694,6 +1700,8 @@ bool parseBlenderScalarVolumeItem(
     classiCAD::SceneObject result;
     result.displayName = item.value(QStringLiteral("name")).toString();
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath =
+        item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
     result.hideViewport = item.value(QStringLiteral("hide_viewport")).toBool(false);
     result.hideRender = item.value(QStringLiteral("hide_render")).toBool(false);

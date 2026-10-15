@@ -3797,7 +3797,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // camera-gated and uses camera-relative depth for either projection.
     if (depthOfFieldEnabled) {
         struct LinearGatherPixel {
-            // Straight scene-linear RGB with the sharp source alpha.
+            // Straight RGB and alpha from the scene-linear source/gather.
             float red = 0.0f;
             float green = 0.0f;
             float blue = 0.0f;
@@ -4196,7 +4196,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const QPointF gatherOriginOffset =
                         rasterWorkbenchDofGatherOriginOffset(
                             x, y, outputHeight, static_cast<float>(radius));
-                    qreal red = 0.0, green = 0.0, blue = 0.0;
+                    qreal red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0;
                     qreal totalWeight = 0.0;
                     for (int tapIndex = 0; tapIndex < dofTapCount; ++tapIndex) {
                         // Evenly subsample Blender's ordered kernel when a
@@ -4224,6 +4224,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         red += sample.color.red * weight;
                         green += sample.color.green * weight;
                         blue += sample.color.blue * weight;
+                        alpha += sample.color.alpha * weight;
                         totalWeight += weight;
                     }
                     if (totalWeight <= 0.0) continue;
@@ -4234,13 +4235,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             static_cast<float>(red / totalWeight),
                             static_cast<float>(green / totalWeight),
                             static_cast<float>(blue / totalWeight),
-                            surfaceLayers->sceneLinearColor[pixelIndex].alpha};
+                            static_cast<float>(alpha / totalWeight)};
                     } else {
                         out[x] = qRgba(
                             qRound(red / totalWeight),
                             qRound(green / totalWeight),
                             qRound(blue / totalWeight),
-                            qAlpha(source.pixel(x, y)));
+                            qRound(alpha / totalWeight * 255.0));
                     }
                 }
             }
@@ -4474,20 +4475,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         RasterWorkbenchLinearPixel &original =
                             surfaceLayers->sceneLinearColor[
                                 static_cast<std::size_t>(pixelIndex)];
-                        if (original.alpha > 0.0f) {
-                            const LinearGatherPixel blurred =
-                                sampleFilteredLinearGather(x, y);
-                            const float inverseAlpha = 1.0f / original.alpha;
-                            original.red = original.alpha * (
-                                (original.red * inverseAlpha) * (1.0f - mix) +
-                                blurred.red * mix);
-                            original.green = original.alpha * (
-                                (original.green * inverseAlpha) * (1.0f - mix) +
-                                blurred.green * mix);
-                            original.blue = original.alpha * (
-                                (original.blue * inverseAlpha) * (1.0f - mix) +
-                                blurred.blue * mix);
-                        }
+                        const LinearGatherPixel blurred =
+                            sampleFilteredLinearGather(x, y);
+                        original.red = original.red * (1.0f - mix) +
+                            blurred.red * blurred.alpha * mix;
+                        original.green = original.green * (1.0f - mix) +
+                            blurred.green * blurred.alpha * mix;
+                        original.blue = original.blue * (1.0f - mix) +
+                            blurred.blue * blurred.alpha * mix;
+                        original.alpha = original.alpha * (1.0f - mix) +
+                            blurred.alpha * mix;
                         continue;
                     }
                     const QRgb original = source.pixel(x, y);
@@ -4499,7 +4496,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                qGreen(blurred) * mix),
                         qRound(qBlue(original) * (1.0f - mix) +
                                qBlue(blurred) * mix),
-                        qAlpha(original));
+                        qRound(qAlpha(original) * (1.0f - mix) +
+                               qAlpha(blurred) * mix));
                 }
             }
             if (!sceneLinearDofActive)

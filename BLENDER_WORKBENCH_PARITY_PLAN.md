@@ -7490,3 +7490,17 @@ resolve remain open.
   affect non-planar face shading and per-corner UV/color interpolation. The
   C++ build passed. Matched Blender mesh captures have not been run, so this
   closes the source-level topology mismatch without claiming visual parity.
+
+### QPainter DOF transparency (2026-10-15)
+
+- The QPainter blur gather now averages alpha along with RGB, and its resolve
+  mixes all four channels. Scene-linear output keeps premultiplied RGB while
+  allowing a blurred object to contribute color and alpha into nearby clear
+  pixels. Blender 5.2.2's pinned DOF resolve writes both add and multiply
+  terms as RGBA, and its blur passes sample and accumulate RGBA. This fixes
+  the previous sharp-alpha clamp in the CPU fallback; its bounded gather and
+  already-composited transparency still differ from Blender's full-resolution
+  pass setup. The C++ build passed; no matched transparent-film DOF comparison
+  has been run. References:
+  [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L304-L320),
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).

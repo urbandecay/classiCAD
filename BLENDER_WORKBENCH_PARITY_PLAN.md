@@ -7894,3 +7894,7 @@ resolve remain open.
   importer now reports this reason directly. A useful port needs a batched
   point-cloud geometry and display contract, including radius-aware rendering
   and point-level picking. No point-cloud geometry was fabricated.
+
+- Non-image Blender Empty display icons are reported as viewport overlays with
+  no matching classiCAD scene-object representation. Still Image Empties retain
+  their existing Picture import path.

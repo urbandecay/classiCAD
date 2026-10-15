@@ -1374,6 +1374,9 @@ def unsupported_object_record(obj, scene, depsgraph=None):
             record["image_name"] = image.name_full
             record["image_path"] = bpy.path.abspath(
                 image.filepath, library=getattr(image, "library", None))
+    elif obj.type == "EMPTY":
+        record["reason"] = (
+            "Empty display icons are viewport overlays; only still Image Empties have a supported classiCAD representation")
     elif obj.type == "CURVE":
         record["reason"] = "curve has no supported POLY, BEZIER, or NURBS spline"
     elif obj.type == "SURFACE":

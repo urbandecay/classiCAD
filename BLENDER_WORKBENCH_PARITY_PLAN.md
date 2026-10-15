@@ -4084,6 +4084,16 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   metadata; the Blender-side fixture covers extraction only. Blender's active
   image sampling and UDIM lookup are documented by pinned
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L433).
+- **Canonical material adapter projection:** Blender import and immutable
+  viewport-frame construction now share
+  `workbenchMaterialDataFromDocumentMaterial` in
+  `src/core/document/workbench_material_adapter.h`. This keeps scalar values,
+  color-space identifiers, float payload dimensions, alpha/sampling settings,
+  and first-usable image-source precedence in one projection. The material
+  resolution contract covers scalar and metadata copying plus UDIM, packed,
+  external-path, and unavailable-image ordering. This changes only transport
+  into the existing `WorkbenchMaterialData` seam; it does not change geometry,
+  material interpretation, or shader behavior.
 - **Native object-image persistence:** object-level Workbench regular image
   paths, packed bytes, and alpha mode now survive native save/reopen. Legacy
   records receive empty path/packed data and `STRAIGHT` alpha; malformed or

@@ -7,6 +7,7 @@
 #include <QVector>
 
 #include "core/document/scene_object.h"
+#include "core/document/workbench_material_adapter.h"
 #include "core/document/document_settings.h"
 #include "core/document/document_collection.h"
 
@@ -64,49 +65,6 @@ struct BlenderSceneImportReport {
     QHash<QString, QByteArray> importedBlenderColorLuts;
     QHash<QString, ImportedBlenderColorLutMetadata> importedBlenderColorLutMetadata;
 };
-
-// Resolve the imported Workbench material and its first usable active image
-// into the viewport-facing material record used by exact surface objects.
-inline WorkbenchMaterialData workbenchMaterialForBlenderImport(
-    const DocumentMaterial &material)
-{
-    WorkbenchMaterialData result;
-    if (material.baseColorSceneLinear.size() >= 3) {
-        result.baseColorSceneLinear = QVector3D(
-            material.baseColorSceneLinear[0], material.baseColorSceneLinear[1],
-            material.baseColorSceneLinear[2]);
-    }
-    result.roughness = material.roughness;
-    result.metallic = material.metallic;
-    result.alpha = material.alpha;
-    for (const DocumentImageTextureReference &image : material.imageTextures) {
-        result.textureImageSrgb = image.colorSpace.compare(
-            QStringLiteral("sRGB"), Qt::CaseInsensitive) == 0;
-        result.textureImageColorTransformId = image.sourceTransformId;
-        result.textureImageSceneLinearFloatDataBase64 =
-            image.sceneLinearFloatDataBase64;
-        result.textureImageSceneLinearFloatWidth =
-            image.sceneLinearFloatWidth;
-        result.textureImageSceneLinearFloatHeight =
-            image.sceneLinearFloatHeight;
-        result.textureImageAlphaMode = image.alphaMode;
-        result.textureImageInterpolation = image.interpolation;
-        result.textureImageExtension = image.extension;
-        if (!image.tiles.isEmpty()) {
-            result.textureImageTiles = image.tiles;
-            break;
-        }
-        if (image.packed && !image.packedDataBase64.isEmpty()) {
-            result.textureImagePackedDataBase64 = image.packedDataBase64;
-            break;
-        }
-        if (image.sourceFileExists && !image.filepath.isEmpty()) {
-            result.textureImagePath = image.filepath;
-            break;
-        }
-    }
-    return result;
-}
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.
 // Returned meshes, curves, and surfaces retain their authoritative geometry;

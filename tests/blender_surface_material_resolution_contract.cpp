@@ -41,7 +41,7 @@ int main()
     material.imageTextures.append(regularImage);
 
     const WorkbenchMaterialData resolved =
-        workbenchMaterialForBlenderImport(material);
+        workbenchMaterialDataFromDocumentMaterial(material);
     bool passed = true;
     passed &= check(resolved.baseColorSceneLinear == QVector3D(0.21f, 0.43f, 0.65f) &&
                         std::abs(resolved.roughness - 0.28) < 1.0e-6 &&
@@ -66,13 +66,30 @@ int main()
                     "packed regular images must keep their exact bytes before external-path fallback");
 
     DocumentImageTextureReference externalImage;
+    externalImage.colorSpace = QStringLiteral("sRGB");
+    externalImage.sourceTransformId = QStringLiteral("srgb-transform");
+    externalImage.sceneLinearFloatDataBase64 = QStringLiteral("external-float");
+    externalImage.sceneLinearFloatWidth = 3;
+    externalImage.sceneLinearFloatHeight = 2;
     externalImage.sourceFileExists = true;
     externalImage.filepath = QStringLiteral("/texture/external.png");
-    material.imageTextures = {externalImage};
+    DocumentImageTextureReference unavailableImage;
+    unavailableImage.colorSpace = QStringLiteral("discarded-space");
+    unavailableImage.sourceTransformId = QStringLiteral("discarded-transform");
+    unavailableImage.filepath = QStringLiteral("/texture/missing.png");
+    material.imageTextures = {unavailableImage, externalImage};
     const WorkbenchMaterialData externalResolved =
-        workbenchMaterialForBlenderImport(material);
-    passed &= check(externalResolved.textureImagePath == externalImage.filepath,
-                    "available external regular images must retain their resolved path");
+        workbenchMaterialDataFromDocumentMaterial(material);
+    passed &= check(
+        externalResolved.textureImagePath == externalImage.filepath &&
+            externalResolved.textureImageSrgb &&
+            externalResolved.textureImageColorTransformId ==
+                QStringLiteral("srgb-transform") &&
+            externalResolved.textureImageSceneLinearFloatDataBase64 ==
+                QStringLiteral("external-float") &&
+            externalResolved.textureImageSceneLinearFloatWidth == 3 &&
+            externalResolved.textureImageSceneLinearFloatHeight == 2,
+        "the first usable external image must supply its path and complete color-space payload");
 
     DocumentImageTextureReference tiledImage;
     tiledImage.tiles = {{1001, QStringLiteral("/texture/tile.1001.png"), true,
@@ -81,7 +98,7 @@ int main()
     tiledImage.packedDataBase64 = QStringLiteral("must-not-replace-tiles");
     material.imageTextures = {tiledImage};
     const WorkbenchMaterialData tiledResolved =
-        workbenchMaterialForBlenderImport(material);
+        workbenchMaterialDataFromDocumentMaterial(material);
     passed &= check(tiledResolved.textureImageTiles.size() == 1 &&
                         tiledResolved.textureImageTiles[0].packedDataBase64 ==
                             QStringLiteral("tile-bytes") &&

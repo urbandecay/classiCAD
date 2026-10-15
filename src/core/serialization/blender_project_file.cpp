@@ -1559,7 +1559,7 @@ bool parseBlenderSurfaceItem(
     if (!material.id.isEmpty()) {
         result.hasWorkbenchMaterial = true;
         result.workbenchMaterial =
-            classiCAD::workbenchMaterialForBlenderImport(material);
+            classiCAD::workbenchMaterialDataFromDocumentMaterial(material);
     }
     result.geometry.geometryType = classiCAD::GeometryType::NurbsSurface;
     result.geometry.nurbsSurface = std::move(surface);

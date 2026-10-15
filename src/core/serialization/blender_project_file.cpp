@@ -11,10 +11,12 @@
 #include "core/serialization/document_serializer.h"
 
 #include <QDir>
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -1718,6 +1720,177 @@ bool parseBlenderSurfaceItem(
     return true;
 }
 
+bool parseBlenderPictureItem(
+    const QJsonObject &item,
+    const QHash<QString, classiCAD::CollectionId> &collectionIds,
+    classiCAD::SceneObject *sceneObject,
+    QString *errorMessage)
+{
+    if (sceneObject == nullptr ||
+        item.value(QStringLiteral("object_type")).toString() !=
+            QLatin1String("EMPTY_IMAGE")) {
+        setError(errorMessage, QStringLiteral("object is not a Blender Image Empty"));
+        return false;
+    }
+
+    const QJsonArray sourceCorners =
+        item.value(QStringLiteral("picture_corners_world")).toArray();
+    if (sourceCorners.size() != 4) {
+        setError(errorMessage, QStringLiteral("Image Empty corners are invalid"));
+        return false;
+    }
+    QVector<classiCAD::Point3D> corners;
+    corners.reserve(4);
+    for (const QJsonValue &cornerValue : sourceCorners) {
+        QVector<double> xyz;
+        if (!jsonNumberArray(cornerValue, 3, &xyz)) {
+            setError(errorMessage, QStringLiteral("Image Empty corner is invalid"));
+            return false;
+        }
+        corners.append({xyz[0], xyz[1], xyz[2]});
+    }
+    const QVector3D first(corners[0].x, corners[0].y, corners[0].z);
+    const QVector3D edgeX(corners[1].x - corners[0].x,
+                          corners[1].y - corners[0].y,
+                          corners[1].z - corners[0].z);
+    const QVector3D edgeY(corners[0].x - corners[3].x,
+                          corners[0].y - corners[3].y,
+                          corners[0].z - corners[3].z);
+    if (edgeX.lengthSquared() <= 1.0e-16f ||
+        edgeY.lengthSquared() <= 1.0e-16f) {
+        setError(errorMessage, QStringLiteral("Image Empty plane is degenerate"));
+        return false;
+    }
+    const QVector3D normal = QVector3D::crossProduct(edgeX, edgeY);
+    const classiCAD::WorkPlaneFrame frame =
+        classiCAD::makeWorkPlaneFrameFromNormal(
+            corners[0], {normal.x(), normal.y(), normal.z()},
+            {edgeX.x(), edgeX.y(), edgeX.z()});
+    if (!classiCAD::isValidWorkPlaneFrame(frame)) {
+        setError(errorMessage, QStringLiteral("Image Empty plane frame is invalid"));
+        return false;
+    }
+
+    constexpr qint64 maximumPackedImageBytes = 32 * 1024 * 1024;
+    constexpr qint64 maximumImagePixels = 16 * 1024 * 1024;
+    QByteArray imageBytes;
+    const QString encoded = item.value(
+        QStringLiteral("picture_image_packed_data_base64")).toString();
+    if (!encoded.isEmpty()) {
+        if (encoded.size() > 44 * 1024 * 1024) {
+            setError(errorMessage, QStringLiteral("packed Image Empty image exceeds the transport limit"));
+            return false;
+        }
+        imageBytes = QByteArray::fromBase64(encoded.toLatin1());
+        if (imageBytes.size() > maximumPackedImageBytes) {
+            setError(errorMessage, QStringLiteral("packed Image Empty image exceeds the byte limit"));
+            return false;
+        }
+    }
+    const QString imagePath = item.value(
+        QStringLiteral("picture_image_path")).toString();
+    QImage image;
+    const auto readImage = [&](QImageReader *reader) {
+        if (reader == nullptr) return QImage{};
+        reader->setAutoTransform(true);
+        const QSize sourceSize = reader->size();
+        if (sourceSize.isValid() &&
+            qint64(sourceSize.width()) * sourceSize.height() > maximumImagePixels) {
+            return QImage{};
+        }
+        QImage decoded = reader->read();
+        if (decoded.isNull() ||
+            qint64(decoded.width()) * decoded.height() > maximumImagePixels) {
+            return QImage{};
+        }
+        return decoded;
+    };
+    if (!imageBytes.isEmpty()) {
+        QBuffer buffer(&imageBytes);
+        if (buffer.open(QIODevice::ReadOnly)) {
+            QImageReader reader(&buffer);
+            image = readImage(&reader);
+        }
+    }
+    if (image.isNull() && !imagePath.isEmpty()) {
+        const QFileInfo imageInfo(imagePath);
+        if (imageInfo.isFile() && imageInfo.size() <= maximumPackedImageBytes) {
+            QImageReader reader(imagePath);
+            image = readImage(&reader);
+            if (!image.isNull()) imageBytes.clear();
+        }
+    }
+    if (image.isNull()) {
+        setError(errorMessage, QStringLiteral("Image Empty image could not be read or exceeds its size limit"));
+        return false;
+    }
+    const double opacity = item.value(QStringLiteral("picture_opacity")).toDouble(1.0);
+    if (!std::isfinite(opacity) || opacity < 0.0 || opacity > 1.0) {
+        setError(errorMessage, QStringLiteral("Image Empty opacity is invalid"));
+        return false;
+    }
+    image = image.convertToFormat(QImage::Format_ARGB32);
+    const int opacityByte = std::clamp(qRound(opacity * 255.0), 0, 255);
+    for (int y = 0; y < image.height(); ++y) {
+        auto *row = reinterpret_cast<QRgb *>(image.scanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            const QRgb pixel = row[x];
+            row[x] = qRgba(qRed(pixel), qGreen(pixel), qBlue(pixel),
+                           (qAlpha(pixel) * opacityByte + 127) / 255);
+        }
+    }
+
+    classiCAD::SceneObject result;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath = item.value(
+        QStringLiteral("workbench_random_library_path")).toString();
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    result.geometry.geometryType = classiCAD::GeometryType::Picture;
+    result.geometry.workPlane = classiCAD::WorkPlane::XY;
+    result.geometry.workPlaneOffset = 0.0;
+    result.geometry.workPlaneFrame = frame;
+    for (const classiCAD::Point3D &corner : corners) {
+        result.geometry.points.append(
+            classiCAD::worldPointToWorkPlaneFrame(corner, frame));
+    }
+    result.geometry.pictureImage = image;
+    result.geometry.pictureImageData = opacity >= 1.0 ? imageBytes : QByteArray{};
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
+                         &objectColor)) {
+        setError(errorMessage, QStringLiteral("Image Empty display color is invalid"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(
+        float(objectColor[0]), float(objectColor[1]),
+        float(objectColor[2]), float(objectColor[3]));
+    for (const QJsonValue &collectionValue :
+         item.value(QStringLiteral("collection_ids")).toArray()) {
+        const QString sourceId = collectionValue.toString();
+        if (sourceId.isEmpty() || !collectionIds.contains(sourceId)) {
+            setError(errorMessage,
+                     QStringLiteral("Image Empty references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(sourceId));
+    }
+    const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
+    result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
+    result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
+    result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+    result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
+    result.viewLayerHidden = item.value(QStringLiteral("view_layer_hidden")).toObject();
+    result.defaultViewLayerKey = item.value(
+        QStringLiteral("default_view_layer_key")).toString();
+    if (!result.defaultViewLayerKey.isEmpty() &&
+        result.viewLayerHidden.contains(result.defaultViewLayerKey)) {
+        result.hiddenInViewport = false;
+    }
+    *sceneObject = std::move(result);
+    return true;
+}
+
 bool parseBlenderScalarVolumeItem(
     const QJsonObject &item,
     const QHash<QString, classiCAD::CollectionId> &collectionIds,
@@ -2639,6 +2812,7 @@ bool importBlenderScene(const QString &path,
             (objectType != QLatin1String("MESH") &&
              objectType != QLatin1String("CURVE") &&
              objectType != QLatin1String("SURFACE") &&
+             objectType != QLatin1String("EMPTY_IMAGE") &&
              objectType != QLatin1String("VOLUME"))) {
             ++skippedCount;
             warnings.append(QStringLiteral("A Blender scene record has missing identity or an unexpected object type and was skipped"));
@@ -2677,7 +2851,10 @@ bool importBlenderScene(const QString &path,
         const int warningCountBeforeItem = warnings.size();
         SceneObject sceneObject;
         QString itemError;
-        const bool parsed = objectType == QLatin1String("VOLUME")
+        const bool parsed = objectType == QLatin1String("EMPTY_IMAGE")
+            ? parseBlenderPictureItem(item, collectionIdsBySource,
+                                      &sceneObject, &itemError)
+            : objectType == QLatin1String("VOLUME")
             ? parseBlenderScalarVolumeItem(item, collectionIdsBySource,
                                            &sceneObject, &itemError)
             : objectType == QLatin1String("MESH")

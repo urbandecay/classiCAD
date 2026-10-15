@@ -634,6 +634,73 @@ def object_metadata(obj, scene, depsgraph=None):
     return record
 
 
+def extract_image_empty(obj, scene, packed_payload_budget):
+    """Extract a still Image Empty into the existing Picture geometry path."""
+    if obj.type != "EMPTY" or str(getattr(obj, "empty_display_type", "")) != "IMAGE":
+        return None, ""
+    image = getattr(obj, "data", None)
+    if image is None or str(getattr(image, "source", "")) != "FILE":
+        return None, "only still file-backed Image Empties are supported"
+    width, height = (int(value) for value in image.size[:2])
+    if width <= 0 or height <= 0 or width * height > 16_777_216:
+        return None, "Image Empty has missing or oversized image dimensions"
+    filepath = bpy.path.abspath(
+        image.filepath, library=getattr(image, "library", None))
+    source_exists = bool(filepath and os.path.isfile(filepath))
+    packed_data = b""
+    packed_file = getattr(image, "packed_file", None)
+    if packed_file is not None:
+        packed_size = int(getattr(packed_file, "size", len(packed_file.data)))
+        if (packed_size <= MAX_PACKED_IMAGE_BYTES and
+                packed_payload_budget["bytes"] + packed_size <=
+                MAX_PACKED_IMAGE_BYTES):
+            packed_data = bytes(packed_file.data)
+            if len(packed_data) <= MAX_PACKED_IMAGE_BYTES:
+                packed_payload_budget["bytes"] += len(packed_data)
+            else:
+                packed_data = b""
+    if not packed_data and not source_exists:
+        if packed_file is not None:
+            return None, "packed Image Empty exceeds or exhausts the 32 MiB aggregate transport limit and has no available source path"
+        return None, "Image Empty image is neither packed nor available at its resolved path"
+
+    from mathutils import Vector
+    pixel_aspect = getattr(image, "display_aspect", (1.0, 1.0))
+    aspect_x = max(1.0e-12, width * float(pixel_aspect[0]))
+    aspect_y = max(1.0e-12, height * float(pixel_aspect[1]))
+    if aspect_x >= aspect_y:
+        aspect_x, aspect_y = 1.0, aspect_y / aspect_x
+    else:
+        aspect_x, aspect_y = aspect_x / aspect_y, 1.0
+    matrix = obj.matrix_world
+    half_x = (matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))) * (
+        aspect_x * float(obj.empty_display_size) * 0.5)
+    half_y = (matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))) * (
+        aspect_y * float(obj.empty_display_size) * 0.5)
+    offset = obj.empty_image_offset
+    center = matrix.translation + half_x * (2.0 * float(offset[0]) + 1.0) + \
+        half_y * (2.0 * float(offset[1]) + 1.0)
+    corners = [center - half_x + half_y,
+               center + half_x + half_y,
+               center + half_x - half_y,
+               center - half_x - half_y]
+    item = object_metadata(obj, scene)
+    item.update({
+        "object_type": "EMPTY_IMAGE",
+        "picture_corners_world": [vector_values(corner) for corner in corners],
+        "picture_image_path": filepath if source_exists else "",
+        "picture_image_packed_data_base64": (
+            base64.b64encode(packed_data).decode("ascii") if packed_data else ""),
+        "picture_opacity": finite_number(obj.color[3]),
+        "empty_image_depth": str(getattr(obj, "empty_image_depth", "DEFAULT")),
+        "show_empty_image_perspective": bool(
+            getattr(obj, "show_empty_image_perspective", True)),
+        "show_empty_image_orthographic": bool(
+            getattr(obj, "show_empty_image_orthographic", True)),
+    })
+    return item, ""
+
+
 def loose_edge_curve_item(obj, scene, source_item, edges_world):
     """Build a curve companion without reusing the Blender mesh identity."""
     source_id = source_item["object_id"]
@@ -1280,6 +1347,14 @@ def unsupported_object_record(obj, scene, depsgraph=None):
     if obj.type == "EMPTY" and obj.instance_collection is not None:
         record["reason"] = "collection instance is metadata only; no geometry was fabricated"
         record["instance_collection"] = obj.instance_collection.name_full
+    elif obj.type == "EMPTY" and str(
+            getattr(obj, "empty_display_type", "")) == "IMAGE":
+        record["reason"] = "Image Empty image is not supported as a still file-backed picture"
+        image = getattr(obj, "data", None)
+        if image is not None:
+            record["image_name"] = image.name_full
+            record["image_path"] = bpy.path.abspath(
+                image.filepath, library=getattr(image, "library", None))
     elif obj.type == "CURVE":
         record["reason"] = "curve has no supported POLY, BEZIER, or NURBS spline"
     elif obj.type == "SURFACE":
@@ -1671,6 +1746,7 @@ def extract_scene(input_path, mode):
     surface_patch_count = 0
     font_mesh_count = 0
     volume_grid_count = 0
+    packed_empty_image_payload_budget = {"bytes": 0}
     collections_by_id = {stable_id(collection): collection
                          for collection in bpy.data.collections}
     scene_names_by_collection = {}
@@ -1811,6 +1887,25 @@ def extract_scene(input_path, mode):
                     "collection_instance_hierarchy",
                     "collection instances are expanded into supported mesh, curve, and surface copies; their hierarchy, instance selection, and per-instance Random variation are not represented",
                 )
+                continue
+            if obj.type == "EMPTY":
+                item, image_error = extract_image_empty(
+                    obj, scene, packed_empty_image_payload_budget)
+                if item is not None:
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                else:
+                    unsupported_item = unsupported_object_record(obj, scene, depsgraph)
+                    if image_error:
+                        unsupported_item["reason"] = image_error
+                    output["unsupported_items"].append(unsupported_item)
                 continue
             if obj.type == "CURVE":
                 item = extract_poly_curve_object(

@@ -7587,7 +7587,7 @@ resolve remain open.
   edge filtering uses Blender's face-angle
   factor and square-root threshold conversion; boundary and nonmanifold edges
   remain visible, while `show_all_edges` bypasses the threshold. Blender's
-  selected NURBS surface wire overlays still use classiCAD's selection color.
+  Selected NURBS surface wires now use Blender's active-object or selected-object theme color and the fixed-facing wire blend used by its curve shader; Object and Random modes use the same transformed and selected-color treatment as mesh wires at a fixed facing value of 0.5. Matched Blender image comparison remains open.
   Blender's Optimal Display flag for Subdivision Surface and Multires hides
   generated subdivision edges, but its per-edge draw mask is built in the
   internal subdivision GPU cache and is not exposed by the public evaluated

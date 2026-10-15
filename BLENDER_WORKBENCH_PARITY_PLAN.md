@@ -8625,6 +8625,8 @@ resolve remain open.
 - QPainter now blends the two adjacent scene-linear mip levels according to
   the fractional quad-wide LOD, with alpha-aware premultiplied interpolation.
   This removes whole-level jumps at fractional minification while retaining
-  the bounded whole-image footprint estimate. Blender still selects LOD per
-  fragment, so perspective-skewed quads can differ. C++ build and matched
-  image comparison remain open.
+  the bounded whole-image footprint estimate. Mip levels are generated once
+  through the selected upper level, and the maximum LOD follows the actual
+  source dimensions, including long images. Blender still selects LOD per
+  fragment, so perspective-skewed quads can differ; levels are regenerated
+  per draw. C++ build and matched image comparison remain open.

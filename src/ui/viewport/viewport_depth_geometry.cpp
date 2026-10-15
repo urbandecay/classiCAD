@@ -6,6 +6,7 @@
 
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_surface_evaluator.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "services/sampling/curve_sampler.h"
 
@@ -416,6 +417,45 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
         trianglesAtVertex[secondVertex].append(triangleIndex);
         trianglesAtVertex[thirdVertex].append(triangleIndex);
     }
+    QVector<QVector3D> evaluatedNormals(tessellation->vertices().size());
+    QVector<quint8> evaluatedNormalValid(tessellation->vertices().size(), 0);
+    if (textureParametersValid && !piecewiseLinearExtrusion) {
+        PreparedNurbsSurfaceEvaluator evaluator;
+        if (evaluator.prepare(surface)) {
+            for (int vertexIndex = 0;
+                 vertexIndex < textureParameters.size();
+                 ++vertexIndex) {
+                Point3D derivativeU{};
+                Point3D derivativeV{};
+                const QPointF parameter = textureParameters[vertexIndex];
+                if (!evaluator.evaluateDerivatives(parameter.x(), parameter.y(),
+                                                   &derivativeU, &derivativeV)) {
+                    continue;
+                }
+                QVector3D normal = QVector3D::crossProduct(
+                    asVector(derivativeU), asVector(derivativeV));
+                if (reverseOrientation) {
+                    normal = -normal;
+                }
+                if (!std::isfinite(normal.lengthSquared()) ||
+                    normal.lengthSquared() <= 1.0e-20f) {
+                    continue;
+                }
+                const int adjacentTriangle =
+                    trianglesAtVertex[vertexIndex].isEmpty()
+                        ? -1
+                        : trianglesAtVertex[vertexIndex].front();
+                if (adjacentTriangle >= 0 &&
+                    QVector3D::dotProduct(
+                        normal, triangleNormals[adjacentTriangle]) < 0.0f) {
+                    normal = -normal;
+                }
+                evaluatedNormals[vertexIndex] = normalizedNormal(
+                    normal, QVector3D(0.0f, 0.0f, 1.0f));
+                evaluatedNormalValid[vertexIndex] = 1;
+            }
+        }
+    }
     if (collectBuildTimings) {
         timing.normalPreparationMicroseconds =
             normalPreparationTimer.nsecsElapsed() / 1000;
@@ -454,6 +494,11 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                     (parameter.y() - fullKnotsV[surface.degreeV]) /
                         (fullKnotsV[surface.controlVertexCountV] -
                          fullKnotsV[surface.degreeV])));
+            }
+            if (evaluatedNormalValid[vertexIndex]) {
+                geometry->surfaceNormals.append(
+                    evaluatedNormals[vertexIndex]);
+                continue;
             }
             QVector3D normal;
             for (const int adjacentTriangle : trianglesAtVertex[vertexIndex]) {

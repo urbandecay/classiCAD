@@ -35,6 +35,141 @@ qreal basisValue(const QVector<double> &knots,
     return value;
 }
 
+qreal basisDerivative(const QVector<double> &knots,
+                      int index,
+                      int degree,
+                      qreal parameter)
+{
+    if (degree <= 0) {
+        return 0.0;
+    }
+    qreal value = 0.0;
+    const qreal leftDenominator = knots[index + degree] - knots[index];
+    if (std::abs(leftDenominator) > 1.0e-12) {
+        value += degree / leftDenominator *
+                 basisValue(knots, index, degree - 1, parameter);
+    }
+    const qreal rightDenominator = knots[index + degree + 1] -
+                                   knots[index + 1];
+    if (std::abs(rightDenominator) > 1.0e-12) {
+        value -= degree / rightDenominator *
+                 basisValue(knots, index + 1, degree - 1, parameter);
+    }
+    return value;
+}
+
+bool evaluateSurface(const NurbsSurface3D &surface,
+                     const QVector<double> &fullKnotsU,
+                     const QVector<double> &fullKnotsV,
+                     qreal uStart,
+                     qreal uEnd,
+                     qreal vStart,
+                     qreal vEnd,
+                     qreal u,
+                     qreal v,
+                     Point3D *point,
+                     Point3D *derivativeU,
+                     Point3D *derivativeV)
+{
+    if ((!point && !derivativeU && !derivativeV) || !std::isfinite(u) ||
+        !std::isfinite(v)) {
+        return false;
+    }
+    u = std::clamp(u, uStart, uEnd);
+    v = std::clamp(v, vStart, vEnd);
+    if (u >= uEnd) u = std::nextafter(uEnd, uStart);
+    if (v >= vEnd) v = std::nextafter(vEnd, vStart);
+
+    QVector<qreal> uBasis(surface.controlVertexCountU);
+    QVector<qreal> vBasis(surface.controlVertexCountV);
+    QVector<qreal> uBasisDerivative;
+    QVector<qreal> vBasisDerivative;
+    if (derivativeU) uBasisDerivative.resize(surface.controlVertexCountU);
+    if (derivativeV) vBasisDerivative.resize(surface.controlVertexCountV);
+    for (int index = 0; index < surface.controlVertexCountU; ++index) {
+        uBasis[index] = basisValue(fullKnotsU, index, surface.degreeU, u);
+        if (derivativeU) {
+            uBasisDerivative[index] = basisDerivative(
+                fullKnotsU, index, surface.degreeU, u);
+        }
+    }
+    for (int index = 0; index < surface.controlVertexCountV; ++index) {
+        vBasis[index] = basisValue(fullKnotsV, index, surface.degreeV, v);
+        if (derivativeV) {
+            vBasisDerivative[index] = basisDerivative(
+                fullKnotsV, index, surface.degreeV, v);
+        }
+    }
+
+    Point3D numerator{};
+    Point3D numeratorU{};
+    Point3D numeratorV{};
+    qreal denominator = 0.0;
+    qreal denominatorU = 0.0;
+    qreal denominatorV = 0.0;
+    for (int uIndex = 0; uIndex < surface.controlVertexCountU; ++uIndex) {
+        if (uBasis[uIndex] == 0.0 &&
+            (!derivativeU || uBasisDerivative[uIndex] == 0.0)) {
+            continue;
+        }
+        for (int vIndex = 0; vIndex < surface.controlVertexCountV; ++vIndex) {
+            const int controlIndex =
+                uIndex * surface.controlVertexCountV + vIndex;
+            const qreal weight = surface.rational
+                                     ? surface.weights[controlIndex]
+                                     : 1.0;
+            const qreal basis = uBasis[uIndex] * vBasis[vIndex] * weight;
+            const qreal basisU = derivativeU
+                                     ? uBasisDerivative[uIndex] *
+                                           vBasis[vIndex] * weight
+                                     : 0.0;
+            const qreal basisV = derivativeV
+                                     ? uBasis[uIndex] *
+                                           vBasisDerivative[vIndex] * weight
+                                     : 0.0;
+            const Point3D &control = surface.controlPoints[controlIndex];
+            numerator.x += control.x * basis;
+            numerator.y += control.y * basis;
+            numerator.z += control.z * basis;
+            denominator += basis;
+            numeratorU.x += control.x * basisU;
+            numeratorU.y += control.y * basisU;
+            numeratorU.z += control.z * basisU;
+            denominatorU += basisU;
+            numeratorV.x += control.x * basisV;
+            numeratorV.y += control.y * basisV;
+            numeratorV.z += control.z * basisV;
+            denominatorV += basisV;
+        }
+    }
+    if (std::abs(denominator) <= 1.0e-12) {
+        return false;
+    }
+    if (point) {
+        point->x = numerator.x / denominator;
+        point->y = numerator.y / denominator;
+        point->z = numerator.z / denominator;
+    }
+    const qreal denominatorSquared = denominator * denominator;
+    if (derivativeU) {
+        derivativeU->x = (numeratorU.x * denominator -
+                           numerator.x * denominatorU) / denominatorSquared;
+        derivativeU->y = (numeratorU.y * denominator -
+                           numerator.y * denominatorU) / denominatorSquared;
+        derivativeU->z = (numeratorU.z * denominator -
+                           numerator.z * denominatorU) / denominatorSquared;
+    }
+    if (derivativeV) {
+        derivativeV->x = (numeratorV.x * denominator -
+                           numerator.x * denominatorV) / denominatorSquared;
+        derivativeV->y = (numeratorV.y * denominator -
+                           numerator.y * denominatorV) / denominatorSquared;
+        derivativeV->z = (numeratorV.z * denominator -
+                           numerator.z * denominatorV) / denominatorSquared;
+    }
+    return true;
+}
+
 } // namespace
 
 bool PreparedNurbsSurfaceEvaluator::prepare(const NurbsSurface3D &surface)
@@ -94,58 +229,26 @@ bool PreparedNurbsSurfaceEvaluator::evaluate(qreal u,
                                              qreal v,
                                              Point3D *point) const
 {
-    if (!valid_ || point == nullptr || !std::isfinite(u) || !std::isfinite(v)) {
+    if (!valid_ || point == nullptr) {
         return false;
     }
+    return evaluateSurface(surface_, fullKnotsU_, fullKnotsV_,
+                           uStart_, uEnd_, vStart_, vEnd_, u, v,
+                           point, nullptr, nullptr);
+}
 
-    u = std::clamp(u, uStart_, uEnd_);
-    v = std::clamp(v, vStart_, vEnd_);
-    if (u >= uEnd_) {
-        u = std::nextafter(uEnd_, uStart_);
-    }
-    if (v >= vEnd_) {
-        v = std::nextafter(vEnd_, vStart_);
-    }
-
-    QVector<qreal> uBasis(surface_.controlVertexCountU);
-    QVector<qreal> vBasis(surface_.controlVertexCountV);
-    for (int uIndex = 0; uIndex < surface_.controlVertexCountU; ++uIndex) {
-        uBasis[uIndex] = basisValue(fullKnotsU_,
-                                    uIndex,
-                                    surface_.degreeU,
-                                    u);
-    }
-    for (int vIndex = 0; vIndex < surface_.controlVertexCountV; ++vIndex) {
-        vBasis[vIndex] = basisValue(fullKnotsV_,
-                                    vIndex,
-                                    surface_.degreeV,
-                                    v);
-    }
-
-    Point3D numerator{};
-    qreal denominator = 0.0;
-    for (int uIndex = 0; uIndex < surface_.controlVertexCountU; ++uIndex) {
-        if (uBasis[uIndex] == 0.0) {
-            continue;
-        }
-        for (int vIndex = 0; vIndex < surface_.controlVertexCountV; ++vIndex) {
-            const int controlIndex = uIndex * surface_.controlVertexCountV + vIndex;
-            const qreal basis = uBasis[uIndex] * vBasis[vIndex] *
-                (surface_.rational ? surface_.weights[controlIndex] : 1.0);
-            const Point3D &controlPoint = surface_.controlPoints[controlIndex];
-            numerator.x += controlPoint.x * basis;
-            numerator.y += controlPoint.y * basis;
-            numerator.z += controlPoint.z * basis;
-            denominator += basis;
-        }
-    }
-    if (std::abs(denominator) <= 1.0e-12) {
+bool PreparedNurbsSurfaceEvaluator::evaluateDerivatives(
+    qreal u,
+    qreal v,
+    Point3D *derivativeU,
+    Point3D *derivativeV) const
+{
+    if (!valid_ || (derivativeU == nullptr && derivativeV == nullptr)) {
         return false;
     }
-    point->x = numerator.x / denominator;
-    point->y = numerator.y / denominator;
-    point->z = numerator.z / denominator;
-    return true;
+    return evaluateSurface(surface_, fullKnotsU_, fullKnotsV_,
+                           uStart_, uEnd_, vStart_, vEnd_, u, v,
+                           nullptr, derivativeU, derivativeV);
 }
 
 bool PreparedNurbsSurfaceBasisGrid::prepare(

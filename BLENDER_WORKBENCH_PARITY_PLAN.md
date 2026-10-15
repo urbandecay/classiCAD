@@ -8713,3 +8713,14 @@ resolve remain open.
   the prepare pass. Alpha remains in its existing `[0, 1]` range. See
   [`workbench_effect_dof_prepare_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_prepare_frag.glsl#L405-L415).
   C++ build passed; matched DOF output comparison remains open.
+
+### NURBS surface derivative normals (2026-10-15)
+
+- Smooth NURBS surface and solid shading normals are now evaluated from the
+  exact rational surface derivatives at tessellation UV samples (`du × dv`),
+  with reversed face orientation applied consistently. Ruled degree-one
+  extrusion panels keep their existing hard profile edges, and facet-averaged
+  normals remain the fallback when parameter samples or derivatives are
+  unavailable. This removes the general curved-surface dependence on triangle
+  density and the fixed crease-angle threshold. `cmake --build build -j4`
+  passed; matched Blender surface-shading comparison remains open.

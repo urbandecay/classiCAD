@@ -19,6 +19,10 @@ public:
                           qreal *vStart,
                           qreal *vEnd) const;
     bool evaluate(qreal u, qreal v, Point3D *point) const;
+    bool evaluateDerivatives(qreal u,
+                             qreal v,
+                             Point3D *derivativeU,
+                             Point3D *derivativeV) const;
 
 private:
     NurbsSurface3D surface_;

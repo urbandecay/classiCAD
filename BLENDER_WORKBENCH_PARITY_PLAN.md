@@ -8393,3 +8393,11 @@ resolve remain open.
   projection helper clips line segments crossing near/far planes; see pinned
   [`overlay_curve.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_curve.hh#L850-L899)
   and [`view3d_iterators.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_view3d/view3d_iterators.cc#L2150-L2257).
+
+### Route NURBS surface wires through Edit Mode smoothing (2026-10-15)
+
+- GPU strokes for NURBS surfaces and solids already identified themselves as
+  Edit Mode wires, but their smooth-wire category defaulted to Overlay. They
+  now use the Edit Mode Smooth Wires preference, leaving ordinary curve
+  strokes on the independent Overlay preference. C++ build passed; matched
+  wire-image comparison remains open.

@@ -537,6 +537,10 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
     sceneStroke->objectId = object.objectId;
     sceneStroke->editModeWire = geometryType == GeometryType::NurbsSurface ||
                                 geometryType == GeometryType::NurbsSolid;
+    if (sceneStroke->editModeWire) {
+        sceneStroke->smoothWireCategory =
+            ViewportSmoothWireCategory::EditMode;
+    }
     sceneStroke->geometryRevision = object.preparedGeometryRevision != 0
         ? object.preparedGeometryRevision : object.geometryRevision;
     sceneStroke->cacheableGeometry = object.cacheable;

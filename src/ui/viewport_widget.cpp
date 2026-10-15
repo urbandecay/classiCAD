@@ -9505,6 +9505,61 @@ protected:
                             backPictures.append(&object);
                         }
                     }
+                    if (!backPictures.isEmpty()) {
+                        const Point3D cameraPosition =
+                            viewportTransform_.cameraPosition(size());
+                        const Point3D viewDirection =
+                            viewportTransform_.viewDirection();
+                        QVector<QPair<qreal,
+                                      const ViewportRenderObject *>>
+                            depthSortedBackPictures;
+                        depthSortedBackPictures.reserve(backPictures.size());
+                        for (const ViewportRenderObject *object :
+                             backPictures) {
+                            qreal sortDepth =
+                                std::numeric_limits<qreal>::infinity();
+                            if (object != nullptr) {
+                                const QVector<QPointF> corners =
+                                    pictureFrameCorners(object->shape);
+                                if (corners.size() == 4) {
+                                    QPointF localCenter;
+                                    for (const QPointF &corner : corners) {
+                                        localCenter += corner * 0.25;
+                                    }
+                                    const Point3D worldCenter =
+                                        workPlaneFramePointToWorld(
+                                            localCenter,
+                                            shapeWorkPlaneFrame(
+                                                object->shape));
+                                    sortDepth = -(
+                                        (cameraPosition.x - worldCenter.x) *
+                                            viewDirection.x +
+                                        (cameraPosition.y - worldCenter.y) *
+                                            viewDirection.y +
+                                        (cameraPosition.z - worldCenter.z) *
+                                            viewDirection.z);
+                                    if (!std::isfinite(sortDepth)) {
+                                        sortDepth =
+                                            std::numeric_limits<qreal>::infinity();
+                                    }
+                                }
+                            }
+                            depthSortedBackPictures.append(
+                                qMakePair(sortDepth, object));
+                        }
+                        // Blender's PassSortable sorts this camera-depth key
+                        // in ascending order, blending farther images first.
+                        std::stable_sort(
+                            depthSortedBackPictures.begin(),
+                            depthSortedBackPictures.end(),
+                            [](const auto &left, const auto &right) {
+                                return left.first < right.first;
+                            });
+                        backPictures.clear();
+                        for (const auto &entry : depthSortedBackPictures) {
+                            backPictures.append(entry.second);
+                        }
+                    }
                     // Keep the deferred overlay work bounded just like the
                     // scene-linear background and surface buffers.
                     constexpr qint64 maximumBackPictureWorkPixels =

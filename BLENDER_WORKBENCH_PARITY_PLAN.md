@@ -8455,3 +8455,15 @@ resolve remain open.
   and
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
   Runtime GPU and matched image comparisons remain open.
+
+### QPainter Back Image depth ordering (2026-10-15)
+
+- The deferred QPainter Back-image list now sorts by image-plane center depth
+  before alpha compositing, from farther to nearer; equal-depth images retain
+  scene order. Previously it used scene order for every image, which could
+  change the result for overlapping translucent images. Blender assigns the
+  same camera-space key in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh)
+  and sorts `PassSortable` keys ascending in
+  [`draw_pass.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_pass.hh).
+  Build passed; no matched overlapping-image comparison has been run.

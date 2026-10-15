@@ -359,15 +359,26 @@ int main(int argc, char *argv[])
         cavityTarget, cavityViewDirection, true);
     const float uncappedCavityRadius = rasterWorkbenchCavityRadius(
         0.6f, 128.0f, 1.0f);
+    const float subpixelCavityRadius = rasterWorkbenchCavityRadius(
+        0.25f, 1.0f, 1.0f);
+    const float subpixelPerspectiveCavityStep = rasterWorkbenchCavityStep(
+        subpixelCavityRadius, QVector3D(0.0f, 0.0f, 8.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, true);
+    const float subpixelOrthographicCavityStep = rasterWorkbenchCavityStep(
+        subpixelCavityRadius, QVector3D(0.0f, 0.0f, 8.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, false);
     passed &= check(nearCavityStep > farCavityStep &&
                         orthographicNearStep == 20.0f &&
                         orthographicFarStep == orthographicNearStep &&
                         largeOrthographicCavityStep == 128.0f &&
                         largePerspectiveNearCavityStep > 128.0f &&
                         std::abs(uncappedCavityRadius - 76.8f) < 0.001f &&
+                        subpixelCavityRadius == 0.25f &&
+                        subpixelPerspectiveCavityStep == 1.25f &&
+                        subpixelOrthographicCavityStep == 0.25f &&
                         rasterWorkbenchCavityRadius(0.0f, 128.0f, 1.0f) ==
-                            1.0f,
-                    "QPainter cavity SSAO footprint must preserve radii above 64 px, shrink with perspective receiver depth, and stay fixed in orthographic views");
+                            0.0f,
+                    "QPainter cavity SSAO footprint must preserve subpixel and large radii, shrink with perspective receiver depth, and stay fixed in orthographic views");
 
     const QSize cavityPixelSize(16, 12);
     passed &= check(

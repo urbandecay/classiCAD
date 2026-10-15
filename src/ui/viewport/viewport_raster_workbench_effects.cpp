@@ -389,8 +389,7 @@ float rasterWorkbenchCavityRadius(float cavityDistance,
                                   float pixelsPerWorldUnit,
                                   float devicePixelRatio) noexcept
 {
-    return std::max(1.0f, cavityDistance * pixelsPerWorldUnit *
-                              devicePixelRatio);
+    return cavityDistance * pixelsPerWorldUnit * devicePixelRatio;
 }
 
 float rasterWorkbenchCavityStep(float baseRadiusPixels,
@@ -415,7 +414,7 @@ float rasterWorkbenchCavityStep(float baseRadiusPixels,
     // The caller supplies an already projected radius in pixels. Blender's
     // shader halves its UV-space offset before sampling; that conversion is
     // already accounted for when expressing this footprint in pixels.
-    return std::max(1.0f, radius);
+    return radius;
 }
 
 int rasterWorkbenchCavitySampleCount(int requestedSamples,

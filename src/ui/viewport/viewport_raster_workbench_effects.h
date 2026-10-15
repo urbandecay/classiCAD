@@ -26,8 +26,8 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
                                  const Point3D &viewDirection) noexcept;
 
-// Project the configured cavity distance into pixels, with Blender's CPU
-// minimum-step guard but no artificial upper radius clamp.
+// Project the configured cavity distance into pixels without an artificial
+// minimum or upper radius clamp.
 float rasterWorkbenchCavityRadius(float cavityDistance,
                                   float pixelsPerWorldUnit,
                                   float devicePixelRatio) noexcept;

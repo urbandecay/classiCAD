@@ -6124,9 +6124,9 @@ resolve remain open.
   radius. Blender 5.2.2 computes the screen-space offset from the projection
   matrix, configured cavity distance, and receiver depth, then samples the
   resulting projected neighborhood without an equivalent 64-pixel limit.
-  The CPU path retains its 1-pixel minimum and its independent 32-million
-  sample-work ceiling, so removing the radius clamp does not increase the
-  number of per-pixel taps.
+  The CPU path preserves the resulting subpixel radius and its independent
+  32-million sample-work ceiling, so removing the radius clamp does not
+  increase the number of per-pixel taps.
 - Added an opt-in shared cavity-distance override to the paired Blender and
   classiCAD diagnostic fixtures. At `cavityDistance=0.6`, the matched
   640×480 orthographic cube projects a radius of 76.8 px in classiCAD's
@@ -6149,6 +6149,22 @@ resolve remain open.
   Validation: `cmake --build build -j4`, Python fixture syntax compilation,
   capture-enabled offscreen `viewport_render_contracts` (1/1), and the
   per-tap/effect-delta comparators passed. No GUI was launched.
+
+### QPainter cavity subpixel projected radius (2026-10-15)
+
+- The QPainter cavity path no longer forces the projected sample radius or its
+  perspective-adjusted step to at least one pixel. Blender 5.2.2 projects the
+  configured cavity distance directly through the view projection and samples
+  at the resulting fractional screen offset; its source contains no one-pixel
+  floor ([`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L48-L55), sample reconstruction and attenuation at lines 63-95).
+- The focused offscreen contract now checks a 0.25-pixel radius remains 0.25
+  in orthographic projection and scales to 1.25 pixels at the tested
+  perspective receiver depth. The zero-distance radius is zero, and the
+  existing 76.8-pixel case remains uncapped. `cmake --build build -j4` passed
+  the 320-source dependency audit and `viewport_render_contracts` passed
+  offscreen (1/1). This aligns the projected sample coordinates with Blender;
+  a matched low-distance output comparison and broader QPainter cavity parity
+  remain open. No GUI was launched.
 
 ### QPainter cavity blue-noise row orientation (2026-10-15)
 

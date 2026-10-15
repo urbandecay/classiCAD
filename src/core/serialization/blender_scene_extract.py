@@ -2175,7 +2175,8 @@ def extract_scene(input_path, mode):
                     unsupported_instance_types.add(
                         "non-collection-generated-" + source_obj.type)
                     continue
-                if source_obj.type not in {"MESH", "CURVE", "SURFACE"}:
+                if source_obj.type not in {
+                        "MESH", "CURVE", "SURFACE", "FONT", "META"}:
                     unsupported_instance_types.add(source_obj.type)
                     continue
                 if len(instance_records) >= MAX_COLLECTION_INSTANCES:
@@ -2219,7 +2220,35 @@ def extract_scene(input_path, mode):
                      "::" + instance_suffix)
                     .encode("utf-8")).hexdigest()
                 try:
-                    if source_obj.type == "MESH":
+                    if source_obj.type in {"FONT", "META"}:
+                        item_features = []
+                        evaluated_object = source_obj.evaluated_get(
+                            instance_depsgraph)
+                        item = extract_mesh_object(
+                            source_obj, scene, "evaluated", instance_depsgraph,
+                            output["materials"], item_features,
+                            transform_override=instance_transform,
+                            evaluated_object_override=evaluated_object)
+                        item["object_type"] = "MESH"
+                        item["source_object_type"] = source_obj.type
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        feature_name = (
+                            "font_to_mesh" if source_obj.type == "FONT"
+                            else "metaball_to_mesh")
+                        reason = (
+                            "evaluated glyph geometry was imported as a mesh; editable text, font settings, and text layout were not retained"
+                            if source_obj.type == "FONT" else
+                            "evaluated metaball geometry was imported as a baked mesh; editable metaball data and threshold settings were not retained")
+                        add_unsupported(
+                            item_features, instance_id, feature_name, reason)
+                        output["unsupported_features"].extend(item_features)
+                        output["items"].append(item)
+                        if source_obj.type == "FONT":
+                            font_mesh_count += 1
+                        mesh_count += 1
+                    elif source_obj.type == "MESH":
                         item = extract_mesh_object(
                             source_obj, scene, mode, instance_depsgraph,
                             output["materials"], output["unsupported_features"],

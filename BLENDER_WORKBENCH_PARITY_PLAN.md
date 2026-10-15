@@ -1412,6 +1412,15 @@ This is the status after the first implementation pass and the team's code revie
   `workbench_raster_fragment_contracts` passed (2/2). Matched Blender image
   comparison, unsupported topology, and broader shadow geometry remain open.
 
+### GPU transparent shadow lighting term (2026-10-15)
+
+- Blender's transparent accumulation shader applies its normal-based shadow
+  lighting term but does not sample opaque shadow-volume visibility. GPU
+  transparent draws now keep the directional lighting factor enabled while
+  disabling shadow-map and volume visibility for those faces. The same rule
+  applies to in-front transparency. This follows Blender's shader structure;
+  no matched image comparison has been run for the change.
+
 **Transparency-domain plan correction (2026-10-14):** The QPainter Solid
 compositor already keeps regular and `showInFront` opaque/transparent domains
 separate in its weighted and sorted paths, and existing contracts exercise

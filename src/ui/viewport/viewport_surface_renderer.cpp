@@ -6804,9 +6804,11 @@ bool ViewportSurfaceRenderer::draw(
                                    int firstVertex,
                                    int vertexCount,
                                    bool transparencyAccumulation = false,
-                                   bool writeMaterialData = false) {
+                                   bool writeMaterialData = false,
+                                   bool enableShadowVisibility = true) {
             program_.setUniformValue("uShadowVolumeShadowed",
-                                     volumeShadowed);
+                                     volumeShadowed &&
+                                         enableShadowVisibility);
             const bool writeShadowMask = !transparencyAccumulation &&
                 settings.shadows && sharedTargets != nullptr &&
                 sharedTargets->shadowMaskTexture != 0 &&
@@ -6815,7 +6817,8 @@ bool ViewportSurfaceRenderer::draw(
             program_.setUniformValue("uUseShadows",
                                      useShadows && enableShadows);
             program_.setUniformValue("uUseShadowMap",
-                                     shadowMapAvailable && enableShadows);
+                                     shadowMapAvailable && enableShadows &&
+                                         enableShadowVisibility);
             program_.setUniformValue(
                 "uUseAttributeColor",
                 settings.colorMode == ViewportColorMode::Attribute &&
@@ -7222,7 +7225,11 @@ bool ViewportSurfaceRenderer::draw(
             program_.setUniformValue("uTransparencyAccumulation", true);
             for (const int rangeIndex : transparentRangeIndices) {
                 const DrawRange &range = ranges_[rangeIndex];
-                drawRange(range, false, false, range.first, range.count, true);
+                // Blender keeps the normal-based shadow lighting term for
+                // transparent faces, but does not sample opaque shadow
+                // visibility for their accumulation pass.
+                drawRange(range, false, true, range.first, range.count,
+                          true, false, false);
             }
             program_.setUniformValue("uTransparencyAccumulation", false);
             program_.setUniformValue("uExcludeFrontCoverage", false);
@@ -7330,8 +7337,8 @@ bool ViewportSurfaceRenderer::draw(
                 program_.setUniformValue("uTransparencyAccumulation", true);
                 for (const int rangeIndex : frontTransparentRangeIndices) {
                     const DrawRange &range = ranges_[rangeIndex];
-                    drawRange(range, false, false, range.first, range.count,
-                              true);
+                    drawRange(range, false, true, range.first, range.count,
+                              true, false, false);
                 }
                 program_.setUniformValue("uTransparencyAccumulation", false);
                 program_.release();

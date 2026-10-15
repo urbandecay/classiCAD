@@ -52,7 +52,8 @@ constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 constexpr qint64 kMaximumPictureProcessPixels = 16'000'000;
 
-QImage pictureImageForPainter(const Shape &picture)
+QImage pictureImageForPainter(const Shape &picture,
+                              bool deferCutoutAlphaThreshold)
 {
     if (picture.pictureImage.isNull()) return {};
     const QVector4D tint = picture.pictureColorSceneLinear;
@@ -85,7 +86,9 @@ QImage pictureImageForPainter(const Shape &picture)
             const int sourceAlpha = qAlpha(source);
             const int alpha = picture.pictureUseAlphaBlend
                 ? qRound(sourceAlpha * std::clamp(tint.w(), 0.0f, 1.0f))
-                : sourceAlpha < qRound(0.05 * 255.0) ? 0 : 255;
+                : deferCutoutAlphaThreshold
+                    ? sourceAlpha
+                    : sourceAlpha < qRound(0.05 * 255.0) ? 0 : 255;
             const auto convertChannel = [&](int channel, float colorTint) {
                 float linear = decodeSrgb(float(channel) / 255.0f);
                 if (tinted) linear *= colorTint;
@@ -3170,7 +3173,30 @@ void ViewportRenderer::drawShape(QPainter &painter,
             !viewportPictureVisibleInView(shape, transform_, viewportSize)) {
             return;
         }
-        const QImage painterImage = pictureImageForPainter(shape);
+        constexpr qint64 maximumPictureDepthPixels = 16'000'000;
+        const qreal pictureDevicePixelRatio =
+            painter.device()->devicePixelRatioF();
+        const QSize viewportRasterSize(
+            qRound(viewportSize.width() * pictureDevicePixelRatio),
+            qRound(viewportSize.height() * pictureDevicePixelRatio));
+        const qint64 viewportRasterPixels =
+            qint64(viewportRasterSize.width()) * viewportRasterSize.height();
+        const bool canUseViewportCutoutRaster =
+            !shape.pictureUseAlphaBlend && viewportRasterPixels > 0 &&
+            viewportRasterPixels <= maximumPictureDepthPixels;
+        const bool canUseSceneDepthRaster =
+            !preview && shape.pictureImageDepth != PictureImageDepth::Front &&
+            opaqueSceneDepth != nullptr &&
+            opaqueSceneDepthSize.width() > 0 &&
+            opaqueSceneDepthSize.height() > 0 &&
+            opaqueSceneDepth->size() ==
+                opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height() &&
+            qint64(opaqueSceneDepthSize.width()) *
+                opaqueSceneDepthSize.height() <= maximumPictureDepthPixels;
+        const bool rasterizePicture = canUseSceneDepthRaster ||
+                                      canUseViewportCutoutRaster;
+        const QImage painterImage = pictureImageForPainter(
+            shape, rasterizePicture && !shape.pictureUseAlphaBlend);
         if (painterImage.isNull()) return;
 
         QPolygonF sourceCorners;
@@ -3186,18 +3212,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
         QTransform imageTransform;
         if (QTransform::quadToQuad(sourceCorners, screenCorners, imageTransform)) {
             QImage depthMaskedImage;
-            bool drawDepthMaskedImage = false;
-            constexpr qint64 maximumPictureDepthPixels = 16'000'000;
-            if (!preview && shape.pictureImageDepth != PictureImageDepth::Front &&
-                opaqueSceneDepth != nullptr &&
-                opaqueSceneDepthSize.width() > 0 &&
-                opaqueSceneDepthSize.height() > 0 &&
-                opaqueSceneDepth->size() ==
-                    opaqueSceneDepthSize.width() *
-                        opaqueSceneDepthSize.height() &&
-                qint64(opaqueSceneDepthSize.width()) *
-                    opaqueSceneDepthSize.height() <=
-                        maximumPictureDepthPixels) {
+            bool drawRasterizedPicture = false;
+            if (rasterizePicture) {
+                const QSize rasterSize = canUseSceneDepthRaster
+                    ? opaqueSceneDepthSize
+                    : viewportRasterSize;
                 const QTransform imageToDevice =
                     imageTransform * painter.deviceTransform();
                 bool inverseValid = false;
@@ -3210,7 +3229,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     imageToDevice.map(sourceCorners[3])};
                 if (inverseValid) {
                     depthMaskedImage = QImage(
-                        opaqueSceneDepthSize, QImage::Format_ARGB32_Premultiplied);
+                        rasterSize, QImage::Format_ARGB32_Premultiplied);
                     depthMaskedImage.fill(Qt::transparent);
                     QPainter imagePainter(&depthMaskedImage);
                     imagePainter.setRenderHint(
@@ -3259,28 +3278,28 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             [](const QPointF &a, const QPointF &b) {
                                 return a.x() < b.x();
                             })->x()),
-                        0, opaqueSceneDepthSize.width());
+                        0, rasterSize.width());
                     const int right = std::clamp(
                         qCeil(std::max_element(
                             deviceCorners.cbegin(), deviceCorners.cend(),
                             [](const QPointF &a, const QPointF &b) {
                                 return a.x() < b.x();
                             })->x()),
-                        0, opaqueSceneDepthSize.width());
+                        0, rasterSize.width());
                     const int top = std::clamp(
                         qFloor(std::min_element(
                             deviceCorners.cbegin(), deviceCorners.cend(),
                             [](const QPointF &a, const QPointF &b) {
                                 return a.y() < b.y();
                             })->y()),
-                        0, opaqueSceneDepthSize.height());
+                        0, rasterSize.height());
                     const int bottom = std::clamp(
                         qCeil(std::max_element(
                             deviceCorners.cbegin(), deviceCorners.cend(),
                             [](const QPointF &a, const QPointF &b) {
                                 return a.y() < b.y();
                             })->y()),
-                        0, opaqueSceneDepthSize.height());
+                        0, rasterSize.height());
                     for (int y = top; y < bottom; ++y) {
                         auto *imageRow = reinterpret_cast<QRgb *>(
                             depthMaskedImage.scanLine(y));
@@ -3293,31 +3312,53 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 source.y() >= shape.pictureImage.height()) {
                                 continue;
                             }
-                            const int depthIndex =
-                                y * opaqueSceneDepthSize.width() + x;
-                            const float sceneDepth =
-                                (*opaqueSceneDepth)[depthIndex];
-                            bool visible = !std::isfinite(sceneDepth);
-                            if (shape.pictureImageDepth ==
-                                PictureImageDepth::Back) {
-                                visible = !std::isfinite(sceneDepth);
-                            } else if (std::isfinite(sceneDepth)) {
-                                const qreal u = source.x() /
-                                    shape.pictureImage.width();
-                                const qreal v = source.y() /
-                                    shape.pictureImage.height();
-                                const qreal imageDepth =
-                                    pictureDepthAt(u, v);
-                                const qreal tolerance = std::max<qreal>(
-                                    5.0e-4, std::abs(sceneDepth) * 1.0e-5);
-                                visible = imageDepth + tolerance >= sceneDepth;
+                            if (!shape.pictureUseAlphaBlend) {
+                                const int alpha = qAlpha(imageRow[x]);
+                                if (alpha < qRound(0.05 * 255.0) || alpha == 0) {
+                                    imageRow[x] = 0;
+                                    continue;
+                                }
+                                if (alpha < 255) {
+                                    imageRow[x] = qRgba(
+                                        std::min(255, qRound(
+                                            float(qRed(imageRow[x])) * 255.0f /
+                                            float(alpha))),
+                                        std::min(255, qRound(
+                                            float(qGreen(imageRow[x])) * 255.0f /
+                                            float(alpha))),
+                                        std::min(255, qRound(
+                                            float(qBlue(imageRow[x])) * 255.0f /
+                                            float(alpha))),
+                                        255);
+                                }
                             }
-                            if (!visible) imageRow[x] = 0;
+                            if (canUseSceneDepthRaster) {
+                                const int depthIndex =
+                                    y * opaqueSceneDepthSize.width() + x;
+                                const float sceneDepth =
+                                    (*opaqueSceneDepth)[depthIndex];
+                                bool visible = !std::isfinite(sceneDepth);
+                                if (shape.pictureImageDepth ==
+                                    PictureImageDepth::Back) {
+                                    visible = !std::isfinite(sceneDepth);
+                                } else if (std::isfinite(sceneDepth)) {
+                                    const qreal u = source.x() /
+                                        shape.pictureImage.width();
+                                    const qreal v = source.y() /
+                                        shape.pictureImage.height();
+                                    const qreal imageDepth =
+                                        pictureDepthAt(u, v);
+                                    const qreal tolerance = std::max<qreal>(
+                                        5.0e-4, std::abs(sceneDepth) * 1.0e-5);
+                                    visible = imageDepth + tolerance >= sceneDepth;
+                                }
+                                if (!visible) imageRow[x] = 0;
+                            }
                         }
                     }
                     depthMaskedImage.setDevicePixelRatio(
-                        painter.device()->devicePixelRatioF());
-                    drawDepthMaskedImage = true;
+                        pictureDevicePixelRatio);
+                    drawRasterizedPicture = true;
                 }
             }
             painter.save();
@@ -3325,7 +3366,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (preview) {
                 painter.setOpacity(0.78);
             }
-            if (drawDepthMaskedImage) {
+            if (drawRasterizedPicture) {
                 bool baseInverseValid = false;
                 const QTransform baseLogicalFromDevice =
                     painter.deviceTransform().inverted(&baseInverseValid);

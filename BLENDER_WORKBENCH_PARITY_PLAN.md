@@ -7814,12 +7814,13 @@ resolve remain open.
   object transform, and image offset; readable packed images and external
   files are supported with 32 MiB packed-byte and 16M decoded-pixel bounds.
   Projection-specific visibility, image side, depth modes, alpha blending,
-  and scene-linear object tint are retained. QPainter preprocesses tint and
-  alpha cutouts only up to 16M image pixels; larger native images keep their
-  original appearance in that fallback. Blender's image alpha mode is also
-  retained: GPU drawing converts decoded RGB to scene-linear, premultiplies
-  when Blender requests PREMUL, then unpremultiplies the filtered sample before
-  tinting. QPainter works from Qt's straight-format conversion. Generated or
+  and scene-linear object tint are retained. QPainter bakes tint only for
+  source images up to 16M pixels; larger sources keep their original RGB.
+  Opaque cutouts are thresholded after filtering only when the viewport raster
+  fits within 16M pixels. Blender's image alpha mode is retained: GPU drawing
+  converts decoded RGB to scene-linear, premultiplies when Blender requests
+  PREMUL, then unpremultiplies the filtered sample before tinting. QPainter
+  works from Qt's straight-format conversion. Generated or
   animated images and matched comparison remain unsupported. GPU Image Empty
   textures now generate mip levels and use trilinear minification; the
   QPainter fallback still relies on Qt's smooth image transform.
@@ -8152,6 +8153,19 @@ resolve remain open.
   [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L2917-L2928).
   QPainter continues to use Qt's smooth image transform without an explicit
   mip chain, so strong minification may still differ. No matched image
+  comparison has been run.
+
+### QPainter Image Empty filtered alpha cutout (2026-10-15)
+
+- When Blender Image Empty alpha blending is disabled, QPainter now filters
+  the image into a bounded device-pixel raster before applying Blender's 5%
+  alpha cutoff. The existing retained scene-depth mask is applied after that
+  cutoff, and the raster is composited without another scaling pass. If the
+  viewport raster exceeds 16M pixels, QPainter keeps the source-texel cutoff
+  fallback. Oversized sources also skip RGB tint preprocessing, even when this
+  bounded raster applies the cutoff. Filtering through premultiplied QImage
+  pixels can still differ when fully transparent texels contain nonblack RGB.
+  No matched image
   comparison has been run.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)

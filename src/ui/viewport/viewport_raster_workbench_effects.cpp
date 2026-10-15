@@ -385,6 +385,14 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
         (position.z() - cameraPosition.z) * viewDirection.z);
 }
 
+float rasterWorkbenchCavityRadius(float cavityDistance,
+                                  float pixelsPerWorldUnit,
+                                  float devicePixelRatio) noexcept
+{
+    return std::max(1.0f, cavityDistance * pixelsPerWorldUnit *
+                              devicePixelRatio);
+}
+
 float rasterWorkbenchCavityStep(float baseRadiusPixels,
                                 const QVector3D &receiverPosition,
                                 const Point3D &cameraPosition,
@@ -3045,10 +3053,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         coveredOpaquePixels += sample.objectId != 0;
     const int effectiveSamples = rasterWorkbenchCavitySampleCount(
         requested, coveredOpaquePixels);
-    const float radius = std::clamp(
-        static_cast<float>(settings.cavityDistance *
-                           transform.viewScalePixelsPerWorldUnit(viewportSize) * dpr),
-        1.0f, 64.0f);
+    const float radius = rasterWorkbenchCavityRadius(
+        static_cast<float>(settings.cavityDistance),
+        static_cast<float>(
+            transform.viewScalePixelsPerWorldUnit(viewportSize)),
+        static_cast<float>(dpr));
     const float attenuation = std::max(0.01f,
         static_cast<float>(settings.cavityAttenuation));
     const Point3D cameraPosition = perspective

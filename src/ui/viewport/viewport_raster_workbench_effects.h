@@ -26,6 +26,12 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
                                  const Point3D &viewDirection) noexcept;
 
+// Project the configured cavity distance into pixels, with Blender's CPU
+// minimum-step guard but no artificial upper radius clamp.
+float rasterWorkbenchCavityRadius(float cavityDistance,
+                                  float pixelsPerWorldUnit,
+                                  float devicePixelRatio) noexcept;
+
 // QPainter SSAO sample step, with perspective footprint scaled from the view
 // target depth to the receiver depth. Orthographic views retain the base step.
 float rasterWorkbenchCavityStep(float baseRadiusPixels,

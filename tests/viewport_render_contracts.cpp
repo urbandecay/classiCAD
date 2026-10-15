@@ -85,6 +85,12 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(format);
     QGuiApplication application(argc, argv);
     bool passed = true;
+    const auto cavityDiagnosticDistance = [] {
+        bool ok = false;
+        const double value = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_DISTANCE").toDouble(&ok);
+        return ok && std::isfinite(value) ? std::max(0.0, value) : 0.2;
+    };
 
     const QColor linkedRandomColorA = workbenchRandomColor(
         ObjectId::fromValue(1), QStringLiteral("LinkedFixture"),
@@ -345,10 +351,23 @@ int main(int argc, char *argv[])
     const float orthographicFarStep = rasterWorkbenchCavityStep(
         20.0f, QVector3D(0.0f, 0.0f, 5.0f), cavityCamera,
         cavityTarget, cavityViewDirection, false);
+    const float largeOrthographicCavityStep = rasterWorkbenchCavityStep(
+        128.0f, QVector3D(0.0f, 0.0f, 5.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, false);
+    const float largePerspectiveNearCavityStep = rasterWorkbenchCavityStep(
+        128.0f, QVector3D(0.0f, 0.0f, 8.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, true);
+    const float uncappedCavityRadius = rasterWorkbenchCavityRadius(
+        0.6f, 128.0f, 1.0f);
     passed &= check(nearCavityStep > farCavityStep &&
                         orthographicNearStep == 20.0f &&
-                        orthographicFarStep == orthographicNearStep,
-                    "QPainter cavity SSAO footprint must use the projected pixel radius, shrink with perspective receiver depth, and stay fixed in orthographic views");
+                        orthographicFarStep == orthographicNearStep &&
+                        largeOrthographicCavityStep == 128.0f &&
+                        largePerspectiveNearCavityStep > 128.0f &&
+                        std::abs(uncappedCavityRadius - 76.8f) < 0.001f &&
+                        rasterWorkbenchCavityRadius(0.0f, 128.0f, 1.0f) ==
+                            1.0f,
+                    "QPainter cavity SSAO footprint must preserve radii above 64 px, shrink with perspective receiver depth, and stay fixed in orthographic views");
 
     const QSize cavityPixelSize(16, 12);
     passed &= check(
@@ -15417,7 +15436,8 @@ int main(int argc, char *argv[])
                         cavityDiagnosticShading.cavity = true;
                         cavityDiagnosticShading.cavityType =
                             ViewportCavityType::World;
-                        cavityDiagnosticShading.cavityDistance = 0.2;
+                        cavityDiagnosticShading.cavityDistance =
+                            cavityDiagnosticDistance();
                         cavityDiagnosticShading.cavityAttenuation = 1.0;
                         cavityDiagnosticShading.cavitySamples = 16;
                         cavityDiagnosticShading.outline = false;
@@ -16585,7 +16605,8 @@ int main(int argc, char *argv[])
                             diagnosticSettings.cavity = true;
                             diagnosticSettings.cavityType =
                                 ViewportCavityType::World;
-                            diagnosticSettings.cavityDistance = 0.2;
+                            diagnosticSettings.cavityDistance =
+                                cavityDiagnosticDistance();
                             diagnosticSettings.cavityAttenuation = 1.0;
                             diagnosticSettings.cavitySamples = 16;
                             diagnosticSettings.outline = false;
@@ -16680,7 +16701,8 @@ int main(int argc, char *argv[])
                         qpainterCavitySettings.cavity = true;
                         qpainterCavitySettings.cavityType =
                             ViewportCavityType::World;
-                        qpainterCavitySettings.cavityDistance = 0.2;
+                        qpainterCavitySettings.cavityDistance =
+                            cavityDiagnosticDistance();
                         qpainterCavitySettings.cavityAttenuation = 1.0;
                         qpainterCavitySettings.cavitySamples = 16;
                         QImage qpainterCavityImage;

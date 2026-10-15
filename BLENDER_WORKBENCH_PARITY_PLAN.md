@@ -226,13 +226,14 @@ open.
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by
   `viewTargetDepth / receiverDepth`, using the viewport camera position,
-  direction, and target. The existing view-scale-derived radius clamp
-  (`1..64` pixels), minimum step, sampling count, attenuation, and curvature
-  pass are unchanged. Orthographic SSAO keeps its prior constant footprint.
+  direction, and target. The view-scale-derived radius now has only a 1-pixel
+  minimum; the temporary 64-pixel ceiling was removed after a source-backed
+  large-distance comparison. Sampling count, attenuation, and curvature pass
+  are unchanged. Orthographic SSAO keeps its prior constant footprint.
 - This is scoped to the QPainter cavity approximation. It does not change the
   GPU cavity shader, radius/depth attenuation, background reconstruction,
-  curvature sampling, or claim visual parity with Blender; a matched visual
-  comparison remains pending.
+  curvature sampling, or claim visual parity with Blender; the later matched
+  comparisons below record the remaining fallback differences.
 
 ### GPU opaque depth comparison (2026-10-12)
 
@@ -6093,6 +6094,38 @@ resolve remain open.
   [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L463-L585)
   and GPU projection setup to
   [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L416-L465).
+
+### QPainter cavity projected radius above 64 px (2026-10-15)
+
+- Removed the QPainter path's 64-pixel upper clamp from its projected cavity
+  radius. Blender 5.2.2 computes the screen-space offset from the projection
+  matrix, configured cavity distance, and receiver depth, then samples the
+  resulting projected neighborhood without an equivalent 64-pixel limit.
+  The CPU path retains its 1-pixel minimum and its independent 32-million
+  sample-work ceiling, so removing the radius clamp does not increase the
+  number of per-pixel taps.
+- Added an opt-in shared cavity-distance override to the paired Blender and
+  classiCAD diagnostic fixtures. At `cavityDistance=0.6`, the matched
+  640×480 orthographic cube projects a radius of 76.8 px in classiCAD's
+  `ViewportTransform`, exercising the former clamp. The capture-enabled
+  offscreen `viewport_render_contracts` test passes; the per-tap comparator
+  reports 48/64 exact GPU/QPainter texel matches and no error beyond one
+  pixel. The paired Blender 5.2.2 capture confirms the remaining broad fallback
+  gap: at a 3/255 threshold its cavity effect mask contains 34,505 pixels,
+  compared with QPainter's 65,029 (IoU `0.258284`). This corrects the
+  source-derived radius range but does not claim that the CPU approximation
+  matches Blender's per-tap depth/normal contribution or final cavity result.
+- Reproduce with
+  `CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_DISTANCE=0.6`, the GPU and QPainter
+  cavity diagnostic prefixes, and
+  `blender -b --python tests/workbench_cube_reference.py -- <output.png>
+  --effect CAVITY --cavity-distance 0.6 --lighting FLAT --no-specular
+  --match-classicad-ortho --view-direction 4 -6 4 --ortho-scale 5.0 --aa OFF
+  --zero-dither`. Blender's no-cap projection and depth scaling are pinned to
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L482-L520).
+  Validation: `cmake --build build -j4`, Python fixture syntax compilation,
+  capture-enabled offscreen `viewport_render_contracts` (1/1), and the
+  per-tap/effect-delta comparators passed. No GUI was launched.
 
 ### QPainter cavity blue-noise row orientation (2026-10-15)
 

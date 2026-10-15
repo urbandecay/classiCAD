@@ -115,6 +115,12 @@ def arguments():
         default="BASELINE",
     )
     parser.add_argument(
+        "--cavity-distance",
+        type=float,
+        default=0.2,
+        help="Workbench cavity distance (default: 0.2)",
+    )
+    parser.add_argument(
         "--shadow-shift",
         type=float,
         default=0.1,
@@ -1065,7 +1071,7 @@ def main():
     shading.cavity_ridge_factor = 1.0
     shading.cavity_valley_factor = 1.0
     scene.display.matcap_ssao_samples = 16
-    scene.display.matcap_ssao_distance = 0.2
+    scene.display.matcap_ssao_distance = args.cavity_distance
     scene.display.matcap_ssao_attenuation = 1.0
     shading.object_outline_color = tuple(args.outline_color)
     shading.show_object_outline = args.effect in ("OUTLINE", "OUTLINE_CAVITY")

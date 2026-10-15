@@ -7600,8 +7600,10 @@ resolve remain open.
   hides mesh fills while keeping the edge overlay visible in both paths.
   Random mesh and NURBS wires now use Blender's separate HSV palette
   (saturation 0.75, value 0.8) while preserving the same object hue used by
-  Random surface shading (saturation 0.5). No matched Blender wire-color image
-  comparison has been run.
+  Random surface shading (saturation 0.5). Their generated colors also bypass
+  the Workbench scene color transform, matching Blender's overlay wire shader;
+  Object wire colors retain their existing transform. No matched Blender
+  wire-color image comparison has been run.
 - Object wire colors now use the imported Standard, AgX, Filmic, Neutral, or
   custom-LUT display transform, including exposure and gamma, after Blender's
   half-brightness adjustment. Imported Blender preferences now supply the

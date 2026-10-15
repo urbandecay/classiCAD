@@ -10527,9 +10527,8 @@ protected:
                             const QColor random = workbenchRandomObjectWireColor(
                                 renderObject.objectId.value(), renderObject.displayName,
                                 workbenchRandomIdentityLibraryPath(renderObject));
-                            sourceColor = workbenchRec709ToSceneLinear(
-                                QVector3D(random.redF(), random.greenF(),
-                                          random.blueF()));
+                            sourceColor = QVector3D(
+                                random.redF(), random.greenF(), random.blueF());
                         }
                         const auto toWireDisplay = [this](const QVector3D &linear) {
                             return workbenchSceneLinearToDisplaySrgb(
@@ -10555,8 +10554,11 @@ protected:
                             adjustedRim *= 0.5f;
                             adjustedWire += QVector3D(0.5f, 0.5f, 0.5f);
                         }
-                        adjustedRim = toWireDisplay(adjustedRim);
-                        adjustedWire = toWireDisplay(adjustedWire);
+                        if (viewportShadingSettings_.wireColorMode !=
+                            ViewportWireColorMode::Random) {
+                            adjustedRim = toWireDisplay(adjustedRim);
+                            adjustedWire = toWireDisplay(adjustedWire);
+                        }
                         rimColor = adjustedRim;
                         frontWireColor = adjustedWire;
                     }
@@ -10682,9 +10684,8 @@ protected:
                         const QColor random = workbenchRandomObjectWireColor(
                             renderObject.objectId.value(), renderObject.displayName,
                             workbenchRandomIdentityLibraryPath(renderObject));
-                        sourceColor = workbenchRec709ToSceneLinear(
-                            QVector3D(random.redF(), random.greenF(),
-                                      random.blueF()));
+                        sourceColor = QVector3D(
+                            random.redF(), random.greenF(), random.blueF());
                     }
                     rimColor = sourceColor;
                     frontWireColor = sourceColor;
@@ -10710,8 +10711,10 @@ protected:
                             viewportShadingSettings_.colorLutData,
                             viewportShadingSettings_.colorLutMetadata);
                     };
-                    rimColor = toWireDisplay(rimColor);
-                    frontWireColor = toWireDisplay(frontWireColor);
+                    if (objectColor) {
+                        rimColor = toWireDisplay(rimColor);
+                        frontWireColor = toWireDisplay(frontWireColor);
+                    }
                 }
                 const auto gamma = [](float channel) {
                     return std::pow(std::clamp(channel, 0.0f, 1.0f),

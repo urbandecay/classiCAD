@@ -61,6 +61,8 @@ struct BlenderSceneImportReport {
     QString blenderVersion;
     QString importMode;
     QString warningMessage;
+    QString activeSceneId;
+    QString activeViewLayerKey;
     QJsonArray scenes;
     // Indices refer to the imported-object array produced by
     // importBlenderScene(); ordinary .blend open also resolves these to the

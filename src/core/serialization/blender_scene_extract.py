@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 17
+BRIDGE_FORMAT_VERSION = 18
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1564,6 +1564,20 @@ def extract_scene(input_path, mode):
     require_pinned_blender()
     source_filepath = bpy.data.filepath
     SOURCE_PROJECT_NAMESPACE = source_project_namespace(source_filepath)
+    active_window = getattr(bpy.context, "window", None)
+    active_scene = active_window.scene if active_window is not None else None
+    if active_scene not in bpy.data.scenes:
+        active_scene = bpy.data.scenes[0] if bpy.data.scenes else None
+    active_view_layer = (
+        active_window.view_layer
+        if active_window is not None and active_window.scene == active_scene
+        else None
+    )
+    if active_scene is None or active_view_layer not in active_scene.view_layers:
+        active_view_layer = (
+            active_scene.view_layers[0]
+            if active_scene is not None and active_scene.view_layers else None
+        )
 
     output = {
         "format": BRIDGE_FORMAT,
@@ -1575,6 +1589,11 @@ def extract_scene(input_path, mode):
             "blender_version_tuple": list(bpy.app.version[:3]),
             "import_mode": mode,
         },
+        "active_scene_id": stable_id(active_scene) if active_scene is not None else "",
+        "active_view_layer_key": (
+            view_layer_key(active_scene, active_view_layer)
+            if active_scene is not None and active_view_layer is not None else ""
+        ),
         "scenes": [],
         "collections": [],
         "items": [],
@@ -1645,12 +1664,16 @@ def extract_scene(input_path, mode):
         render = scene.render
         scene_record = {
             "scene_id": stable_id(scene),
+            "is_active_scene": scene == active_scene,
             "name": scene.name_full,
             "library_path": source_library_path(scene),
             "view_layer_names": [view_layer.name for view_layer in scene.view_layers],
             "view_layers": [{
                 "name": view_layer.name,
                 "key": view_layer_key(scene, view_layer),
+                "is_active_view_layer": (
+                    scene == active_scene and view_layer == active_view_layer
+                ),
                 "selected_object_ids": sorted(
                     stable_id(obj) for obj in scene.objects
                     if obj.select_get(view_layer=view_layer)

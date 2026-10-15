@@ -64,6 +64,22 @@
 
 namespace classiCAD {
 
+namespace {
+
+QJsonObject activeImportedBlenderScene(const BlenderSceneImportReport &report)
+{
+    for (const QJsonValue &sceneValue : report.scenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        if (scene.value(QStringLiteral("scene_id")).toString() ==
+            report.activeSceneId) {
+            return scene;
+        }
+    }
+    return report.scenes.isEmpty() ? QJsonObject{} : report.scenes.first().toObject();
+}
+
+} // namespace
+
 class MainWindow final : public QMainWindow {
 public:
     MainWindow()
@@ -536,7 +552,7 @@ private:
         const bool importedOrdinaryBlend =
             !ordinaryImportReport.blenderVersion.isEmpty();
         if (importedOrdinaryBlend && !ordinaryImportReport.scenes.isEmpty()) {
-            const QJsonObject scene = ordinaryImportReport.scenes.first().toObject();
+            const QJsonObject scene = activeImportedBlenderScene(ordinaryImportReport);
             QJsonObject shading = scene.value(
                 QStringLiteral("workbench_viewport_shading")).toObject();
             if (shading.isEmpty()) {
@@ -559,6 +575,9 @@ private:
                                   QStringLiteral("; ") + summary;
                 }
             }
+            session_.selection().setObjectIds(
+                ordinaryImportReport.selectedObjectIds,
+                ordinaryImportReport.activeObjectId);
         }
         // Opening a normal Blender file imports its supported scene data into
         // a new classiCAD document. Never let Ctrl+S replace that source file.
@@ -828,7 +847,9 @@ private:
                 }
                 if (!replaced) settings.importedBlenderScenes.append(importedScene);
             }
-            if (settings.activeViewLayerKey.isEmpty()) {
+            if (!report.activeViewLayerKey.isEmpty()) {
+                settings.activeViewLayerKey = report.activeViewLayerKey;
+            } else if (settings.activeViewLayerKey.isEmpty()) {
                 for (const SceneObject &object : importedObjects) {
                     if (!object.defaultViewLayerKey.isEmpty()) {
                         settings.activeViewLayerKey = object.defaultViewLayerKey;
@@ -869,7 +890,7 @@ private:
             if (viewport_ != nullptr) {
                 viewport_->refreshAfterProjectImport();
                 if (!report.scenes.isEmpty()) {
-                    const QJsonObject scene = report.scenes.first().toObject();
+                    const QJsonObject scene = activeImportedBlenderScene(report);
                     QJsonObject shading = scene.value(
                         QStringLiteral("workbench_viewport_shading")).toObject();
                     if (shading.isEmpty()) {

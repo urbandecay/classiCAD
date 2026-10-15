@@ -2132,15 +2132,7 @@ bool loadVignolaDocument(const QString &path,
             importReport.importedBlenderColorLuts;
         snapshot.settings.importedBlenderColorLutMetadata =
             importReport.importedBlenderColorLutMetadata;
-        for (const QJsonValue &sceneValue : importReport.scenes) {
-            const QJsonArray viewLayers = sceneValue.toObject().value(
-                QStringLiteral("view_layers")).toArray();
-            if (!viewLayers.isEmpty()) {
-                snapshot.settings.activeViewLayerKey = viewLayers.first()
-                    .toObject().value(QStringLiteral("key")).toString();
-                break;
-            }
-        }
+        snapshot.settings.activeViewLayerKey = importReport.activeViewLayerKey;
         restored.restoreSnapshot(snapshot);
         *document = std::move(restored);
         if (cameraSettings != nullptr) *cameraSettings = ProjectViewportCameraSettings{};
@@ -2232,12 +2224,15 @@ bool importBlenderScene(const QString &path,
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
-         bridgeVersion != 16 && bridgeVersion != 17)) {
+         bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
     }
     const QJsonObject source = root.value(QStringLiteral("source")).toObject();
+    QString activeSceneId = root.value(QStringLiteral("active_scene_id")).toString();
+    QString activeViewLayerKey = root.value(
+        QStringLiteral("active_view_layer_key")).toString();
     const QString sourceVersion =
         source.value(QStringLiteral("blender_version")).toString();
     const QJsonArray version =
@@ -2361,6 +2356,18 @@ bool importBlenderScene(const QString &path,
     QHash<QString, QString> sceneLibraryPaths;
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
+    if (activeSceneId.isEmpty() || activeViewLayerKey.isEmpty()) {
+        for (const QJsonValue &sceneValue : sourceScenes) {
+            const QJsonObject scene = sceneValue.toObject();
+            const QJsonArray viewLayers = scene.value(
+                QStringLiteral("view_layers")).toArray();
+            if (viewLayers.isEmpty()) continue;
+            activeSceneId = scene.value(QStringLiteral("scene_id")).toString();
+            activeViewLayerKey = viewLayers.first().toObject().value(
+                QStringLiteral("key")).toString();
+            break;
+        }
+    }
     for (const QJsonValue &sceneValue : sourceScenes) {
         if (!sceneValue.isObject()) {
             setError(errorMessage,
@@ -2687,11 +2694,27 @@ bool importBlenderScene(const QString &path,
     int activeObjectIndex = -1;
     QString activeSourceObjectId;
     QSet<QString> selectedSourceObjectIds;
+    bool selectionLayerFound = false;
     for (const QJsonValue &sceneValue : importedSceneRecords) {
-        const QJsonArray viewLayers = sceneValue.toObject().value(
+        const QJsonObject scene = sceneValue.toObject();
+        if (scene.value(QStringLiteral("scene_id")).toString() != activeSceneId) {
+            continue;
+        }
+        const QJsonArray viewLayers = scene.value(
             QStringLiteral("view_layers")).toArray();
-        if (viewLayers.isEmpty()) continue;
-        const QJsonObject activeViewLayer = viewLayers.first().toObject();
+        QJsonObject activeViewLayer;
+        for (const QJsonValue &viewLayerValue : viewLayers) {
+            const QJsonObject candidate = viewLayerValue.toObject();
+            if (candidate.value(QStringLiteral("key")).toString() ==
+                activeViewLayerKey) {
+                activeViewLayer = candidate;
+                break;
+            }
+        }
+        if (activeViewLayer.isEmpty() && !viewLayers.isEmpty()) {
+            activeViewLayer = viewLayers.first().toObject();
+        }
+        if (activeViewLayer.isEmpty()) continue;
         for (const QJsonValue &objectIdValue : activeViewLayer.value(
                  QStringLiteral("selected_object_ids")).toArray()) {
             if (objectIdValue.isString() && !objectIdValue.toString().isEmpty()) {
@@ -2700,7 +2723,25 @@ bool importBlenderScene(const QString &path,
         }
         activeSourceObjectId = activeViewLayer.value(
             QStringLiteral("active_object_id")).toString();
+        selectionLayerFound = true;
         break;
+    }
+    if (!selectionLayerFound) {
+        for (const QJsonValue &sceneValue : importedSceneRecords) {
+            const QJsonArray viewLayers = sceneValue.toObject().value(
+                QStringLiteral("view_layers")).toArray();
+            if (viewLayers.isEmpty()) continue;
+            const QJsonObject activeViewLayer = viewLayers.first().toObject();
+            for (const QJsonValue &objectIdValue : activeViewLayer.value(
+                     QStringLiteral("selected_object_ids")).toArray()) {
+                if (objectIdValue.isString() && !objectIdValue.toString().isEmpty()) {
+                    selectedSourceObjectIds.insert(objectIdValue.toString());
+                }
+            }
+            activeSourceObjectId = activeViewLayer.value(
+                QStringLiteral("active_object_id")).toString();
+            break;
+        }
     }
     for (int index = 0; index < sourceObjectIdsByImportedIndex.size(); ++index) {
         const QString &sourceObjectId = sourceObjectIdsByImportedIndex[index];
@@ -2725,6 +2766,8 @@ bool importBlenderScene(const QString &path,
         report->warningMessage = conciseImportWarnings(
             warnings, skippedCount, unsupportedFeatureCount);
         report->scenes = importedSceneRecords;
+        report->activeSceneId = activeSceneId;
+        report->activeViewLayerKey = activeViewLayerKey;
         report->selectedObjectIndices = selectedObjectIndices;
         report->activeObjectIndex = activeObjectIndex;
         report->importedBlenderColorLuts = importedBlenderColorLuts;

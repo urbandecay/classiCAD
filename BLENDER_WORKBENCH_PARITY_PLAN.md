@@ -7584,9 +7584,13 @@ resolve remain open.
 ### Imported Blender object selection (2026-10-15)
 
 - The extractor records selected and active source object IDs for each Blender
-  view layer. Ordinary `.blend` open and scene import map the chosen first
-  scene/view-layer state to classiCAD object IDs after import has assigned
-  those IDs, then restore it through the existing selection model. When one
+  view layer and identifies the active window's scene and layer (falling back
+  to the first scene and layer when no active window is available). Ordinary
+  `.blend` open and scene import map that active scene/layer state to classiCAD
+  object IDs after import has assigned those IDs, then restore it through the
+  existing selection model. Ordinary open reapplies the selection after camera
+  settings reset the viewport. Appending activates the imported Blender layer
+  so its selection and visibility rules agree. When one
   Blender curve or surface becomes several imported objects, all pieces
   follow the source object's selection and its first imported piece becomes
   primary. Unsupported objects without imported geometry are omitted. This
@@ -7677,3 +7681,15 @@ resolve remain open.
   theme color otherwise. This follows Blender 5.2.2's `object_wire_theme_id`
   and `object_wire_color` path in `overlay_private.hh`. The C++ build passed;
   matched bounds-color comparison remains open.
+
+### Active Blender scene and selection restore (2026-10-15)
+
+- Blender extraction format 18 records the active window scene and view layer,
+  with a deterministic first-scene/first-layer fallback when no active window
+  is available. Import restores selected and active objects from that exact
+  pair, uses its view-layer key for the document, and applies shading from the
+  same scene. Ordinary `.blend` open reapplies selection after camera setup,
+  which resets viewport selection; importing into an existing document makes
+  the imported active layer visible alongside its selection. Older extraction
+  versions keep their first-scene/layer behavior. The C++ build passed;
+  multi-scene Blender comparison remains open.

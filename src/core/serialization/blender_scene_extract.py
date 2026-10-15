@@ -1486,6 +1486,70 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
     return item
 
 
+def curve_has_surface_output(obj):
+    curve_data = obj.data
+    return (
+        float(curve_data.bevel_depth) > 0.0 or
+        float(curve_data.extrude) > 0.0 or
+        getattr(curve_data, "bevel_object", None) is not None or
+        (curve_data.dimensions == "2D" and
+         getattr(curve_data, "fill_mode", "NONE") != "NONE") or
+        bool(obj.modifiers)
+    )
+
+
+def curve_surface_item_id(source_item_id):
+    digest = hashlib.sha256(
+        (source_item_id + "::evaluated-curve-surface").encode("utf-8")
+    ).hexdigest()
+    return "classiCAD::derived::curve-surface::" + digest
+
+
+def source_curve_features_after_surface_bake(features):
+    baked_features = {"curve_surface_geometry", "curve_bevel_object",
+                      "curve_2d_fill"}
+    return [feature for feature in features
+            if feature.get("feature") not in baked_features and
+            not feature.get("feature", "").startswith("modifier:")]
+
+
+def extract_curve_surface_mesh(obj, scene, source_item_id, materials,
+                               unsupported, depsgraph=None,
+                               transform_override=None):
+    """Bake visible curve surfaces as a separate display-mesh item."""
+    if not curve_has_surface_output(obj):
+        return None
+    mesh_features = []
+    try:
+        evaluated_depsgraph = depsgraph or depsgraph_for_scene(scene)
+        evaluated_obj = obj.evaluated_get(evaluated_depsgraph)
+        item = extract_mesh_object(
+            obj, scene, "evaluated", evaluated_depsgraph, materials,
+            mesh_features, transform_override=transform_override,
+            evaluated_object_override=evaluated_obj)
+    except Exception as error:
+        add_unsupported(
+            unsupported, source_item_id, "curve_surface_proxy",
+            "evaluated curve surface could not be baked: " + str(error))
+        return None
+    if not item.get("polygons"):
+        return None
+
+    item["object_type"] = "MESH"
+    item["object_id"] = curve_surface_item_id(source_item_id)
+    item["source_object_id"] = source_item_id
+    item["source_object_name"] = obj.name_full
+    item["source_object_type"] = "CURVE"
+    item["name"] = obj.name_full + " (Evaluated Curve Surface)"
+    item["evaluated_curve_surface_proxy"] = True
+    add_unsupported(
+        mesh_features, item["object_id"], "curve_surface_baked",
+        "the visible curve surface was imported as a baked mesh; bevel, extrusion, fill, and modifier settings are not editable",
+    )
+    unsupported.extend(mesh_features)
+    return item
+
+
 def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None,
                             transform_override=None):
     """Extract each Blender SURFACE NURBS patch as a separate item."""
@@ -1908,8 +1972,9 @@ def extract_scene(input_path, mode):
                     output["unsupported_items"].append(unsupported_item)
                 continue
             if obj.type == "CURVE":
+                curve_features = []
                 item = extract_poly_curve_object(
-                    obj, scene, output["unsupported_features"], depsgraph)
+                    obj, scene, curve_features, depsgraph)
                 if item["splines"]:
                     item["view_layer_hidden"] = {
                         view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
@@ -1920,7 +1985,22 @@ def extract_scene(input_path, mode):
                         if len(scene.view_layers) else ""
                     )
                     output["items"].append(item)
+                    surface_item = extract_curve_surface_mesh(
+                        obj, scene, item["object_id"], output["materials"],
+                        output["unsupported_features"], depsgraph)
+                    if surface_item is not None:
+                        surface_item["view_layer_hidden"] = item[
+                            "view_layer_hidden"]
+                        surface_item["default_view_layer_key"] = item[
+                            "default_view_layer_key"]
+                        output["items"].append(surface_item)
+                        output["unsupported_features"].extend(
+                            source_curve_features_after_surface_bake(
+                                curve_features))
+                    else:
+                        output["unsupported_features"].extend(curve_features)
                 else:
+                    output["unsupported_features"].extend(curve_features)
                     output["unsupported_items"].append(
                         unsupported_object_record(obj, scene, depsgraph))
                 continue
@@ -2163,14 +2243,32 @@ def extract_scene(input_path, mode):
                             output["items"].append(loose_edges_item)
                         mesh_count += 1
                     elif source_obj.type == "CURVE":
+                        curve_features = []
                         item = extract_poly_curve_object(
-                            source_obj, scene, output["unsupported_features"],
+                            source_obj, scene, curve_features,
                             instance_depsgraph,
                             transform_override=instance_transform)
                         assign_instance_metadata(
                             item, instance_id, source_obj, parent_source,
                             instance_transform)
                         output["items"].append(item)
+                        surface_item = extract_curve_surface_mesh(
+                            source_obj, scene, instance_id, output["materials"],
+                            output["unsupported_features"], instance_depsgraph,
+                            transform_override=instance_transform)
+                        if surface_item is not None:
+                            assign_instance_metadata(
+                                surface_item, instance_id, source_obj,
+                                parent_source, instance_transform)
+                            surface_item["object_id"] = curve_surface_item_id(
+                                instance_id)
+                            surface_item["source_object_id"] = instance_id
+                            output["items"].append(surface_item)
+                            output["unsupported_features"].extend(
+                                source_curve_features_after_surface_bake(
+                                    curve_features))
+                        else:
+                            output["unsupported_features"].extend(curve_features)
                     else:
                         patches = extract_surface_patches(
                             source_obj, scene, output["materials"],

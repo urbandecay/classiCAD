@@ -8387,9 +8387,15 @@ int main(int argc, char *argv[])
                         const auto captureQPainterColorSource =
                             [&](const QString &stem,
                                 const ViewportRenderObject &object,
-                                const ViewportShadingSettings &shading) {
+                                const ViewportShadingSettings &shading,
+                                const ViewportTransform *captureTransform =
+                                    nullptr) {
                                 CurveHitTester hitTester;
-                                ViewportRenderer renderer(gpuTransform,
+                                const ViewportTransform &renderTransform =
+                                    captureTransform != nullptr
+                                        ? *captureTransform
+                                        : gpuTransform;
+                                ViewportRenderer renderer(renderTransform,
                                                           hitTester);
                                 renderer.setWorkbenchRasterAntialiasingEnabled(
                                     false);
@@ -11894,12 +11900,23 @@ int main(int argc, char *argv[])
                                 extensionDisplay.size() == glSize &&
                                 extensionLinearSaved &&
                                 extensionDisplay.save(extensionDisplayPath);
+                            const QString qpainterExtensionStem =
+                                QStringLiteral(
+                                    "color_texture_mesh_perspective_%1")
+                                    .arg(extension.toLower());
+                            const bool qpainterExtensionCaptured =
+                                captureQPainterColorSource(
+                                    qpainterExtensionStem,
+                                    perspectiveExtensionObject,
+                                    textureColorShading,
+                                    &perspectiveTextureTransform);
                             perspectiveExtensionCapturesSucceeded &=
-                                extensionSaved;
+                                extensionSaved &&
+                                qpainterExtensionCaptured;
                         }
                         passed &= check(
                             perspectiveExtensionCapturesSucceeded,
-                            "GPU perspective mesh texture captures must render Extend, Clip, and Mirror UV extensions");
+                            "GPU and QPainter perspective mesh texture captures must render Extend, Clip, and Mirror UV extensions");
                         lightingCapturesSucceeded &=
                             perspectiveExtensionCapturesSucceeded;
 

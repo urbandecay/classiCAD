@@ -6139,6 +6139,31 @@ edge comparison remains open.
   --world-color 0.0219421387 0.0219421387 0.0219421387 --zero-dither` plus
   `--linear-output` and `--linear-pfm-output`.
 
+### Matched QPainter perspective mesh texture extensions (2026-10-15)
+
+- Extended the existing perspective two-triangle mesh fixture to write
+  opt-in QPainter PNG/PFM captures for Image Texture `EXTEND`, `CLIP`, and
+  `MIRROR`. The capture helper accepts the fixture's perspective transform;
+  the mesh uses the same asymmetric 2×2 sRGB texture, UV range `[-0.5, 1.5]`,
+  Linear filtering, 640×480 target, and neutral World as the GPU and Blender
+  captures. Blender references use the pinned 5.2.2 `MESH_TEXTURE` helper
+  scene and matching perspective view.
+- Against Blender, QPainter foreground-mask IoU is `0.999973` (one XOR
+  pixel) for EXTEND and MIRROR, and `0.998891` (17 XOR pixels) for CLIP.
+  Shared-foreground display channel MAE is `0.1857/255`, `0.2217/255`, and
+  `0.2711/255`, respectively. Scene-linear RGB MAE `(blue, green, red)` is
+  `(4.03e-5, 1.14e-4, 8.29e-5)` for EXTEND,
+  `(8.29e-5, 1.16e-4, 1.45e-4)` for MIRROR, and
+  `(3.18e-5, 3.87e-5, 5.59e-5)` for CLIP. PFM maximum errors are isolated
+  samples; the captures do not show a broad extension-sampling mismatch, so
+  no production sampler change is justified. Perspective raster edges and
+  other camera/mesh cases remain approximate.
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  capture-enabled offscreen `viewport_render_contracts` passed (1/1,
+  42.34 seconds); Blender reported 5.2.2 LTS for all three references; and
+  `workbench_image_compare.py` plus `workbench_pfm_compare.py` completed for
+  each QPainter extension capture.
+
 ### Matched GPU Image Texture on a nonplanar NURBS patch (2026-10-14)
 
 - Added a degree-2 by degree-2, non-rational 3×3 NURBS patch with asymmetric

@@ -5809,3 +5809,37 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   --lighting FLAT --color-source TEXTURE --aa OFF --zero-dither`, using
   `--match-classicad-ortho` or `--match-classicad-perspective --view-direction
   4 -6 4`, plus `--linear-output` and `--linear-pfm-output` for PFM comparison.
+
+### Curved NURBS filtered Image Texture alpha cutoff (2026-10-14)
+
+- Extended the curved-patch alpha fixture to Linear texture interpolation,
+  retaining Closest as the nearest-sample baseline. The same binary 8×8 alpha
+  transition exercises interpolated alpha values around Blender's `0.1`
+  fragment cutoff. GPU and QPainter captures cover STRAIGHT cutout and NONE
+  bypass, each with orthographic and perspective cameras.
+- Against Blender 5.2.2, GPU mask IoU is `0.999862` (3 XOR pixels) for
+  orthographic STRAIGHT, `0.999971` (1 XOR) for orthographic NONE, and `1.0`
+  (zero XOR) for both perspective modes. QPainter mask IoU is `0.999817` (4
+  XOR), `0.999971` (1 XOR), `0.999884` (4 XOR), and `0.999978` (1 XOR) in the
+  same order. On common foreground, GPU display MAE ranges from `0.0123/255`
+  to `0.0246/255` with p95 `0/255`; QPainter ranges from `0.0924/255` to
+  `0.1247/255` with p95 `1/255`. Scene-linear max channel MAE is at most
+  `0.000012` for GPU and `0.000246` for QPainter. The remaining QPainter
+  differences are limited to filtered cutout/raster coverage edges; these
+  captures do not establish other texture filters or all alpha modes.
+- Blender 5.2.2 linearly samples Image Texture RGBA before applying the alpha
+  cutoff in pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L429);
+  the interpolated surface UV is supplied by
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105).
+  No material or geometry contract changed, and these measurements do not
+  justify a production renderer adjustment.
+- Validation: `cmake --build build -j4` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 53.24 seconds); all four Blender references reported 5.2.2 LTS; and
+  eight PNG/PFM pairs were compared. Reproduce classiCAD captures with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir> QT_QPA_PLATFORM=offscreen
+  ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`.
+  Use the Blender command in the preceding curved-alpha section, changing
+  `--texture-interpolation Closest` to `--texture-interpolation Linear`, and
+  render both `--texture-alpha-mode STRAIGHT` and `NONE` for each camera.

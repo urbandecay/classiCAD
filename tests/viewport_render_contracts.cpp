@@ -8566,6 +8566,54 @@ int main(int argc, char *argv[])
                                     "color_texture_nurbs_curved_perspective_alpha_none_qpainter"),
                                 curvedPerspectiveTransform,
                                 curvedNoAlphaObject);
+                        ViewportRenderObject curvedLinearStraightAlphaObject =
+                            curvedStraightAlphaObject;
+                        curvedLinearStraightAlphaObject.workbenchMaterial
+                            .textureImageInterpolation =
+                            QStringLiteral("Linear");
+                        ViewportRenderObject curvedLinearNoAlphaObject =
+                            curvedNoAlphaObject;
+                        curvedLinearNoAlphaObject.workbenchMaterial
+                            .textureImageInterpolation =
+                            QStringLiteral("Linear");
+                        const bool curvedLinearAlphaGpuCaptured =
+                            captureCurvedAlphaGpu(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_alpha_straight_linear_gpu"),
+                                curvedLinearStraightAlphaObject, nullptr) &&
+                            captureCurvedAlphaGpu(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_alpha_none_linear_gpu"),
+                                curvedLinearNoAlphaObject, nullptr) &&
+                            captureCurvedAlphaGpu(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_straight_linear_gpu"),
+                                curvedLinearStraightAlphaObject,
+                                &curvedPerspectiveTransform) &&
+                            captureCurvedAlphaGpu(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_none_linear_gpu"),
+                                curvedLinearNoAlphaObject,
+                                &curvedPerspectiveTransform);
+                        const bool curvedLinearAlphaQPainterCaptured =
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_alpha_straight_linear_qpainter"),
+                                gpuTransform, curvedLinearStraightAlphaObject) &&
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_alpha_none_linear_qpainter"),
+                                gpuTransform, curvedLinearNoAlphaObject) &&
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_straight_linear_qpainter"),
+                                curvedPerspectiveTransform,
+                                curvedLinearStraightAlphaObject) &&
+                            captureCurvedQPainterTexture(
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_none_linear_qpainter"),
+                                curvedPerspectiveTransform,
+                                curvedLinearNoAlphaObject);
                         const auto capturedForegroundPixels = [&] (
                             const QString &stem) {
                             const QImage image(QDir(
@@ -8600,12 +8648,35 @@ int main(int argc, char *argv[])
                                     "color_texture_nurbs_curved_perspective_alpha_straight_qpainter"),
                                 QStringLiteral(
                                     "color_texture_nurbs_curved_perspective_alpha_none_qpainter")};
+                        const std::array<QString, 4> curvedLinearAlphaStems{
+                            QStringLiteral(
+                                "color_texture_nurbs_curved_alpha_straight_linear_gpu"),
+                            QStringLiteral(
+                                "color_texture_nurbs_curved_alpha_none_linear_gpu"),
+                            QStringLiteral(
+                                "color_texture_nurbs_curved_alpha_straight_linear_qpainter"),
+                            QStringLiteral(
+                                "color_texture_nurbs_curved_alpha_none_linear_qpainter")};
+                        const std::array<QString, 4>
+                            curvedPerspectiveLinearAlphaStems{
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_straight_linear_gpu"),
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_none_linear_gpu"),
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_straight_linear_qpainter"),
+                                QStringLiteral(
+                                    "color_texture_nurbs_curved_perspective_alpha_none_linear_qpainter")};
                         bool curvedAlphaReducesCoverage =
                             curvedAlphaGpuCaptured &&
-                            curvedAlphaQPainterCaptured;
+                            curvedAlphaQPainterCaptured &&
+                            curvedLinearAlphaGpuCaptured &&
+                            curvedLinearAlphaQPainterCaptured;
                         for (const auto &stems :
                              {curvedAlphaStems,
-                              curvedPerspectiveAlphaStems}) {
+                              curvedPerspectiveAlphaStems,
+                              curvedLinearAlphaStems,
+                              curvedPerspectiveLinearAlphaStems}) {
                             for (int renderer = 0; renderer < 2; ++renderer) {
                                 const int straightCoverage =
                                     capturedForegroundPixels(
@@ -8622,12 +8693,16 @@ int main(int argc, char *argv[])
                             curvedAlphaTextureSaved &&
                                 curvedAlphaGpuCaptured &&
                                 curvedAlphaQPainterCaptured &&
+                                curvedLinearAlphaGpuCaptured &&
+                                curvedLinearAlphaQPainterCaptured &&
                                 curvedAlphaReducesCoverage,
-                            "GPU and QPainter curved NURBS alpha cutoff captures must render STRAIGHT cutouts and NONE controls in orthographic and perspective views");
+                            "GPU and QPainter curved NURBS alpha cutoff captures must compare Closest and Linear STRAIGHT cutouts and NONE controls in orthographic and perspective views");
                         lightingCapturesSucceeded &=
                             curvedAlphaTextureSaved &&
                             curvedAlphaGpuCaptured &&
                             curvedAlphaQPainterCaptured &&
+                            curvedLinearAlphaGpuCaptured &&
+                            curvedLinearAlphaQPainterCaptured &&
                             curvedAlphaReducesCoverage;
 
                         const auto makeClosedUvTrim = [](

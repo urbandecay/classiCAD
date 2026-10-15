@@ -7371,6 +7371,8 @@ resolve remain open.
 - The bounded flat-polygon fallback for oversized untextured mesh triangles
   now converts its stored scene-linear Workbench color through the configured
   Standard, AgX, or custom view transform, exposure, gamma, and LUT before
-  drawing. It preserves the existing packed alpha and flat-shading behavior.
+  drawing. It preserves the existing flat-shading behavior and applies the
+  configured X-Ray opacity to its packed source alpha, like the bounded raster
+  path.
   Oversized textured triangles still have no raster fallback, and this change
   has not been validated with a matched Blender image comparison.

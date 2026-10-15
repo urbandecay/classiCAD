@@ -2337,7 +2337,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         std::clamp<qreal>(displayRgb.x(), 0.0, 1.0),
                         std::clamp<qreal>(displayRgb.y(), 0.0, 1.0),
                         std::clamp<qreal>(displayRgb.z(), 0.0, 1.0),
-                        triangle.color.alphaF()));
+                        triangle.color.alphaF() *
+                            (shadingSettings_.xrayEnabled()
+                                 ? shadingSettings_.xrayAlpha
+                                 : 1.0)));
                     painter.drawPolygon(triangle.points);
                 }
                 return;

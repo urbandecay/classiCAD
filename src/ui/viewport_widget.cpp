@@ -9642,9 +9642,14 @@ protected:
                     auto boundsGeometry = makeBoundsDisplayGeometry(renderObject);
                     if (!boundsGeometry->lineVertices.isEmpty()) {
                         ViewportSceneStroke boundsStroke;
-                        boundsStroke.color = renderObject.selected
-                            ? viewportSelectionColor()
-                            : viewportShadingSettings_.themeWireColor;
+                        if (renderObject.selected) {
+                            boundsStroke.color =
+                                selection_.primaryObjectId() == objectId
+                                    ? viewportShadingSettings_.themeActiveObjectColor
+                                    : viewportShadingSettings_.themeSelectedObjectColor;
+                        } else {
+                            boundsStroke.color = viewportShadingSettings_.themeWireColor;
+                        }
                         boundsStroke.width = 1.0f;
                         boundsStroke.writeDepth = true;
                         boundsStroke.blenderMeshWire = true;

@@ -7667,3 +7667,13 @@ resolve remain open.
   this path still uses its existing display-color gather because that background
   cannot be recovered accurately. The C++ build passed; matched Blender DOF
   comparison remains open.
+
+### Bounds overlay selection colors (2026-10-15)
+
+- Blender's overlay bounds pass uses theme colors for all objects, regardless
+  of Workbench's Theme/Object/Random mesh-wire color mode. classiCAD bounds now
+  use the imported active-object theme color for the primary selected object,
+  the selected-object theme color for other selected objects, and the wire
+  theme color otherwise. This follows Blender 5.2.2's `object_wire_theme_id`
+  and `object_wire_color` path in `overlay_private.hh`. The C++ build passed;
+  matched bounds-color comparison remains open.

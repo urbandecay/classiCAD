@@ -131,6 +131,9 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());
         entry.showInFront = sceneObject.showInFront;
+        entry.reverseSurfaceOrientation =
+            sceneObject.geometry.geometryType == GeometryType::NurbsSurface &&
+            !sceneObject.blenderSourceVersion.isEmpty();
         if (layer != nullptr) {
             entry.layerColor = layer->color;
         }

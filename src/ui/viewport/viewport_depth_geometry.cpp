@@ -866,7 +866,8 @@ void appendShapeDepthGeometry(const Shape &shape,
                               const SurfaceTessellationCache *surfaceCache = nullptr,
                               ObjectId objectId = ObjectId::invalid(),
                               quint64 geometryRevision = 0,
-                              bool collectSurfaceBuildTimings = false)
+                              bool collectSurfaceBuildTimings = false,
+                              bool reverseSurfaceOrientation = false)
 {
         if (isDimensionGeometryType(shape.geometryType)) {
             // Dimension text and leaders are viewport annotations, not scene
@@ -897,9 +898,10 @@ void appendShapeDepthGeometry(const Shape &shape,
                                             objectId,
                                             geometryRevision, index,
                                             shape.geometryType ==
-                                                    GeometryType::NurbsSolid &&
-                                                nurbsSolidFaceReversed(
-                                                    shape.nurbsSolid, index),
+                                                    GeometryType::NurbsSolid
+                                                ? nurbsSolidFaceReversed(
+                                                      shape.nurbsSolid, index)
+                                                : reverseSurfaceOrientation,
                                             collectSurfaceBuildTimings);
             }
             if (shape.geometryType == GeometryType::NurbsSolid) {
@@ -963,7 +965,8 @@ ViewportDepthGeometry buildViewportDepthGeometry(
                              surfaceTessellationCache,
                              useCache ? sceneObject.objectId : ObjectId::invalid(),
                              useCache ? sceneObject.geometryRevision : 0,
-                             collectSurfaceBuildTimings);
+                             collectSurfaceBuildTimings,
+                             sceneObject.reverseSurfaceOrientation);
     return geometry;
 }
 

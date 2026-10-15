@@ -6189,6 +6189,8 @@ int main(int argc, char *argv[])
 
                     std::optional<ViewportRenderObject>
                         importedMaterialGpuObject;
+                    std::optional<ViewportRenderObject>
+                        importedSurfaceMaterialGpuObject;
                     const QString importedMaterialBlendPath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_BLEND");
@@ -6400,6 +6402,229 @@ int main(int argc, char *argv[])
                                 : qPrintable(QStringLiteral(
                                       "a real Blender material-slot file must import: %1")
                                       .arg(importError)));
+                    }
+                    const QString importedSurfaceBlendPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_BLEND");
+                    if (!importedSurfaceBlendPath.isEmpty()) {
+                        QVector<SceneObject> importedSurfaceObjects;
+                        QVector<DocumentCollection> importedSurfaceCollections;
+                        QVector<DocumentMaterial> importedSurfaceMaterials;
+                        BlenderSceneImportReport importReport;
+                        QString importError;
+                        const bool importedSurfaceLoaded =
+                            importBlenderScene(
+                                importedSurfaceBlendPath,
+                                QStringLiteral("original"),
+                                &importedSurfaceObjects,
+                                &importedSurfaceCollections,
+                                &importedSurfaceMaterials, &importReport,
+                                &importError);
+                        Document importedSurfaceDocument;
+                        History importedSurfaceHistory(
+                            importedSurfaceDocument);
+                        DocumentTransaction importedSurfaceTransaction(
+                            importedSurfaceDocument,
+                            importedSurfaceHistory);
+                        bool importedSurfaceMaterialsAdded = true;
+                        bool importedSurfaceDocumentBuilt =
+                            importedSurfaceLoaded &&
+                            importedSurfaceObjects.size() == 1;
+                        if (importedSurfaceLoaded) {
+                            for (const DocumentMaterial &material :
+                                 importedSurfaceMaterials) {
+                                importedSurfaceMaterialsAdded &=
+                                    importedSurfaceTransaction.addMaterial(
+                                        material);
+                            }
+                            importedSurfaceDocumentBuilt &=
+                                importedSurfaceMaterialsAdded;
+                            for (SceneObject &object : importedSurfaceObjects) {
+                                object.collectionIds.clear();
+                            }
+                            const QVector<ObjectId> importedIds =
+                                importedSurfaceTransaction.insertObjects(
+                                    0, importedSurfaceObjects);
+                            importedSurfaceDocumentBuilt &=
+                                importedIds.size() ==
+                                importedSurfaceObjects.size();
+                            importedSurfaceDocumentBuilt &=
+                                importedSurfaceTransaction.commit();
+                        }
+                        const ViewportRenderFrame importedSurfaceFrame =
+                            importedSurfaceDocumentBuilt
+                                ? buildViewportRenderFrame(
+                                      importedSurfaceDocument, gpuTransform,
+                                      glSize, {})
+                                : ViewportRenderFrame{};
+                        bool importedSurfaceMaterialMatches =
+                            importedSurfaceFrame.objects.size() == 1 &&
+                            importedSurfaceFrame.objects[0].shape.geometryType ==
+                                GeometryType::NurbsSurface &&
+                            importedSurfaceFrame.objects[0]
+                                .reverseSurfaceOrientation &&
+                            importedSurfaceFrame.objects[0]
+                                .hasWorkbenchMaterial &&
+                            importedSurfaceFrame.objects[0]
+                                    .workbenchMaterial.textureImageAlphaMode ==
+                                QStringLiteral("PREMUL") &&
+                            importedSurfaceFrame.objects[0]
+                                    .workbenchMaterial.textureImageInterpolation ==
+                                QStringLiteral("Closest") &&
+                            !importedSurfaceFrame.objects[0]
+                                 .workbenchMaterial
+                                 .textureImagePackedDataBase64.isEmpty();
+                        if (importedSurfaceMaterialMatches) {
+                            const WorkbenchMaterialData &material =
+                                importedSurfaceFrame.objects[0]
+                                    .workbenchMaterial;
+                            importedSurfaceMaterialMatches &=
+                                (material.baseColorSceneLinear -
+                                 QVector3D(0.3f, 0.5f, 0.7f)).length() <
+                                    1.0e-5f &&
+                                std::abs(material.alpha - 0.6f) < 1.0e-5f &&
+                                std::abs(material.roughness - 0.27f) <
+                                    1.0e-5f &&
+                                std::abs(material.metallic - 0.41f) <
+                                    1.0e-5f;
+                        }
+                        if (importedSurfaceMaterialMatches) {
+                            importedSurfaceMaterialGpuObject =
+                                importedSurfaceFrame.objects[0];
+                            importedSurfaceMaterialGpuObject
+                                ->preparedDepthGeometry =
+                                QSharedPointer<ViewportDepthGeometry>::create(
+                                    buildViewportDepthGeometry(
+                                        *importedSurfaceMaterialGpuObject));
+                        }
+                        bool importedSurfaceQPainterCaptureSaved = false;
+                        const QString importedCaptureDirectory =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_CAPTURE_DIR");
+                        if (importedSurfaceMaterialMatches &&
+                            !importedCaptureDirectory.isEmpty() &&
+                            QDir().mkpath(importedCaptureDirectory)) {
+                            ViewportShadingSettings importedSurfaceShading;
+                            importedSurfaceShading.mode =
+                                ViewportShadingMode::Solid;
+                            importedSurfaceShading.lightingMode =
+                                ViewportLightingMode::Studio;
+                            importedSurfaceShading.studioLightPreset =
+                                QStringLiteral("Default");
+                            importedSurfaceShading.colorMode =
+                                ViewportColorMode::Material;
+                            importedSurfaceShading.specularLighting = true;
+                            importedSurfaceShading.outline = false;
+                            importedSurfaceShading.shadows = false;
+                            importedSurfaceShading.cavity = false;
+                            CurveHitTester importedSurfaceHitTester;
+                            ViewportRenderer importedSurfaceRenderer(
+                                gpuTransform, importedSurfaceHitTester);
+                            importedSurfaceRenderer
+                                .setWorkbenchRasterAntialiasingEnabled(false);
+                            importedSurfaceRenderer.setShadingSettings(
+                                importedSurfaceShading);
+                            QImage importedSurfaceDisplay(
+                                glSize, QImage::Format_ARGB32_Premultiplied);
+                            importedSurfaceDisplay.fill(QColor(34, 34, 34));
+                            RasterWorkbenchFragmentSink importedSurfaceFragments;
+                            const ViewportRenderObject &importedSurfaceObject =
+                                *importedSurfaceMaterialGpuObject;
+                            QPainter importedSurfacePainter(
+                                &importedSurfaceDisplay);
+                            importedSurfaceRenderer.drawShape(
+                                importedSurfacePainter,
+                                importedSurfaceObject.shape, glSize, false,
+                                false, true, importedSurfaceObject.layerColor,
+                                importedSurfaceObject.layerLineType,
+                                importedSurfaceObject.layerLineWeightMm,
+                                importedSurfaceObject.objectId,
+                                importedSurfaceObject.geometryRevision,
+                                importedSurfaceObject.preparedDepthGeometry.data(),
+                                importedSurfaceObject.preparedGeometryOffset,
+                                importedSurfaceObject.displayColorSceneLinear,
+                                importedSurfaceObject.workbenchMaterial,
+                                importedSurfaceObject.displayName,
+                                importedSurfaceObject.libraryPath,
+                                importedSurfaceObject.meshObjectTransform,
+                                importedSurfaceObject.meshMaterials,
+                                &importedSurfaceFragments);
+                            importedSurfacePainter.end();
+                            constexpr float importedSurfaceBackground =
+                                0.0219421387f;
+                            QVector<float> importedSurfaceSceneLinear(
+                                glSize.width() * glSize.height() * 3);
+                            for (int pixel = 0;
+                                 pixel < glSize.width() * glSize.height();
+                                 ++pixel) {
+                                importedSurfaceSceneLinear[pixel * 3] =
+                                    importedSurfaceBackground;
+                                importedSurfaceSceneLinear[pixel * 3 + 1] =
+                                    importedSurfaceBackground;
+                                importedSurfaceSceneLinear[pixel * 3 + 2] =
+                                    importedSurfaceBackground;
+                            }
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 importedSurfaceFragments) {
+                                if (fragment.x < 0 ||
+                                    fragment.x >= glSize.width() ||
+                                    fragment.y < 0 ||
+                                    fragment.y >= glSize.height()) {
+                                    continue;
+                                }
+                                const int offset =
+                                    (fragment.y * glSize.width() + fragment.x) * 3;
+                                importedSurfaceSceneLinear[offset] =
+                                    fragment.sceneLinearRgb[0];
+                                importedSurfaceSceneLinear[offset + 1] =
+                                    fragment.sceneLinearRgb[1];
+                                importedSurfaceSceneLinear[offset + 2] =
+                                    fragment.sceneLinearRgb[2];
+                            }
+                            const QString importedSurfacePngPath = QDir(
+                                importedCaptureDirectory).filePath(
+                                    QStringLiteral(
+                                        "surface_material_imported_qpainter.png"));
+                            QFile importedSurfacePfm(QDir(
+                                importedCaptureDirectory).filePath(
+                                    QStringLiteral(
+                                        "surface_material_imported_qpainter.pfm")));
+                            const QByteArray importedSurfacePfmHeader =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            const bool pfmSaved =
+                                importedSurfaceFragments.size() > 5000 &&
+                                importedSurfacePfm.open(QIODevice::WriteOnly) &&
+                                importedSurfacePfm.write(
+                                    importedSurfacePfmHeader) ==
+                                    importedSurfacePfmHeader.size() &&
+                                importedSurfacePfm.write(
+                                    reinterpret_cast<const char *>(
+                                        importedSurfaceSceneLinear.constData()),
+                                    importedSurfaceSceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    importedSurfaceSceneLinear.size() *
+                                        qsizetype(sizeof(float));
+                            importedSurfaceQPainterCaptureSaved =
+                                importedSurfaceDisplay.save(
+                                    importedSurfacePngPath) && pfmSaved;
+                        }
+                        passed &= check(
+                            importedSurfaceLoaded &&
+                                importedSurfaceDocumentBuilt &&
+                                importedSurfaceMaterialMatches &&
+                                (importedCaptureDirectory.isEmpty() ||
+                                 importedSurfaceQPainterCaptureSaved),
+                            qPrintable(QStringLiteral(
+                                "a real Blender NURBS surface material must import through frame and QPainter capture (loaded=%1 document=%2 material=%3 capture=%4 error=%5)")
+                                .arg(importedSurfaceLoaded)
+                                .arg(importedSurfaceDocumentBuilt)
+                                .arg(importedSurfaceMaterialMatches)
+                                .arg(importedSurfaceQPainterCaptureSaved)
+                                .arg(importError) +
+                                QStringLiteral(" objects=%1 materials=%2 documentMaterials=%3")
+                                    .arg(importedSurfaceObjects.size())
+                                    .arg(importedSurfaceMaterials.size())
+                                    .arg(importedSurfaceDocument.materials().size())));
                     }
                     ViewportShadingSettings gpuSolidShading;
                     gpuSolidShading.mode = ViewportShadingMode::Solid;
@@ -7484,6 +7709,89 @@ int main(int argc, char *argv[])
                                 importedGpuDisplaySaved &&
                                 importedGpuSlotsVisible,
                             "a real Blender material-slot file must render through the production GPU scene pass");
+                    }
+                    if (importedSurfaceMaterialGpuObject.has_value() &&
+                        !qEnvironmentVariable(
+                             "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_CAPTURE_DIR")
+                             .isEmpty()) {
+                        ViewportShadingSettings importedSurfaceGpuShading;
+                        importedSurfaceGpuShading.mode =
+                            ViewportShadingMode::Solid;
+                        importedSurfaceGpuShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        importedSurfaceGpuShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        importedSurfaceGpuShading.colorMode =
+                            ViewportColorMode::Material;
+                        importedSurfaceGpuShading.specularLighting = true;
+                        importedSurfaceGpuShading.outline = false;
+                        importedSurfaceGpuShading.shadows = false;
+                        importedSurfaceGpuShading.cavity = false;
+                        const QString importedCaptureDirectory =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_CAPTURE_DIR");
+                        QImage importedSurfaceGpuDisplay;
+                        QVector<float> importedSurfaceGpuSceneLinear;
+                        const QVector3D importedSurfaceWorldBackground(
+                            0.0219421387f, 0.0219421387f, 0.0219421387f);
+                        const bool importedSurfaceGpuRendered =
+                            renderCoordinatedScene(
+                                importedSurfaceGpuShading,
+                                QByteArrayLiteral(
+                                    "imported-surface-material-gpu"),
+                                &importedSurfaceGpuDisplay,
+                                &*importedSurfaceMaterialGpuObject, nullptr,
+                                nullptr, QString{},
+                                &importedSurfaceGpuSceneLinear,
+                                &importedSurfaceWorldBackground);
+                        const QString importedSurfaceGpuPngPath = QDir(
+                            importedCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "surface_material_imported_gpu.png"));
+                        QFile importedSurfaceGpuPfm(QDir(
+                            importedCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "surface_material_imported_gpu.pfm")));
+                        const QByteArray importedSurfaceGpuPfmHeader =
+                            QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                        constexpr qsizetype importedSurfaceGpuExpectedValues =
+                            640 * 480 * 3;
+                        const bool importedSurfaceGpuPfmSaved =
+                            importedSurfaceGpuRendered &&
+                            importedSurfaceGpuSceneLinear.size() ==
+                                importedSurfaceGpuExpectedValues &&
+                            importedSurfaceGpuPfm.open(QIODevice::WriteOnly) &&
+                            importedSurfaceGpuPfm.write(
+                                importedSurfaceGpuPfmHeader) ==
+                                importedSurfaceGpuPfmHeader.size() &&
+                            importedSurfaceGpuPfm.write(
+                                reinterpret_cast<const char *>(
+                                    importedSurfaceGpuSceneLinear.constData()),
+                                importedSurfaceGpuExpectedValues *
+                                    qsizetype(sizeof(float))) ==
+                                importedSurfaceGpuExpectedValues *
+                                    qsizetype(sizeof(float));
+                        const bool importedSurfaceGpuPngSaved =
+                            importedSurfaceGpuRendered &&
+                            importedSurfaceGpuDisplay.size() == glSize &&
+                            importedSurfaceGpuDisplay.save(
+                                importedSurfaceGpuPngPath);
+                        int importedSurfaceForegroundPixels = 0;
+                        if (importedSurfaceGpuRendered) {
+                            for (int y = 0; y < glSize.height(); ++y) {
+                                for (int x = 0; x < glSize.width(); ++x) {
+                                    if (importedSurfaceGpuDisplay.pixelColor(x, y) !=
+                                        QColor(34, 34, 34)) {
+                                        ++importedSurfaceForegroundPixels;
+                                    }
+                                }
+                            }
+                        }
+                        passed &= check(
+                            importedSurfaceGpuPfmSaved &&
+                                importedSurfaceGpuPngSaved &&
+                                importedSurfaceForegroundPixels > 5000,
+                            "a real Blender NURBS surface material must render through the production GPU scene pass");
                     }
                     // A face-material split can make one imported mesh
                     // transparent as a whole even when its first draw range

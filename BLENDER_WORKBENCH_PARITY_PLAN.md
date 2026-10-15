@@ -4110,8 +4110,10 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   values plus the first usable active image record. Resolution preserves UDIM
   tiles first, then packed regular image bytes, then an existing external
   image path. A standalone C++ contract covers those choices and image
-  metadata; the Blender-side fixture covers extraction only. Blender's active
-  image sampling and UDIM lookup are documented by pinned
+  metadata. The saved Blender 5.2.2 fixture also exercises the imported
+  surface through the production viewport frame and both rendering paths in
+  Material mode. Blender's active image sampling and UDIM lookup are
+  documented by pinned
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L433).
 - **NURBS Surface material scalar extraction (2026-10-14):** the Blender
   5.2.2 extractor contract now checks the assigned material record's name,
@@ -4120,12 +4122,32 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   Blender's valid 4×4 NURBS-surface primitive; its previous empty spline did
   not satisfy the API's read-only control-count fields and stopped before
   exercising extraction. This verifies Blender-record extraction alongside
-  the existing C++ `WorkbenchMaterialData` scalar projection contract. It does
-  not yet compare rendered pixels for an imported `.blend` material. Blender's
+  the existing C++ `WorkbenchMaterialData` scalar projection contract. Blender's
   supported Workbench material resolution is pinned in
   [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L37)
   and
   [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L538-L553).
+- **End-to-end imported NURBS Surface material rendering (2026-10-14):** a
+  saved ordinary Blender 5.2.2 `.blend` containing a valid 4×4 NURBS Surface,
+  an assigned material, and a packed PREMUL image now passes through
+  `importBlenderScene`, `Document`, `ViewportRenderFrame`, and both the
+  QPainter and GPU render paths. The contract checks imported material
+  scalars and packed image/sampling metadata. Captures use Studio/Material,
+  AA Off, at 640×480; the image is verified as imported metadata, not sampled
+  for this comparison. Blender's evaluated surface normal is `-Z`, while
+  classiCAD's native U/V tessellation produces `+Z`; imported Blender surfaces
+  now carry an explicit render-frame orientation flag so prepared depth and
+  shading geometry match Blender's winding. GPU scene-linear RGB MAE is
+  `[6.64e-8, 1.12e-7, 1.60e-7]`, p95 and p99 are zero, with a sparse maximum
+  `0.01227`. Display foreground IoU is `0.999497` (4 XOR pixels); common
+  foreground display MAE is `0.001248` on a 0–1 channel scale (p95 `1/255`).
+  QPainter is included in the paired display comparison. Imported NURBS
+  Surface Texture-mode UV/render parity, image alpha behavior, and broader
+  camera/material coverage remain open. Blender behavior is pinned in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L538-L553),
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L433),
+  and
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105).
 - **End-to-end imported mesh material rendering (2026-10-14):** the reference
   fixture can save its configured material-slot scene as an ordinary Blender
   `.blend`. A headless acceptance path imports that file through

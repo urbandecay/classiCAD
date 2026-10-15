@@ -89,6 +89,9 @@ struct ViewportRenderObject {
     bool outlineHandledBySceneStroke = false;
     bool selected = false;
     bool showInFront = false;
+    // Blender's SURFACE tessellation has the opposite winding convention
+    // from classiCAD's native U/V triangle expansion.
+    bool reverseSurfaceOrientation = false;
     bool scalePreview = false;
     bool rotatePreview = false;
 

@@ -9123,6 +9123,90 @@ int main(int argc, char *argv[])
                         lightingCapturesSucceeded &=
                             trimmedQPainterCaptured;
 
+                        const auto makeTrimmedAlphaObject = [&] (
+                            const QString &alphaMode) {
+                            ViewportRenderObject object = trimmedTextureObject;
+                            object.workbenchMaterial.textureImagePath =
+                                curvedAlphaTexturePath;
+                            object.workbenchMaterial
+                                .textureImagePackedDataBase64.clear();
+                            object.workbenchMaterial
+                                .textureImageSceneLinearFloatDataBase64.clear();
+                            object.workbenchMaterial
+                                .textureImageSceneLinearFloatWidth = 0;
+                            object.workbenchMaterial
+                                .textureImageSceneLinearFloatHeight = 0;
+                            object.workbenchMaterial.textureImageSrgb = true;
+                            object.workbenchMaterial.textureImageAlphaMode =
+                                alphaMode;
+                            object.workbenchMaterial.textureImageInterpolation =
+                                QStringLiteral("Linear");
+                            object.workbenchMaterial.textureImageExtension =
+                                QStringLiteral("REPEAT");
+                            return object;
+                        };
+                        const ViewportRenderObject trimmedStraightAlphaObject =
+                            makeTrimmedAlphaObject(QStringLiteral("STRAIGHT"));
+                        const ViewportRenderObject trimmedNoAlphaObject =
+                            makeTrimmedAlphaObject(QStringLiteral("NONE"));
+                        const QString trimmedAlphaPrefix =
+                            QStringLiteral("color_texture_nurbs_trimmed_alpha_");
+                        const bool trimmedAlphaGpuCaptured =
+                            captureCurvedAlphaGpu(
+                                trimmedAlphaPrefix +
+                                    QStringLiteral("straight_gpu"),
+                                trimmedStraightAlphaObject, nullptr) &&
+                            captureCurvedAlphaGpu(
+                                trimmedAlphaPrefix +
+                                    QStringLiteral("none_gpu"),
+                                trimmedNoAlphaObject, nullptr);
+                        const bool trimmedAlphaQPainterCaptured =
+                            captureCurvedQPainterTexture(
+                                trimmedAlphaPrefix +
+                                    QStringLiteral("straight_qpainter"),
+                                gpuTransform, trimmedStraightAlphaObject,
+                                trimProbePixelsValid
+                                    ? std::optional<QPoint>(holeCenterPixel)
+                                    : std::nullopt) &&
+                            captureCurvedQPainterTexture(
+                                trimmedAlphaPrefix +
+                                    QStringLiteral("none_qpainter"),
+                                gpuTransform, trimmedNoAlphaObject,
+                                trimProbePixelsValid
+                                    ? std::optional<QPoint>(holeCenterPixel)
+                                    : std::nullopt);
+                        const int trimmedStraightGpuPixels =
+                            capturedForegroundPixels(
+                                trimmedAlphaPrefix +
+                                QStringLiteral("straight_gpu"));
+                        const int trimmedNoneGpuPixels =
+                            capturedForegroundPixels(
+                                trimmedAlphaPrefix + QStringLiteral("none_gpu"));
+                        const int trimmedStraightQPainterPixels =
+                            capturedForegroundPixels(
+                                trimmedAlphaPrefix +
+                                QStringLiteral("straight_qpainter"));
+                        const int trimmedNoneQPainterPixels =
+                            capturedForegroundPixels(
+                                trimmedAlphaPrefix +
+                                QStringLiteral("none_qpainter"));
+                        const bool trimmedAlphaReducesCoverage =
+                            trimmedStraightGpuPixels > 5000 &&
+                            trimmedNoneGpuPixels >
+                                trimmedStraightGpuPixels + 5000 &&
+                            trimmedStraightQPainterPixels > 5000 &&
+                            trimmedNoneQPainterPixels >
+                                trimmedStraightQPainterPixels + 5000;
+                        passed &= check(
+                            trimmedAlphaGpuCaptured &&
+                                trimmedAlphaQPainterCaptured &&
+                                trimmedAlphaReducesCoverage,
+                            "trimmed NURBS Image Texture STRAIGHT alpha must cut out coverage while NONE preserves the trimmed patch in GPU and QPainter captures");
+                        lightingCapturesSucceeded &=
+                            trimmedAlphaGpuCaptured &&
+                            trimmedAlphaQPainterCaptured &&
+                            trimmedAlphaReducesCoverage;
+
                         CurveHitTester qpainterTextureHitTester;
                         ViewportRenderer qpainterTextureRenderer(
                             gpuTransform, qpainterTextureHitTester);

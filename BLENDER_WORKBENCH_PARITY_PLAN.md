@@ -3472,7 +3472,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   and Paint world-space rotations 0°, 37°, and 90°. Exact edge parity remains
   open. Other presets, AA modes, camera orientations, and broader full-frame
   QPainter parity remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched GPU and QPainter curved NURBS captures now compare STRAIGHT cutout and NONE alpha bypass in orthographic and perspective views. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Trimmed surfaces, broader curved-surface alpha modes/settings/camera coverage, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched GPU and QPainter curved NURBS captures compare STRAIGHT cutout and NONE alpha bypass in orthographic and perspective views; a curved trimmed patch with an interior hole now also has matched STRAIGHT/NONE alpha captures. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Other trimmed-surface textures and alpha modes, broader curved-surface alpha modes/settings/camera coverage, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
@@ -5889,3 +5889,45 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   STRAIGHT|PREMUL|CHANNEL_PACKED|NONE`, using the matched orthographic or
   perspective camera arguments from the preceding alpha categories; use
   `--linear-output` and `--linear-pfm-output` for scene-linear comparison.
+
+### Curved trimmed NURBS Image Texture alpha comparison (2026-10-14)
+
+- Extended the existing curved degree-2 NURBS surface fixture, with its outer
+  trim and square interior hole, to capture a linearly filtered binary alpha
+  texture in STRAIGHT and NONE modes. Both the production GPU and QPainter
+  renderers write display PNG and scene-linear PFM captures; their foreground
+  checks confirm STRAIGHT cuts out substantial surface coverage while NONE
+  retains the trimmed surface. The authoritative NURBS surface, trim loops,
+  UVs, and material adapter remain unchanged.
+- Compared with Blender 5.2.2 using the production tessellation exported as
+  the exact OBJ triangle/UV proxy, GPU foreground-mask IoU is `0.999309`
+  (12 XOR pixels) for STRAIGHT and `0.999580` (12 XOR) for NONE. QPainter
+  mask IoU is `0.999540` (8 XOR) and `0.999755` (7 XOR), respectively.
+  Display MAE on common foreground is `0.0206/255` and `0.0160/255` for GPU,
+  and `0.0987/255` and `0.0791/255` for QPainter; p95 is at most `1/255`.
+  Scene-linear channel MAE is at most `0.000019` GPU and `0.000135` QPainter.
+  This validates alpha cutoff/bypass across one trimmed patch and one texture;
+  it does not establish other trim topology, texture modes, camera poses, or
+  general QPainter parity. Blender renders the matching mesh proxy, not native
+  NURBS trims.
+- Blender 5.2.2 interpolates Image Texture RGBA and applies its alpha cutoff in
+  pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L385-L429);
+  the prepass supplies interpolated UVs in pinned
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105).
+  The remaining differences are concentrated at alpha/trim raster boundaries;
+  these measurements did not justify a production renderer change.
+- Validation: `cmake --build build` passed with the 316-file dependency
+  audit; capture-enabled offscreen CTest `viewport_render_contracts` passed
+  (1/1, 43.96 seconds); both Blender references reported 5.2.2 LTS; and four
+  PNG plus four PFM comparisons completed. Reproduce classiCAD captures with
+  `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR=<dir> QT_QPA_PLATFORM=offscreen
+  ctest --test-dir build -R '^viewport_render_contracts$' --output-on-failure`.
+  Render each Blender reference with `--scene NURBS_TEXTURE_CURVED
+  --nurbs-proxy-obj <dir>/color_texture_nurbs_trimmed_proxy.obj
+  --texture-image <dir>/workbench-texture-nurbs-curved-alpha.png
+  --texture-interpolation Linear --texture-extension REPEAT
+  --texture-alpha-mode STRAIGHT|NONE --lighting FLAT --color-source TEXTURE
+  --aa OFF --match-classicad-ortho --world-color 0.0219421387 0.0219421387
+  0.0219421387 --zero-dither`, with `--linear-output` and
+  `--linear-pfm-output` for scene-linear captures.

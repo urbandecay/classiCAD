@@ -44,7 +44,7 @@ COLOR_LUT_SHAPER_SCALE = 64.0
 MAX_VOLUME_GRID_RECORDS = 262144
 MAX_VOLUME_GRID_VOXELS = 16 * 1024 * 1024
 MAX_VOLUME_GRID_PAYLOAD_BYTES = 16 * 1024 * 1024
-MAX_COLLECTION_INSTANCE_MESHES = 50000
+MAX_COLLECTION_INSTANCES = 50000
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -1294,7 +1294,8 @@ def unsupported_object_record(obj, scene, depsgraph=None):
     return record
 
 
-def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
+def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
+                              transform_override=None):
     """Extract supported source splines in world XYZ."""
     from mathutils import Vector
 
@@ -1302,6 +1303,8 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
     item = object_metadata(obj, scene, depsgraph)
     item["object_type"] = "CURVE"
     item["splines"] = []
+    transform = (transform_override if transform_override is not None
+                 else obj.matrix_world)
     if obj.parent is not None:
         add_unsupported(unsupported, item_id, "parent_hierarchy",
                         "the object's world-space spline geometry is preserved, but its Blender parent relationship is not represented")
@@ -1336,7 +1339,7 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
         if spline.type == "POLY":
             points = []
             for point in spline.points:
-                world = obj.matrix_world @ Vector((point.co[0], point.co[1], point.co[2]))
+                world = transform @ Vector((point.co[0], point.co[1], point.co[2]))
                 points.append(vector_values(world))
             if spline.use_cyclic_u and points and points[-1] != points[0]:
                 points.append(list(points[0]))
@@ -1360,7 +1363,7 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
             weights = []
             points = []
             for point in source_points:
-                world = obj.matrix_world @ Vector((point.co[0], point.co[1], point.co[2]))
+                world = transform @ Vector((point.co[0], point.co[1], point.co[2]))
                 points.append(vector_values(world))
                 weights.append(finite_number(point.co[3]))
             if cyclic:
@@ -1392,7 +1395,7 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
             local_points = (start.co, start.handle_right, end.handle_left, end.co)
             span = []
             for point in local_points:
-                world = obj.matrix_world @ Vector((point[0], point[1], point[2]))
+                world = transform @ Vector((point[0], point[1], point[2]))
                 span.append(vector_values(world))
             spans.append(span)
         if not spans:
@@ -1407,11 +1410,14 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
     return item
 
 
-def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None):
+def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None,
+                            transform_override=None):
     """Extract each Blender SURFACE NURBS patch as a separate item."""
     from mathutils import Vector
 
     source_id = stable_id(obj)
+    transform = (transform_override if transform_override is not None
+                 else obj.matrix_world)
     if obj.parent is not None:
         add_unsupported(unsupported, source_id, "parent_hierarchy",
                         "the surface world-space control net is preserved, but its Blender parent relationship is not represented")
@@ -1505,7 +1511,7 @@ def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None):
             for v_index in range(expanded_v):
                 source_v = v_index % count_v
                 point = spline.points[source_u + source_v * count_u]
-                world = obj.matrix_world @ Vector(
+                world = transform @ Vector(
                     (point.co[0], point.co[1], point.co[2]))
                 world_points.append(vector_values(world))
                 weights.append(finite_number(point.co[3]))
@@ -1564,7 +1570,7 @@ def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None):
                     temporary_object = bpy.data.objects.new(
                         "__classiCAD_surface_wire_eval__", temporary_data)
                     scene.collection.objects.link(temporary_object)
-                    temporary_object.matrix_world = obj.matrix_world.copy()
+                    temporary_object.matrix_world = transform.copy()
                     with bpy.context.temp_override(
                             scene=scene, view_layer=scene.view_layers[0]):
                         bpy.context.view_layer.update()
@@ -1802,7 +1808,7 @@ def extract_scene(input_path, mode):
                 add_unsupported(
                     output["unsupported_features"], object_id,
                     "collection_instance_hierarchy",
-                    "collection instances are expanded into mesh copies; their hierarchy, instance selection, and per-instance Random variation are not represented",
+                    "collection instances are expanded into supported mesh, curve, and surface copies; their hierarchy, instance selection, and per-instance Random variation are not represented",
                 )
                 continue
             if obj.type == "CURVE":
@@ -1972,90 +1978,140 @@ def extract_scene(input_path, mode):
         instance_depsgraph = depsgraph or depsgraph_for_scene(scene)
         if instance_depsgraph is not None:
             emitted_instance_keys = set()
-            emitted_instance_meshes = 0
             unsupported_instance_types = set()
+            instance_records = []
+            instance_limit_exceeded = False
+
+            # Surface wire extraction updates Blender's dependency graph while
+            # evaluating a temporary object, so snapshot instance identities
+            # and matrices before extracting any instance geometry.
             for instance in instance_depsgraph.object_instances:
                 if not instance.is_instance:
                     continue
                 evaluated_obj = instance.object
                 source_obj = getattr(evaluated_obj, "original", evaluated_obj)
-                if source_obj.type != "MESH":
-                    unsupported_instance_types.add(source_obj.type)
-                    continue
                 parent = instance.parent
                 parent_source = getattr(parent, "original", parent)
                 if parent_source is None:
                     continue
-                persistent_id = tuple(int(value) for value in instance.persistent_id)
+                if (parent_source.type != "EMPTY" or
+                        parent_source.instance_collection is None):
+                    unsupported_instance_types.add(
+                        "non-collection-generated-" + source_obj.type)
+                    continue
+                if source_obj.type not in {"MESH", "CURVE", "SURFACE"}:
+                    unsupported_instance_types.add(source_obj.type)
+                    continue
+                if len(instance_records) >= MAX_COLLECTION_INSTANCES:
+                    instance_limit_exceeded = True
+                    break
+                instance_records.append((
+                    source_obj, parent_source, instance.matrix_world.copy(),
+                    tuple(int(value) for value in instance.persistent_id)))
+
+            def assign_instance_metadata(item, instance_id, source_obj,
+                                         parent_source, instance_transform):
+                item["object_id"] = instance_id
+                item["parent_id"] = stable_id(parent_source)
+                if item.get("bounds_display_type"):
+                    item["bounds_transform_world"] = matrix_values(
+                        instance_transform)
+                item["collection_ids"] = sorted(
+                    stable_id(collection)
+                    for collection in parent_source.users_collection)
+                item["view_layer_hidden"] = {
+                    view_layer_key(scene, view_layer): (
+                        object_hidden_in_layer(source_obj, view_layer) or
+                        object_hidden_in_layer(parent_source, view_layer))
+                    for view_layer in scene.view_layers
+                }
+                item["default_view_layer_key"] = (
+                    view_layer_key(scene, scene.view_layers[0])
+                    if len(scene.view_layers) else ""
+                )
+
+            for source_obj, parent_source, instance_transform, persistent_id in instance_records:
                 source_id = stable_id(source_obj)
                 parent_id = stable_id(parent_source)
                 instance_key = (source_id, parent_id, persistent_id)
                 if instance_key in emitted_instance_keys:
                     continue
                 emitted_instance_keys.add(instance_key)
-                if emitted_instance_meshes >= MAX_COLLECTION_INSTANCE_MESHES:
-                    add_unsupported(
-                        output["unsupported_features"], stable_id(scene),
-                        "collection_instance_limit",
-                        "mesh collection instances exceeded the extraction limit of %d; remaining instances were skipped" %
-                        MAX_COLLECTION_INSTANCE_MESHES,
-                    )
-                    break
-                emitted_instance_meshes += 1
                 instance_suffix = ":".join(str(value) for value in persistent_id)
                 instance_id = "classiCAD::instance::" + hashlib.sha256(
-                    (source_id + "::" + parent_id + "::" + instance_suffix)
+                    (stable_id(scene) + "::" + source_id + "::" + parent_id +
+                     "::" + instance_suffix)
                     .encode("utf-8")).hexdigest()
                 try:
-                    item = extract_mesh_object(
-                        source_obj, scene, mode, instance_depsgraph,
-                        output["materials"], output["unsupported_features"],
-                        transform_override=instance.matrix_world,
-                        evaluated_object_override=evaluated_obj,
-                    )
-                    item["object_id"] = instance_id
-                    item["parent_id"] = parent_id
-                    if item["bounds_display_type"]:
-                        item["bounds_transform_world"] = matrix_values(
-                            instance.matrix_world)
-                    item["collection_ids"] = sorted(
-                        stable_id(collection)
-                        for collection in parent_source.users_collection)
-                    item["view_layer_hidden"] = {
-                        view_layer_key(scene, view_layer): (
-                            object_hidden_in_layer(source_obj, view_layer) or
-                            object_hidden_in_layer(parent_source, view_layer))
-                        for view_layer in scene.view_layers
-                    }
-                    item["default_view_layer_key"] = (
-                        view_layer_key(scene, scene.view_layers[0])
-                        if len(scene.view_layers) else ""
-                    )
-                    loose_edges_world = item.pop("_loose_edges_world", [])
-                    loose_edges_item = (
-                        loose_edge_curve_item(
-                            source_obj, scene, item, loose_edges_world)
-                        if loose_edges_world and
-                        not item["bounds_display_type"] else None
-                    )
-                    output["items"].append(item)
-                    scene_record["object_ids"].append(instance_id)
+                    if source_obj.type == "MESH":
+                        item = extract_mesh_object(
+                            source_obj, scene, mode, instance_depsgraph,
+                            output["materials"], output["unsupported_features"],
+                            transform_override=instance_transform,
+                            evaluated_object_override=(
+                                source_obj.evaluated_get(instance_depsgraph)
+                                if mode == "evaluated" else None),
+                        )
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        loose_edges_world = item.pop("_loose_edges_world", [])
+                        loose_edges_item = (
+                            loose_edge_curve_item(
+                                source_obj, scene, item, loose_edges_world)
+                            if loose_edges_world and
+                            not item["bounds_display_type"] else None
+                        )
+                        output["items"].append(item)
+                        if loose_edges_item is not None:
+                            output["items"].append(loose_edges_item)
+                        mesh_count += 1
+                    elif source_obj.type == "CURVE":
+                        item = extract_poly_curve_object(
+                            source_obj, scene, output["unsupported_features"],
+                            instance_depsgraph,
+                            transform_override=instance_transform)
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        output["items"].append(item)
+                    else:
+                        patches = extract_surface_patches(
+                            source_obj, scene, output["materials"],
+                            output["unsupported_features"], instance_depsgraph,
+                            transform_override=instance_transform)
+                        for patch_index, item in enumerate(patches):
+                            patch_id = "%s::surface:%d" % (
+                                instance_id, patch_index)
+                            assign_instance_metadata(
+                                item, patch_id, source_obj, parent_source,
+                                instance_transform)
+                            item["source_object_id"] = instance_id
+                            output["items"].append(item)
+                            scene_record["object_ids"].append(patch_id)
+                        surface_patch_count += len(patches)
+                    if source_obj.type != "SURFACE":
+                        scene_record["object_ids"].append(instance_id)
                     object_count += 1
-                    mesh_count += 1
-                    if loose_edges_item is not None:
-                        output["items"].append(loose_edges_item)
                 except Exception as error:
                     output["unsupported_items"].append({
                         **object_metadata(source_obj, scene, depsgraph),
                         "object_id": instance_id,
-                        "object_type": "MESH",
-                        "reason": "collection mesh instance extraction failed; instance skipped: " + str(error),
+                        "object_type": source_obj.type,
+                        "reason": "collection geometry instance extraction failed; instance skipped: " + str(error),
                     })
+            if instance_limit_exceeded:
+                add_unsupported(
+                    output["unsupported_features"], stable_id(scene),
+                    "collection_instance_limit",
+                    "supported collection instances exceeded the extraction limit of %d; remaining instances were skipped" %
+                    MAX_COLLECTION_INSTANCES,
+                )
             if unsupported_instance_types:
                 add_unsupported(
                     output["unsupported_features"], stable_id(scene),
                     "non_mesh_collection_instances",
-                    "collection instances containing non-mesh objects were skipped: " +
+                    "collection or generated instances with unsupported geometry were skipped: " +
                     ", ".join(sorted(unsupported_instance_types)),
                 )
         output["scenes"].append(scene_record)

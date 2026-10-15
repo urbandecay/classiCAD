@@ -7727,16 +7727,18 @@ resolve remain open.
   confirmed. The C++ build passed; no matched Blender image comparison has
   been run.
 
-### Blender collection mesh instances (2026-10-15)
+### Blender collection geometry instances (2026-10-15)
 
-- Blender extraction now expands visible dependency-graph mesh instances into
-  separate imported mesh objects, retaining the source mesh-local vertices,
-  material slots, each instance's world transform, and object-aligned bounds
-  transforms when Bounds display is enabled. Synthetic stable IDs keep
-  repeated copies distinct, and extraction is capped at 50,000 instances
-  per scene. The source collection hierarchy, instance selection, and
-  per-instance Blender Random variation are not represented; non-mesh
-  collection instances are reported as unsupported. The C++ build passed;
+- Blender extraction now expands visible collection instances of mesh, curve,
+  and NURBS surface objects into separate scene items, keeping mesh vertices
+  local with the instance transform and applying that transform to exact curve
+  and surface control points. Mesh material slots, surface patch materials,
+  bounds transforms, and Blender's source-object Random color identity are
+  retained. Per-scene synthetic IDs keep repeated copies distinct; extraction
+  is capped at 50,000 instances per scene. The source collection hierarchy,
+  instance selection, per-instance Random variation, curve material slots, and
+  image-texture UV evaluation for exact NURBS instances are not represented.
+  Other generated instance types remain unsupported. The C++ build passed;
   no matched Blender instance comparison has been run.
 
 ### QPainter Workbench effect and overlay ordering (2026-10-15)

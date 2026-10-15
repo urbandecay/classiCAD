@@ -561,6 +561,32 @@ std::array<RasterWorkbenchDofTap, 49> rasterWorkbenchDofKernel(
     return samples;
 }
 
+QPointF rasterWorkbenchDofGatherOriginOffset(
+    int x, int y, int targetHeight, float centerCocPixels) noexcept
+{
+    if (targetHeight <= 0 || !std::isfinite(centerCocPixels) ||
+        centerCocPixels <= 0.0f) {
+        return {};
+    }
+
+    constexpr float tau = 6.28318530718f;
+    const int noiseY = targetHeight - 1 - y;
+    const float blueNoise = rasterCavityNoise(x, noiseY, 1);
+    const float pixelX = static_cast<float>(x) + 0.5f;
+    const float pixelY = static_cast<float>(noiseY) + 0.5f;
+    const float gradient = 0.06711056f * pixelX + 0.00583715f * pixelY;
+    const float ign = std::fmod(
+        52.9829189f * (gradient - std::floor(gradient)), 1.0f);
+    const float anglePhase = blueNoise - std::floor(blueNoise);
+    const float angle = tau * anglePhase;
+    const float ramp = std::clamp(centerCocPixels * 0.2f - 4.0f,
+                                  0.0f, 1.0f);
+    const float jitterScale = centerCocPixels * 0.2f * ramp *
+                              std::sqrt(std::clamp(ign, 0.0f, 1.0f));
+    return QPointF(std::cos(angle) * jitterScale,
+                   std::sin(angle) * jitterScale);
+}
+
 RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
     const std::array<float, 4> &signedCocs) noexcept
 {
@@ -4136,6 +4162,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     dofMixes[pixelIndex] = static_cast<float>(mix);
                     medianRadii[pixelIndex] = static_cast<float>(
                         std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
+                    const QPointF gatherOriginOffset =
+                        rasterWorkbenchDofGatherOriginOffset(
+                            x, y, outputHeight, static_cast<float>(radius));
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     qreal totalWeight = 0.0;
                     for (int tapIndex = 0; tapIndex < dofTapCount; ++tapIndex) {
@@ -4148,8 +4177,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                   tapIndex * (dofKernel.size() - 1) /
                                   (dofTapCount - 1));
                         const RasterWorkbenchDofTap &tap = dofKernel[kernelIndex];
-                        const qreal sx = x + tap.position.x() * radius;
-                        const qreal sy = y + tap.position.y() * radius;
+                        const qreal sx = x + gatherOriginOffset.x() +
+                                         tap.position.x() * radius;
+                        const qreal sy = y + gatherOriginOffset.y() +
+                                         tap.position.y() * radius;
                         const FilteredDofPixel sample = sampleDofMip(
                             sx, sy, rasterWorkbenchDofMipLod(
                                 sourceCocAt(sx, sy),

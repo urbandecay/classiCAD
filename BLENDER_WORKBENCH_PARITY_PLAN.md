@@ -8281,7 +8281,10 @@ resolve remain open.
 - The QPainter Solid path now clips each NURBS surface triangle against the
   viewport near and far depth planes before projection. It interpolates UVs
   and smooth normals at generated boundary vertices, and applies the same
-  path to NURBS solid faces. This prevents out-of-range geometry from drawing
-  and preserves the portion of triangles that cross a clip plane. Imported
-  polygon meshes already use a separate clipped triangle path. Build passed;
-  no matched Blender image comparison was run.
+  path to NURBS solid faces. A follow-up audit found that imported polygon
+  meshes had still been dropping whole triangles when a vertex crossed either
+  plane. They now clip their triangles before projection as well, interpolating
+  UVs, corner normals, and color attributes at new vertices. This prevents
+  out-of-range geometry from drawing and preserves the visible portion of
+  crossing triangles. Build passed; no matched Blender image comparison was
+  run.

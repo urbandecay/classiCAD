@@ -1880,6 +1880,140 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
             return colors;
         };
+        struct MeshClipVertex {
+            Point3D position;
+            QPointF uv;
+            QVector3D normal;
+            QVector3D attributeColor;
+        };
+        const ViewportCameraPreferences clipPreferences =
+            transform_.cameraPreferences();
+        const Point3D clipTarget = transform_.viewTarget();
+        const Point3D clipCamera = transform_.cameraPosition(viewportSize);
+        const Point3D clipViewDirection = transform_.viewDirection();
+        const Point3D clipForward{-clipViewDirection.x,
+                                  -clipViewDirection.y,
+                                  -clipViewDirection.z};
+        const qreal meshNearDepth = clipPreferences.clipStart;
+        const qreal meshFarDepth = transform_.isPerspectiveEnabled()
+                                       ? clipPreferences.clipEnd
+                                       : 2.0 * clipPreferences.clipEnd;
+        const auto meshViewDepth = [&](const Point3D &point) {
+            if (transform_.isPerspectiveEnabled()) {
+                return (point.x - clipCamera.x) * clipForward.x +
+                       (point.y - clipCamera.y) * clipForward.y +
+                       (point.z - clipCamera.z) * clipForward.z;
+            }
+            return clipPreferences.clipEnd +
+                   (point.x - clipTarget.x) * clipForward.x +
+                   (point.y - clipTarget.y) * clipForward.y +
+                   (point.z - clipTarget.z) * clipForward.z;
+        };
+        const auto appendClippedMeshTriangle =
+            [&](const MeshTriangle &sourceTriangle) {
+                QVector<MeshClipVertex> polygon;
+                polygon.reserve(4);
+                for (int corner = 0; corner < 3; ++corner) {
+                    polygon.append({sourceTriangle.worldPoints[corner],
+                                    sourceTriangle.uvs[corner],
+                                    sourceTriangle.cornerNormalsView[corner],
+                                    sourceTriangle.attributeColors[corner]});
+                }
+                const qreal clipPlanes[] = {meshNearDepth, meshFarDepth};
+                for (int planeIndex = 0;
+                     planeIndex < 2 && !polygon.isEmpty(); ++planeIndex) {
+                    const bool keepGreater = planeIndex == 0;
+                    const qreal planeDepth = clipPlanes[planeIndex];
+                    QVector<MeshClipVertex> clipped;
+                    clipped.reserve(polygon.size() + 1);
+                    MeshClipVertex previous = polygon.last();
+                    qreal previousDepth = meshViewDepth(previous.position);
+                    bool previousInside = keepGreater
+                                              ? previousDepth >= planeDepth
+                                              : previousDepth <= planeDepth;
+                    for (const MeshClipVertex &current : polygon) {
+                        const qreal currentDepth = meshViewDepth(current.position);
+                        const bool currentInside = keepGreater
+                                                       ? currentDepth >= planeDepth
+                                                       : currentDepth <= planeDepth;
+                        if (currentInside != previousInside) {
+                            const qreal denominator = currentDepth - previousDepth;
+                            if (std::abs(denominator) > 1.0e-15) {
+                                const qreal t = std::clamp(
+                                    (planeDepth - previousDepth) / denominator,
+                                    0.0, 1.0);
+                                clipped.append({
+                                    {previous.position.x +
+                                         (current.position.x - previous.position.x) * t,
+                                     previous.position.y +
+                                         (current.position.y - previous.position.y) * t,
+                                     previous.position.z +
+                                         (current.position.z - previous.position.z) * t},
+                                    previous.uv + (current.uv - previous.uv) * t,
+                                    previous.normal + (current.normal - previous.normal) *
+                                                          static_cast<float>(t),
+                                    previous.attributeColor +
+                                        (current.attributeColor -
+                                         previous.attributeColor) *
+                                            static_cast<float>(t)});
+                            }
+                        }
+                        if (currentInside) clipped.append(current);
+                        previous = current;
+                        previousDepth = currentDepth;
+                        previousInside = currentInside;
+                    }
+                    polygon = std::move(clipped);
+                }
+                for (int fanIndex = 1; fanIndex + 1 < polygon.size();
+                     ++fanIndex) {
+                    MeshTriangle triangle = sourceTriangle;
+                    triangle.points.clear();
+                    triangle.depth = 0.0;
+                    const MeshClipVertex corners[] = {
+                        polygon[0], polygon[fanIndex], polygon[fanIndex + 1]};
+                    bool projectable = true;
+                    for (int corner = 0; corner < 3; ++corner) {
+                        triangle.worldPoints[corner] = corners[corner].position;
+                        triangle.uvs[corner] = corners[corner].uv;
+                        triangle.cornerNormalsView[corner] = corners[corner].normal;
+                        triangle.attributeColors[corner] =
+                            corners[corner].attributeColor;
+                        QPointF screen;
+                        if (!transform_.worldPointToScreenUnclipped(
+                                corners[corner].position, viewportSize, &screen)) {
+                            projectable = false;
+                            break;
+                        }
+                        triangle.points.append(screen);
+                        triangle.depth += transform_.worldDirectionToView(
+                            corners[corner].position).towardCamera / 3.0;
+                        if (transform_.isPerspectiveEnabled()) {
+                            const qreal depth = meshViewDepth(corners[corner].position);
+                            triangle.reciprocalDepths[corner] =
+                                1.0 / std::max<qreal>(depth, 1.0e-9);
+                        } else {
+                            triangle.reciprocalDepths[corner] = 1.0;
+                        }
+                    }
+                    if (projectable) {
+                        const QTransform deviceTransform = painter.deviceTransform();
+                        const QPointF screenA = deviceTransform.map(triangle.points[0]);
+                        const QPointF screenB = deviceTransform.map(triangle.points[1]);
+                        const QPointF screenC = deviceTransform.map(triangle.points[2]);
+                        const qreal area =
+                            (screenB.x() - screenA.x()) *
+                                (screenC.y() - screenA.y()) -
+                            (screenB.y() - screenA.y()) *
+                                (screenC.x() - screenA.x());
+                        bool frontFacing = area < 0.0;
+                        if (reflectedMeshTransform) frontFacing = !frontFacing;
+                        if (!shadingSettings_.backfaceCulling || frontFacing) {
+                            triangles.append(std::move(triangle));
+                        }
+                    }
+                }
+            };
         for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
             const QVector<int> &face = mesh.faces[faceIndex];
             QColor faceColor = curveColor;
@@ -1950,35 +2084,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 const Point3D vertices[] = {world[loopTriangle[0]],
                                             world[loopTriangle[1]],
                                             world[loopTriangle[2]]};
-                if (shadingSettings_.backfaceCulling) {
-                    const Point3D &a = vertices[0];
-                    const Point3D &b = vertices[1];
-                    const Point3D &c = vertices[2];
-                    const Point3D ab{b.x - a.x, b.y - a.y, b.z - a.z};
-                    const Point3D ac{c.x - a.x, c.y - a.y, c.z - a.z};
-                    const Point3D normal{ab.y * ac.z - ab.z * ac.y,
-                                         ab.z * ac.x - ab.x * ac.z,
-                                         ab.x * ac.y - ab.y * ac.x};
-                    Point3D towardCamera = transform_.isPerspectiveEnabled()
-                        ? transform_.cameraPosition(viewportSize)
-                        : Point3D{};
-                    if (transform_.isPerspectiveEnabled()) {
-                        towardCamera.x -= a.x;
-                        towardCamera.y -= a.y;
-                        towardCamera.z -= a.z;
-                    } else {
-                        const Point3D view = transform_.viewDirection();
-                        towardCamera = {-view.x, -view.y, -view.z};
-                    }
-                    const qreal facing =
-                        normal.x * towardCamera.x +
-                        normal.y * towardCamera.y +
-                        normal.z * towardCamera.z;
-                    if ((reflectedMeshTransform ? -facing : facing) <= 0.0) {
-                        continue;
-                    }
-                }
-                bool projected = true;
                 std::array<QPointF, 3> triangleUvs;
                 bool hasUvs = activeUvMap != nullptr;
                 if (hasUvs) {
@@ -1997,29 +2102,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     }
                 }
                 for (int corner = 0; corner < 3; ++corner) {
-                    const Point3D &point = vertices[corner];
-                    triangle.worldPoints[corner] = point;
-                    QPointF screen;
-                    if (!transform_.worldPointToScreen(point, viewportSize, &screen)) {
-                        projected = false;
-                        break;
-                    }
-                    triangle.points.append(screen);
-                    triangle.depth +=
-                        transform_.worldDirectionToView(point).towardCamera / 3.0;
-                    if (transform_.isPerspectiveEnabled()) {
-                        const Point3D camera = transform_.cameraPosition(viewportSize);
-                        const Point3D view = transform_.viewDirection();
-                        const qreal cameraDepth = (point.x - camera.x) * view.x +
-                            (point.y - camera.y) * view.y +
-                            (point.z - camera.z) * view.z;
-                        triangle.reciprocalDepths[corner] =
-                            1.0 / std::max<qreal>(-cameraDepth, 1.0e-9);
-                    } else {
-                        triangle.reciprocalDepths[corner] = 1.0;
-                    }
+                    triangle.worldPoints[corner] = vertices[corner];
+                    triangle.uvs[corner] = triangleUvs[corner];
                 }
-                if (projected) {
+                {
                     triangle.color = faceColor;
                     if (useWorkbenchColor && shadingSettings_.colorMode ==
                             ViewportColorMode::Texture && hasUvs &&
@@ -2196,7 +2282,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             triangle.hasAttributeColors = true;
                         }
                     }
-                    triangles.append(std::move(triangle));
+                    appendClippedMeshTriangle(triangle);
                 }
             }
             firstCorner += face.size();

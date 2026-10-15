@@ -660,6 +660,62 @@ bool jsonNumberArray(const QJsonValue &value,
     return true;
 }
 
+bool parseDisplayBoundsData(const QJsonObject &item,
+                            classiCAD::SceneObject *sceneObject,
+                            QString *errorMessage)
+{
+    if (sceneObject == nullptr) return false;
+    const QString minimumKey = QStringLiteral("bounds_min_local");
+    const QString maximumKey = QStringLiteral("bounds_max_local");
+    const QString transformKey = QStringLiteral("bounds_transform_world");
+    const bool hasMinimum = item.contains(minimumKey);
+    const bool hasMaximum = item.contains(maximumKey);
+    const bool hasTransform = item.contains(transformKey);
+    if (!hasMinimum && !hasMaximum && !hasTransform) return true;
+    QVector<double> minimum;
+    QVector<double> maximum;
+    const QJsonArray transform = item.value(transformKey).toArray();
+    if (!hasMinimum || !hasMaximum || !hasTransform || transform.size() != 4 ||
+        !jsonNumberArray(item.value(minimumKey), 3, &minimum) ||
+        !jsonNumberArray(item.value(maximumKey), 3, &maximum)) {
+        setError(errorMessage,
+                 QStringLiteral("object bounds display metadata is incomplete or invalid"));
+        return false;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+        if (minimum[axis] > maximum[axis]) {
+            setError(errorMessage,
+                     QStringLiteral("object bounds display extents are inverted"));
+            return false;
+        }
+    }
+    for (int row = 0; row < 4; ++row) {
+        QVector<double> values;
+        if (!jsonNumberArray(transform[row], 4, &values)) {
+            setError(errorMessage,
+                     QStringLiteral("object bounds display transform is invalid"));
+            return false;
+        }
+        for (int column = 0; column < 4; ++column) {
+            sceneObject->displayBoundsTransformWorld[
+                static_cast<size_t>(row * 4 + column)] = values[column];
+        }
+    }
+    const auto &matrix = sceneObject->displayBoundsTransformWorld;
+    if (std::abs(matrix[12]) > 1.0e-9 || std::abs(matrix[13]) > 1.0e-9 ||
+        std::abs(matrix[14]) > 1.0e-9 || std::abs(matrix[15] - 1.0) > 1.0e-9) {
+        setError(errorMessage,
+                 QStringLiteral("object bounds display transform is not affine"));
+        return false;
+    }
+    sceneObject->displayBoundsMinimumLocal =
+        {minimum[0], minimum[1], minimum[2]};
+    sceneObject->displayBoundsMaximumLocal =
+        {maximum[0], maximum[1], maximum[2]};
+    sceneObject->hasDisplayBoundsData = true;
+    return true;
+}
+
 QString blenderItemLabel(const QJsonObject &item)
 {
     const QString name = item.value(QStringLiteral("name")).toString();
@@ -924,6 +980,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
+    if (!parseDisplayBoundsData(item, &result, errorMessage)) return false;
     const QJsonArray sourceCollectionIds = item.value(QStringLiteral("collection_ids")).toArray();
     for (const QJsonValue &collectionValue : sourceCollectionIds) {
         const QString sourceId = collectionValue.toString();
@@ -1351,6 +1408,7 @@ bool parseBlenderPolyCurveItem(
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
+    if (!parseDisplayBoundsData(item, &result, errorMessage)) return false;
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1595,6 +1653,7 @@ bool parseBlenderSurfaceItem(
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
+    if (!parseDisplayBoundsData(item, &result, errorMessage)) return false;
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1761,6 +1820,7 @@ bool parseBlenderScalarVolumeItem(
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
+    if (!parseDisplayBoundsData(item, &result, errorMessage)) return false;
     result.hideViewport = item.value(QStringLiteral("hide_viewport")).toBool(false);
     result.hideRender = item.value(QStringLiteral("hide_render")).toBool(false);
     result.hideSelect = item.value(QStringLiteral("hide_select")).toBool(false);
@@ -2159,7 +2219,7 @@ bool importBlenderScene(const QString &path,
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
-         bridgeVersion != 16)) {
+         bridgeVersion != 16 && bridgeVersion != 17)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

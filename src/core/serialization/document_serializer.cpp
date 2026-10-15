@@ -23,6 +23,42 @@ namespace {
 constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
 constexpr quint64 kSceneLinearImageByteLimit = 32ULL * 1024 * 1024;
 
+bool readDisplayBoundsPoint(const QJsonValue &value, Point3D *point)
+{
+    if (point == nullptr || !value.isArray()) return false;
+    const QJsonArray values = value.toArray();
+    if (values.size() != 3 || !values[0].isDouble() ||
+        !values[1].isDouble() || !values[2].isDouble() ||
+        !std::isfinite(values[0].toDouble()) ||
+        !std::isfinite(values[1].toDouble()) ||
+        !std::isfinite(values[2].toDouble())) return false;
+    *point = {values[0].toDouble(), values[1].toDouble(), values[2].toDouble()};
+    return true;
+}
+
+bool readDisplayBoundsTransform(const QJsonValue &value,
+                               MeshObjectTransform *transform)
+{
+    if (transform == nullptr || !value.isArray()) return false;
+    const QJsonArray rows = value.toArray();
+    if (rows.size() != 4) return false;
+    for (int row = 0; row < 4; ++row) {
+        if (!rows[row].isArray()) return false;
+        const QJsonArray columns = rows[row].toArray();
+        if (columns.size() != 4) return false;
+        for (int column = 0; column < 4; ++column) {
+            if (!columns[column].isDouble() ||
+                !std::isfinite(columns[column].toDouble())) return false;
+            (*transform)[static_cast<size_t>(row * 4 + column)] =
+                columns[column].toDouble();
+        }
+    }
+    return std::abs((*transform)[12]) <= 1.0e-9 &&
+           std::abs((*transform)[13]) <= 1.0e-9 &&
+           std::abs((*transform)[14]) <= 1.0e-9 &&
+           std::abs((*transform)[15] - 1.0) <= 1.0e-9;
+}
+
 bool decodeFiniteSceneLinearFloatPayload(const QString &encoded,
                                          const QJsonValue &widthValue,
                                          const QJsonValue &heightValue,
@@ -463,6 +499,29 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("wireDisplay"), sceneObject.wireDisplay);
         serializedObject.insert(QStringLiteral("displayBoundsType"),
                                 sceneObject.displayBoundsType);
+        serializedObject.insert(QStringLiteral("hasDisplayBoundsData"),
+                                sceneObject.hasDisplayBoundsData);
+        if (sceneObject.hasDisplayBoundsData) {
+            serializedObject.insert(QStringLiteral("displayBoundsMinimumLocal"),
+                QJsonArray{sceneObject.displayBoundsMinimumLocal.x,
+                           sceneObject.displayBoundsMinimumLocal.y,
+                           sceneObject.displayBoundsMinimumLocal.z});
+            serializedObject.insert(QStringLiteral("displayBoundsMaximumLocal"),
+                QJsonArray{sceneObject.displayBoundsMaximumLocal.x,
+                           sceneObject.displayBoundsMaximumLocal.y,
+                           sceneObject.displayBoundsMaximumLocal.z});
+            QJsonArray boundsTransform;
+            for (int row = 0; row < 4; ++row) {
+                QJsonArray transformRow;
+                for (int column = 0; column < 4; ++column) {
+                    transformRow.append(sceneObject.displayBoundsTransformWorld[
+                        static_cast<size_t>(row * 4 + column)]);
+                }
+                boundsTransform.append(transformRow);
+            }
+            serializedObject.insert(QStringLiteral("displayBoundsTransformWorld"),
+                                    boundsTransform);
+        }
         serializedObject.insert(QStringLiteral("viewLayerHidden"), sceneObject.viewLayerHidden);
         serializedObject.insert(QStringLiteral("defaultViewLayerKey"), sceneObject.defaultViewLayerKey);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
@@ -1326,6 +1385,36 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.wireDisplay = serializedObject.value(QStringLiteral("wireDisplay")).toBool(false);
         sceneObject.displayBoundsType = serializedObject.value(
             QStringLiteral("displayBoundsType")).toString();
+        const QJsonValue hasDisplayBoundsData = serializedObject.value(
+            QStringLiteral("hasDisplayBoundsData"));
+        if (!hasDisplayBoundsData.isUndefined()) {
+            if (!hasDisplayBoundsData.isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender bounds display data flag"));
+                return false;
+            }
+            sceneObject.hasDisplayBoundsData = hasDisplayBoundsData.toBool();
+        }
+        if (sceneObject.hasDisplayBoundsData &&
+            (!readDisplayBoundsPoint(serializedObject.value(
+                 QStringLiteral("displayBoundsMinimumLocal")),
+                 &sceneObject.displayBoundsMinimumLocal) ||
+             !readDisplayBoundsPoint(serializedObject.value(
+                 QStringLiteral("displayBoundsMaximumLocal")),
+                 &sceneObject.displayBoundsMaximumLocal) ||
+             !readDisplayBoundsTransform(serializedObject.value(
+                 QStringLiteral("displayBoundsTransformWorld")),
+                 &sceneObject.displayBoundsTransformWorld) ||
+             sceneObject.displayBoundsMinimumLocal.x >
+                 sceneObject.displayBoundsMaximumLocal.x ||
+             sceneObject.displayBoundsMinimumLocal.y >
+                 sceneObject.displayBoundsMaximumLocal.y ||
+             sceneObject.displayBoundsMinimumLocal.z >
+                 sceneObject.displayBoundsMaximumLocal.z)) {
+            setError(errorMessage,
+                     QStringLiteral("invalid Blender bounds display metadata"));
+            return false;
+        }
         sceneObject.viewLayerHidden = viewLayerHidden;
         sceneObject.defaultViewLayerKey = defaultViewLayerKey;
         if (version >= 7) {

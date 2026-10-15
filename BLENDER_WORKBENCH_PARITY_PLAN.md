@@ -7577,9 +7577,11 @@ resolve remain open.
   The imported Blender `BOUNDS` display type is preserved in native documents
   and replaces the source fill with generated Box, Sphere, Cylinder, Cone, or
   Capsule wire proxies. Polygon meshes derive their bounds from the current
-  imported mesh vertices; curves and surfaces use prepared display geometry.
-  The latter remains tessellation-based, and the five proxy shapes have not
-  been matched visually against Blender.
+  imported mesh vertices when older records lack bounds metadata. New Blender
+  imports retain local evaluated bounds and the object's world transform, so
+  rotated curves and surfaces use object-aligned proxies instead of a world
+  axis-aligned box. Capsule placement follows Blender's local X-size formula.
+  These proxies have not been matched visually against Blender.
   These theme colors come from the Blender installation used for import, not
   the `.blend` file, so another system can render a different theme. Polygon
   edge filtering uses Blender's face-angle

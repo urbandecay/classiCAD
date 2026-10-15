@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 16
+BRIDGE_FORMAT_VERSION = 17
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -584,10 +584,10 @@ def visibility_metadata(obj):
     }
 
 
-def object_metadata(obj, scene):
+def object_metadata(obj, scene, depsgraph=None):
     parent = obj.parent
     library_path = source_library_path(obj)
-    return {
+    record = {
         "object_id": stable_id(obj),
         # Workbench Random hashes ID.name, which is obj.name in Blender's
         # Python API. name_full adds a linked-library suffix and would change
@@ -617,6 +617,20 @@ def object_metadata(obj, scene):
         "classiCAD_proxy_geometry": obj.get("classiCAD_proxy_geometry", ""),
         "classiCAD_data_block": obj.get("classiCAD_data_block", ""),
     }
+    if str(getattr(obj, "display_type", "")) == "BOUNDS":
+        bounds_obj = obj.evaluated_get(depsgraph) if depsgraph is not None else obj
+        corners = [tuple(float(component) for component in corner)
+                   for corner in bounds_obj.bound_box]
+        if len(corners) == 8 and all(
+                math.isfinite(component)
+                for corner in corners for component in corner):
+            record["bounds_min_local"] = [
+                min(corner[axis] for corner in corners) for axis in range(3)]
+            record["bounds_max_local"] = [
+                max(corner[axis] for corner in corners) for axis in range(3)]
+            record["bounds_transform_world"] = matrix_values(
+                bounds_obj.matrix_world)
+    return record
 
 
 def loose_edge_curve_item(obj, scene, source_item, edges_world):
@@ -828,7 +842,8 @@ def object_hidden_in_layer(obj, view_layer):
 
 def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
     item_id = stable_id(obj)
-    item = object_metadata(obj, scene)
+    item = object_metadata(obj, scene,
+                           depsgraph if mode == "evaluated" else None)
     item["object_type"] = obj.type
     item["import_mode"] = mode
     if obj.parent is not None:
@@ -1250,8 +1265,8 @@ def extract_scalar_volume_grid(obj, scene, depsgraph):
             bpy.data.node_groups.remove(node_group)
 
 
-def unsupported_object_record(obj, scene):
-    record = object_metadata(obj, scene)
+def unsupported_object_record(obj, scene, depsgraph=None):
+    record = object_metadata(obj, scene, depsgraph)
     record["object_type"] = obj.type
     if obj.type == "EMPTY" and obj.instance_collection is not None:
         record["reason"] = "collection instance is metadata only; no geometry was fabricated"
@@ -1271,12 +1286,12 @@ def unsupported_object_record(obj, scene):
     return record
 
 
-def extract_poly_curve_object(obj, scene, unsupported):
+def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None):
     """Extract supported source splines in world XYZ."""
     from mathutils import Vector
 
     item_id = stable_id(obj)
-    item = object_metadata(obj, scene)
+    item = object_metadata(obj, scene, depsgraph)
     item["object_type"] = "CURVE"
     item["splines"] = []
     if obj.parent is not None:
@@ -1384,7 +1399,7 @@ def extract_poly_curve_object(obj, scene, unsupported):
     return item
 
 
-def extract_surface_patches(obj, scene, materials, unsupported):
+def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None):
     """Extract each Blender SURFACE NURBS patch as a separate item."""
     from mathutils import Vector
 
@@ -1497,7 +1512,7 @@ def extract_surface_patches(obj, scene, materials, unsupported):
                 len(full_knots_v) != expanded_v + order_v):
             raise ValueError("Blender generated inconsistent surface knot vectors")
 
-        item = object_metadata(obj, scene)
+        item = object_metadata(obj, scene, depsgraph)
         item["object_id"] = "%s::surface:%d" % (source_id, spline_index)
         item["source_object_id"] = source_id
         item["object_type"] = "SURFACE"
@@ -1697,7 +1712,7 @@ def extract_scene(input_path, mode):
             scene_record["object_ids"].append(object_id)
             if obj.type == "CURVE":
                 item = extract_poly_curve_object(
-                    obj, scene, output["unsupported_features"])
+                    obj, scene, output["unsupported_features"], depsgraph)
                 if item["splines"]:
                     item["view_layer_hidden"] = {
                         view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
@@ -1709,13 +1724,14 @@ def extract_scene(input_path, mode):
                     )
                     output["items"].append(item)
                 else:
-                    output["unsupported_items"].append(unsupported_object_record(obj, scene))
+                    output["unsupported_items"].append(
+                        unsupported_object_record(obj, scene, depsgraph))
                 continue
             if obj.type == "SURFACE":
                 try:
                     patches = extract_surface_patches(
                         obj, scene, output["materials"],
-                        output["unsupported_features"])
+                        output["unsupported_features"], depsgraph)
                     for item in patches:
                         item["view_layer_hidden"] = {
                             view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
@@ -1729,10 +1745,10 @@ def extract_scene(input_path, mode):
                     surface_patch_count += len(patches)
                     if not patches:
                         output["unsupported_items"].append(
-                            unsupported_object_record(obj, scene))
+                            unsupported_object_record(obj, scene, depsgraph))
                 except Exception as error:
                     output["unsupported_items"].append({
-                        **object_metadata(obj, scene),
+                        **object_metadata(obj, scene, depsgraph),
                         "object_type": obj.type,
                         "reason": "surface extraction failed; whole object skipped: " + str(error),
                     })
@@ -1740,7 +1756,7 @@ def extract_scene(input_path, mode):
             if obj.type == "FONT":
                 if mode != "evaluated":
                     output["unsupported_items"].append(
-                        unsupported_object_record(obj, scene))
+                        unsupported_object_record(obj, scene, depsgraph))
                     continue
                 try:
                     item = extract_mesh_object(
@@ -1765,7 +1781,7 @@ def extract_scene(input_path, mode):
                     font_mesh_count += 1
                 except Exception as error:
                     output["unsupported_items"].append({
-                        **object_metadata(obj, scene),
+                        **object_metadata(obj, scene, depsgraph),
                         "object_type": obj.type,
                         "reason": "font mesh extraction failed; whole object skipped: " + str(error),
                     })
@@ -1773,7 +1789,7 @@ def extract_scene(input_path, mode):
             if obj.type == "META":
                 if mode != "evaluated":
                     output["unsupported_items"].append(
-                        unsupported_object_record(obj, scene))
+                        unsupported_object_record(obj, scene, depsgraph))
                     continue
                 try:
                     item = extract_mesh_object(
@@ -1797,7 +1813,7 @@ def extract_scene(input_path, mode):
                     mesh_count += 1
                 except Exception as error:
                     output["unsupported_items"].append({
-                        **object_metadata(obj, scene),
+                        **object_metadata(obj, scene, depsgraph),
                         "object_type": obj.type,
                         "reason": "metaball mesh extraction failed; whole object skipped: " + str(error),
                     })
@@ -1805,7 +1821,7 @@ def extract_scene(input_path, mode):
             if obj.type == "VOLUME":
                 try:
                     volume_depsgraph = depsgraph or depsgraph_for_scene(scene)
-                    item = object_metadata(obj, scene)
+                    item = object_metadata(obj, scene, volume_depsgraph)
                     item["object_type"] = "VOLUME"
                     item["import_mode"] = mode
                     item.update(extract_scalar_volume_grid(
@@ -1822,13 +1838,14 @@ def extract_scene(input_path, mode):
                     volume_grid_count += 1
                 except Exception as error:
                     output["unsupported_items"].append({
-                        **object_metadata(obj, scene),
+                        **object_metadata(obj, scene, depsgraph),
                         "object_type": obj.type,
                         "reason": "volume extraction failed; whole object skipped: " + str(error),
                     })
                 continue
             if obj.type != "MESH":
-                output["unsupported_items"].append(unsupported_object_record(obj, scene))
+                output["unsupported_items"].append(
+                    unsupported_object_record(obj, scene, depsgraph))
                 continue
             try:
                 item = extract_mesh_object(obj, scene, mode, depsgraph,
@@ -1845,7 +1862,7 @@ def extract_scene(input_path, mode):
                 loose_edges_world = item.pop("_loose_edges_world", [])
                 loose_edges_item = (
                     loose_edge_curve_item(obj, scene, item, loose_edges_world)
-                    if loose_edges_world else None
+                    if loose_edges_world and not item["bounds_display_type"] else None
                 )
                 output["items"].append(item)
                 mesh_count += 1
@@ -1853,7 +1870,7 @@ def extract_scene(input_path, mode):
                     output["items"].append(loose_edges_item)
             except Exception as error:
                 output["unsupported_items"].append({
-                    **object_metadata(obj, scene),
+                    **object_metadata(obj, scene, depsgraph),
                     "object_type": obj.type,
                     "reason": "mesh extraction failed; whole object skipped: " + str(error),
                 })

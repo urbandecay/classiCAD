@@ -125,6 +125,11 @@ struct SceneObject {
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;
+    bool hasDisplayBoundsData = false;
+    Point3D displayBoundsMinimumLocal;
+    Point3D displayBoundsMaximumLocal;
+    MeshObjectTransform displayBoundsTransformWorld =
+        identityMeshObjectTransform;
     QJsonObject viewLayerHidden;
     QString defaultViewLayerKey;
     // Blender ID identity used by Workbench Random color. Imported linked

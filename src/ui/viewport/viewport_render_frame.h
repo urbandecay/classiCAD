@@ -94,6 +94,11 @@ struct ViewportRenderObject {
     bool showAllEdges = false;
     bool wireDisplay = false;
     QString displayBoundsType;
+    bool hasDisplayBoundsData = false;
+    Point3D displayBoundsMinimumLocal;
+    Point3D displayBoundsMaximumLocal;
+    MeshObjectTransform displayBoundsTransformWorld =
+        identityMeshObjectTransform;
     // Blender's SURFACE tessellation has the opposite winding convention
     // from classiCAD's native U/V triangle expansion.
     bool reverseSurfaceOrientation = false;

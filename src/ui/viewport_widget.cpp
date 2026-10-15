@@ -9436,7 +9436,13 @@ protected:
                 QVector<Point3D> sourcePoints;
                 const bool meshLocal =
                     object.shape.geometryType == GeometryType::PolygonMesh;
-                if (meshLocal) {
+                const bool useImportedLocalBounds = object.hasDisplayBoundsData &&
+                    !object.scalePreview && !object.rotatePreview;
+                if (useImportedLocalBounds) {
+                    sourcePoints = {
+                        object.displayBoundsMinimumLocal,
+                        object.displayBoundsMaximumLocal};
+                } else if (meshLocal) {
                     sourcePoints = object.shape.polygonMesh.vertices;
                 } else if (object.preparedDepthGeometry) {
                     const auto &prepared = *object.preparedDepthGeometry;
@@ -9476,8 +9482,11 @@ protected:
                                                1.0e-6);
                 const qreal radialSize = std::max(radiusX, radiusY);
                 const auto localPoint = [&](qreal x, qreal y, qreal z) {
-                    if (!meshLocal) return Point3D{x, y, z};
-                    const auto &m = object.meshObjectTransform;
+                    if (!useImportedLocalBounds && !meshLocal)
+                        return Point3D{x, y, z};
+                    const auto &m = useImportedLocalBounds
+                        ? object.displayBoundsTransformWorld
+                        : object.meshObjectTransform;
                     const qreal w = m[12] * x + m[13] * y + m[14] * z + m[15];
                     const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
                     return Point3D{
@@ -9532,7 +9541,7 @@ protected:
                     constexpr int segments = 24;
                     const qreal capRadius = radialSize;
                     const qreal capCenterOffset =
-                        std::max(0.0, radiusZ - capRadius);
+                        std::max(0.0, radiusZ - radiusX);
                     const qreal lowerCenter = center.z - capCenterOffset;
                     const qreal upperCenter = center.z + capCenterOffset;
                     for (int index = 0; index < segments; ++index) {
@@ -9641,7 +9650,12 @@ protected:
                         boundsStroke.geometryRevision = renderObject.geometryRevision;
                         boundsStroke.cacheableGeometry = renderObject.cacheable;
                         boundsStroke.preparedDepthGeometry = std::move(boundsGeometry);
-                        boundsStroke.worldOffset = renderObject.preparedGeometryOffset;
+                        boundsStroke.worldOffset =
+                            renderObject.hasDisplayBoundsData &&
+                                    !renderObject.scalePreview &&
+                                    !renderObject.rotatePreview
+                                ? Point3D{}
+                                : renderObject.preparedGeometryOffset;
                         gpuStrokes.append(std::move(boundsStroke));
                     }
                 }

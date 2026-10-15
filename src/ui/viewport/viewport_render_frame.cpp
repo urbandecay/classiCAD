@@ -137,6 +137,11 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.showAllEdges = sceneObject.showAllEdges;
         entry.wireDisplay = sceneObject.wireDisplay;
         entry.displayBoundsType = sceneObject.displayBoundsType;
+        entry.hasDisplayBoundsData = sceneObject.hasDisplayBoundsData;
+        entry.displayBoundsMinimumLocal = sceneObject.displayBoundsMinimumLocal;
+        entry.displayBoundsMaximumLocal = sceneObject.displayBoundsMaximumLocal;
+        entry.displayBoundsTransformWorld =
+            sceneObject.displayBoundsTransformWorld;
         entry.reverseSurfaceOrientation =
             sceneObject.geometry.geometryType == GeometryType::NurbsSurface &&
             !sceneObject.blenderSourceVersion.isEmpty();

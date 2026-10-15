@@ -9299,6 +9299,7 @@ protected:
         QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
         QSet<quint64> surfaceOutlineStrokeObjectIds;
         QSet<quint64> rasterBackPictureObjectIds;
+        QVector<const ViewportRenderObject *> rasterBackPictures;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
         QVector<Shape> gpuExtrudePreviewCapShapes;
@@ -9426,73 +9427,20 @@ protected:
                             backPictures.append(&object);
                         }
                     }
-                    // Bound work for stacked images as well as the retained
-                    // scene buffers. Each picture is converted and blended
-                    // separately in scene-linear color.
+                    // Keep the deferred overlay work bounded just like the
+                    // scene-linear background and surface buffers.
                     constexpr qint64 maximumBackPictureWorkPixels =
                         16'000'000;
-                    const bool canCompositeBackPictures =
-                        !backPictures.isEmpty() &&
-                        rasterThemeBackgroundPixels.size() ==
-                            static_cast<std::size_t>(rasterPixelCount) &&
-                        rasterPixelCount <= maximumBackPictureWorkPixels /
-                                                backPictures.size();
-                    if (canCompositeBackPictures) {
-                        for (const ViewportRenderObject *object :
-                             backPictures) {
-                            QImage backPictureLayer(
-                                committedSceneLayer.size(),
-                                QImage::Format_ARGB32_Premultiplied);
-                            backPictureLayer.setDevicePixelRatio(
-                                committedSceneLayer.devicePixelRatioF());
-                            backPictureLayer.fill(Qt::transparent);
-                            QPainter backPicturePainter(&backPictureLayer);
-                            backPicturePainter.setRenderHint(
-                                QPainter::SmoothPixmapTransform, true);
-                            drawShape(backPicturePainter, object->shape, false,
-                                      false, false, object->layerColor,
-                                      object->layerLineType,
-                                      object->layerLineWeightMm,
-                                      object->objectId,
-                                      object->geometryRevision);
-                            backPicturePainter.end();
-                            for (int y = 0;
-                                 y < backPictureLayer.height(); ++y) {
-                                const auto *row =
-                                    reinterpret_cast<const QRgb *>(
-                                        backPictureLayer.constScanLine(y));
-                                const std::size_t rowOffset =
-                                    static_cast<std::size_t>(y) *
-                                    static_cast<std::size_t>(
-                                        backPictureLayer.width());
-                                for (int x = 0;
-                                     x < backPictureLayer.width(); ++x) {
-                                    const QRgb pixel = row[x];
-                                    const qreal alpha = qAlpha(pixel) / 255.0;
-                                    if (alpha <= 0.0) continue;
-                                    const qreal inverseAlpha = 1.0 / alpha;
-                                    const QVector3D imageSrgb(
-                                        std::clamp(qRed(pixel) * inverseAlpha /
-                                                       255.0,
-                                                   0.0, 1.0),
-                                        std::clamp(qGreen(pixel) * inverseAlpha /
-                                                       255.0,
-                                                   0.0, 1.0),
-                                        std::clamp(qBlue(pixel) * inverseAlpha /
-                                                       255.0,
-                                                   0.0, 1.0));
-                                    const QVector3D imageLinear =
-                                        workbenchSrgbToSceneLinear(imageSrgb);
-                                    QVector3D &backgroundPixel =
-                                        rasterThemeBackgroundPixels[
-                                            rowOffset +
-                                            static_cast<std::size_t>(x)];
-                                    backgroundPixel =
-                                        imageLinear * static_cast<float>(alpha) +
-                                        backgroundPixel *
-                                            static_cast<float>(1.0 - alpha);
-                                }
-                            }
+                    const qint64 backPictureTargetPixels =
+                        qint64(committedSceneLayer.width()) *
+                        committedSceneLayer.height();
+                    if (!backPictures.isEmpty() &&
+                        backPictureTargetPixels > 0 &&
+                        backPictureTargetPixels <=
+                            maximumBackPictureWorkPixels /
+                                backPictures.size()) {
+                        rasterBackPictures = backPictures;
+                        for (const ViewportRenderObject *object : backPictures) {
                             backPictureCandidates.append(
                                 object->objectId.value());
                         }
@@ -11533,18 +11481,8 @@ protected:
                 // existing stroke/cage collection remains active.
             } else if (rasterBackPictureObjectIds.contains(
                            objectId.value())) {
-                // Back images were folded into the scene-linear background
-                // before transparent surfaces and Workbench effects ran.
-                if (selected) {
-                    Shape outlineOnlyPicture = visibleShape;
-                    outlineOnlyPicture.pictureImage = QImage(
-                        1, 1, QImage::Format_ARGB32_Premultiplied);
-                    outlineOnlyPicture.pictureImage.fill(Qt::transparent);
-                    drawShape(scenePainter, outlineOnlyPicture, false, true,
-                              true, layerColor, layerLineType,
-                              layerLineWeightMm, objectId,
-                              renderObject.geometryRevision);
-                }
+                // Back images are drawn after Workbench effects in the final
+                // color-only image overlay pass.
             } else if (scalePreview || rotatePreview) {
                 drawShape(scenePainter,
                           visibleShape,
@@ -13082,6 +13020,36 @@ protected:
             }
             if (!gpuViewportBackground.isNull()) {
                 painter.drawImage(QPoint(0, 0), gpuViewportBackground);
+            }
+            if (rasterSurfaceBatchRendered &&
+                !rasterBackPictures.isEmpty()) {
+                QImage backPictureLayer(
+                    committedSceneLayer.size(),
+                    QImage::Format_ARGB32_Premultiplied);
+                backPictureLayer.setDevicePixelRatio(
+                    committedSceneLayer.devicePixelRatioF());
+                backPictureLayer.fill(Qt::transparent);
+                QPainter backPicturePainter(&backPictureLayer);
+                backPicturePainter.setRenderHint(
+                    QPainter::SmoothPixmapTransform, true);
+                for (const ViewportRenderObject *object :
+                     rasterBackPictures) {
+                    if (object == nullptr) continue;
+                    drawShape(
+                        backPicturePainter, object->shape, false,
+                        object->selected, false, object->layerColor,
+                        object->layerLineType, object->layerLineWeightMm,
+                        object->objectId, object->geometryRevision,
+                        object->preparedDepthGeometry.data(),
+                        object->preparedGeometryOffset,
+                        object->displayColorSceneLinear,
+                        object->workbenchMaterial, object->displayName,
+                        workbenchRandomIdentityLibraryPath(*object),
+                        object->meshObjectTransform, object->meshMaterials,
+                        nullptr, object->nurbsSolidFaceMaterials);
+                }
+                backPicturePainter.end();
+                painter.drawImage(QPoint(0, 0), backPictureLayer);
             }
 
             // The ordinary QPainter scene path does not replay all GPU scene

@@ -8108,17 +8108,21 @@ resolve remain open.
 ### QPainter Back Image blending with transparent surfaces (2026-10-15)
 
 - When the bounded QPainter surface compositor is active, ordinary Back
-  images are now rasterized into its scene-linear background before surfaces
-  and effects are composited. This lets translucent surfaces blend over the
-  image instead of hiding it as if they were opaque. Imported image opacity is
-  already stored in the image alpha and is preserved; image RGB is converted
-  from sRGB before alpha blending. Precomposited images are skipped in the
-  later scene draw to prevent a second blend. Images are composited one at a
-  time in source order within a 16-million image-pixel work budget. The
-  selected Back images keep their selection outline. The compositor's
-  background pixels are opaque, so transparent viewport film remains
-  unsupported here; failed renderer fallback and matched image comparison
-  remain open.
+  images are now drawn in a separate overlay after scene effects, matching
+  Blender's final overlay output pass. This target has no scene-depth
+  attachment, so the Back images blend over scene colors without an extra
+  opaque-depth mask. The selected image frame is drawn with its image.
+  Deferred image work stays within a 16-million-target-pixel budget. Blender's
+  Back-image pass uses premultiplied-alpha blending with depth LEQUAL, while
+  the final output framebuffer has no depth attachment; see pinned
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh)
+  and the final output setup and ordering in
+  [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc).
+  QPainter blends this late image layer over display-transformed scene pixels,
+  while Blender composites its scene-linear image sample before final display
+  conversion. Semi-transparent image pixels can therefore differ under AgX or
+  custom transforms. Transparent viewport film remains unsupported; the
+  failed-renderer fallback and matched image comparison remain open.
 
 ### QPainter curvature independent of World cavity taps (2026-10-15)
 

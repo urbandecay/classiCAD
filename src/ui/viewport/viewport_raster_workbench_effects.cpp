@@ -673,7 +673,8 @@ bool compositeRasterWorkbenchSurfaces(
     RasterWorkbenchSurfaceLayers *surfaceLayers,
     const std::vector<QVector3D> &sceneLinearBackgroundPixels,
     bool allowFragmentGeneratedDepth,
-    const QVector<ViewportRenderObject> &scalarVolumeObjects)
+    const QVector<ViewportRenderObject> &scalarVolumeObjects,
+    std::vector<RasterWorkbenchLinearPixel> *sceneLinearCapture)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
         (objects.isEmpty() && scalarVolumeObjects.isEmpty()) ||
@@ -1534,6 +1535,9 @@ bool compositeRasterWorkbenchSurfaces(
             }
             surfaceLayers->outlineAppliedBeforeDisplay =
                 !deferOutlineUntilEffects;
+        }
+        if (sceneLinearCapture != nullptr) {
+            *sceneLinearCapture = resolved;
         }
         for (int y = 0; y < height; ++y) {
             auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));

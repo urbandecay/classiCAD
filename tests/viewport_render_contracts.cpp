@@ -2658,6 +2658,77 @@ int main(int argc, char *argv[])
                             rearImage.pixel(200, 394) == background.rgb(),
                         "headless QPainter TRANSPARENT_OVERLAP must render rear-only, front-only, and distinct overlap pixels");
 
+        const QString linearCaptureDirectory = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_LINEAR_CAPTURE_DIR");
+        if (!linearCaptureDirectory.isEmpty()) {
+            QImage filmImage(size, QImage::Format_ARGB32_Premultiplied);
+            filmImage.fill(Qt::transparent);
+            std::vector<RasterWorkbenchLinearPixel> sceneLinearCapture;
+            const bool filmRendered = compositeRasterWorkbenchSurfaces(
+                &filmImage, objects, transform, size, 1.0, false, true,
+                shading, std::nullopt, drawObject, nullptr, {}, false, {},
+                &sceneLinearCapture);
+            const bool captureReady = filmRendered &&
+                sceneLinearCapture.size() ==
+                    static_cast<std::size_t>(size.width() * size.height()) &&
+                QDir().mkpath(linearCaptureDirectory);
+            const auto writeChannel = [&](const QString &path, int channel) {
+                if (!captureReady) return false;
+                QFile file(path);
+                const QByteArray header =
+                    (channel < 3 ? QByteArrayLiteral("PF\n")
+                                 : QByteArrayLiteral("Pf\n")) +
+                    QByteArray::number(size.width()) + ' ' +
+                    QByteArray::number(size.height()) +
+                    QByteArrayLiteral("\n-1.0\n");
+                if (!file.open(QIODevice::WriteOnly) ||
+                    file.write(header) != header.size()) return false;
+                for (int y = size.height() - 1; y >= 0; --y) {
+                    for (int x = 0; x < size.width(); ++x) {
+                        const RasterWorkbenchLinearPixel &pixel =
+                            sceneLinearCapture[static_cast<std::size_t>(
+                                y * size.width() + x)];
+                        if (channel < 3) {
+                            const float rgb[3] = {
+                                pixel.red, pixel.green, pixel.blue};
+                            if (file.write(reinterpret_cast<const char *>(rgb),
+                                           sizeof(rgb)) != qsizetype(sizeof(rgb)))
+                                return false;
+                        } else if (file.write(
+                                       reinterpret_cast<const char *>(
+                                           &pixel.alpha), sizeof(pixel.alpha)) !=
+                                   qsizetype(sizeof(pixel.alpha))) {
+                            return false;
+                        }
+                    }
+                }
+                return true;
+            };
+            const bool capturesSaved = captureReady &&
+                filmImage.save(QDir(linearCaptureDirectory).filePath(
+                    QStringLiteral("classiCAD-display.png"))) &&
+                writeChannel(QDir(linearCaptureDirectory).filePath(
+                    QStringLiteral("classiCAD-color.pfm")), 0) &&
+                writeChannel(QDir(linearCaptureDirectory).filePath(
+                    QStringLiteral("classiCAD-alpha.pfm")), 3);
+            const RasterWorkbenchLinearPixel filmCorner =
+                sceneLinearCapture.empty()
+                    ? RasterWorkbenchLinearPixel{}
+                    : sceneLinearCapture[5 * size.width() + 5];
+            const RasterWorkbenchLinearPixel filmOverlap =
+                sceneLinearCapture.empty()
+                    ? RasterWorkbenchLinearPixel{}
+                    : sceneLinearCapture[(size.height() / 2) * size.width() +
+                                         size.width() / 2];
+            passed &= check(
+                capturesSaved && std::abs(filmCorner.alpha) < 1.0e-6f &&
+                    filmOverlap.alpha > 0.5f && filmOverlap.alpha < 1.0f &&
+                    filmOverlap.red <= filmOverlap.alpha + 1.0e-5f &&
+                    filmOverlap.green <= filmOverlap.alpha + 1.0e-5f &&
+                    filmOverlap.blue <= filmOverlap.alpha + 1.0e-5f,
+                "QPainter transparent-film OIT capture must preserve transparent corners, partial overlap alpha, and premultiplied scene-linear color");
+        }
+
         // This variant deliberately reverses object order while supplying
         // camera-relative depth in the prepared triangles. It isolates the
         // transparent resolver's far-to-near ordering from QPainter's

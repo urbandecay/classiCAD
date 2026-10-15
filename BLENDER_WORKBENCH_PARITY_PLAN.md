@@ -6367,8 +6367,9 @@ edge comparison remains open.
   `0.00015772` and p95 is `0.00024414`. Display alpha is exact; display RGB
   differs by at most `1/255`, with 0.0106/255 mean channel error and p95 0.
 - This validates final GPU OIT output for one overlapping-quad fixture and
-  view. Other transparent geometry, lighting modes, AA, and QPainter's
-  separate compositor remain open. Blender 5.2.2 accumulation and revealage
+  view. Other transparent geometry, lighting modes, and AA remain open.
+  QPainter's separate compositor has a corresponding matched capture below.
+  Blender 5.2.2 accumulation and revealage
   are pinned in
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L435-L524)
   and
@@ -6377,6 +6378,39 @@ edge comparison remains open.
   `workbench_render_pass_capture` passed (1/1); and
   `workbench_transparent_film_compare.py` completed within its scene-linear,
   alpha, and display tolerances.
+
+### Matched QPainter transparent-film weighted OIT comparison (2026-10-15)
+
+- Added an opt-in scene-linear RGBA capture from the QPainter weighted-OIT
+  compositor and compared the final transparent-film output with Blender
+  5.2.2. Both captures use the same 640×480 Top view, two overlapping
+  camera-facing quads, Standard transform, Flat Material shading, AA Off,
+  transparent film, and zero dither. Blender's direction and orthographic
+  scale are explicit (`0, 0, 1` and `5.0`) to match the classiCAD fixture.
+- At an alpha threshold of `0.05`, both renders have 104,592 covered pixels,
+  zero mask XOR, and IoU `1.0`. Center-overlap alpha is `0.7646484` in Blender
+  and `0.7647828` in QPainter. On common coverage, scene-linear RGB maximum-
+  channel p95 is `0.0005726`; alpha p95 is `0.0001915`. Full-frame mean
+  absolute alpha error is `0.001040`. Display RGB p95 is `1/255` and display
+  alpha p95 is zero. The maximum color/alpha errors are localized to a small
+  number of fractional edge pixels: display RGB max is `28/255` and scene-
+  linear alpha max is `0.4116`, consistent with the fallback's estimated
+  4×4 coverage versus Blender's GPU raster coverage. The QPainter comparator
+  therefore checks mask equality, common-coverage percentile error, and bounded
+  whole-frame alpha error separately; the GPU comparator retains its stricter
+  exact-alpha and one-code display thresholds.
+- This validates one two-quad camera/view and AA-Off setting in the QPainter
+  compositor. Other transparent geometry, camera views, lighting, AA, and
+  combinations with cavity, shadows, outlines, X-Ray, or DOF remain open.
+  Blender 5.2.2 accumulation and revealage are pinned in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L435-L524)
+  and
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
+- Validation: `cmake --build build -j4` passed with the dependency audit;
+  offscreen `viewport_render_contracts` passed (1/1) while writing QPainter
+  scene-linear RGB/alpha and display captures. Blender reported 5.2.2 LTS,
+  and `workbench_transparent_film_compare.py --q-painter` passed on the paired
+  files.
 
 ### Workbench settings and material persistence matrix (2026-10-14)
 

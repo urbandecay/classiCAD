@@ -2392,6 +2392,15 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // pixelCountWide is bounded above before allocating them.
     QVector<RasterSample> samples(width * height);
     QVector<RasterSample> inFrontSamples(width * height);
+    const bool rasterWorkbenchOutlineEnabled = settings.outline &&
+        !(surfaceLayers != nullptr &&
+          surfaceLayers->outlineAppliedBeforeDisplay);
+    QVector<RasterSample> outlineSamples;
+    QVector<RasterSample> inFrontOutlineSamples;
+    if (rasterWorkbenchOutlineEnabled) {
+        outlineSamples.resize(width * height);
+        inFrontOutlineSamples.resize(width * height);
+    }
     QVector<RasterSample> opaqueSamples;
     QVector<RasterSample> inFrontOpaqueSamples;
     if (cavityEnabled || shadowEnabled) {
@@ -2893,6 +2902,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     };
                     writeNearest(sample);
                     const float sourceAlpha = triangleSourceAlpha;
+                    if (rasterWorkbenchOutlineEnabled &&
+                        isOpaqueWorkbenchAlpha(sourceAlpha)) {
+                        QVector<RasterSample> &domainOutlineSamples =
+                            object.showInFront ? inFrontOutlineSamples
+                                               : outlineSamples;
+                        writeNearest(domainOutlineSamples[y * width + x]);
+                    }
                     if ((cavityEnabled || shadowEnabled) &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {
                         QVector<RasterSample> &domainOpaqueSamples =
@@ -2913,6 +2929,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     for (int index = 0; index < samples.size(); ++index) {
         if (inFrontSamples[index].objectId != 0) {
             samples[index] = inFrontSamples[index];
+        }
+        if (rasterWorkbenchOutlineEnabled &&
+            inFrontOutlineSamples[index].objectId != 0) {
+            outlineSamples[index] = inFrontOutlineSamples[index];
         }
         if ((cavityEnabled || shadowEnabled) &&
             inFrontOpaqueSamples[index].objectId != 0) {
@@ -3058,9 +3078,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     }
 
     const auto applyOutline = [&]() {
-        const bool drawWorkbenchOutline = settings.outline &&
-            !(surfaceLayers != nullptr &&
-              surfaceLayers->outlineAppliedBeforeDisplay);
+        const bool drawWorkbenchOutline = rasterWorkbenchOutlineEnabled;
         const bool drawSelectionOutline =
             settings.selectedObjectOutlineVisible && settings.wireOverlaysVisible;
         if (!drawWorkbenchOutline && !drawSelectionOutline) return;
@@ -3124,10 +3142,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int depthX = std::clamp(
                     static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                     0, width - 1);
-                const quint64 objectId = samples[depthY * width + depthX].objectId;
+                const int sampleIndex = depthY * width + depthX;
+                const quint64 objectId = drawWorkbenchOutline
+                    ? outlineSamples[sampleIndex].objectId
+                    : samples[sampleIndex].objectId;
+                const quint64 selectionObjectId =
+                    samples[sampleIndex].objectId;
                 int differentNeighbors = 0;
                 int differentSelectionNeighbors = 0;
-                const bool centerSelected = (objectId & 0x80000000ull) != 0;
+                const bool centerSelected =
+                    (selectionObjectId & 0x80000000ull) != 0;
                 const std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(outlineSampleOffset, 0),
                     QPoint(-outlineSampleOffset, 0),
@@ -3137,11 +3161,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 for (const QPoint &offset : cardinalNeighbors) {
                     const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
                     const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
-                    const quint64 neighborId =
-                        samples[sy * width + sx].objectId;
+                    const int neighborIndex = sy * width + sx;
+                    const quint64 neighborId = drawWorkbenchOutline
+                        ? outlineSamples[neighborIndex].objectId
+                        : samples[neighborIndex].objectId;
+                    const quint64 selectionNeighborId =
+                        samples[neighborIndex].objectId;
                     differentNeighbors += neighborId != objectId;
                     differentSelectionNeighbors +=
-                        ((neighborId & 0x80000000ull) != 0) != centerSelected;
+                        ((selectionNeighborId & 0x80000000ull) != 0) !=
+                        centerSelected;
                 }
                 const auto blend = [&](const QColor &color, float coverage) {
                     const float sourceAlpha =

@@ -1194,7 +1194,49 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         bool visibleRun = false;
         quint64 sampleBudget = 0;
         constexpr quint64 maximumDepthSamples = 1'000'000;
+        const quint64 segmentCount =
+            static_cast<quint64>(worldVertices.size() / 2);
+        const quint64 segmentStride = std::max<quint64>(
+            1, (segmentCount + maximumDepthSamples - 1) /
+                   maximumDepthSamples);
+        quint64 requestedSamples = 0;
+        for (quint64 segment = 0; segment < segmentCount;
+             segment += segmentStride) {
+            const int index = static_cast<int>(segment * 2);
+            QPointF screenStart;
+            QPointF screenEnd;
+            if (!transform_.worldPointToScreenUnclipped(
+                    worldVertices[index], viewportSize, &screenStart) ||
+                !transform_.worldPointToScreenUnclipped(
+                    worldVertices[index + 1], viewportSize, &screenEnd)) {
+                continue;
+            }
+            const QPointF deviceStart = deviceTransform.map(screenStart);
+            const QPointF deviceEnd = deviceTransform.map(screenEnd);
+            const qreal deviceLength = std::hypot(
+                deviceEnd.x() - deviceStart.x(),
+                deviceEnd.y() - deviceStart.y());
+            if (!std::isfinite(deviceLength)) continue;
+            const quint64 steps = static_cast<quint64>(std::clamp<qreal>(
+                std::ceil(deviceLength * 2.0), 1.0,
+                static_cast<qreal>(maximumDepthSamples)));
+            requestedSamples = std::min(
+                maximumDepthSamples * maximumDepthSamples,
+                requestedSamples + steps + 1);
+        }
+        // Preserve at least one segment sample but reduce density uniformly
+        // when a very large curve would otherwise exceed the bounded depth
+        // sampling work. This avoids falling back to an unoccluded full path.
+        const quint64 sampleStride = std::max<quint64>(
+            1, (requestedSamples + maximumDepthSamples - 1) /
+                   maximumDepthSamples);
         for (int index = 0; index + 1 < worldVertices.size(); index += 2) {
+            const quint64 segmentIndex =
+                static_cast<quint64>(index / 2);
+            if (segmentIndex % segmentStride != 0) {
+                visibleRun = false;
+                continue;
+            }
             QPointF screenStart;
             QPointF screenEnd;
             const Point3D &worldStart = worldVertices[index];
@@ -1219,15 +1261,27 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             const qreal deviceLength = std::hypot(
                 deviceEnd.x() - deviceStart.x(),
                 deviceEnd.y() - deviceStart.y());
-            const int steps = std::max(1, qCeil(deviceLength * 2.0));
-            sampleBudget += static_cast<quint64>(steps);
-            if (sampleBudget > maximumDepthSamples) {
-                return false;
+            if (!std::isfinite(deviceLength) ||
+                sampleBudget + 2 > maximumDepthSamples) {
+                visibleRun = false;
+                continue;
             }
+            const quint64 requestedSteps = static_cast<quint64>(
+                std::clamp<qreal>(
+                    std::ceil(deviceLength * 2.0 / sampleStride), 1.0,
+                    static_cast<qreal>(maximumDepthSamples)));
+            const quint64 steps = std::min(
+                requestedSteps, maximumDepthSamples - sampleBudget - 1);
+            if (steps == 0) {
+                visibleRun = false;
+                continue;
+            }
+            sampleBudget += steps + 1;
             const qreal startDepth = cameraDepth(worldStart);
             const qreal endDepth = cameraDepth(worldEnd);
-            for (int step = 0; step <= steps; ++step) {
-                const qreal fraction = static_cast<qreal>(step) / steps;
+            for (quint64 step = 0; step <= steps; ++step) {
+                const qreal fraction = static_cast<qreal>(step) /
+                                       static_cast<qreal>(steps);
                 const QPointF devicePoint =
                     deviceStart + (deviceEnd - deviceStart) * fraction;
                 const int x = qFloor(devicePoint.x());

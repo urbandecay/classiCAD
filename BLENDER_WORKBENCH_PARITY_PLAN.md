@@ -6556,8 +6556,15 @@ resolve remain open.
   verifies that `showInFront` strokes bypass regular blockers, are hidden by
   nearer in-front opaque and transparent surfaces, and remain visible ahead of
   farther in-front transparent surfaces. Separate X-Ray depth domains,
-  compositor-unavailable cases, over-budget curves, and selected
-  component-edge overlays remain open.
+  and compositor-unavailable cases remain open.
+- **Bounded large-curve depth sampling (2026-10-15):** when a committed curve
+  would exceed the one-million depth-sample budget, the QPainter path now
+  reduces sampling density uniformly and, for exceptionally large component
+  counts, samples a bounded subset of segments. It keeps the depth-tested
+  visible-run path instead of falling back to an unconditional full NURBS
+  stroke. This prevents over-budget curves from leaking through opaque
+  blockers, with reduced occlusion-edge precision as the tradeoff. Matched
+  large-curve GPU/QPainter captures remain open.
 - Validation: `cmake --build build -j4` passed with the 317-file dependency
   audit; offscreen `viewport_render_contracts` passed (1/1, 28.43 seconds).
   This verifies the software visibility contract, not a matched full-frame

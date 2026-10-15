@@ -3583,8 +3583,20 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const qsizetype mapIndex =
                     qsizetype(lightY) * lightMapWidth + lightX;
                 const float casterDepth = lightDepth[mapIndex];
+                float localDepthBias = softwareDepthBias;
+                if (std::isfinite(casterDepth) &&
+                    std::isfinite(receiverDepth)) {
+                    const float comparedDepthMagnitude = std::max(
+                        std::abs(casterDepth), std::abs(receiverDepth));
+                    const float nextComparedDepth = std::nextafter(
+                        comparedDepthMagnitude,
+                        std::numeric_limits<float>::infinity());
+                    localDepthBias = std::min(
+                        softwareDepthBias,
+                        (nextComparedDepth - comparedDepthMagnitude) * 2.0f);
+                }
                 const bool shadowed = std::isfinite(casterDepth) &&
-                    casterDepth < receiverDepth - softwareDepthBias;
+                    casterDepth < receiverDepth - localDepthBias;
                 factorSum += rasterWorkbenchShadowFactor(
                     normal, lightDirection,
                     static_cast<float>(settings.shadowIntensity),

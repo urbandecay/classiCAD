@@ -4073,9 +4073,10 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   Shadow intensity mixes that lit-normal response with the shadowed/unshadowed
   result. Shift no longer changes the software light-depth bias. The fallback
   now scales its light-depth comparison tolerance from the caster depth range
-  with a two-ULP floor for float quantization; a numerical contract checks the
-  same relative tolerance at 1/1000, 1, and 1000x scene scales and rejects non-finite
-  bounds. Blender 5.2.2 uses stencil shadow volumes in
+  but caps each receiver comparison to two ULP at the local caster/receiver
+  depths. The numerical contract checks the range helper at 1/1000, 1, and
+  1000x scene scales and rejects non-finite bounds. Blender 5.2.2 uses stencil
+  shadow volumes in
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1111-L1123),
   so this tolerance is a QPainter fallback robustness rule, not Blender bias
   parity.
@@ -8160,6 +8161,16 @@ resolve remain open.
   The fallback remains enabled if the retained scene-linear color or coverage
   mask is missing or has the wrong size, and selected-object outlines remain
   separate. C++ build passed; matched outline comparison remains open.
+
+### QPainter shadow comparison bias cap (2026-10-15)
+
+- The software shadow depth-map fallback now caps its scene-range tolerance to
+  two ULP at the compared caster and receiver depths. This keeps the small
+  float-precision guard for its raster map without allowing distant geometry
+  to inflate the receiver comparison threshold and hide nearby blockers.
+  Blender uses stencil shadow volumes without a receiver bias; the QPainter
+  depth-map path remains an approximation. C++ build passed; matched shadow
+  comparison remains open.
 
 ### QPainter opaque prepass coplanar depth ties (2026-10-15)
 

@@ -7504,3 +7504,15 @@ resolve remain open.
   has been run. References:
   [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L304-L320),
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
+
+### X-Ray hidden-stroke fade (2026-10-15)
+
+- GPU and QPainter scene strokes behind geometry now fade by
+  `1 - xrayAlpha`, matching Blender 5.2.2's separate overlay X-Ray fade
+  multiplier. The previous fixed 0.5 matched only the default setting. Visible
+  strokes retain their configured color alpha. Blender's pinned
+  [`overlay_xray_fade.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_xray_fade.hh#L25-L43)
+  sets the multiplier and its
+  [`overlay_xray_fade.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_xray_fade.bsl.hh#L55-L87)
+  applies it to overlay pixels behind scene geometry. The C++ build passed;
+  matched Blender captures at non-default X-Ray opacity remain open.

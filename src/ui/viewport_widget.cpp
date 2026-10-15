@@ -11465,12 +11465,14 @@ protected:
             if (sceneRenderer != nullptr) {
                 const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
                 if (xrayEnabled) {
-                    // Preserve Blender's X-Ray wire behavior: show hidden
-                    // portions at half opacity, then visible portions at full
-                    // opacity against the scene depth buffer.
+                    // Blender fades overlay strokes behind scene geometry by
+                    // the inverse of X-Ray opacity, then draws visible strokes
+                    // at their configured opacity.
                     const bool backWiresDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,
-                        devicePixelRatioF(), false, 0.5,
+                        devicePixelRatioF(), false,
+                        1.0 - std::clamp(viewportShadingSettings_.xrayAlpha,
+                                         0.0, 1.0),
                         smoothWiresOverlay_, smoothWiresEditMode_);
                     const bool frontWiresDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,
@@ -11781,7 +11783,8 @@ protected:
                         }
                     };
                     if (viewportShadingSettings_.xrayEnabled()) {
-                        drawPass(false, 0.5);
+                        drawPass(false, 1.0 - std::clamp(
+                            viewportShadingSettings_.xrayAlpha, 0.0, 1.0));
                     }
                     drawPass(true, 1.0);
                     painter.restore();

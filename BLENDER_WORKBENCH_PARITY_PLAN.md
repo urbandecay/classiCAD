@@ -8603,3 +8603,12 @@ resolve remain open.
   is available, matching Blender 5.2.2. Previously both paths preferred the
   default attribute when both existed. C++ build passed; matched image
   comparison remains open.
+
+### QPainter textured shadow-caster cutouts (2026-10-15)
+
+- The software light-depth map now samples a textured face's filtered alpha
+  for each light-map texel and skips fragments below Blender's 0.1 cutout
+  threshold. Previously the camera-facing software coverage honored this
+  alpha mask, but the separate shadow caster list kept every triangle solid.
+  GPU depth-map cutout handling remains separate; matched shadow images remain
+  open.

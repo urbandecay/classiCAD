@@ -6187,6 +6187,8 @@ int main(int argc, char *argv[])
                             buildViewportDepthGeometry(
                                 polygonCubeObject.shape));
 
+                    std::optional<ViewportRenderObject>
+                        importedMaterialGpuObject;
                     const QString importedMaterialBlendPath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_BLEND");
@@ -6248,6 +6250,10 @@ int main(int argc, char *argv[])
                                 3 &&
                             importedMaterialFrame.objects[0]
                                     .shape.polygonMesh.materialSlotIds.size() == 3;
+                        if (importedFrameHasSlots) {
+                            importedMaterialGpuObject =
+                                importedMaterialFrame.objects[0];
+                        }
                         bool importedScalarsMatch = importedFrameHasSlots;
                         if (importedFrameHasSlots) {
                             const auto close = [](float actual,
@@ -7394,6 +7400,91 @@ int main(int argc, char *argv[])
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    if (importedMaterialGpuObject.has_value() &&
+                        !qEnvironmentVariable(
+                             "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_CAPTURE_DIR")
+                             .isEmpty()) {
+                        ViewportShadingSettings importedGpuShading;
+                        importedGpuShading.mode = ViewportShadingMode::Solid;
+                        importedGpuShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        importedGpuShading.studioLightPreset =
+                            QStringLiteral("Default");
+                        importedGpuShading.colorMode =
+                            ViewportColorMode::Material;
+                        importedGpuShading.specularLighting = true;
+                        importedGpuShading.outline = false;
+                        importedGpuShading.shadows = false;
+                        importedGpuShading.cavity = false;
+                        const QString importedCaptureDirectory =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_CAPTURE_DIR");
+                        QImage importedGpuDisplay;
+                        QVector<float> importedGpuSceneLinear;
+                        const QVector3D importedWorldBackground(
+                            0.0219421387f, 0.0219421387f, 0.0219421387f);
+                        const bool importedGpuRendered =
+                            renderCoordinatedScene(
+                                importedGpuShading,
+                                QByteArrayLiteral(
+                                    "imported-material-slots-gpu"),
+                                &importedGpuDisplay,
+                                &*importedMaterialGpuObject, nullptr, nullptr,
+                                QString{}, &importedGpuSceneLinear,
+                                &importedWorldBackground);
+                        const QString importedGpuDisplayPath = QDir(
+                            importedCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "material_slots_imported_gpu.png"));
+                        const QString importedGpuLinearPath = QDir(
+                            importedCaptureDirectory).filePath(
+                                QStringLiteral(
+                                    "material_slots_imported_gpu.pfm"));
+                        QFile importedGpuLinearFile(importedGpuLinearPath);
+                        const QByteArray importedGpuPfmHeader =
+                            QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                        constexpr qsizetype importedGpuExpectedValues =
+                            640 * 480 * 3;
+                        const bool importedGpuLinearSaved =
+                            importedGpuRendered &&
+                            importedGpuSceneLinear.size() ==
+                                importedGpuExpectedValues &&
+                            importedGpuLinearFile.open(QIODevice::WriteOnly) &&
+                            importedGpuLinearFile.write(
+                                importedGpuPfmHeader) ==
+                                importedGpuPfmHeader.size() &&
+                            importedGpuLinearFile.write(
+                                reinterpret_cast<const char *>(
+                                    importedGpuSceneLinear.constData()),
+                                importedGpuExpectedValues *
+                                    qsizetype(sizeof(float))) ==
+                                importedGpuExpectedValues *
+                                    qsizetype(sizeof(float));
+                        const bool importedGpuDisplaySaved =
+                            importedGpuRendered &&
+                            importedGpuDisplay.size() == glSize &&
+                            importedGpuDisplay.save(importedGpuDisplayPath);
+                        const QColor importedCaptureBackground(34, 34, 34);
+                        const QColor importedGpuTop =
+                            importedGpuDisplay.pixelColor(320, 120);
+                        const QColor importedGpuFront =
+                            importedGpuDisplay.pixelColor(230, 260);
+                        const QColor importedGpuRight =
+                            importedGpuDisplay.pixelColor(420, 275);
+                        const bool importedGpuSlotsVisible =
+                            importedGpuRendered &&
+                            importedGpuTop != importedCaptureBackground &&
+                            importedGpuFront != importedCaptureBackground &&
+                            importedGpuRight != importedCaptureBackground &&
+                            importedGpuTop != importedGpuFront &&
+                            importedGpuTop != importedGpuRight &&
+                            importedGpuFront != importedGpuRight;
+                        passed &= check(
+                            importedGpuLinearSaved &&
+                                importedGpuDisplaySaved &&
+                                importedGpuSlotsVisible,
+                            "a real Blender material-slot file must render through the production GPU scene pass");
+                    }
                     // A face-material split can make one imported mesh
                     // transparent as a whole even when its first draw range
                     // is opaque. Blender keeps its validated shared volume

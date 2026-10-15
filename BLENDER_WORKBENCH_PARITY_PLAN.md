@@ -7380,6 +7380,15 @@ resolve remain open.
   Oversized textured triangles still have no raster fallback, and this change
   has not been validated with a matched Blender image comparison.
 
+### QPainter oversized textured NURBS fallback (2026-10-15)
+
+- Oversized textured NURBS triangles now use a bounded coarse raster instead
+  of disappearing when their device-pixel bounds exceed four million pixels.
+  The sampled image is stretched across the original bounds, retaining the
+  perspective-correct UV and alpha-cutout sampling path. Fine texture detail
+  and edge coverage are less accurate at this size. No matched Blender image
+  comparison has been run for this fallback.
+
 ### QPainter DOF pyramid and odd-size audit (2026-10-15)
 
 - The QPainter renderer already builds the half-, quarter-, and

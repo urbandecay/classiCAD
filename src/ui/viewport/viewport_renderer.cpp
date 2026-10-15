@@ -4255,7 +4255,20 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             if (right <= left || bottom <= top) return;
             const int rasterWidth = right - left;
             const int rasterHeight = bottom - top;
-            if (qint64(rasterWidth) * rasterHeight > 4000000) return;
+            constexpr qint64 maximumRasterSamples = 4000000;
+            const qint64 rasterArea = qint64(rasterWidth) * rasterHeight;
+            const qreal sampleScale = rasterArea > maximumRasterSamples
+                ? std::sqrt(static_cast<qreal>(rasterArea) /
+                            static_cast<qreal>(maximumRasterSamples))
+                : 1.0;
+            const int sampleWidth = std::max(
+                1, qFloor(static_cast<qreal>(rasterWidth) / sampleScale));
+            const int sampleHeight = std::max(
+                1, qFloor(static_cast<qreal>(rasterHeight) / sampleScale));
+            const qreal sampleStepX =
+                static_cast<qreal>(rasterWidth) / sampleWidth;
+            const qreal sampleStepY =
+                static_cast<qreal>(rasterHeight) / sampleHeight;
             const Point3D cameraWorld = transform_.cameraPosition(viewportSize);
             const Point3D viewDirection = transform_.viewDirection();
             const Point3D points[3] = {triangle.a, triangle.b, triangle.c};
@@ -4273,18 +4286,18 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         1.0e-9);
                 }
             }
-            QImage raster(rasterWidth, rasterHeight,
+            QImage raster(sampleWidth, sampleHeight,
                           QImage::Format_ARGB32_Premultiplied);
             raster.setDevicePixelRatio(targetDpr);
             raster.fill(Qt::transparent);
             for (int y = 0; y < raster.height(); ++y) {
                 auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
                 for (int x = 0; x < raster.width(); ++x) {
-                    const qreal px = left + x + 0.5;
-                    const qreal py = top + y + 0.5;
+                    const qreal px = left + (x + 0.5) * sampleStepX;
+                    const qreal py = top + (y + 0.5) * sampleStepY;
                     qreal w0, w1, w2;
                     const qreal coverage = workbenchTrianglePixelCoverage(
-                        devicePoints, area, px, py, 1.0, 1.0,
+                        devicePoints, area, px, py, sampleStepX, sampleStepY,
                         &w0, &w1, &w2, nullptr,
                         workbenchRasterAntialiasingEnabled_ ? 4 : 1);
                     if (coverage <= 0.0) continue;
@@ -4453,8 +4466,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             const QTransform baseLogicalFromDevice =
                 painter.deviceTransform().inverted(&baseInverseValid);
             if (baseInverseValid) {
+                const QRectF targetRect(
+                    baseLogicalFromDevice.map(QPointF(left, top)),
+                    baseLogicalFromDevice.map(QPointF(right, bottom)));
                 painter.drawImage(
-                    baseLogicalFromDevice.map(QPointF(left, top)), raster);
+                    targetRect.normalized(), raster);
             }
             painter.restore();
         };

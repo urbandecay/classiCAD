@@ -3768,6 +3768,24 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   build -j4` passed with the 317-file dependency audit; offscreen
   `viewport_render_contracts` passed (1/1, 27.27 seconds).
 
+### QPainter NURBS-solid seed-face texture alpha contract (2026-10-14)
+
+- The supported seed-face material path already selects a NURBS-solid face's
+  `WorkbenchMaterialData` and matching tessellation UV range in both QPainter
+  color rendering and effect-alpha coverage. Added a production-path regression
+  that keeps the object material texture-free, assigns a packed fully transparent
+  Image Texture to only the displaced cap by its stable face ID, and checks that
+  the resulting color/outline image matches the receiver-only image. An
+  object-level `NONE` alpha control confirms the same caster is visible when
+  the cutout is bypassed. Materialized boundary faces still lack seed-face
+  lineage and remain outside this contract.
+- Blender 5.2.2 selects image inputs per material batch in pinned
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L451-L542)
+  and samples the active image alpha in pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L433).
+  Validation: `cmake --build build -j4` passed with the 317-file dependency
+  audit; offscreen `viewport_render_contracts` passed (1/1, 28.12 seconds).
+
 ## QPainter Workbench shadow focus and shift (2026-10-14)
 
 - The QPainter shadow resolve now applies Blender's normal/light `smoothstep`

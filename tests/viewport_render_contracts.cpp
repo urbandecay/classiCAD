@@ -6061,6 +6061,12 @@ int main(int argc, char *argv[])
                     ViewportRenderObject ignoredAlphaCaster = alphaCaster;
                     ignoredAlphaCaster.workbenchMaterial.textureImageAlphaMode =
                         QStringLiteral("NONE");
+                    ViewportRenderObject faceAlphaCaster = alphaCaster;
+                    faceAlphaCaster.workbenchMaterial
+                        .textureImagePackedDataBase64.clear();
+                    faceAlphaCaster.nurbsSolidFaceMaterials.insert(
+                        faceAlphaCaster.shape.nurbsSolid.displacedCapFaceId,
+                        alphaCaster.workbenchMaterial);
 
                     const auto renderCpuSolidAlphaScene = [&] (
                         const QVector<ViewportRenderObject> &objects) {
@@ -6099,7 +6105,8 @@ int main(int argc, char *argv[])
                                         object.libraryPath,
                                         object.meshObjectTransform,
                                         object.meshMaterials,
-                                        fragmentSink);
+                                        fragmentSink,
+                                        object.nurbsSolidFaceMaterials);
                                 });
                         if (!composed) return QImage{};
                         applyRasterWorkbenchEffects(
@@ -6116,6 +6123,9 @@ int main(int argc, char *argv[])
                     const QImage cpuSolidAlphaIgnored =
                         renderCpuSolidAlphaScene(
                             {alphaReceiver, ignoredAlphaCaster});
+                    const QImage cpuSolidFaceAlphaCutout =
+                        renderCpuSolidAlphaScene(
+                            {alphaReceiver, faceAlphaCaster});
                     passed &= check(!cpuSolidAlphaReceiverOnly.isNull(),
                                     "QPainter NurbsSolid alpha baseline must render");
                     passed &= check(
@@ -6127,6 +6137,12 @@ int main(int argc, char *argv[])
                     passed &= check(
                         cpuSolidAlphaIgnored != cpuSolidAlphaReceiverOnly,
                         "QPainter NurbsSolid NONE alpha mode must bypass the cutout");
+                    passed &= check(
+                        cpuSolidAlphaIgnored != cpuSolidAlphaReceiverOnly,
+                        "QPainter NurbsSolid opaque control must visibly cover the receiver");
+                    passed &= check(
+                        cpuSolidFaceAlphaCutout == cpuSolidAlphaReceiverOnly,
+                        "QPainter NurbsSolid seed-face texture alpha must control visible color and effect coverage independently of the object material");
 
                     QOpenGLFramebufferObjectFormat depthOnlyFormat;
                     depthOnlyFormat.setAttachment(

@@ -8209,15 +8209,52 @@ int main(int argc, char *argv[])
                             linkedRandomDocumentBuilt &=
                                 linkedRandomTransaction.commit();
                         }
-                        const ViewportRenderFrame linkedRandomFrame =
+                        const ViewportRenderFrame importedLinkedRandomFrame =
                             linkedRandomDocumentBuilt
                                 ? buildViewportRenderFrame(
                                       linkedRandomDocument, gpuTransform,
                                       glSize, {})
                                 : ViewportRenderFrame{};
+                        QTemporaryDir linkedRandomProjectDirectory;
+                        const QString linkedRandomProjectPath =
+                            linkedRandomProjectDirectory.filePath(
+                                QStringLiteral("linked-random.vignola"));
+                        QString linkedRandomPersistenceError;
+                        const bool linkedRandomProjectSaved =
+                            linkedRandomDocumentBuilt &&
+                            linkedRandomProjectDirectory.isValid() &&
+                            saveVignolaDocument(
+                                linkedRandomProjectPath,
+                                linkedRandomDocument,
+                                &linkedRandomPersistenceError);
+                        Document reopenedLinkedRandomDocument;
+                        const bool linkedRandomProjectReopened =
+                            linkedRandomProjectSaved &&
+                            loadVignolaDocument(
+                                linkedRandomProjectPath,
+                                &reopenedLinkedRandomDocument,
+                                &linkedRandomPersistenceError);
+                        const ViewportRenderFrame linkedRandomFrame =
+                            linkedRandomProjectReopened
+                                ? buildViewportRenderFrame(
+                                      reopenedLinkedRandomDocument,
+                                      gpuTransform, glSize, {})
+                                : ViewportRenderFrame{};
+                        QHash<QString, QString> importedLinkedRandomNames;
+                        QHash<QString, quint64> importedLinkedRandomIds;
+                        for (const ViewportRenderObject &object :
+                             importedLinkedRandomFrame.objects) {
+                            importedLinkedRandomNames.insert(
+                                object.libraryPath, object.displayName);
+                            importedLinkedRandomIds.insert(
+                                object.libraryPath, object.objectId.value());
+                        }
                         QSet<QString> linkedRandomLibraryPaths;
                         QSet<quint64> linkedRandomObjectIds;
                         bool linkedRandomFrameIdentityMatches =
+                            importedLinkedRandomFrame.objects.size() == 2 &&
+                            linkedRandomProjectSaved &&
+                            linkedRandomProjectReopened &&
                             linkedRandomFrame.objects.size() == 2;
                         const QString linkedRandomDisplayName =
                             QStringLiteral("LinkedFixture");
@@ -8226,6 +8263,11 @@ int main(int argc, char *argv[])
                             linkedRandomFrameIdentityMatches &=
                                 object.displayName == linkedRandomDisplayName &&
                                 !object.libraryPath.isEmpty() &&
+                                importedLinkedRandomNames.value(
+                                    object.libraryPath) == object.displayName &&
+                                importedLinkedRandomIds.value(
+                                    object.libraryPath) ==
+                                    object.objectId.value() &&
                                 object.shape.geometryType ==
                                     GeometryType::PolygonMesh;
                             linkedRandomLibraryPaths.insert(
@@ -8330,14 +8372,19 @@ int main(int argc, char *argv[])
                         passed &= check(
                             linkedRandomBlendLoaded &&
                                 linkedRandomDocumentBuilt &&
+                                linkedRandomProjectSaved &&
+                                linkedRandomProjectReopened &&
                                 linkedRandomFrameIdentityMatches &&
                                 linkedRandomQPainterMatches &&
                                 linkedRandomGpuMatches,
-                            linkedRandomImportError.isEmpty()
+                            linkedRandomImportError.isEmpty() &&
+                                    linkedRandomPersistenceError.isEmpty()
                                 ? "linked Blender objects must retain distinct Random identities through import, Document, render frame, QPainter, and GPU"
                                 : qPrintable(QStringLiteral(
-                                      "linked Blender Random identity import failed: %1")
-                                      .arg(linkedRandomImportError)));
+                                      "linked Blender Random identity import/persistence failed: %1")
+                                      .arg(linkedRandomImportError.isEmpty()
+                                               ? linkedRandomPersistenceError
+                                               : linkedRandomImportError)));
                     }
                     {
                         ViewportRenderObject shadowFactorReceiver;

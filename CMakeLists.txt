@@ -187,6 +187,7 @@ set(CLASSICAD_VIEWPORT_SHARED_SOURCES
     src/ui/viewport/viewport_erase_overlay_renderer.cpp
     src/ui/viewport/viewport_geometry_cache.cpp
     src/ui/viewport/viewport_render_frame.cpp
+    src/ui/viewport/workbench_random_color.cpp
     src/ui/viewport/viewport_raster_workbench_effects.cpp
     src/ui/viewport/viewport_raster_workbench_volume.cpp
     src/ui/viewport/viewport_raster_workbench_linear.cpp

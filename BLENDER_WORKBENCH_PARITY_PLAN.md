@@ -6875,3 +6875,21 @@ resolve remain open.
   ./build/classicad_viewport_render_contracts_test`. This validates identity
   transport and each renderer's color input, not a paired full-frame Blender
   render comparison.
+
+### Linked Blender Random identity persistence and shared resolver (2026-10-15)
+
+- Consolidated the Blender-compatible Random color hash and legacy ObjectId
+  fallback into `workbench_random_color.cpp`, shared by QPainter and GPU
+  rendering. Both paths now call the same implementation for the Blender
+  `OB`-prefixed object name and linked-library filepath hash.
+- Extended the linked-object fixture contract through `.vignola` save and
+  reopen. It verifies both base names, raw library paths, and object IDs match
+  their imported render-frame values, then checks that the reopened objects
+  still produce their expected QPainter and GPU Random color samples. Blender
+  5.2.2's source identity equation remains pinned in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L33).
+- Validation: `cmake --build build -j4` passed with the 320-source dependency
+  audit; offscreen `viewport_render_contracts` passed (1/1, 41.38 seconds)
+  with `CLASSICAD_VIEWPORT_LINKED_RANDOM_BLEND` set to the generated Blender
+  5.2.2 host fixture. This covers linked identity persistence and both
+  renderer paths, not a paired full-frame render comparison.

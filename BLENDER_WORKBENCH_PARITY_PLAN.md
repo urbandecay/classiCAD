@@ -7570,7 +7570,9 @@ resolve remain open.
   `wireframe_threshold` values. The color type is read from the shading
   settings, where Blender 5.2.2 defines it; if an older Blender lacks that
   property, extraction defaults it to `THEME` instead of failing. Imported
-  objects also retain `show_wire`,
+  viewport sessions now preserve these three wire overlay controls, while
+  older session files retain their default settings. Imported objects also
+  retain `show_wire`,
   `show_all_edges`, and whether `display_type` is `WIRE`; native classiCAD
   documents preserve those object flags. The viewport draws deduplicated
   polygon-loop edges over Solid mesh fills when the saved global overlay or

@@ -192,6 +192,9 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
     object.insert(QStringLiteral("xrayWireframe"), settings.xrayWireframe);
     object.insert(QStringLiteral("wireColorMode"),
                   static_cast<int>(settings.wireColorMode));
+    object.insert(QStringLiteral("solidWireframes"), settings.solidWireframes);
+    object.insert(QStringLiteral("wireframeOpacity"), settings.wireframeOpacity);
+    object.insert(QStringLiteral("wireframeThreshold"), settings.wireframeThreshold);
     object.insert(QStringLiteral("wireOverlaysVisible"),
                   settings.wireOverlaysVisible);
     object.insert(QStringLiteral("selectedObjectOutlineVisible"),
@@ -367,6 +370,18 @@ bool viewportShadingFromJson(const QJsonValue &value,
         return false;
     }
     restored.wireColorMode = static_cast<ViewportWireColorMode>(parsed);
+    if ((object.contains(QStringLiteral("solidWireframes")) &&
+         !boolean(QStringLiteral("solidWireframes"),
+                  &restored.solidWireframes)) ||
+        !optionalNumber(QStringLiteral("wireframeOpacity"),
+                        &restored.wireframeOpacity) ||
+        restored.wireframeOpacity < 0.0 || restored.wireframeOpacity > 1.0 ||
+        !optionalNumber(QStringLiteral("wireframeThreshold"),
+                        &restored.wireframeThreshold) ||
+        restored.wireframeThreshold < 0.0 ||
+        restored.wireframeThreshold > 1.0) {
+        return false;
+    }
     if (object.contains(QStringLiteral("wireOverlaysVisible")) &&
         !boolean(QStringLiteral("wireOverlaysVisible"),
                  &restored.wireOverlaysVisible)) {

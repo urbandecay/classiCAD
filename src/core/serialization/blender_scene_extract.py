@@ -741,7 +741,7 @@ def extract_image_empty(obj, scene, packed_payload_budget,
     return item, ""
 
 
-def loose_edge_curve_item(obj, scene, source_item, edges_world):
+def loose_edge_curve_item(obj, scene, source_item, edges_world, edge_indices):
     """Build a curve companion without reusing the Blender mesh identity."""
     source_id = source_item["object_id"]
     derived_id = hashlib.sha256(source_id.encode("utf-8")).hexdigest()
@@ -752,6 +752,8 @@ def loose_edge_curve_item(obj, scene, source_item, edges_world):
     item["name"] = obj.name_full + " (Loose Edges)"
     item["object_type"] = "CURVE"
     item["classiCAD_loose_mesh_edge_companion"] = True
+    item["classiCAD_loose_mesh_edge_source_indices"] = [
+        int(index) for index in edge_indices]
     item["splines"] = [
         {"type": "POLY", "control_points_world": edge}
         for edge in edges_world
@@ -1090,7 +1092,7 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
             for edge in mesh.edges
         ]
         loose_edges = [
-            (int(edge.vertices[0]), int(edge.vertices[1]))
+            (int(edge.index), int(edge.vertices[0]), int(edge.vertices[1]))
             for edge in mesh.edges
             if tuple(sorted((int(edge.vertices[0]), int(edge.vertices[1]))))
             not in polygon_edges
@@ -1127,8 +1129,10 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
                     vector_values(transform @ mesh.vertices[first].co),
                     vector_values(transform @ mesh.vertices[second].co),
                 ]
-                for first, second in loose_edges
+                for _edge_index, first, second in loose_edges
             ]
+            item["_loose_edge_source_indices"] = [
+                edge_index for edge_index, _first, _second in loose_edges]
         item["polygon_material_indices"] = [
             int(polygon.material_index) for polygon in mesh.polygons
         ]
@@ -2511,10 +2515,13 @@ def extract_scene(input_path, mode):
                     if len(scene.view_layers) else ""
                 )
                 loose_edges_world = item.pop("_loose_edges_world", [])
+                loose_edge_source_indices = item.pop(
+                    "_loose_edge_source_indices", [])
                 loose_vertices_world = item.pop("_loose_vertices_world", [])
                 omitted_vertices = item.pop("_loose_vertices_omitted", 0)
                 loose_edges_item = (
-                    loose_edge_curve_item(obj, scene, item, loose_edges_world)
+                    loose_edge_curve_item(obj, scene, item, loose_edges_world,
+                                          loose_edge_source_indices)
                     if loose_edges_world and not item["bounds_display_type"] else None
                 )
                 output["items"].append(item)
@@ -2803,13 +2810,16 @@ def extract_scene(input_path, mode):
                             item, instance_id, source_obj, parent_source,
                             instance_transform)
                         loose_edges_world = item.pop("_loose_edges_world", [])
+                        loose_edge_source_indices = item.pop(
+                            "_loose_edge_source_indices", [])
                         loose_vertices_world = item.pop(
                             "_loose_vertices_world", [])
                         omitted_vertices = item.pop(
                             "_loose_vertices_omitted", 0)
                         loose_edges_item = (
                             loose_edge_curve_item(
-                                source_obj, scene, item, loose_edges_world)
+                                source_obj, scene, item, loose_edges_world,
+                                loose_edge_source_indices)
                             if loose_edges_world and
                             not item["bounds_display_type"] else None
                         )

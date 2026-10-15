@@ -73,7 +73,8 @@ ViewportRenderFrame buildViewportRenderFrame(
     QHash<QString, ObjectId> blenderObjectIdsBySourceId;
     blenderObjectIdsBySourceId.reserve(document.size());
     for (const SceneObject &sceneObject : document.objects()) {
-        if (!sceneObject.blenderSourceObjectId.isEmpty()) {
+        if (!sceneObject.blenderLooseMeshEdgeCompanion &&
+            !sceneObject.blenderSourceObjectId.isEmpty()) {
             blenderObjectIdsBySourceId.insert(
                 sceneObject.blenderSourceObjectId, sceneObject.id);
         }
@@ -155,6 +156,8 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.wireDisplay = sceneObject.wireDisplay;
         entry.blenderLooseMeshEdgeCompanion =
             sceneObject.blenderLooseMeshEdgeCompanion;
+        entry.blenderLooseMeshEdgeSourceIndices =
+            sceneObject.blenderLooseMeshEdgeSourceIndices;
         if (sceneObject.blenderLooseMeshEdgeCompanion &&
             !sceneObject.blenderSourceObjectId.isEmpty()) {
             const ObjectId sourceObjectId = blenderObjectIdsBySourceId.value(
@@ -168,6 +171,22 @@ ViewportRenderFrame buildViewportRenderFrame(
             entry.blenderLooseMeshEdgeSourceTransforming =
                 sourceObjectId.isValid() &&
                 transformedIds.contains(sourceObjectId.value());
+            if (sourceObjectId.isValid()) {
+                const QSet<int> selectedSourceEdges =
+                    input.blenderMeshEdgeSelections.value(
+                        sourceObjectId.value());
+                for (int componentIndex = 0;
+                     componentIndex <
+                         sceneObject.blenderLooseMeshEdgeSourceIndices.size();
+                     ++componentIndex) {
+                    if (selectedSourceEdges.contains(
+                            sceneObject.blenderLooseMeshEdgeSourceIndices[
+                                componentIndex])) {
+                        entry.blenderLooseMeshEdgeSelectedComponents.insert(
+                            componentIndex);
+                    }
+                }
+            }
         }
         entry.displayBoundsType = sceneObject.displayBoundsType;
         entry.hasDisplayBoundsData = sceneObject.hasDisplayBoundsData;

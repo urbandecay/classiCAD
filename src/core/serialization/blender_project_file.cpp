@@ -1567,6 +1567,27 @@ bool parseBlenderPolyCurveItem(
             return false;
         }
     }
+    if (result.blenderLooseMeshEdgeCompanion) {
+        const QJsonArray sourceEdgeIndices = item.value(
+            QStringLiteral("classiCAD_loose_mesh_edge_source_indices"))
+                                                .toArray();
+        if (sourceEdgeIndices.size() != curves.size()) {
+            setError(errorMessage,
+                     QStringLiteral("loose-edge source index count does not match its curves"));
+            return false;
+        }
+        result.blenderLooseMeshEdgeSourceIndices.reserve(
+            sourceEdgeIndices.size());
+        for (const QJsonValue &sourceEdgeIndex : sourceEdgeIndices) {
+            int edgeIndex = -1;
+            if (!jsonInteger(sourceEdgeIndex, &edgeIndex) || edgeIndex < 0) {
+                setError(errorMessage,
+                         QStringLiteral("loose-edge source index is invalid"));
+                return false;
+            }
+            result.blenderLooseMeshEdgeSourceIndices.append(edgeIndex);
+        }
+    }
 
     result.geometry.workPlane = classiCAD::WorkPlane::XY;
     result.geometry.workPlaneOffset = 0.0;

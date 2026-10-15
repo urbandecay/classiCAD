@@ -7597,6 +7597,10 @@ protected:
         input.primarySelectedObjectId = selectedShapeIndex_;
         input.highlightedObjectIds = joinTool_.selectedObjectIds();
         input.activeToolPreview = toolPreview_;
+        if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
+            input.blenderMeshEdgeSelections = componentSelections_[
+                static_cast<int>(ComponentSelectionMode::Edge)];
+        }
 
         if (activeTool_ == Tool::Scale && scaleState().previewValid) {
             input.transformPreview.kind = ViewportRenderTransformKind::Scale;
@@ -9888,8 +9892,10 @@ protected:
                 geometryType == GeometryType::ScalarVolume) {
                 continue;
             }
-            const QSet<int> &objectComponentSelection =
+            QSet<int> objectComponentSelection =
                 componentSelectionForObject(objectId);
+            objectComponentSelection.unite(
+                renderObject.blenderLooseMeshEdgeSelectedComponents);
             QSet<int> objectVertexSelection = objectComponentSelection;
             objectVertexSelection.unite(
                 weldedVertexSelections.value(objectId.value()));
@@ -11086,7 +11092,9 @@ protected:
                         ViewportSmoothWireCategory::Overlay;
                 }
                 const bool selectedCurveComponents =
-                    selected && componentSelectionMode_ ==
+                    (selected ||
+                     renderObject.blenderLooseMeshEdgeSourceSelected) &&
+                    componentSelectionMode_ ==
                                     ComponentSelectionMode::Edge &&
                     !objectComponentSelection.isEmpty() &&
                     !curveSampler_.curvesForShape(visibleShape).isEmpty();
@@ -11430,9 +11438,18 @@ protected:
                 if (renderObject.blenderLooseMeshEdgeCompanion &&
                     viewportShadingSettings_.mode ==
                         ViewportShadingMode::Solid) {
+                    const int looseEdgeComponentCount =
+                        curveSampler_.curvesForShape(visibleShape).size();
+                    const bool hasPartialLooseEdgeSelection =
+                        componentSelectionMode_ ==
+                            ComponentSelectionMode::Edge &&
+                        !objectComponentSelection.isEmpty() &&
+                        objectComponentSelection.size() <
+                            looseEdgeComponentCount;
                     const bool looseEdgeSelected =
-                        selected ||
-                        renderObject.blenderLooseMeshEdgeSourceSelected;
+                        (selected ||
+                         renderObject.blenderLooseMeshEdgeSourceSelected) &&
+                        !hasPartialLooseEdgeSelection;
                     const bool looseEdgeActive =
                         selection_.primaryObjectId() == objectId ||
                         renderObject.blenderLooseMeshEdgeSourceActive;

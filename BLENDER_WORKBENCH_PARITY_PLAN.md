@@ -8075,6 +8075,18 @@ resolve remain open.
   while matching the source mesh's selected Theme/Object/Random wire treatment.
   C++ build passed; matched image comparison remains open.
 
+### Per-edge selection for loose mesh companions (2026-10-15)
+
+- Each companion curve now keeps the Blender source edge index for every
+  loose-edge component through Blender import and native save/load. In Edge
+  selection mode, selected companion components get their own wire overlay;
+  the remaining edges keep the unselected wire color. Source-edge selections,
+  when present, map by the saved indices to the matching curve components.
+  Source-object lookup now prefers the original mesh over its derived
+  companion, preserving active/selected state when both share a source
+  identity. The C++ build passed; matched selection-image comparison remains
+  open.
+
 ### QPainter Workbench outline composition (2026-10-15)
 
 - The QPainter outline fallback now reconstructs bounded scene-linear color

@@ -55,6 +55,7 @@ struct ViewportRenderFrameInput {
     QVector<ObjectId> selectedObjectIds;
     ObjectId primarySelectedObjectId = ObjectId::invalid();
     QVector<ObjectId> highlightedObjectIds;
+    QHash<quint64, QSet<int>> blenderMeshEdgeSelections;
     ViewportRenderTransform transformPreview;
     ToolPreview activeToolPreview;
 };
@@ -95,6 +96,8 @@ struct ViewportRenderObject {
     bool showAllEdges = false;
     bool wireDisplay = false;
     bool blenderLooseMeshEdgeCompanion = false;
+    QVector<int> blenderLooseMeshEdgeSourceIndices;
+    QSet<int> blenderLooseMeshEdgeSelectedComponents;
     bool blenderLooseMeshEdgeSourceSelected = false;
     bool blenderLooseMeshEdgeSourceActive = false;
     bool blenderLooseMeshEdgeSourceTransforming = false;

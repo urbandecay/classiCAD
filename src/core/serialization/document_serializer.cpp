@@ -499,6 +499,14 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("wireDisplay"), sceneObject.wireDisplay);
         serializedObject.insert(QStringLiteral("blenderLooseMeshEdgeCompanion"),
                                 sceneObject.blenderLooseMeshEdgeCompanion);
+        QJsonArray looseEdgeSourceIndices;
+        for (const int edgeIndex :
+             sceneObject.blenderLooseMeshEdgeSourceIndices) {
+            looseEdgeSourceIndices.append(edgeIndex);
+        }
+        serializedObject.insert(
+            QStringLiteral("blenderLooseMeshEdgeSourceIndices"),
+            looseEdgeSourceIndices);
         serializedObject.insert(QStringLiteral("blenderSourceObjectId"),
                                 sceneObject.blenderSourceObjectId);
         serializedObject.insert(QStringLiteral("displayBoundsType"),
@@ -1402,6 +1410,43 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.wireDisplay = serializedObject.value(QStringLiteral("wireDisplay")).toBool(false);
         sceneObject.blenderLooseMeshEdgeCompanion = serializedObject.value(
             QStringLiteral("blenderLooseMeshEdgeCompanion")).toBool(false);
+        const QJsonValue looseEdgeSourceIndicesValue = serializedObject.value(
+            QStringLiteral("blenderLooseMeshEdgeSourceIndices"));
+        if (!looseEdgeSourceIndicesValue.isUndefined()) {
+            if (!looseEdgeSourceIndicesValue.isArray()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid loose-edge source index list"));
+                return false;
+            }
+            for (const QJsonValue &edgeIndexValue :
+                 looseEdgeSourceIndicesValue.toArray()) {
+                const double edgeIndexNumber = edgeIndexValue.toDouble(-1.0);
+                if (!edgeIndexValue.isDouble() ||
+                    !std::isfinite(edgeIndexNumber) ||
+                    std::floor(edgeIndexNumber) != edgeIndexNumber ||
+                    edgeIndexNumber < 0.0 ||
+                    edgeIndexNumber > std::numeric_limits<int>::max()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid loose-edge source index"));
+                    return false;
+                }
+                sceneObject.blenderLooseMeshEdgeSourceIndices.append(
+                    static_cast<int>(edgeIndexNumber));
+            }
+            const int curveComponentCount =
+                shape.geometryType == GeometryType::PolyCurve
+                    ? shape.components.size()
+                    : shape.geometryType == GeometryType::Nurbs ? 1 : 0;
+            if ((!sceneObject.blenderLooseMeshEdgeCompanion &&
+                 !sceneObject.blenderLooseMeshEdgeSourceIndices.isEmpty()) ||
+                (!sceneObject.blenderLooseMeshEdgeSourceIndices.isEmpty() &&
+                 sceneObject.blenderLooseMeshEdgeSourceIndices.size() !=
+                     curveComponentCount)) {
+                setError(errorMessage,
+                         QStringLiteral("loose-edge source indices do not match companion geometry"));
+                return false;
+            }
+        }
         sceneObject.blenderSourceObjectId = serializedObject.value(
             QStringLiteral("blenderSourceObjectId")).toString();
         sceneObject.displayBoundsType = serializedObject.value(

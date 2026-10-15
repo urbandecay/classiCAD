@@ -192,6 +192,8 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
     object.insert(QStringLiteral("xrayWireframe"), settings.xrayWireframe);
     object.insert(QStringLiteral("wireColorMode"),
                   static_cast<int>(settings.wireColorMode));
+    object.insert(QStringLiteral("wireOverlaysVisible"),
+                  settings.wireOverlaysVisible);
     object.insert(QStringLiteral("colorMode"),
                   static_cast<int>(settings.colorMode));
     object.insert(QStringLiteral("backgroundMode"),
@@ -355,6 +357,11 @@ bool viewportShadingFromJson(const QJsonValue &value,
         return false;
     }
     restored.wireColorMode = static_cast<ViewportWireColorMode>(parsed);
+    if (object.contains(QStringLiteral("wireOverlaysVisible")) &&
+        !boolean(QStringLiteral("wireOverlaysVisible"),
+                 &restored.wireOverlaysVisible)) {
+        return false;
+    }
     if (!integer(QStringLiteral("colorMode"), 0, 5, &parsed)) {
         return false;
     }

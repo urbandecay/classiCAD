@@ -7346,6 +7346,10 @@ public:
         readBoolean(QStringLiteral("show_xray_wireframe"), &settings.xrayWireframe);
         readNumber(QStringLiteral("xray_alpha_wireframe"), 0.0, 1.0,
                    &settings.xrayWireframeAlpha);
+        if (source.contains(QStringLiteral("show_overlays"))) {
+            readBoolean(QStringLiteral("show_overlays"),
+                        &settings.wireOverlaysVisible);
+        }
         readBoolean(QStringLiteral("show_wireframes"), &settings.solidWireframes);
         readNumber(QStringLiteral("wireframe_opacity"), 0.0, 1.0,
                    &settings.wireframeOpacity);
@@ -10015,6 +10019,7 @@ protected:
             ViewportSceneStroke controlGuide;
             const bool drawMeshWireOverlay =
                 viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                viewportShadingSettings_.wireOverlaysVisible &&
                 geometryType == GeometryType::PolygonMesh &&
                 (viewportShadingSettings_.solidWireframes ||
                  renderObject.showWire || renderObject.wireDisplay);
@@ -10353,6 +10358,7 @@ protected:
             }
             const bool drawNurbsSurfaceWireOverlay =
                 viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                viewportShadingSettings_.wireOverlaysVisible &&
                 geometryType == GeometryType::NurbsSurface &&
                 (viewportShadingSettings_.solidWireframes ||
                  renderObject.showWire || renderObject.wireDisplay);

@@ -71,6 +71,9 @@ struct ViewportShadingSettings {
     bool xrayWireframe = true;
     ViewportWireColorMode wireColorMode = ViewportWireColorMode::Theme;
     bool solidWireframes = false;
+    // Blender's global overlays switch gates Solid-mode wire overlays,
+    // including per-object show_wire and WIRE display flags.
+    bool wireOverlaysVisible = true;
     qreal wireframeOpacity = 1.0;
     qreal wireframeThreshold = 1.0;
     ViewportColorMode colorMode = ViewportColorMode::Material;

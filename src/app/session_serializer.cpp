@@ -194,6 +194,8 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
                   static_cast<int>(settings.wireColorMode));
     object.insert(QStringLiteral("wireOverlaysVisible"),
                   settings.wireOverlaysVisible);
+    object.insert(QStringLiteral("selectedObjectOutlineVisible"),
+                  settings.selectedObjectOutlineVisible);
     object.insert(QStringLiteral("gridFloorVisible"), settings.gridFloorVisible);
     object.insert(QStringLiteral("orthographicGridVisible"),
                   settings.orthographicGridVisible);
@@ -366,6 +368,11 @@ bool viewportShadingFromJson(const QJsonValue &value,
     if (object.contains(QStringLiteral("wireOverlaysVisible")) &&
         !boolean(QStringLiteral("wireOverlaysVisible"),
                  &restored.wireOverlaysVisible)) {
+        return false;
+    }
+    if (object.contains(QStringLiteral("selectedObjectOutlineVisible")) &&
+        !boolean(QStringLiteral("selectedObjectOutlineVisible"),
+                 &restored.selectedObjectOutlineVisible)) {
         return false;
     }
     for (const auto &entry : {

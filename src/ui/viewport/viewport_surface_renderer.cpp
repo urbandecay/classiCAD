@@ -2428,6 +2428,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform usampler2D uObjectIdBuffer;
         uniform vec4 uOutlineColor;
         uniform float uUiScale;
+        uniform bool uSelectionOutlineOnly;
         layout(location = 0) out vec4 fragmentColor;
         void main()
         {
@@ -2443,6 +2444,22 @@ bool ViewportSurfaceRenderer::initialize()
                 texture(uObjectIdBuffer, uv - dx).r,
                 texture(uObjectIdBuffer, uv + dy).r,
                 texture(uObjectIdBuffer, uv - dy).r);
+            if (uSelectionOutlineOnly) {
+                bool centerSelected = (centerId & 0x80000000u) != 0u;
+                bvec4 neighborSelected = bvec4(
+                    (cardinalIds.x & 0x80000000u) != 0u,
+                    (cardinalIds.y & 0x80000000u) != 0u,
+                    (cardinalIds.z & 0x80000000u) != 0u,
+                    (cardinalIds.w & 0x80000000u) != 0u);
+                float sameSelection = dot(
+                    vec4(equal(bvec4(centerSelected), neighborSelected)),
+                    vec4(0.25));
+                float selectionOpacity = 1.0 - sameSelection;
+                if (selectionOpacity <= 0.0) discard;
+                fragmentColor = vec4(uOutlineColor.rgb,
+                                     uOutlineColor.a * selectionOpacity);
+                return;
+            }
             // Blender Workbench derives silhouette coverage from the center
             // ID and its four cardinal neighbors, then uses one configured
             // outline color regardless of object selection.
@@ -5967,8 +5984,11 @@ bool ViewportSurfaceRenderer::draw(
         settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
         !vertices_.isEmpty();
+    const bool selectedOutlineRequested =
+        settings.selectedObjectOutlineVisible && settings.wireOverlaysVisible;
     const bool outlineRequested =
-        settings.mode == ViewportShadingMode::Solid && settings.outline &&
+        settings.mode == ViewportShadingMode::Solid &&
+        (settings.outline || selectedOutlineRequested) &&
         !previewOverlay && !selectionOverlay && clearDepth &&
         !vertices_.isEmpty();
     if (settings.mode == ViewportShadingMode::Solid &&
@@ -7908,7 +7928,7 @@ bool ViewportSurfaceRenderer::draw(
     }
 
     if (settings.mode == ViewportShadingMode::Solid &&
-        settings.outline && !previewOverlay && !selectionOverlay &&
+        outlineRequested && !previewOverlay && !selectionOverlay &&
         !vertices_.isEmpty()) {
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const QSize pixelSize(qRound(viewportSize.width() * dpr),
@@ -8096,20 +8116,29 @@ bool ViewportSurfaceRenderer::draw(
 
             outlineProgram_.bind();
             outlineProgram_.setUniformValue("uObjectIdBuffer", 0);
-            QVector3D outlineColor(settings.outlineColor.redF(),
-                                   settings.outlineColor.greenF(),
-                                   settings.outlineColor.blueF());
-            if (sceneLinearOutput) {
-                outlineColor = workbenchSrgbToSceneLinear(outlineColor);
-            }
-            outlineProgram_.setUniformValue(
-                "uOutlineColor",
-                QVector4D(outlineColor, 1.0f));
             outlineProgram_.setUniformValue(
                 "uUiScale",
                 static_cast<float>(workbenchEffectUiScale(dpr)));
+            const auto drawOutlineColor = [&](const QColor &sourceColor,
+                                              bool selectionOnly) {
+                QVector3D color(sourceColor.redF(), sourceColor.greenF(),
+                                sourceColor.blueF());
+                if (sceneLinearOutput) {
+                    color = workbenchSrgbToSceneLinear(color);
+                }
+                outlineProgram_.setUniformValue(
+                    "uOutlineColor", QVector4D(color, sourceColor.alphaF()));
+                outlineProgram_.setUniformValue("uSelectionOutlineOnly",
+                                                selectionOnly);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+            };
             outlineVertexArray_.bind();
-            glDrawArrays(GL_TRIANGLES, 0, 3);
+            if (settings.outline) {
+                drawOutlineColor(settings.outlineColor, false);
+            }
+            if (selectedOutlineRequested) {
+                drawOutlineColor(settings.themeActiveObjectColor, true);
+            }
             outlineVertexArray_.release();
             outlineProgram_.release();
             glBindTexture(GL_TEXTURE_2D,

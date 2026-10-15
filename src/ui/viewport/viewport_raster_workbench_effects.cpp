@@ -3045,12 +3045,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     }
 
     const auto applyOutline = [&]() {
-        if (!settings.outline ||
-            (surfaceLayers != nullptr &&
-             surfaceLayers->outlineAppliedBeforeDisplay)) return;
+        const bool drawWorkbenchOutline = settings.outline &&
+            !(surfaceLayers != nullptr &&
+              surfaceLayers->outlineAppliedBeforeDisplay);
+        const bool drawSelectionOutline =
+            settings.selectedObjectOutlineVisible && settings.wireOverlaysVisible;
+        if (!drawWorkbenchOutline && !drawSelectionOutline) return;
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
         const QColor outline = settings.outlineColor;
+        const QColor selectionOutline = settings.themeActiveObjectColor;
         // Blender offsets its four object-ID taps by UI scale in normalized
         // viewport coordinates. The QPainter ID buffer is allocated at the
         // device-pixel resolution, so this is the equivalent texel distance.
@@ -3068,6 +3072,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     0, width - 1);
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
                 int differentNeighbors = 0;
+                int differentSelectionNeighbors = 0;
+                const bool centerSelected = (objectId & 0x80000000ull) != 0;
                 const std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(outlineSampleOffset, 0),
                     QPoint(-outlineSampleOffset, 0),
@@ -3080,28 +3086,40 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const quint64 neighborId =
                         samples[sy * width + sx].objectId;
                     differentNeighbors += neighborId != objectId;
+                    differentSelectionNeighbors +=
+                        ((neighborId & 0x80000000ull) != 0) != centerSelected;
                 }
-                const float edgeOpacity = differentNeighbors / 4.0f;
-                const float sourceAlpha =
-                    static_cast<float>(outline.alphaF()) * edgeOpacity;
-                if (sourceAlpha <= 0.0f) continue;
-                const float outlineRed = static_cast<float>(outline.red());
-                const float outlineGreen = static_cast<float>(outline.green());
-                const float outlineBlue = static_cast<float>(outline.blue());
-                const QRgb pixel = source.pixel(x, y);
-                const float dstAlpha = qAlpha(pixel) / 255.0f;
-                const float outAlpha = sourceAlpha +
-                                       dstAlpha * (1.0f - sourceAlpha);
-                const auto blend = [&](int dst, float src) {
+                const auto blend = [&](const QColor &color, float coverage) {
+                    const float sourceAlpha =
+                        static_cast<float>(color.alphaF()) * coverage;
+                    if (sourceAlpha <= 0.0f) return;
+                    const float outlineRed = static_cast<float>(color.red());
+                    const float outlineGreen = static_cast<float>(color.green());
+                    const float outlineBlue = static_cast<float>(color.blue());
+                    const QRgb pixel = out[x];
+                    const float dstAlpha = qAlpha(pixel) / 255.0f;
+                    const float outAlpha = sourceAlpha +
+                                           dstAlpha * (1.0f - sourceAlpha);
+                    const auto blendChannel = [&](int dst, float src) {
                     if (outAlpha <= 0.0f) return 0;
                     return std::clamp(qRound(
                         (src * sourceAlpha + dst * dstAlpha *
                          (1.0f - sourceAlpha)) / outAlpha), 0, 255);
+                    };
+                    out[x] = qRgba(blendChannel(qRed(pixel), outlineRed),
+                                   blendChannel(qGreen(pixel), outlineGreen),
+                                   blendChannel(qBlue(pixel), outlineBlue),
+                                   std::clamp(qRound(outAlpha * 255.0f), 0, 255));
                 };
-                out[x] = qRgba(blend(qRed(pixel), outlineRed),
-                               blend(qGreen(pixel), outlineGreen),
-                               blend(qBlue(pixel), outlineBlue),
-                               std::clamp(qRound(outAlpha * 255.0f), 0, 255));
+                if (drawWorkbenchOutline) {
+                    blend(outline,
+                          static_cast<float>(differentNeighbors) / 4.0f);
+                }
+                if (drawSelectionOutline) {
+                    blend(selectionOutline,
+                          static_cast<float>(differentSelectionNeighbors) /
+                              4.0f);
+                }
             }
         }
         *colorImage = result.convertToFormat(colorImage->format());

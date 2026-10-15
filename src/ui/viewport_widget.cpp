@@ -7350,6 +7350,8 @@ public:
             readBoolean(QStringLiteral("show_overlays"),
                         &settings.wireOverlaysVisible);
         }
+        readBoolean(QStringLiteral("show_outline_selected"),
+                    &settings.selectedObjectOutlineVisible);
         for (const auto &entry : {
                  std::pair{QStringLiteral("show_floor"),
                            &settings.gridFloorVisible},
@@ -9691,7 +9693,10 @@ protected:
                             ? selectedSurfaceControlNet(visibleShape)
                             : selectedSurfaceCage(visibleShape));
                     if (geometryType == GeometryType::NurbsSurface &&
-                        viewportShadingSettings_.outline &&
+                        (viewportShadingSettings_.outline ||
+                         (renderObject.selected &&
+                          viewportShadingSettings_.selectedObjectOutlineVisible &&
+                          viewportShadingSettings_.wireOverlaysVisible)) &&
                         !viewportShadingSettings_.xrayEnabled()) {
                         QSharedPointer<const ViewportDepthGeometry> boundary;
                         if (renderObject.preparedDepthGeometry) {
@@ -9705,6 +9710,9 @@ protected:
                                 selectedSurfaceCage(visibleShape));
                         }
                         ViewportRenderObject outlineObject = renderObject;
+                        outlineObject.selected = renderObject.selected &&
+                            viewportShadingSettings_.selectedObjectOutlineVisible &&
+                            viewportShadingSettings_.wireOverlaysVisible;
                         if (!objectComponentSelection.isEmpty()) {
                             // Component selection colors the selected control
                             // elements; the surface perimeter keeps its normal

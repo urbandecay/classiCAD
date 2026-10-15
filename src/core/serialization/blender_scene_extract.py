@@ -788,6 +788,8 @@ def saved_viewport_shading_record(scene):
                 record["show_axis_x"] = bool(overlay.show_axis_x)
                 record["show_axis_y"] = bool(overlay.show_axis_y)
                 record["show_axis_z"] = bool(overlay.show_axis_z)
+                record["show_outline_selected"] = bool(
+                    overlay.show_outline_selected)
                 record["show_wireframes"] = bool(overlay.show_wireframes)
                 record["wireframe_color_type"] = str(
                     overlay.wireframe_color_type)

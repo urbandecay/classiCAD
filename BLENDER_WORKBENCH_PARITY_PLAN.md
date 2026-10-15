@@ -8555,6 +8555,14 @@ resolve remain open.
   `BKE_object_dimensions_get()` input to the 0.05 slice step factor; matched
   rotated-volume images remain open.
 
+### QPainter depth-of-field mip edge sampling (2026-10-15)
+
+- QPainter now clamps each DOF mip coordinate before deriving bilinear texel
+  indices and interpolation fractions. Previously, a gather just outside an
+  image edge could blend the edge texel with the next interior texel, while
+  Blender's filtered DOF texture lookup clamps at the edge. Matched edge-bokeh
+  images remain open. Blender source: `workbench_effect_dof_blur1_frag.glsl`.
+
 ### GPU DOF blue-noise channel (2026-10-15)
 
 - The gather angle now reads alpha from the 64×64 blue-noise LUT, matching

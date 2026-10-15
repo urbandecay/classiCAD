@@ -4219,8 +4219,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const qreal blend = lod - lowerLevel;
                 const auto bilinear = [&](int level) {
                     const DofMipLevel &mip = dofMips[static_cast<std::size_t>(level)];
-                    const qreal mipX = (sampleX + 0.5) * mip.width / outputWidth - 0.5;
-                    const qreal mipY = (sampleY + 0.5) * mip.height / outputHeight - 0.5;
+                    const qreal mipX = std::clamp(
+                        (sampleX + 0.5) * mip.width / outputWidth - 0.5,
+                        0.0, qreal(mip.width - 1));
+                    const qreal mipY = std::clamp(
+                        (sampleY + 0.5) * mip.height / outputHeight - 0.5,
+                        0.0, qreal(mip.height - 1));
                     const int x0 = std::clamp(static_cast<int>(std::floor(mipX)), 0, mip.width - 1);
                     const int y0 = std::clamp(static_cast<int>(std::floor(mipY)), 0, mip.height - 1);
                     const int x1 = std::min(x0 + 1, mip.width - 1);

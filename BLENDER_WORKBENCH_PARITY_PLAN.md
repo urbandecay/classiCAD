@@ -1849,6 +1849,31 @@ rows, matching the Blender PFM comparator.
 
 Phase Two color-source comparison: matched 640×480 Flat captures for Material, Object, and Random use the same cube, name, camera, and RGB inputs. All nine scene-linear and display probes match exactly for each source. Feature contracts verify interpolated Attribute RGB with material alpha, active-then-default color-attribute selection, and Texture RGB replacing material RGB while retaining material alpha. Blender import and native JSON now retain the default color attribute separately from the active attribute; both renderers use it when the active attribute is unset, and keep the material fallback when neither exists, matching Blender's active/default selection in [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc). Texture extraction now selects Blender's separately marked active texture node (`show_texture`) even when `nodes.active` points elsewhere, following [`node_get_active_texture`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/uvedit/uvedit_ops.cc#L98-L152). Meshes also retain Blender's default/render UV layer separately; GPU, QPainter, and raster paths use active UV first and default/render UV when active is unset, matching [`active_or_default_uv_map_name`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh.cc#L1300-L1324) and the Workbench mesh batch setup in [`draw_cache_impl_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_cache_impl_mesh.cc#L628-L635). Blender 5.2.2's active-texture selection contract and classiCAD's UV fallback/serialization contracts pass. The QPainter texture-alpha cutoff uses `< 0.1`, with a contract retaining exactly `0.1` and discarding the next float below, matching Blender's pinned [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429). Material alpha uses round-to-nearest UNorm8 packing; the CPU shadow contract now checks values immediately below, at, and above the 254.5/255 boundary against the opaque classification, following Blender's pinned [`math_base_inline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/math_base_inline.cc#L2362-L2368). Existing records establish interior probes; the full-frame Flat comparisons below cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, and per-corner Vertex Attribute. Point-domain GPU output is compared below; Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute. Other texture filters/alpha/UDIM output and broader QPainter comparisons remain open. The focused viewport contract passes; `core_contracts` still reports perspective/zoom, snapping, curve-tool, and dimension failures outside this color-source category. Reproduce the three exact color-source comparisons with `tests/workbench_cube_reference.py --lighting FLAT --color-source MATERIAL|OBJECT|RANDOM|TEXTURE|SINGLE|VERTEX` and compare each output pair with `tests/workbench_display_probe_compare.py`.
 
+### Linked-object Workbench Random identity contract (2026-10-15)
+
+- Added fixed vectors for the Blender 5.2.2 Random color hash with the same
+  object name, `LinkedFixture`, and two distinct library paths:
+  `/tmp/classicad-random-library-a.blend` maps to Rec.709 RGB
+  `(0.64629560, 0.8, 0.4)`, and
+  `/tmp/classicad-random-library-b.blend` maps to `(0.4, 0.8, 0.53649284)`.
+  The vectors are calculated independently from the pinned Blender hash and
+  HSV equations. The CPU helper contract checks both values and confirms the
+  library path changes the result even when object names match.
+- An offscreen GPU Flat/Random render contract supplies those same adapter
+  name/path pairs and finds each expected color in scene-linear output. This
+  exercises the GPU renderer's separate Random color resolver as well as the
+  public QPainter helper. Blender 5.2.2 hashes `ob.id.name`, mixes the linked
+  library filepath, converts the result to HSV `(h, 0.5, 0.8)`, and applies
+  Rec.709-to-scene-linear conversion in pinned
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L420-L438).
+- This validates downstream rendering from the material adapter's library
+  path field; it does not render a newly linked `.blend` fixture or re-test
+  extraction of the library path itself. Other names, paths, and imported
+  linked-object image comparisons remain open.
+- Validation: `cmake --build build -j4` passed with the 318-source dependency
+  audit; offscreen `viewport_render_contracts` passed with the fixed CPU
+  vectors and GPU path captures enabled.
+
 **Full-frame Flat color-source cube comparison (2026-10-14):** Compared
 Material, Object, Random, and Texture inputs on the same nonblank polygon cube
 at 640×480, Blender orthographic scale 5.0, AA Off, Flat lighting, AgX, and

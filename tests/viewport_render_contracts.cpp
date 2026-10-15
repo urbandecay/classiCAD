@@ -86,6 +86,25 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    const QColor linkedRandomColorA = workbenchRandomColor(
+        ObjectId::fromValue(1), QStringLiteral("LinkedFixture"),
+        QStringLiteral("/tmp/classicad-random-library-a.blend"));
+    const QColor linkedRandomColorB = workbenchRandomColor(
+        ObjectId::fromValue(2), QStringLiteral("LinkedFixture"),
+        QStringLiteral("/tmp/classicad-random-library-b.blend"));
+    const QVector3D expectedLinkedRandomColorA(0.64629560f, 0.8f, 0.4f);
+    const QVector3D expectedLinkedRandomColorB(0.4f, 0.8f, 0.53649284f);
+    const auto rgbColor = [](const QColor &color) {
+        return QVector3D(color.redF(), color.greenF(), color.blueF());
+    };
+    passed &= check(
+        (rgbColor(linkedRandomColorA) - expectedLinkedRandomColorA).length() <
+                0.0001f &&
+            (rgbColor(linkedRandomColorB) - expectedLinkedRandomColorB).length() <
+                0.0001f &&
+            linkedRandomColorA != linkedRandomColorB,
+        "Workbench Random color identity must include the linked-library path for same-named objects");
+
     if (application.arguments().contains(
             QStringLiteral("--cavity-jitter-only"))) {
         const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
@@ -8101,6 +8120,55 @@ int main(int argc, char *argv[])
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    const auto gpuLinkedRandomPathMatches = [&] (
+                        const QString &libraryPath,
+                        const QVector3D &expectedRgb) {
+                        ViewportRenderObject linkedRandomObject =
+                            polygonCubeObject;
+                        linkedRandomObject.displayName =
+                            QStringLiteral("LinkedFixture");
+                        linkedRandomObject.libraryPath = libraryPath;
+                        ViewportShadingSettings linkedRandomSettings =
+                            rawFaceShading;
+                        linkedRandomSettings.lightingMode =
+                            ViewportLightingMode::Flat;
+                        linkedRandomSettings.colorMode =
+                            ViewportColorMode::Random;
+                        linkedRandomSettings.outline = false;
+                        linkedRandomSettings.specularLighting = false;
+                        QVector<float> linkedRandomLinear;
+                        QImage linkedRandomImage;
+                        const bool rendered = renderCoordinatedScene(
+                            linkedRandomSettings,
+                            QByteArrayLiteral("linked-random-color-") +
+                                libraryPath.toUtf8(),
+                            &linkedRandomImage, &linkedRandomObject,
+                            nullptr, nullptr, QString{}, &linkedRandomLinear);
+                        const QVector3D expectedLinear = expectedRgb;
+                        bool expectedColorFound = false;
+                        for (qsizetype pixel = 0;
+                             pixel + 2 < linkedRandomLinear.size(); pixel += 3) {
+                            const QVector3D actual(
+                                linkedRandomLinear[pixel],
+                                linkedRandomLinear[pixel + 1],
+                                linkedRandomLinear[pixel + 2]);
+                            expectedColorFound |=
+                                (actual - expectedLinear).length() < 0.001f;
+                        }
+                        return rendered && expectedColorFound;
+                    };
+                    const bool gpuLinkedRandomPathsMatch =
+                        gpuLinkedRandomPathMatches(
+                            QStringLiteral(
+                                "/tmp/classicad-random-library-a.blend"),
+                            expectedLinkedRandomColorA) &&
+                        gpuLinkedRandomPathMatches(
+                            QStringLiteral(
+                                "/tmp/classicad-random-library-b.blend"),
+                            expectedLinkedRandomColorB);
+                    passed &= check(
+                        gpuLinkedRandomPathsMatch,
+                        "GPU Workbench Random shading must use Blender's linked-library-path hue for same-named objects");
                     {
                         ViewportRenderObject shadowFactorReceiver;
                         shadowFactorReceiver.shape.geometryType =

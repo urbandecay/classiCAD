@@ -2870,13 +2870,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // Workbench keeps depth_in_front separate through its effects inputs.
     // Select the nearest sample inside each domain first, then let covered
     // in-front samples replace regular scene samples regardless of geometric
-    // depth. Cavity remains opaque-only, so a transparent in-front sample
-    // does not remove the regular opaque receiver underneath it.
+    // depth. Cavity and shadows use opaque receivers, so a transparent
+    // in-front sample does not remove the regular opaque receiver underneath.
     for (int index = 0; index < samples.size(); ++index) {
         if (inFrontSamples[index].objectId != 0) {
             samples[index] = inFrontSamples[index];
         }
-        if (cavityEnabled && inFrontOpaqueSamples[index].objectId != 0) {
+        if ((cavityEnabled || shadowEnabled) &&
+            inFrontOpaqueSamples[index].objectId != 0) {
             opaqueSamples[index] = inFrontOpaqueSamples[index];
         }
     }

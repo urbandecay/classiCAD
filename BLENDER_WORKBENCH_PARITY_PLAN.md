@@ -7465,3 +7465,15 @@ resolve remain open.
   this rule. Texture alpha remains active in color, depth, and object-ID passes.
   The C++ build passed; no matched Blender shadow comparison has been run for
   this correction.
+
+### QPainter in-front shadow receiver (2026-10-15)
+
+- When shadows are enabled, the nearest opaque `showInFront` sample now
+  supplies its own position and normal to the software shadow receiver pass,
+  even when cavity is disabled. Previously, the front sample replaced the
+  regular opaque receiver only for cavity, so an in-front object could receive
+  the shadow factor computed for geometry behind it. Blender's pinned
+  `OpaquePass` resolves the in-front depth/normal domain and applies the same
+  shadow stencil in its composite pass. Transparent in-front samples still
+  leave the regular opaque receiver available. The C++ build passed; no
+  matched Blender shadow comparison has been run for this fix.

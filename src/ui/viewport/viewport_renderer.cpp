@@ -51,6 +51,84 @@ namespace {
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 
+qreal workbenchViewDepth(const ViewportTransform &transform,
+                         const QSize &viewportSize,
+                         const Point3D &worldPoint)
+{
+    const Point3D viewDirection = transform.viewDirection();
+    const Point3D forward{-viewDirection.x, -viewDirection.y,
+                          -viewDirection.z};
+    if (transform.isPerspectiveEnabled()) {
+        const Point3D camera = transform.cameraPosition(viewportSize);
+        return (worldPoint.x - camera.x) * forward.x +
+               (worldPoint.y - camera.y) * forward.y +
+               (worldPoint.z - camera.z) * forward.z;
+    }
+    const Point3D target = transform.viewTarget();
+    const qreal clipEnd = transform.cameraPreferences().clipEnd;
+    return clipEnd + (worldPoint.x - target.x) * forward.x +
+           (worldPoint.y - target.y) * forward.y +
+           (worldPoint.z - target.z) * forward.z;
+}
+
+bool workbenchPointWithinViewDepth(const ViewportTransform &transform,
+                                   const QSize &viewportSize,
+                                   const Point3D &worldPoint)
+{
+    const ViewportCameraPreferences preferences = transform.cameraPreferences();
+    const qreal depth = workbenchViewDepth(transform, viewportSize, worldPoint);
+    return std::isfinite(depth) && depth >= preferences.clipStart &&
+           depth <= (transform.isPerspectiveEnabled()
+                         ? preferences.clipEnd : 2.0 * preferences.clipEnd);
+}
+
+bool clipWorkbenchSegmentToViewDepth(const ViewportTransform &transform,
+                                     const QSize &viewportSize,
+                                     Point3D *worldStart,
+                                     Point3D *worldEnd)
+{
+    if (worldStart == nullptr || worldEnd == nullptr) return false;
+    const ViewportCameraPreferences preferences = transform.cameraPreferences();
+    const qreal nearDepth = preferences.clipStart;
+    const qreal farDepth = transform.isPerspectiveEnabled()
+                               ? preferences.clipEnd
+                               : 2.0 * preferences.clipEnd;
+    const qreal startDepth = workbenchViewDepth(transform, viewportSize,
+                                                *worldStart);
+    const qreal endDepth = workbenchViewDepth(transform, viewportSize,
+                                              *worldEnd);
+    if (!std::isfinite(startDepth) || !std::isfinite(endDepth)) return false;
+    if ((startDepth < nearDepth && endDepth < nearDepth) ||
+        (startDepth > farDepth && endDepth > farDepth)) return false;
+    const qreal delta = endDepth - startDepth;
+    qreal first = 0.0;
+    qreal last = 1.0;
+    if (std::abs(delta) <= 1.0e-15) {
+        return startDepth >= nearDepth && startDepth <= farDepth;
+    }
+    const qreal nearIntersection = (nearDepth - startDepth) / delta;
+    const qreal farIntersection = (farDepth - startDepth) / delta;
+    if (delta > 0.0) {
+        first = std::max(first, nearIntersection);
+        last = std::min(last, farIntersection);
+    } else {
+        first = std::max(first, farIntersection);
+        last = std::min(last, nearIntersection);
+    }
+    first = std::clamp(first, 0.0, 1.0);
+    last = std::clamp(last, 0.0, 1.0);
+    if (first > last) return false;
+    const Point3D start = *worldStart;
+    const Point3D end = *worldEnd;
+    *worldStart = {start.x + (end.x - start.x) * first,
+                   start.y + (end.y - start.y) * first,
+                   start.z + (end.z - start.z) * first};
+    *worldEnd = {start.x + (end.x - start.x) * last,
+                 start.y + (end.y - start.y) * last,
+                 start.z + (end.z - start.z) * last};
+    return true;
+}
+
 qreal workbenchTrianglePixelCoverage(
     const std::array<QPointF, 3> &points, qreal area, qreal px, qreal py,
     qreal stepX, qreal stepY, qreal *b0, qreal *b1, qreal *b2,
@@ -1224,12 +1302,18 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         for (quint64 segment = 0; segment < segmentCount;
              segment += segmentStride) {
             const int index = static_cast<int>(segment * 2);
+            Point3D clippedStart = worldVertices[index];
+            Point3D clippedEnd = worldVertices[index + 1];
+            if (!clipWorkbenchSegmentToViewDepth(
+                    transform_, viewportSize, &clippedStart, &clippedEnd)) {
+                continue;
+            }
             QPointF screenStart;
             QPointF screenEnd;
             if (!transform_.worldPointToScreenUnclipped(
-                    worldVertices[index], viewportSize, &screenStart) ||
+                    clippedStart, viewportSize, &screenStart) ||
                 !transform_.worldPointToScreenUnclipped(
-                    worldVertices[index + 1], viewportSize, &screenEnd)) {
+                    clippedEnd, viewportSize, &screenEnd)) {
                 continue;
             }
             const QPointF deviceStart = deviceTransform.map(screenStart);
@@ -1272,10 +1356,18 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     hiddenRun = false;
                 }
             }
+            Point3D clippedStart = worldStart;
+            Point3D clippedEnd = worldEnd;
+            if (!clipWorkbenchSegmentToViewDepth(
+                    transform_, viewportSize, &clippedStart, &clippedEnd)) {
+                visibleRun = false;
+                hiddenRun = false;
+                continue;
+            }
             if (!transform_.worldPointToScreenUnclipped(
-                    worldStart, viewportSize, &screenStart) ||
+                    clippedStart, viewportSize, &screenStart) ||
                 !transform_.worldPointToScreenUnclipped(
-                    worldEnd, viewportSize, &screenEnd)) {
+                    clippedEnd, viewportSize, &screenEnd)) {
                 visibleRun = false;
                 hiddenRun = false;
                 continue;
@@ -1303,8 +1395,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 continue;
             }
             sampleBudget += steps + 1;
-            const qreal startDepth = cameraDepth(worldStart);
-            const qreal endDepth = cameraDepth(worldEnd);
+            const qreal startDepth = cameraDepth(clippedStart);
+            const qreal endDepth = cameraDepth(clippedEnd);
             for (quint64 step = 0; step <= steps; ++step) {
                 const qreal fraction = static_cast<qreal>(step) /
                                        static_cast<qreal>(steps);
@@ -3564,15 +3656,29 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
         painter.setRenderHint(QPainter::Antialiasing,
                               smoothWiresEditMode_);
         QPainterPath visibleCage;
+        bool connectedCageRun = false;
         quint64 depthSampleBudget = 0;
         constexpr quint64 kMaximumControlCageDepthSamples = 1'000'000;
         for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-            const QPointF start = screenPosition(index);
-            const QPointF end = screenPosition(index + 1);
-            const Point3D worldStart = worldPosition(index);
-            const Point3D worldEnd = worldPosition(index + 1);
+            Point3D worldStart = worldPosition(index);
+            Point3D worldEnd = worldPosition(index + 1);
+            if (!clipWorkbenchSegmentToViewDepth(
+                    transform_, viewportSize, &worldStart, &worldEnd)) {
+                connectedCageRun = false;
+                continue;
+            }
+            QPointF start;
+            QPointF end;
+            if (!transform_.worldPointToScreenUnclipped(
+                    worldStart, viewportSize, &start) ||
+                !transform_.worldPointToScreenUnclipped(
+                    worldEnd, viewportSize, &end)) {
+                connectedCageRun = false;
+                continue;
+            }
             if (!depthAvailable) {
                 painter.drawLine(start, end);
+                connectedCageRun = false;
                 continue;
             }
             const qreal pixelLength = std::hypot(
@@ -3583,12 +3689,13 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                 static_cast<qreal>(kMaximumControlCageDepthSamples)));
             if (steps + 1 > kMaximumControlCageDepthSamples -
                                 depthSampleBudget) {
+                connectedCageRun = false;
                 break;
             }
             depthSampleBudget += steps + 1;
             const qreal startDepth = pointDepth(worldStart);
             const qreal endDepth = pointDepth(worldEnd);
-            bool visibleRun = false;
+            bool visibleRun = connectedCageRun;
             for (quint64 step = 0; step <= steps; ++step) {
                 const qreal fraction = static_cast<qreal>(step) /
                                        static_cast<qreal>(steps);
@@ -3616,6 +3723,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     visibleRun = false;
                 }
             }
+            connectedCageRun = visibleRun;
         }
         if (!visibleCage.isEmpty()) painter.drawPath(visibleCage);
         painter.restore();
@@ -3631,6 +3739,8 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                                 1.5));
             painter.setBrush(active ? QColor(QStringLiteral("#f0a45a")) : handleFill);
             const QPointF screenPoint = screenPosition(index);
+            if (!workbenchPointWithinViewDepth(transform_, viewportSize,
+                                               worldPosition(index))) continue;
             if (!depthVisible(screenPoint, worldPosition(index))) continue;
             painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
                                     screenPoint + QPointF(4.0, 4.0)));
@@ -3663,12 +3773,21 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                               smoothWiresEditMode_);
         painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
-        painter.drawLine(transform_.workPlaneToScreen(controlPoints.last(),
-                                                       viewportSize,
-                                                       frame),
-                         transform_.workPlaneToScreen(controlPoints.first(),
-                                                       viewportSize,
-                                                       frame));
+        Point3D startWorld = workPlaneFramePointToWorld(
+            controlPoints.last(), 0.0, frame);
+        Point3D endWorld = workPlaneFramePointToWorld(
+            controlPoints.first(), 0.0, frame);
+        if (clipWorkbenchSegmentToViewDepth(
+                transform_, viewportSize, &startWorld, &endWorld)) {
+            QPointF startScreen;
+            QPointF endScreen;
+            if (transform_.worldPointToScreenUnclipped(
+                    startWorld, viewportSize, &startScreen) &&
+                transform_.worldPointToScreenUnclipped(
+                    endWorld, viewportSize, &endScreen)) {
+                painter.drawLine(startScreen, endScreen);
+            }
+        }
         painter.restore();
     }
 }
@@ -3701,6 +3820,8 @@ void ViewportRenderer::drawSubdivisionPoints(QPainter &painter,
         }
         const Point3D world = workPlaneFramePointToWorld(
             {local.x, local.y}, local.z, frame);
+        if (!workbenchPointWithinViewDepth(transform_, viewportSize, world))
+            return;
         QPointF screen;
         if (!transform_.worldPointToScreenUnclipped(world,
                                                     viewportSize,
@@ -3747,6 +3868,45 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
                                                       viewportSize,
                                                       screenPoint);
     };
+    const auto worldPoint = [&frame](const Point3D &localPoint) {
+        return workPlaneFramePointToWorld(
+            {localPoint.x, localPoint.y}, localPoint.z, frame);
+    };
+    const auto drawClippedPolyline = [&](const QVector<Point3D> &worldPoints) {
+        QPainterPath clippedPath;
+        bool hasRun = false;
+        Point3D previousClippedEnd;
+        for (int index = 0; index + 1 < worldPoints.size(); ++index) {
+            Point3D clippedStart = worldPoints[index];
+            Point3D clippedEnd = worldPoints[index + 1];
+            if (!clipWorkbenchSegmentToViewDepth(
+                    transform_, viewportSize, &clippedStart, &clippedEnd)) {
+                hasRun = false;
+                continue;
+            }
+            QPointF screenStart;
+            QPointF screenEnd;
+            if (!transform_.worldPointToScreenUnclipped(
+                    clippedStart, viewportSize, &screenStart) ||
+                !transform_.worldPointToScreenUnclipped(
+                    clippedEnd, viewportSize, &screenEnd)) {
+                hasRun = false;
+                continue;
+            }
+            const bool joinsPrevious = hasRun &&
+                std::abs(previousClippedEnd.x - clippedStart.x) <= 1.0e-9 &&
+                std::abs(previousClippedEnd.y - clippedStart.y) <= 1.0e-9 &&
+                std::abs(previousClippedEnd.z - clippedStart.z) <= 1.0e-9;
+            if (joinsPrevious) clippedPath.lineTo(screenEnd);
+            else {
+                clippedPath.moveTo(screenStart);
+                clippedPath.lineTo(screenEnd);
+            }
+            previousClippedEnd = clippedEnd;
+            hasRun = true;
+        }
+        if (!clippedPath.isEmpty()) painter.drawPath(clippedPath);
+    };
 
     const int controlPointCount = curve.controlPoints.size();
     const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
@@ -3758,31 +3918,19 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
             ++nonZeroSpans;
         }
     }
-    QPainterPath path;
     if (!smoothCurveDisplay_) {
         const int sampleCount = std::max(32, nonZeroSpans * 24);
-        bool hasStart = false;
+        QVector<Point3D> sampledWorldPoints;
+        sampledWorldPoints.reserve(sampleCount + 1);
         for (int sample = 0; sample <= sampleCount; ++sample) {
             const qreal fraction = static_cast<qreal>(sample) / sampleCount;
             const qreal parameter = firstParameter +
                                     (lastParameter - firstParameter) * fraction;
             Point3D point;
-            QPointF screenPoint;
-            if (!evaluateNurbsPoint3D(curve, parameter, &point) ||
-                !project(point, &screenPoint)) {
-                continue;
-            }
-            if (!hasStart) {
-                path.moveTo(screenPoint);
-                hasStart = true;
-            } else {
-                path.lineTo(screenPoint);
-            }
+            if (evaluateNurbsPoint3D(curve, parameter, &point))
+                sampledWorldPoints.append(worldPoint(point));
         }
-
-        if (hasStart) {
-            painter.drawPath(path);
-        }
+        drawClippedPolyline(sampledWorldPoints);
         return;
     }
 
@@ -3791,7 +3939,11 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
     constexpr int maximumAdaptivePointCount = 16384;
     QVector<QPointF> screenPoints;
     screenPoints.reserve(std::min(maximumAdaptivePointCount, nonZeroSpans * 8));
+    QVector<qreal> adaptiveParameters;
+    adaptiveParameters.reserve(std::min(maximumAdaptivePointCount,
+                                        nonZeroSpans * 8));
     bool exceededAdaptivePointLimit = false;
+    bool needsUniformSampling = false;
 
     const auto screenPointAt = [&](qreal parameter, QPointF *screenPoint) {
         if (screenPoint == nullptr) {
@@ -3841,6 +3993,8 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
             !screenPointAt(middleParameter, &middlePoint) ||
             !screenPointAt(threeQuarterParameter, &threeQuarterPoint)) {
             screenPoints.append(screenEnd);
+            adaptiveParameters.append(parameterEnd);
+            needsUniformSampling = true;
             if (screenPoints.size() > maximumAdaptivePointCount) {
                 exceededAdaptivePointLimit = true;
             }
@@ -3854,6 +4008,7 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
         if (maximumDeviation <= flatnessTolerancePixels ||
             depth >= maximumSubdivisionDepth) {
             screenPoints.append(screenEnd);
+            adaptiveParameters.append(parameterEnd);
             if (screenPoints.size() > maximumAdaptivePointCount) {
                 exceededAdaptivePointLimit = true;
             }
@@ -3888,10 +4043,13 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
         QPointF spanEndPoint;
         if (!screenPointAt(spanStart, &spanStartPoint) ||
             !screenPointAt(spanEnd, &spanEndPoint)) {
+            needsUniformSampling = true;
+            hasStart = false;
             continue;
         }
         if (!hasStart) {
             screenPoints.append(spanStartPoint);
+            adaptiveParameters.append(spanStart);
             hasStart = true;
         }
         appendAdaptiveSegment(appendAdaptiveSegment,
@@ -3902,11 +4060,12 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
                               0);
     }
 
-    if (exceededAdaptivePointLimit) {
+    if (exceededAdaptivePointLimit || needsUniformSampling) {
         // Preserve the entire curve if a pathological shape exceeds the
         // adaptive detail budget. This fallback is bounded and still becomes
         // denser at higher zoom levels.
         screenPoints.clear();
+        adaptiveParameters.clear();
         const int sampleCount = std::max(
             32,
             std::min(
@@ -3920,24 +4079,19 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
             const qreal fraction = static_cast<qreal>(sample) / sampleCount;
             const qreal parameter = firstParameter +
                                     (lastParameter - firstParameter) * fraction;
-            QPointF screenPoint;
-            if (screenPointAt(parameter, &screenPoint)) {
-                screenPoints.append(screenPoint);
-            }
+            Point3D localPoint;
+            if (evaluateNurbsPoint3D(curve, parameter, &localPoint))
+                adaptiveParameters.append(parameter);
         }
     }
-
-    for (int index = 0; index < screenPoints.size(); ++index) {
-        if (index == 0) {
-            path.moveTo(screenPoints[index]);
-        } else {
-            path.lineTo(screenPoints[index]);
-        }
+    QVector<Point3D> adaptiveWorldPoints;
+    adaptiveWorldPoints.reserve(adaptiveParameters.size());
+    for (const qreal parameter : adaptiveParameters) {
+        Point3D localPoint;
+        if (evaluateNurbsPoint3D(curve, parameter, &localPoint))
+            adaptiveWorldPoints.append(worldPoint(localPoint));
     }
-
-    if (!screenPoints.isEmpty()) {
-        painter.drawPath(path);
-    }
+    drawClippedPolyline(adaptiveWorldPoints);
 }
 
 void ViewportRenderer::drawNurbsSurface(QPainter &painter,

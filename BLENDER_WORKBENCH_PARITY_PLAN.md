@@ -8288,3 +8288,11 @@ resolve remain open.
   out-of-range geometry from drawing and preserves the visible portion of
   crossing triangles. Build passed; no matched Blender image comparison was
   run.
+- Committed curve strokes, prepared curve segments, Edit Mode control-cage
+  edges, control-point markers, subdivision markers, and closing cage edges
+  also use the viewport's near/far range. Crossing line segments are trimmed
+  in world space before screen projection. Blender's curve overlay binds the
+  clipping planes in its edit-curve line and handle passes, and its screen
+  projection helper clips line segments crossing near/far planes; see pinned
+  [`overlay_curve.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_curve.hh#L850-L899)
+  and [`view3d_iterators.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_view3d/view3d_iterators.cc#L2150-L2257).

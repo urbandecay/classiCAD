@@ -10415,11 +10415,14 @@ protected:
                           renderObject.displayName,
                           renderObject.libraryPath,
                           identityMeshObjectTransform, {}, nullptr, {},
-                          rasterSurfaceBatchRendered &&
-                                  !renderObject.showInFront
-                              ? &rasterSurfaceLayers.regularSceneDepth
+                          rasterSurfaceBatchRendered
+                              ? (renderObject.showInFront
+                                     ? &rasterSurfaceLayers.inFrontSceneDepth
+                                     : &rasterSurfaceLayers.regularSceneDepth)
                               : nullptr,
-                          rasterSurfaceLayers.regularSceneDepthSize);
+                          renderObject.showInFront
+                              ? rasterSurfaceLayers.inFrontSceneDepthSize
+                              : rasterSurfaceLayers.regularSceneDepthSize);
             } else {
                 drawShape(scenePainter,
                           visibleShape,
@@ -10438,11 +10441,14 @@ protected:
                           renderObject.displayName,
                           renderObject.libraryPath,
                           identityMeshObjectTransform, {}, nullptr, {},
-                          rasterSurfaceBatchRendered &&
-                                  !renderObject.showInFront
-                              ? &rasterSurfaceLayers.regularSceneDepth
+                          rasterSurfaceBatchRendered
+                              ? (renderObject.showInFront
+                                     ? &rasterSurfaceLayers.inFrontSceneDepth
+                                     : &rasterSurfaceLayers.regularSceneDepth)
                               : nullptr,
-                          rasterSurfaceLayers.regularSceneDepthSize);
+                          renderObject.showInFront
+                              ? rasterSurfaceLayers.inFrontSceneDepthSize
+                              : rasterSurfaceLayers.regularSceneDepthSize);
             }
         }
 
@@ -11248,11 +11254,14 @@ protected:
                                   renderObject.meshObjectTransform,
                                   renderObject.meshMaterials, nullptr,
                                   renderObject.nurbsSolidFaceMaterials,
-                                  fallbackSurfaceBatchRendered &&
-                                          !renderObject.showInFront
-                                      ? &fallbackSurfaceLayers.regularSceneDepth
+                                  fallbackSurfaceBatchRendered
+                                      ? (renderObject.showInFront
+                                             ? &fallbackSurfaceLayers.inFrontSceneDepth
+                                             : &fallbackSurfaceLayers.regularSceneDepth)
                                       : nullptr,
-                                  fallbackSurfaceLayers.regularSceneDepthSize);
+                                  renderObject.showInFront
+                                      ? fallbackSurfaceLayers.inFrontSceneDepthSize
+                                      : fallbackSurfaceLayers.regularSceneDepthSize);
                     }
                 }
             }

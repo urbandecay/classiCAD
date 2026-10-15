@@ -890,6 +890,8 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->opaqueSceneDepthSize = QSize();
         surfaceLayers->regularSceneDepth.clear();
         surfaceLayers->regularSceneDepthSize = QSize();
+        surfaceLayers->inFrontSceneDepth.clear();
+        surfaceLayers->inFrontSceneDepthSize = QSize();
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         surfaceLayers->opaqueColor.setDevicePixelRatio(
@@ -1646,6 +1648,7 @@ bool compositeRasterWorkbenchSurfaces(
             surfaceLayers->opaqueSceneDepth = opaqueSceneDepth;
             surfaceLayers->opaqueSceneDepthSize = QSize(width, height);
             surfaceLayers->regularSceneDepth = opaqueSceneDepth;
+            surfaceLayers->inFrontSceneDepth = frontOpaqueSceneDepth;
             for (const RasterWorkbenchLinearFragment &fragment : fragments) {
                 if (fragment.alpha <= 0.0f || fragment.x < 0 ||
                     fragment.x >= width || fragment.y < 0 ||
@@ -1655,7 +1658,17 @@ bool compositeRasterWorkbenchSurfaces(
                     surfaceLayers->regularSceneDepth[index],
                     fragment.cameraDepth);
             }
+            for (const RasterWorkbenchLinearFragment &fragment : frontFragments) {
+                if (fragment.alpha <= 0.0f || fragment.x < 0 ||
+                    fragment.x >= width || fragment.y < 0 ||
+                    fragment.y >= height) continue;
+                const int index = fragment.y * width + fragment.x;
+                surfaceLayers->inFrontSceneDepth[index] = std::max(
+                    surfaceLayers->inFrontSceneDepth[index],
+                    fragment.cameraDepth);
+            }
             surfaceLayers->regularSceneDepthSize = QSize(width, height);
+            surfaceLayers->inFrontSceneDepthSize = QSize(width, height);
         }
         return true;
     }
@@ -2130,6 +2143,7 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->opaqueSceneDepth = opaqueSceneDepth;
         surfaceLayers->opaqueSceneDepthSize = QSize(width, height);
         surfaceLayers->regularSceneDepth = opaqueSceneDepth;
+        surfaceLayers->inFrontSceneDepth = frontOpaqueSceneDepth;
         for (const TransparentFragment &fragment : regularTransparentFragments) {
             if (fragment.alpha <= 0.0f || fragment.pixelIndex < 0 ||
                 fragment.pixelIndex >= pixelCount) continue;
@@ -2137,7 +2151,15 @@ bool compositeRasterWorkbenchSurfaces(
                 surfaceLayers->regularSceneDepth[fragment.pixelIndex],
                 fragment.depth);
         }
+        for (const TransparentFragment &fragment : frontTransparentFragments) {
+            if (fragment.alpha <= 0.0f || fragment.pixelIndex < 0 ||
+                fragment.pixelIndex >= pixelCount) continue;
+            surfaceLayers->inFrontSceneDepth[fragment.pixelIndex] = std::max(
+                surfaceLayers->inFrontSceneDepth[fragment.pixelIndex],
+                fragment.depth);
+        }
         surfaceLayers->regularSceneDepthSize = QSize(width, height);
+        surfaceLayers->inFrontSceneDepthSize = QSize(width, height);
     }
     return true;
 }

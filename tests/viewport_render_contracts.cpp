@@ -1069,6 +1069,12 @@ int main(int argc, char *argv[])
             drawOccludedCurve(&curveWithGeneratedDepth,
                               &curveOcclusionLayers.opaqueSceneDepth,
                               curveOcclusionLayers.opaqueSceneDepthSize, false);
+        QImage showInFrontCurveOverRegularBlocker = curveOcclusionBase;
+        const bool showInFrontCurveOverRegularBlockerRendered =
+            drawOccludedCurve(
+                &showInFrontCurveOverRegularBlocker,
+                &curveOcclusionLayers.inFrontSceneDepth,
+                curveOcclusionLayers.inFrontSceneDepthSize, true);
         const bool curveDepthSamplesValid =
             curveOcclusionLayers.opaqueSceneDepth.size() ==
                 orthographicDofSize.width() * orthographicDofSize.height() &&
@@ -1097,13 +1103,57 @@ int main(int argc, char *argv[])
                             curveWithGeneratedDepth.pixelColor(20, 64) !=
                                 curveOcclusionBase.pixelColor(20, 64),
                         "QPainter committed curve wires must remain visible outside the blocker");
+        passed &= check(showInFrontCurveOverRegularBlockerRendered &&
+                            showInFrontCurveOverRegularBlocker.pixelColor(
+                                64, 64) != curveOcclusionBase.pixelColor(64, 64),
+                        "QPainter showInFront curve strokes must ignore regular scene depth");
+
+        ViewportRenderObject frontCurveBlocker = makeShadowQuad(
+            13, 40, 56, 88, 72, -2.0);
+        frontCurveBlocker.showInFront = true;
+        frontCurveBlocker.hasWorkbenchMaterial = true;
+        frontCurveBlocker.workbenchMaterial.baseColorSceneLinear =
+            QVector3D(0.5f, 0.5f, 0.5f);
+        frontCurveBlocker.workbenchMaterial.alpha = 1.0f;
+        frontCurveBlocker.meshMaterials = {frontCurveBlocker.workbenchMaterial};
+        RasterWorkbenchSurfaceLayers frontCurveBlockerLayers;
+        QImage frontCurveBlockerBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        frontCurveBlockerBase.fill(QColor(22, 22, 22));
+        const bool frontCurveBlockerRendered =
+            compositeRasterWorkbenchSurfaces(
+                &frontCurveBlockerBase,
+                {opaqueCurveBlocker, frontCurveBlocker},
+                orthographicDofTransform, orthographicDofSize, 1.0, false,
+                true, curveOcclusionSettings, std::nullopt,
+                drawCurveOcclusionBlocker, &frontCurveBlockerLayers);
+        QImage curveBehindFrontOpaque = frontCurveBlockerBase;
+        const bool curveBehindFrontOpaqueRendered = drawOccludedCurve(
+            &curveBehindFrontOpaque,
+            &frontCurveBlockerLayers.inFrontSceneDepth,
+            frontCurveBlockerLayers.inFrontSceneDepthSize, true);
+        const int centerIndex = 64 * orthographicDofSize.width() + 64;
+        passed &= check(frontCurveBlockerRendered &&
+                            frontCurveBlockerLayers.inFrontSceneDepth.size() ==
+                                orthographicDofSize.width() *
+                                    orthographicDofSize.height() &&
+                            std::isfinite(frontCurveBlockerLayers
+                                              .inFrontSceneDepth[centerIndex]) &&
+                            curveBehindFrontOpaqueRendered &&
+                            curveBehindFrontOpaque.pixelColor(64, 64) ==
+                                frontCurveBlockerBase.pixelColor(64, 64) &&
+                            curveBehindFrontOpaque.pixelColor(20, 64) !=
+                                frontCurveBlockerBase.pixelColor(20, 64),
+                        "QPainter showInFront curves must depth-test against their independent in-front opaque domain");
 
         const auto renderTransparentCurveBlocker =
             [&](double height, RasterWorkbenchSurfaceLayers *layers,
-                QImage *image) {
+                QImage *image, bool showInFront = false,
+                bool useWeightedOit = true) {
                 if (layers == nullptr || image == nullptr) return false;
                 ViewportRenderObject blocker = makeShadowQuad(
                     10, 40, 56, 88, 72, height);
+                blocker.showInFront = showInFront;
                 blocker.hasWorkbenchMaterial = true;
                 blocker.workbenchMaterial.baseColorSceneLinear =
                     QVector3D(0.5f, 0.5f, 0.5f);
@@ -1112,7 +1162,7 @@ int main(int argc, char *argv[])
                 image->fill(QColor(22, 22, 22));
                 return compositeRasterWorkbenchSurfaces(
                     image, {blocker}, orthographicDofTransform,
-                    orthographicDofSize, 1.0, false, true,
+                    orthographicDofSize, 1.0, false, useWeightedOit,
                     curveOcclusionSettings, std::nullopt,
                     drawCurveOcclusionBlocker, layers);
             };
@@ -1123,7 +1173,6 @@ int main(int argc, char *argv[])
             renderTransparentCurveBlocker(
                 -2.0, &transparentCurveBlockerLayers,
                 &transparentCurveBlockerBase);
-        const int centerIndex = 64 * orthographicDofSize.width() + 64;
         const qreal lineDepth =
             orthographicDofTransform.worldDirectionToView(
                 {0.0, 0.0, 0.0}).towardCamera;
@@ -1158,23 +1207,95 @@ int main(int argc, char *argv[])
                                 transparentCurveBlockerBase.pixelColor(20, 64),
                         "QPainter committed curve must depth-test against nearer regular transparent surfaces while remaining visible outside them");
 
+        QImage frontTransparentCurveBlockerBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        RasterWorkbenchSurfaceLayers frontTransparentCurveBlockerLayers;
+        const bool frontTransparentCurveBlockerRendered =
+            renderTransparentCurveBlocker(
+                -2.0, &frontTransparentCurveBlockerLayers,
+                &frontTransparentCurveBlockerBase, true);
+        QImage curveBehindFrontTransparent = frontTransparentCurveBlockerBase;
+        const bool curveBehindFrontTransparentRendered = drawOccludedCurve(
+            &curveBehindFrontTransparent,
+            &frontTransparentCurveBlockerLayers.inFrontSceneDepth,
+            frontTransparentCurveBlockerLayers.inFrontSceneDepthSize, true);
+        passed &= check(frontTransparentCurveBlockerRendered &&
+                            std::isfinite(frontTransparentCurveBlockerLayers
+                                              .inFrontSceneDepth[centerIndex]) &&
+                            curveBehindFrontTransparentRendered &&
+                            curveBehindFrontTransparent.pixelColor(64, 64) ==
+                                frontTransparentCurveBlockerBase.pixelColor(
+                                    64, 64) &&
+                            curveBehindFrontTransparent.pixelColor(20, 64) !=
+                                frontTransparentCurveBlockerBase.pixelColor(
+                                    20, 64),
+                        "QPainter showInFront curves must depth-test against nearer in-front transparent surfaces");
+
+        QImage sortedFrontTransparentCurveBlockerBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        RasterWorkbenchSurfaceLayers sortedFrontTransparentCurveBlockerLayers;
+        const bool sortedFrontTransparentBlockerRendered =
+            renderTransparentCurveBlocker(
+                -2.0, &sortedFrontTransparentCurveBlockerLayers,
+                &sortedFrontTransparentCurveBlockerBase, true, false);
+        QImage curveBehindSortedFrontTransparent =
+            sortedFrontTransparentCurveBlockerBase;
+        const bool curveBehindSortedFrontTransparentRendered =
+            drawOccludedCurve(
+                &curveBehindSortedFrontTransparent,
+                &sortedFrontTransparentCurveBlockerLayers.inFrontSceneDepth,
+                sortedFrontTransparentCurveBlockerLayers
+                    .inFrontSceneDepthSize,
+                true);
+        passed &= check(sortedFrontTransparentBlockerRendered &&
+                            std::isfinite(sortedFrontTransparentCurveBlockerLayers
+                                              .inFrontSceneDepth[centerIndex]) &&
+                            curveBehindSortedFrontTransparentRendered &&
+                            curveBehindSortedFrontTransparent.pixelColor(
+                                64, 64) ==
+                                sortedFrontTransparentCurveBlockerBase
+                                    .pixelColor(64, 64),
+                        "QPainter showInFront curve depth must include front transparency in the sorted compositor fallback");
+
         QImage fartherTransparentBlockerBase(
             orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
         RasterWorkbenchSurfaceLayers fartherTransparentBlockerLayers;
         const bool fartherTransparentBlockerRendered =
             renderTransparentCurveBlocker(
                 2.0, &fartherTransparentBlockerLayers,
-                &fartherTransparentBlockerBase);
+                &fartherTransparentBlockerBase, true);
         QImage curveInFrontOfTransparentDepth = fartherTransparentBlockerBase;
         const bool curveInFrontOfTransparentDepthRendered = drawOccludedCurve(
             &curveInFrontOfTransparentDepth,
-            &fartherTransparentBlockerLayers.regularSceneDepth,
-            fartherTransparentBlockerLayers.regularSceneDepthSize, true);
+            &fartherTransparentBlockerLayers.inFrontSceneDepth,
+            fartherTransparentBlockerLayers.inFrontSceneDepthSize, true);
         passed &= check(fartherTransparentBlockerRendered &&
                             curveInFrontOfTransparentDepthRendered &&
                             curveInFrontOfTransparentDepth.pixelColor(64, 64) !=
                                 fartherTransparentBlockerBase.pixelColor(64, 64),
                         "QPainter committed curve must remain visible in front of a farther transparent surface");
+
+        QImage sortedFartherFrontTransparentBase(
+            orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        RasterWorkbenchSurfaceLayers sortedFartherFrontTransparentLayers;
+        const bool sortedFartherFrontTransparentRendered =
+            renderTransparentCurveBlocker(
+                2.0, &sortedFartherFrontTransparentLayers,
+                &sortedFartherFrontTransparentBase, true, false);
+        QImage curveInFrontOfSortedTransparent =
+            sortedFartherFrontTransparentBase;
+        const bool curveInFrontOfSortedTransparentRendered =
+            drawOccludedCurve(
+                &curveInFrontOfSortedTransparent,
+                &sortedFartherFrontTransparentLayers.inFrontSceneDepth,
+                sortedFartherFrontTransparentLayers.inFrontSceneDepthSize,
+                true);
+        passed &= check(sortedFartherFrontTransparentRendered &&
+                            curveInFrontOfSortedTransparentRendered &&
+                            curveInFrontOfSortedTransparent.pixelColor(64, 64) !=
+                                sortedFartherFrontTransparentBase.pixelColor(
+                                    64, 64),
+                        "QPainter showInFront curves must remain visible ahead of farther in-front transparency in the sorted fallback");
     }
     const auto renderCpuShadow = [&](ViewportShadingSettings shading) {
         QImage image(orthographicDofSize, QImage::Format_ARGB32_Premultiplied);

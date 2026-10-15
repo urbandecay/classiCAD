@@ -132,6 +132,11 @@ struct RasterWorkbenchSurfaceLayers {
     // QPainter curve strokes after the regular transparent resolve.
     QVector<float> regularSceneDepth;
     QSize regularSceneDepthSize;
+    // Physical-target depth of the nearest in-front opaque or transparent
+    // surface. Strokes belonging to showInFront objects test against this
+    // depth domain while remaining visible over regular scene geometry.
+    QVector<float> inFrontSceneDepth;
+    QSize inFrontSceneDepthSize;
     // Optional pre-display resolved scene for the bounded weighted-compositor
     // outline path. Pixels are row-major physical-target samples.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearColor;

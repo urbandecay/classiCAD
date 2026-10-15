@@ -2724,11 +2724,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             QPointF screen[3];
             qreal reciprocalDepth[3] = {1.0, 1.0, 1.0};
             bool valid = true;
+            bool finiteWorldTriangle = true;
             for (int corner = 0; corner < 3; ++corner) {
                 world[corner] = vertices[triangle + corner] + QVector3D(
                     object.preparedGeometryOffset.x,
                     object.preparedGeometryOffset.y,
                     object.preparedGeometryOffset.z);
+                finiteWorldTriangle = finiteWorldTriangle &&
+                    std::isfinite(world[corner].x()) &&
+                    std::isfinite(world[corner].y()) &&
+                    std::isfinite(world[corner].z());
                 normal[corner] = normals.size() > triangle + corner
                                      ? normalized(normals[triangle + corner])
                                      : QVector3D();
@@ -2745,6 +2750,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         1.0 / std::max<qreal>(cameraDepth, 1.0e-9);
                 }
             }
+            if (!finiteWorldTriangle) continue;
             const float triangleSourceAlpha = triangleIndex < triangleAlphas.size()
                 ? triangleAlphas[triangleIndex] : objectAlpha;
             if (shadowEnabled) {

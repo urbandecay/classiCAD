@@ -19,6 +19,9 @@
 #include "core/geometry/nurbs_solid.h"
 #include "core/geometry/scalar_volume.h"
 #include "core/document/document.h"
+#include "core/history/document_transaction.h"
+#include "core/history/history.h"
+#include "core/serialization/blender_project_file.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/viewport/viewport_transform.h"
 
@@ -6183,6 +6186,215 @@ int main(int argc, char *argv[])
                         QSharedPointer<ViewportDepthGeometry>::create(
                             buildViewportDepthGeometry(
                                 polygonCubeObject.shape));
+
+                    const QString importedMaterialBlendPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_BLEND");
+                    if (!importedMaterialBlendPath.isEmpty()) {
+                        QVector<SceneObject> importedMaterialObjects;
+                        QVector<DocumentCollection> importedMaterialCollections;
+                        QVector<DocumentMaterial> importedMaterialRecords;
+                        BlenderSceneImportReport importReport;
+                        QString importError;
+                        const bool importedMaterialBlendLoaded =
+                            importBlenderScene(
+                                importedMaterialBlendPath,
+                                QStringLiteral("original"),
+                                &importedMaterialObjects,
+                                &importedMaterialCollections,
+                                &importedMaterialRecords, &importReport,
+                                &importError);
+                        Document importedMaterialDocument;
+                        History importedMaterialHistory(
+                            importedMaterialDocument);
+                        DocumentTransaction importedMaterialTransaction(
+                            importedMaterialDocument,
+                            importedMaterialHistory);
+                        bool importedMaterialDocumentBuilt =
+                            importedMaterialBlendLoaded &&
+                            importedMaterialObjects.size() == 1 &&
+                            importedMaterialRecords.size() == 3;
+                        if (importedMaterialBlendLoaded) {
+                            for (const DocumentMaterial &material :
+                                 importedMaterialRecords) {
+                                importedMaterialDocumentBuilt &=
+                                    importedMaterialTransaction.addMaterial(
+                                        material);
+                            }
+                            for (SceneObject &object :
+                                 importedMaterialObjects) {
+                                object.collectionIds.clear();
+                            }
+                            const QVector<ObjectId> importedIds =
+                                importedMaterialTransaction.insertObjects(
+                                    0, importedMaterialObjects);
+                            importedMaterialDocumentBuilt &=
+                                importedIds.size() ==
+                                importedMaterialObjects.size();
+                            importedMaterialDocumentBuilt &=
+                                importedMaterialTransaction.commit();
+                        }
+                        const ViewportRenderFrame importedMaterialFrame =
+                            importedMaterialDocumentBuilt
+                                ? buildViewportRenderFrame(
+                                      importedMaterialDocument, gpuTransform,
+                                      glSize, {})
+                                : ViewportRenderFrame{};
+                        const bool importedFrameHasSlots =
+                            importedMaterialFrame.objects.size() == 1 &&
+                            importedMaterialFrame.objects[0].shape.geometryType ==
+                                GeometryType::PolygonMesh &&
+                            importedMaterialFrame.objects[0].meshMaterials.size() ==
+                                3 &&
+                            importedMaterialFrame.objects[0]
+                                    .shape.polygonMesh.materialSlotIds.size() == 3;
+                        bool importedScalarsMatch = importedFrameHasSlots;
+                        if (importedFrameHasSlots) {
+                            const auto close = [](float actual,
+                                                  float expected) {
+                                return std::abs(actual - expected) < 1.0e-5f;
+                            };
+                            const auto &importedSlots =
+                                importedMaterialFrame.objects[0].meshMaterials;
+                            const QVector3D expectedColors[] = {
+                                QVector3D(0.18f, 0.28f, 0.72f),
+                                QVector3D(0.72f, 0.20f, 0.18f),
+                                QVector3D(0.18f, 0.65f, 0.25f)};
+                            const float expectedRoughness[] = {
+                                0.2f, 0.5f, 0.8f};
+                            const float expectedMetallic[] = {
+                                0.0f, 0.5f, 1.0f};
+                            for (int index = 0; index < 3; ++index) {
+                                const WorkbenchMaterialData &slot =
+                                    importedSlots[index];
+                                importedScalarsMatch &=
+                                    (slot.baseColorSceneLinear -
+                                     expectedColors[index]).length() < 1.0e-5f &&
+                                    close(slot.roughness,
+                                          expectedRoughness[index]) &&
+                                    close(slot.metallic,
+                                          expectedMetallic[index]);
+                            }
+                        }
+
+                        bool importedMaterialCaptureSaved = false;
+                        const QString importedCaptureDirectory =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_MATERIAL_CAPTURE_DIR");
+                        if (importedMaterialFrame.objects.size() == 1 &&
+                            !importedCaptureDirectory.isEmpty() &&
+                            QDir().mkpath(importedCaptureDirectory)) {
+                            ViewportShadingSettings importedShading;
+                            importedShading.mode = ViewportShadingMode::Solid;
+                            importedShading.lightingMode =
+                                ViewportLightingMode::Studio;
+                            importedShading.studioLightPreset =
+                                QStringLiteral("Default");
+                            importedShading.colorMode =
+                                ViewportColorMode::Material;
+                            importedShading.specularLighting = true;
+                            importedShading.outline = false;
+                            importedShading.shadows = false;
+                            importedShading.cavity = false;
+                            CurveHitTester importedHitTester;
+                            ViewportRenderer importedRenderer(
+                                gpuTransform, importedHitTester);
+                            importedRenderer.setShadingSettings(
+                                importedShading);
+                            importedRenderer
+                                .setWorkbenchRasterAntialiasingEnabled(false);
+                            QImage importedDisplay(
+                                glSize, QImage::Format_ARGB32_Premultiplied);
+                            const QColor captureBackground(34, 34, 34);
+                            importedDisplay.fill(captureBackground);
+                            RasterWorkbenchFragmentSink importedFragments;
+                            const ViewportRenderObject &importedObject =
+                                importedMaterialFrame.objects[0];
+                            QPainter importedPainter(&importedDisplay);
+                            importedRenderer.drawShape(
+                                importedPainter, importedObject.shape, glSize,
+                                false, false, true, importedObject.layerColor,
+                                importedObject.layerLineType,
+                                importedObject.layerLineWeightMm,
+                                importedObject.objectId,
+                                importedObject.geometryRevision, nullptr,
+                                importedObject.preparedGeometryOffset,
+                                importedObject.displayColorSceneLinear,
+                                importedObject.hasWorkbenchMaterial
+                                    ? std::optional<WorkbenchMaterialData>(
+                                          importedObject.workbenchMaterial)
+                                    : std::nullopt,
+                                importedObject.displayName,
+                                importedObject.libraryPath,
+                                importedObject.meshObjectTransform,
+                                importedObject.meshMaterials,
+                                &importedFragments);
+                            importedPainter.end();
+
+                            QVector<float> importedSceneLinear(
+                                glSize.width() * glSize.height() * 3);
+                            constexpr float importedBackgroundLinear =
+                                0.0219421387f;
+                            for (int pixel = 0;
+                                 pixel < glSize.width() * glSize.height();
+                                 ++pixel) {
+                                importedSceneLinear[pixel * 3] =
+                                    importedBackgroundLinear;
+                                importedSceneLinear[pixel * 3 + 1] =
+                                    importedBackgroundLinear;
+                                importedSceneLinear[pixel * 3 + 2] =
+                                    importedBackgroundLinear;
+                            }
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 importedFragments) {
+                                if (fragment.x < 0 ||
+                                    fragment.x >= glSize.width() ||
+                                    fragment.y < 0 ||
+                                    fragment.y >= glSize.height()) continue;
+                                const int offset =
+                                    (fragment.y * glSize.width() + fragment.x) * 3;
+                                importedSceneLinear[offset] =
+                                    fragment.sceneLinearRgb[0];
+                                importedSceneLinear[offset + 1] =
+                                    fragment.sceneLinearRgb[1];
+                                importedSceneLinear[offset + 2] =
+                                    fragment.sceneLinearRgb[2];
+                            }
+                            QFile importedPfm(QDir(importedCaptureDirectory)
+                                                  .filePath(QStringLiteral(
+                                                      "material_slots_imported_qpainter.pfm")));
+                            const QByteArray importedPfmHeader =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            const bool pfmSaved = importedFragments.size() >
+                                    5000 && importedPfm.open(
+                                        QIODevice::WriteOnly) &&
+                                importedPfm.write(importedPfmHeader) ==
+                                    importedPfmHeader.size() &&
+                                importedPfm.write(
+                                    reinterpret_cast<const char *>(
+                                        importedSceneLinear.constData()),
+                                    importedSceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    importedSceneLinear.size() *
+                                        qsizetype(sizeof(float));
+                            const bool pngSaved = importedDisplay.save(
+                                QDir(importedCaptureDirectory).filePath(
+                                    QStringLiteral(
+                                        "material_slots_imported_qpainter.png")));
+                            importedMaterialCaptureSaved = pfmSaved && pngSaved;
+                        }
+                        passed &= check(
+                            importedMaterialBlendLoaded &&
+                                importedMaterialDocumentBuilt &&
+                                importedFrameHasSlots && importedScalarsMatch &&
+                                (importedCaptureDirectory.isEmpty() ||
+                                 importedMaterialCaptureSaved),
+                            importError.isEmpty()
+                                ? "a real Blender material-slot file must import into the render frame and QPainter capture"
+                                : qPrintable(QStringLiteral(
+                                      "a real Blender material-slot file must import: %1")
+                                      .arg(importError)));
+                    }
                     ViewportShadingSettings gpuSolidShading;
                     gpuSolidShading.mode = ViewportShadingMode::Solid;
                     ViewportSurfaceRenderer gpuSurfaceRenderer;

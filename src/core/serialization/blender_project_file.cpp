@@ -2099,6 +2099,8 @@ bool importBlenderScene(const QString &path,
         return false;
     }
     const QJsonObject source = root.value(QStringLiteral("source")).toObject();
+    const QString sourceVersion =
+        source.value(QStringLiteral("blender_version")).toString();
     const QJsonArray version =
         source.value(QStringLiteral("blender_version_tuple")).toArray();
     int major = -1;
@@ -2107,8 +2109,8 @@ bool importBlenderScene(const QString &path,
     if (version.size() != 3 || !jsonInteger(version[0], &major) ||
         !jsonInteger(version[1], &minor) || !jsonInteger(version[2], &patch) ||
         major != 5 || minor != 2 || patch != 2 ||
-        source.value(QStringLiteral("blender_version")).toString() !=
-            QLatin1String(kPinnedBlenderVersion) ||
+        (sourceVersion != QLatin1String(kPinnedBlenderVersion) &&
+         sourceVersion != QStringLiteral("5.2.2 LTS")) ||
         source.value(QStringLiteral("import_mode")).toString() != mode) {
         setError(errorMessage,
                  QStringLiteral("The extraction was not produced by Blender 5.2.2 in the requested mode"));

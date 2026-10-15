@@ -1191,7 +1191,9 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             return transform_.worldDirectionToView(point).towardCamera;
         };
         QPainterPath visiblePath;
+        QPainterPath hiddenPath;
         bool visibleRun = false;
+        bool hiddenRun = false;
         quint64 sampleBudget = 0;
         constexpr quint64 maximumDepthSamples = 1'000'000;
         const quint64 segmentCount =
@@ -1235,6 +1237,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 static_cast<quint64>(index / 2);
             if (segmentIndex % segmentStride != 0) {
                 visibleRun = false;
+                hiddenRun = false;
                 continue;
             }
             QPointF screenStart;
@@ -1247,6 +1250,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     previousEnd.y != worldStart.y ||
                     previousEnd.z != worldStart.z) {
                     visibleRun = false;
+                    hiddenRun = false;
                 }
             }
             if (!transform_.worldPointToScreenUnclipped(
@@ -1254,6 +1258,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 !transform_.worldPointToScreenUnclipped(
                     worldEnd, viewportSize, &screenEnd)) {
                 visibleRun = false;
+                hiddenRun = false;
                 continue;
             }
             const QPointF deviceStart = deviceTransform.map(screenStart);
@@ -1264,6 +1269,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             if (!std::isfinite(deviceLength) ||
                 sampleBudget + 2 > maximumDepthSamples) {
                 visibleRun = false;
+                hiddenRun = false;
                 continue;
             }
             const quint64 requestedSteps = static_cast<quint64>(
@@ -1274,6 +1280,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 requestedSteps, maximumDepthSamples - sampleBudget - 1);
             if (steps == 0) {
                 visibleRun = false;
+                hiddenRun = false;
                 continue;
             }
             sampleBudget += steps + 1;
@@ -1316,15 +1323,39 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     } else {
                         visiblePath.lineTo(screenPoint);
                     }
+                    hiddenRun = false;
                 } else {
                     visibleRun = false;
+                    if (!shadingSettings_.xrayEnabled()) {
+                        hiddenRun = false;
+                        continue;
+                    }
+                    if (!hiddenRun) {
+                        hiddenPath.moveTo(screenPoint);
+                        hiddenRun = true;
+                    } else {
+                        hiddenPath.lineTo(screenPoint);
+                    }
                 }
             }
         }
-        if (visiblePath.isEmpty()) {
+        if (shadingSettings_.xrayEnabled() && !hiddenPath.isEmpty()) {
+            painter.save();
+            QPen hiddenPen = painter.pen();
+            QColor hiddenColor = hiddenPen.color();
+            hiddenColor.setAlphaF(hiddenColor.alphaF() *
+                (1.0 - std::clamp(shadingSettings_.xrayAlpha, 0.0, 1.0)));
+            hiddenPen.setColor(hiddenColor);
+            painter.setPen(hiddenPen);
+            painter.drawPath(hiddenPath);
+            painter.restore();
+        }
+        if (!visiblePath.isEmpty()) {
+            painter.drawPath(visiblePath);
+        }
+        if (visiblePath.isEmpty() && hiddenPath.isEmpty()) {
             return true;
         }
-        painter.drawPath(visiblePath);
         return true;
     }
 
@@ -1494,9 +1525,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                shadingSettings_.mode == ViewportShadingMode::Wireframe &&
                shadingSettings_.wireColorMode == ViewportWireColorMode::Theme) {
         curveColor = shadingSettings_.themeWireColor;
-    }
-    if (shadingSettings_.xrayEnabled() && !preview) {
-        curveColor.setAlphaF(curveColor.alphaF() * shadingSettings_.xrayAlpha);
     }
     const auto *imageTarget = isDimensionGeometryType(shape.geometryType)
         ? dynamic_cast<const QImage *>(painter.device()) : nullptr;

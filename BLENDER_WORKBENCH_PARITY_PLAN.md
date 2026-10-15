@@ -7516,3 +7516,13 @@ resolve remain open.
   [`overlay_xray_fade.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_xray_fade.bsl.hh#L55-L87)
   applies it to overlay pixels behind scene geometry. The C++ build passed;
   matched Blender captures at non-default X-Ray opacity remain open.
+
+### QPainter committed-curve X-Ray visibility (2026-10-15)
+
+- The ordinary QPainter prepared-curve path now separates depth-visible and
+  hidden curve runs. Visible strokes keep their configured alpha; hidden runs
+  are drawn first with the Blender X-Ray fade `1 - xrayAlpha`. Previously this
+  path dimmed the whole curve by `xrayAlpha` and discarded hidden samples. The
+  GPU-stroke fallback's separate hidden/visible passes remain independently
+  handled. The C++ build passed; transparent receiver depth and matched Blender
+  captures remain open.

@@ -103,7 +103,8 @@ def arguments():
     )
     parser.add_argument(
         "--effect",
-        choices=("BASELINE", "SHADOWS", "CAVITY", "OUTLINE"),
+        choices=("BASELINE", "SHADOWS", "CAVITY", "OUTLINE",
+                 "OUTLINE_CAVITY"),
         default="BASELINE",
     )
     parser.add_argument(
@@ -969,8 +970,8 @@ def main():
     shading.shadow_intensity = 0.5
     scene.display.shadow_shift = args.shadow_shift
     scene.display.shadow_focus = args.shadow_focus
-    shading.show_cavity = args.effect == "CAVITY"
-    if args.effect == "CAVITY":
+    shading.show_cavity = args.effect in ("CAVITY", "OUTLINE_CAVITY")
+    if shading.show_cavity:
         shading.cavity_type = "WORLD"
     shading.cavity_ridge_factor = 1.0
     shading.cavity_valley_factor = 1.0
@@ -978,7 +979,7 @@ def main():
     scene.display.matcap_ssao_distance = 0.2
     scene.display.matcap_ssao_attenuation = 1.0
     shading.object_outline_color = tuple(args.outline_color)
-    shading.show_object_outline = args.effect == "OUTLINE"
+    shading.show_object_outline = args.effect in ("OUTLINE", "OUTLINE_CAVITY")
     shading.background_type = args.background_source
     scene.world.color = args.world_color
     shading.background_color = args.viewport_background_color

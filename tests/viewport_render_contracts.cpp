@@ -13683,6 +13683,63 @@ int main(int argc, char *argv[])
                     if (!cavityCapturePath.isEmpty()) {
                         gpuCavityImage.save(cavityCapturePath);
                     }
+                    const QString effectComboPrefix = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_GPU_EFFECT_COMBO_PREFIX");
+                    if (!effectComboPrefix.isEmpty()) {
+                        ViewportTransform effectComboCamera = gpuTransform;
+                        effectComboCamera.setPerspectiveEnabled(true);
+                        struct EffectComboCapture {
+                            const char *suffix;
+                            bool outline;
+                            bool cavity;
+                        };
+                        const EffectComboCapture captures[] = {
+                            {"baseline", false, false},
+                            {"outline", true, false},
+                            {"cavity", false, true},
+                            {"outline-cavity", true, true},
+                        };
+                        const auto saveLinearCapture = [&](
+                            const QString &path,
+                            const QVector<float> &pixels) {
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            return pixels.size() == 640 * 480 * 3 &&
+                                file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               pixels.constData()),
+                                           pixels.size() * qsizetype(sizeof(float))) ==
+                                    pixels.size() * qsizetype(sizeof(float));
+                        };
+                        bool comboCapturesSaved = true;
+                        for (const EffectComboCapture &capture : captures) {
+                            ViewportShadingSettings settings = rawFaceShading;
+                            settings.outline = capture.outline;
+                            settings.cavity = capture.cavity;
+                            settings.cavityType = ViewportCavityType::World;
+                            QImage image;
+                            QVector<float> linear;
+                            const QString stem = effectComboPrefix +
+                                QStringLiteral("-") +
+                                QString::fromLatin1(capture.suffix);
+                            const bool rendered = renderCoordinatedScene(
+                                settings,
+                                QByteArrayLiteral("gpu-effect-combo-") +
+                                    QByteArray(capture.suffix),
+                                &image, &polygonCubeObject,
+                                &effectComboCamera, nullptr,
+                                QString{}, &linear);
+                            comboCapturesSaved &= rendered &&
+                                image.save(stem + QStringLiteral(".png")) &&
+                                saveLinearCapture(stem + QStringLiteral(".pfm"),
+                                                  linear);
+                        }
+                        passed &= check(
+                            comboCapturesSaved,
+                            "matched polygon cube outline/cavity combination captures must save display and scene-linear output");
+                    }
                     const QString polygonCubeCavityCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAVITY_CAPTURE");

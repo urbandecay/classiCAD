@@ -285,6 +285,33 @@ and saved-file comparison remain open.
   Blender image comparison and a direct CAD-stroke-through-cutout image check
   remain open.
 
+### GPU Workbench outline and world-cavity combination capture (2026-10-14)
+
+- The optional viewport contract now captures a matched polygon cube in four
+  states: baseline, outline, WORLD cavity, and outline plus WORLD cavity. Each
+  state records the final display PNG and the scene-linear Combined RGB PFM.
+  The capture uses the same 640×480 perspective view as the Blender reference,
+  with Workbench Studio/Default lighting, Material color, AA Off, zero output
+  dither, and AgX. The Blender 5.2.2 reference harness accepts the combined
+  `OUTLINE_CAVITY` effect state. A comparison script reports per-effect change
+  mask IoU and the scene-linear interaction residual
+  `(outline+cavity − outline − cavity + baseline)`.
+- With masks defined by per-pixel maximum channel change above 2/255, outline
+  IoU is 1.0 (2,454 changed pixels in each renderer), cavity IoU is 0.9760,
+  and combined IoU is 0.9771. At 3/255, outline remains 1.0, cavity is
+  0.9863, and the combined state is 0.9875. Blender and classiCAD interaction
+  residuals have mean max-channel magnitudes `3.8474e-5` and `3.8211e-5` in
+  scene-linear RGB; their cross-renderer mean difference is `5.0639e-7`. The
+  95th-percentile residual is zero because nonzero interaction is confined to
+  fewer than five percent of pixels; maximum residual is `0.05969` in both.
+  These measurements verify this one polygon-cube view and the effect
+  combination. They do not close cavity magnitude parity, other geometry or
+  camera cases, transparency combinations, or QPainter effect parity.
+- Validation: full `cmake --build build -j4` passed with the 316-source
+  dependency audit; offscreen `viewport_render_contracts` passed with the
+  capture enabled. Blender reported 5.2.2 LTS. Captures and reports are under
+  `/tmp/classicad-effect-combo`.
+
 ### GPU Workbench orthographic-view depth of field (2026-10-12)
 
 - GPU depth of field now runs in orthographic views when a scene camera has

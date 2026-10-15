@@ -3452,20 +3452,40 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const auto shadowFactorAt = [&](const QVector2D &lightPixel,
                                         float receiverDepth,
                                         const QVector3D &normal) {
-            const int lightX = std::clamp(qFloor(lightPixel.x()), 0,
-                                          lightMapWidth - 1);
-            const int lightY = std::clamp(qFloor(lightPixel.y()), 0,
-                                          lightMapHeight - 1);
-            const qsizetype mapIndex = qsizetype(lightY) * lightMapWidth +
-                                       lightX;
-            const float casterDepth = lightDepth[mapIndex];
-            const bool shadowed = std::isfinite(casterDepth) &&
-                casterDepth < receiverDepth - softwareDepthBias;
-            return rasterWorkbenchShadowFactor(
-                normal, lightDirection,
-                static_cast<float>(settings.shadowIntensity),
-                static_cast<float>(settings.shadowOffset),
-                static_cast<float>(settings.shadowFocus), shadowed);
+            // Approximate per-pixel shadow coverage with four receiver
+            // locations. Scale the footprint to the light map: it is twice
+            // the target size when the memory cap permits, and target-sized
+            // otherwise. Interior receivers retain the same binary result.
+            const float footprintX = static_cast<float>(lightMapWidth) /
+                                     std::max(width, 1);
+            const float footprintY = static_cast<float>(lightMapHeight) /
+                                     std::max(height, 1);
+            const float offsetX = footprintX * 0.25f;
+            const float offsetY = footprintY * 0.25f;
+            const std::array<QVector2D, 4> sampleOffsets{{
+                QVector2D(-offsetX, -offsetY),
+                QVector2D(offsetX, -offsetY),
+                QVector2D(-offsetX, offsetY),
+                QVector2D(offsetX, offsetY)}};
+            float factorSum = 0.0f;
+            for (const QVector2D &sampleOffset : sampleOffsets) {
+                const QVector2D samplePosition = lightPixel + sampleOffset;
+                const int lightX = std::clamp(qFloor(samplePosition.x()), 0,
+                                              lightMapWidth - 1);
+                const int lightY = std::clamp(qFloor(samplePosition.y()), 0,
+                                              lightMapHeight - 1);
+                const qsizetype mapIndex =
+                    qsizetype(lightY) * lightMapWidth + lightX;
+                const float casterDepth = lightDepth[mapIndex];
+                const bool shadowed = std::isfinite(casterDepth) &&
+                    casterDepth < receiverDepth - softwareDepthBias;
+                factorSum += rasterWorkbenchShadowFactor(
+                    normal, lightDirection,
+                    static_cast<float>(settings.shadowIntensity),
+                    static_cast<float>(settings.shadowOffset),
+                    static_cast<float>(settings.shadowFocus), shadowed);
+            }
+            return factorSum / static_cast<float>(sampleOffsets.size());
         };
         std::vector<RasterWorkbenchLinearPixel>
             perFragmentShadowedTransparent;

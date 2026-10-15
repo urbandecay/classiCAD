@@ -5312,7 +5312,8 @@ resolve remain open.
 - The comparison does not isolate shadow-map sampling, light matching, or
   receiver shading well enough to justify changing the software shadow
   factor. QPainter still uses a target-sized orthographic light-depth map and
-  one nearest-texel test in
+  a single nearest-texel test in the capture described here (before the
+  receiver-coverage update below) in
   `src/ui/viewport/viewport_raster_workbench_effects.cpp`; Blender 5.2.2 uses
   stencil shadow volumes and a nonzero-stencil resolve in pinned
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1759-L1790)
@@ -5323,6 +5324,23 @@ resolve remain open.
   `workbench_effect_delta_compare.py` ran against Blender 5.2.2. This covers
   one unselected default cube only; other casters, receivers, directions,
   focus/shift settings, and QPainter shadow configurations remain open.
+
+### QPainter shadow receiver coverage (2026-10-15)
+
+- `shadowFactorAt` now checks four receiver positions around each light-map
+  coordinate and averages their visibility factors. The sample footprint
+  scales with the light-map-to-target ratio, so it covers one target-pixel
+  footprint both when the shadow map is 2x resolution and when the 16M-texel
+  memory cap leaves it at target resolution. Fully lit and fully shadowed
+  interiors retain the prior binary factor; only receivers crossing a shadow
+  edge can produce partial coverage.
+- This is a bounded QPainter approximation of Blender 5.2.2's stencil-volume
+  resolve, not an equivalent shadow algorithm. The existing matched cube
+  capture predates this change; edge-coverage and effect-delta comparisons
+  have not yet been rerun. Caster rasterization, depth bias, transparency, and
+  shadow lighting remain unchanged.
+- Validation: `cmake --build build -j4` passed. No matched image comparison
+  was run for this change.
 
 ### QPainter fully shadowed factor contract (2026-10-15)
 

@@ -78,6 +78,8 @@ inline const QString &workbenchUvMapName(const PolygonMesh3D &mesh)
 }
 
 bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error = nullptr);
+bool validatePolygonFaceTriangulation(
+    int loopCount, const QVector<std::array<int, 3>> &triangles);
 QVector<std::array<int, 3>> triangulatePolygonLoop(
     const QVector<Point3D> &loopVertices);
 QVector<std::array<int, 3>> polygonMeshFaceTriangles(

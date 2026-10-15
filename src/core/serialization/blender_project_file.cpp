@@ -1142,6 +1142,12 @@ bool parseBlenderMeshItem(const QJsonObject &item,
                 }
                 triangles.append(triangle);
             }
+            if (!classiCAD::validatePolygonFaceTriangulation(
+                    mesh.faces[faceIndex].size(), triangles)) {
+                setError(errorMessage,
+                         QStringLiteral("mesh loop triangulation is incomplete or invalid"));
+                return false;
+            }
             mesh.faceTriangles.append(std::move(triangles));
         }
     }

@@ -8526,3 +8526,13 @@ resolve remain open.
   shading and alpha. Random and Custom colors reuse the scene-linear values
   already prepared for the normal Workbench triangle path. Build passed;
   matched Blender image comparison remains open.
+
+### Validate imported polygon triangulations (2026-10-15)
+
+- Blender's evaluated loop triangles are already preserved and used by both
+  renderers. Blender import and native JSON loading now reject incomplete or
+  malformed per-face triangle lists instead of drawing only part of a face.
+  Validation checks the expected triangle count, loop indices, boundary-edge
+  coverage, and paired internal edges. Meshes without stored Blender
+  triangulation still use classiCAD's local tessellator. C++ build passed;
+  malformed-input and matched color-image comparisons remain open.

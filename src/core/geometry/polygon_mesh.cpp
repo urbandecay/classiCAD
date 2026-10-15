@@ -1,5 +1,8 @@
 #include "polygon_mesh.h"
 
+#include <QHash>
+#include <QSet>
+
 #include <algorithm>
 #include <cmath>
 
@@ -15,7 +18,74 @@ bool fail(QString *error, const QString &message)
     return false;
 }
 
+quint64 undirectedEdgeKey(int first, int second)
+{
+    const quint32 low = static_cast<quint32>(std::min(first, second));
+    const quint32 high = static_cast<quint32>(std::max(first, second));
+    return (quint64(low) << 32) | quint64(high);
+}
+
 } // namespace
+
+bool validatePolygonFaceTriangulation(
+    int loopCount, const QVector<std::array<int, 3>> &triangles)
+{
+    if (loopCount < 3) return triangles.isEmpty();
+    if (triangles.size() != loopCount - 2) return false;
+
+    struct EdgeUsage {
+        int count = 0;
+        int orientation = 0;
+    };
+    QHash<quint64, EdgeUsage> edgeUsage;
+    QSet<quint64> boundaryEdges;
+    for (int loop = 0; loop < loopCount; ++loop) {
+        boundaryEdges.insert(undirectedEdgeKey(
+            loop, (loop + 1) % loopCount));
+    }
+    QSet<int> usedCorners;
+    for (const auto &triangle : triangles) {
+        if (triangle[0] < 0 || triangle[0] >= loopCount ||
+            triangle[1] < 0 || triangle[1] >= loopCount ||
+            triangle[2] < 0 || triangle[2] >= loopCount ||
+            triangle[0] == triangle[1] || triangle[1] == triangle[2] ||
+            triangle[2] == triangle[0]) {
+            return false;
+        }
+        usedCorners.insert(triangle[0]);
+        usedCorners.insert(triangle[1]);
+        usedCorners.insert(triangle[2]);
+        for (int edge = 0; edge < 3; ++edge) {
+            const int first = triangle[static_cast<size_t>(edge)];
+            const int second = triangle[static_cast<size_t>((edge + 1) % 3)];
+            EdgeUsage &usage = edgeUsage[undirectedEdgeKey(first, second)];
+            ++usage.count;
+            usage.orientation += first < second ? 1 : -1;
+        }
+    }
+    if (usedCorners.size() != loopCount) return false;
+
+    for (auto edge = edgeUsage.cbegin(); edge != edgeUsage.cend(); ++edge) {
+        if (boundaryEdges.contains(edge.key())) {
+            const quint32 low = static_cast<quint32>(edge.key() >> 32);
+            const quint32 high = static_cast<quint32>(edge.key());
+            const int expectedOrientation =
+                (static_cast<int>(low) + 1) % loopCount ==
+                        static_cast<int>(high)
+                    ? 1 : -1;
+            if (edge->count != 1 ||
+                edge->orientation != expectedOrientation) {
+                return false;
+            }
+        } else if (edge->count != 2 || edge->orientation != 0) {
+            return false;
+        }
+    }
+    for (const quint64 boundaryEdge : boundaryEdges) {
+        if (!edgeUsage.contains(boundaryEdge)) return false;
+    }
+    return true;
+}
 
 bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error)
 {
@@ -39,6 +109,20 @@ bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error)
             }
         }
         cornerCount += face.size();
+    }
+    if (!mesh.faceTriangles.isEmpty()) {
+        if (mesh.faceTriangles.size() != mesh.faces.size()) {
+            return fail(error,
+                        QStringLiteral("mesh face triangulation count does not match faces"));
+        }
+        for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+            if (!validatePolygonFaceTriangulation(
+                    mesh.faces[faceIndex].size(),
+                    mesh.faceTriangles[faceIndex])) {
+                return fail(error,
+                            QStringLiteral("mesh face triangulation is incomplete or invalid"));
+            }
+        }
     }
     if (!mesh.cornerNormals.isEmpty() && mesh.cornerNormals.size() != cornerCount) {
         return fail(error, QStringLiteral("mesh corner normal count does not match face loops"));
@@ -255,13 +339,15 @@ QVector<std::array<int, 3>> polygonMeshFaceTriangles(
     if (faceIndex >= 0 && faceIndex < mesh.faceTriangles.size()) {
         const QVector<std::array<int, 3>> &triangles =
             mesh.faceTriangles[faceIndex];
-        bool valid = !triangles.isEmpty();
+        bool usable = loopVertices.size() >= 3 &&
+                      triangles.size() == loopVertices.size() - 2;
         for (const auto &triangle : triangles) {
             for (const int corner : triangle) {
-                valid = valid && corner >= 0 && corner < loopVertices.size();
+                usable = usable && corner >= 0 &&
+                         corner < loopVertices.size();
             }
         }
-        if (valid) return triangles;
+        if (usable) return triangles;
     }
     return triangulatePolygonLoop(loopVertices);
 }

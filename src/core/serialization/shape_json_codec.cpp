@@ -4,6 +4,7 @@
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/nurbs_curve.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/polygon_mesh.h"
 #include "core/geometry/shape_mapping.h"
 #include "core/geometry/work_plane.h"
 
@@ -675,6 +676,10 @@ bool polygonMeshFromJson(const QJsonValue &value, PolygonMesh3D *mesh)
                             result.faces[faceIndex].size()) return false;
                 }
                 triangles.append(triangle);
+            }
+            if (!validatePolygonFaceTriangulation(
+                    result.faces[faceIndex].size(), triangles)) {
+                return false;
             }
             result.faceTriangles.append(std::move(triangles));
         }

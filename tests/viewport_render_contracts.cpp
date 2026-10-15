@@ -7689,6 +7689,34 @@ int main(int argc, char *argv[])
                                 }
                                 return rgb;
                             };
+                            const auto readTextureAlpha = [&](GLuint texture) {
+                                QVector<float> rgba(glSize.width() *
+                                                    glSize.height() * 4);
+                                GLint oldActive = GL_TEXTURE0;
+                                GLint oldBinding = 0;
+                                functions.glGetIntegerv(GL_ACTIVE_TEXTURE,
+                                                        &oldActive);
+                                functions.glActiveTexture(GL_TEXTURE0);
+                                functions.glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                                                        &oldBinding);
+                                functions.glBindTexture(GL_TEXTURE_2D, texture);
+                                functions.glGetTexImage(GL_TEXTURE_2D, 0,
+                                                        GL_RGBA, GL_FLOAT,
+                                                        rgba.data());
+                                functions.glBindTexture(
+                                    GL_TEXTURE_2D,
+                                    static_cast<GLuint>(oldBinding));
+                                functions.glActiveTexture(
+                                    static_cast<GLenum>(oldActive));
+                                QVector<float> alpha(glSize.width() *
+                                                     glSize.height());
+                                for (int pixel = 0;
+                                     pixel < glSize.width() * glSize.height();
+                                     ++pixel) {
+                                    alpha[pixel] = rgba[pixel * 4 + 3];
+                                }
+                                return alpha;
+                            };
                             const ViewportRenderTargets &targets =
                                 sceneAaRenderer.targets();
                             const bool amountsSaved = writePfm(
@@ -7696,6 +7724,11 @@ int main(int argc, char *argv[])
                                     QStringLiteral("-amounts.pfm"),
                                 readTextureRgb(
                                     targets.currentSampleColorTexture, 0), 3);
+                            const bool factorSaved = writePfm(
+                                cavityDiagnosticPrefix +
+                                    QStringLiteral("-factor.pfm"),
+                                readTextureAlpha(
+                                    targets.currentSampleColorTexture), 1);
                             const bool normalsSaved = writePfm(
                                 cavityDiagnosticPrefix +
                                     QStringLiteral("-normal-encoded.pfm"),
@@ -7740,7 +7773,8 @@ int main(int argc, char *argv[])
                                 writePfm(cavityDiagnosticPrefix +
                                              QStringLiteral("-depth-buffer.pfm"),
                                          rawDepth, 1);
-                            if (!amountsSaved || !normalsSaved || !depthSaved) {
+                            if (!amountsSaved || !factorSaved ||
+                                !normalsSaved || !depthSaved) {
                                 return false;
                             }
                         }
@@ -14271,7 +14305,10 @@ int main(int argc, char *argv[])
                             rawFaceShading;
                         cavityDiagnosticShading.cavity = true;
                         cavityDiagnosticShading.cavityType =
-                            ViewportCavityType::Both;
+                            ViewportCavityType::World;
+                        cavityDiagnosticShading.cavityDistance = 0.2;
+                        cavityDiagnosticShading.cavityAttenuation = 1.0;
+                        cavityDiagnosticShading.cavitySamples = 16;
                         cavityDiagnosticShading.outline = false;
                         cavityDiagnosticShading.shadows = false;
                         QImage cavityDiagnosticDisplay;
@@ -15044,10 +15081,14 @@ int main(int argc, char *argv[])
                     const QString qpainterOutlineCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_QPAINTER_OUTLINE_CAPTURE");
+                    const QString qpainterCavityDiagnosticPrefix =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_DIAGNOSTIC_PREFIX");
                     if (!qpainterCavityCapturePath.isEmpty() ||
                         !qpainterShadowCapturePath.isEmpty() ||
                         !qpainterShadowShiftFocusCapturePath.isEmpty() ||
-                        !qpainterOutlineCapturePath.isEmpty()) {
+                        !qpainterOutlineCapturePath.isEmpty() ||
+                        !qpainterCavityDiagnosticPrefix.isEmpty()) {
                         const QString qpainterCavityBaselinePath =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_QPAINTER_CAVITY_BASELINE_CAPTURE");
@@ -15147,7 +15188,8 @@ int main(int argc, char *argv[])
                             QImage *display,
                             QVector<float> *linear,
                             const QVector<ViewportRenderObject> *objectsOverride =
-                                nullptr) {
+                                nullptr,
+                            std::vector<float> *cavityFactors = nullptr) {
                             if (display == nullptr) return false;
                             const QVector<ViewportRenderObject> captureObjects =
                                 objectsOverride != nullptr
@@ -15191,7 +15233,8 @@ int main(int argc, char *argv[])
                                 compositeRasterWorkbenchSurfaces(
                                     display, captureObjects, gpuTransform,
                                     glSize, 1.0, false, true, captureSettings,
-                                    worldBackground, drawObject, &layers);
+                                    worldBackground, drawObject, &layers,
+                                    {}, false, {}, nullptr, cavityFactors);
                             if (!composed) return false;
                             applyRasterWorkbenchEffects(
                                 display, captureObjects, gpuTransform,
@@ -15223,6 +15266,54 @@ int main(int argc, char *argv[])
                             }
                             return !display->isNull();
                         };
+                        if (!qpainterCavityDiagnosticPrefix.isEmpty()) {
+                            ViewportShadingSettings diagnosticSettings =
+                                rawFaceShading;
+                            diagnosticSettings.cavity = true;
+                            diagnosticSettings.cavityType =
+                                ViewportCavityType::World;
+                            diagnosticSettings.cavityDistance = 0.2;
+                            diagnosticSettings.cavityAttenuation = 1.0;
+                            diagnosticSettings.cavitySamples = 16;
+                            diagnosticSettings.outline = false;
+                            diagnosticSettings.shadows = false;
+                            QImage diagnosticDisplay;
+                            std::vector<float> cavityFactors;
+                            const bool diagnosticCaptured =
+                                captureQPainterCavity(
+                                    diagnosticSettings, &diagnosticDisplay,
+                                    nullptr, nullptr, &cavityFactors);
+                            const QByteArray factorHeader =
+                                QByteArrayLiteral("Pf\n640 480\n-1.0\n");
+                            QFile factorFile(
+                                qpainterCavityDiagnosticPrefix +
+                                QStringLiteral("-factor.pfm"));
+                            std::vector<float> bottomUpFactors(
+                                static_cast<std::size_t>(640 * 480));
+                            if (cavityFactors.size() == bottomUpFactors.size()) {
+                                for (int y = 0; y < 480; ++y) {
+                                    std::copy_n(
+                                        cavityFactors.begin() + y * 640,
+                                        640,
+                                        bottomUpFactors.begin() +
+                                            (479 - y) * 640);
+                                }
+                            }
+                            const qsizetype factorBytes = qsizetype(
+                                bottomUpFactors.size() * sizeof(float));
+                            const bool factorSaved = diagnosticCaptured &&
+                                cavityFactors.size() == bottomUpFactors.size() &&
+                                factorFile.open(QIODevice::WriteOnly) &&
+                                factorFile.write(factorHeader) ==
+                                    factorHeader.size() &&
+                                factorFile.write(
+                                    reinterpret_cast<const char *>(
+                                        bottomUpFactors.data()),
+                                    factorBytes) == factorBytes;
+                            passed &= check(
+                                factorSaved,
+                                "opt-in QPainter cavity diagnostic must save its pre-composite factor buffer");
+                        }
                         ViewportShadingSettings qpainterCavityBaselineSettings =
                             rawFaceShading;
                         qpainterCavityBaselineSettings.outline = false;

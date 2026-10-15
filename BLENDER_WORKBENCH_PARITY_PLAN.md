@@ -5732,11 +5732,9 @@ edge comparison remains open.
   The fallback evaluates a discrete software neighborhood against retained
   raster samples, while Blender 5.2.2 uses its screen-space depth/normal
   cavity shader and blue-noise sampling. Existing scene-linear captures and
-  source audits do not isolate one bounded formula correction; do not tune
-  the production equation from this output comparison alone. The next useful
-  step is a mismatch-pixel diagnostic of QPainter's sampled depth, normal,
-  cavity/edge amounts, and per-sample visibility against the already
-  instrumented GPU path. Blender references remain pinned to
+  source audits do not isolate one bounded formula correction. Do not tune
+  the production equation from this output comparison alone. Blender
+  references remain pinned to
   [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L100)
   and
   [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L52-L68).
@@ -5745,6 +5743,34 @@ edge comparison remains open.
   and `tests/workbench_effect_delta_compare.py` at threshold 3. No C++ source
   changed, so no rebuild was required. Full QPainter cavity parity remains
   open.
+
+### QPainter cavity factor mismatch diagnostic (2026-10-15)
+
+- Added opt-in pre-composite factor capture to the QPainter compositor and
+  saved the GPU cavity shader's combined factor channel beside its existing
+  amount, encoded normal, and depth captures. The comparison uses the same
+  640×480 orthographic cube and World cavity settings as the existing matched
+  effect comparison. Captures are scalar PFM files with rows converted to the
+  same top-left convention by
+  `tests/workbench_qpainter_cavity_diagnostic.py`.
+- The visible effect comparison reproduces its previous result: 27,109
+  Blender effect pixels, 15,732 QPainter effect pixels, and IoU `0.164347` at
+  3/255. Across common baseline foreground, GPU versus QPainter factor MAE is
+  `0.049919`, p95 `0.212904`, and maximum `0.647132`. At the ten largest
+  output-delta mismatch pixels, GPU factors exceed QPainter factors by
+  `0.510864` to `0.580889`; the largest output error is 33/255 at `(355,289)`
+  where the factors are `1.274414` and `0.725690`. This verifies that the
+  mismatch includes a cavity-factor difference, while the captures do not
+  yet attribute it to a particular sampled depth, normal, or visibility tap.
+  The production equation remains unchanged pending that attribution.
+- Validation: `cmake --build build -j4` passed; capture-enabled offscreen
+  `viewport_render_contracts` passed (1/1, 28.55 seconds); and the diagnostic
+  script reproduced the recorded mask and factor metrics. Reproduce the
+  captures with `CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX` and
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_DIAGNOSTIC_PREFIX`, together with the
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_CAPTURE` and
+  `CLASSICAD_VIEWPORT_QPAINTER_CAVITY_BASELINE_CAPTURE` paths. This diagnostic
+  does not establish full QPainter cavity parity.
 
 ### GPU per-face mesh texture-slot comparison (2026-10-14)
 

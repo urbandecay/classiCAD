@@ -674,7 +674,8 @@ bool compositeRasterWorkbenchSurfaces(
     const std::vector<QVector3D> &sceneLinearBackgroundPixels,
     bool allowFragmentGeneratedDepth,
     const QVector<ViewportRenderObject> &scalarVolumeObjects,
-    std::vector<RasterWorkbenchLinearPixel> *sceneLinearCapture)
+    std::vector<RasterWorkbenchLinearPixel> *sceneLinearCapture,
+    std::vector<float> *cavityFactorCapture)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
         (objects.isEmpty() && scalarVolumeObjects.isEmpty()) ||
@@ -1092,6 +1093,8 @@ bool compositeRasterWorkbenchSurfaces(
         computeCavityFactors(regularObjects, &regularCavityFactors);
         computeCavityFactors(inFrontObjects, &inFrontCavityFactors);
     }
+    if (cavityFactorCapture != nullptr)
+        *cavityFactorCapture = regularCavityFactors;
 
     // Opaque color/depth is established before any translucent fragment.
     for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {

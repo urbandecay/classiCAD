@@ -9237,6 +9237,9 @@ protected:
                 surfaceDrawObjects.begin(), surfaceDrawObjects.end(),
                 [&averageViewDepth](const ViewportRenderObject &a,
                                     const ViewportRenderObject &b) {
+                    if (a.showInFront != b.showInFront) {
+                        return !a.showInFront;
+                    }
                     return averageViewDepth(a) < averageViewDepth(b);
                 });
             // Reorder only surface-bearing objects in their existing slots.
@@ -11234,6 +11237,9 @@ protected:
                 fallbackDrawObjects.begin(), fallbackDrawObjects.end(),
                 [&fallbackViewDepths](const ViewportRenderObject &a,
                                       const ViewportRenderObject &b) {
+                    if (a.showInFront != b.showInFront) {
+                        return !a.showInFront;
+                    }
                     return fallbackViewDepths.value(a.objectId.value()) <
                            fallbackViewDepths.value(b.objectId.value());
                 });

@@ -7405,3 +7405,12 @@ resolve remain open.
   paths. Previously, the prepared path inherited the painter's prior
   antialiasing state. The C++ build passed; no matched image comparison is
   claimed.
+
+### QPainter average-depth in-front ordering (2026-10-15)
+
+- Both ordinary and native-renderer-failure QPainter fallbacks now draw
+  regular surface objects before `showInFront` objects when the bounded
+  per-pixel compositor cannot run. Average view-depth order is retained within
+  each group. This follows Blender's regular-then-in-front pass ordering, but
+  still cannot reproduce per-pixel depth ordering in the average-depth path.
+  The C++ build passed; no matched image comparison is claimed.

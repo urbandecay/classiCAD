@@ -7738,7 +7738,8 @@ resolve remain open.
 ### Blender collection geometry instances (2026-10-15)
 
 - Blender extraction now expands visible collection instances of mesh, curve,
-  NURBS surface, font, and metaball objects into separate scene items, keeping mesh vertices
+  NURBS surface, font, metaball, and static file-backed Image Empty objects
+  into separate scene items, keeping mesh vertices
   local with the instance transform and applying that transform to exact curve
   and surface control points. Mesh material slots, surface patch materials,
   bounds transforms, and Blender's source-object Random color identity are
@@ -7747,8 +7748,10 @@ resolve remain open.
   instance selection, per-instance Random variation, curve material slots, and
   image-texture UV evaluation for exact NURBS instances are not represented.
   Font glyphs and metaball surfaces are baked from evaluated geometry; their
-  source editing settings are not retained. Other generated instance types
-  remain unsupported. The C++ build passed;
+  source editing settings are not retained. Image instances use the source
+  object's per-instance world matrix and are capped at 256 instances and 16M
+  decoded pixels per scene, in addition to the packed-byte limit. Other
+  generated instance types remain unsupported. The C++ build passed;
   no matched Blender instance comparison has been run.
 
 ### Transform theme color on selected overlays (2026-10-15)
@@ -7834,3 +7837,12 @@ resolve remain open.
   keeps the collection instance transform and parent visibility; text and
   metaball editing data remain unsupported. No matched instance comparison
   has been run.
+
+### Collection-instanced Blender Image Empties (2026-10-15)
+
+- Static file-backed Image Empties inside collection instances now import as
+  Picture items using each instance's world matrix. To bound repeated image
+  decoding, extraction limits these instances to 256 items and 16M decoded
+  pixels per scene, while sharing the existing 32 MiB packed-byte budget.
+  Projection modes and other Image Empty display rules remain unsupported;
+  no matched comparison has been run.

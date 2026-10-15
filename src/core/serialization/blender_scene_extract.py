@@ -45,6 +45,8 @@ MAX_VOLUME_GRID_RECORDS = 262144
 MAX_VOLUME_GRID_VOXELS = 16 * 1024 * 1024
 MAX_VOLUME_GRID_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_COLLECTION_INSTANCES = 50000
+MAX_COLLECTION_IMAGE_EMPTY_INSTANCES = 256
+MAX_COLLECTION_IMAGE_EMPTY_PIXELS = 16 * 1024 * 1024
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -634,7 +636,8 @@ def object_metadata(obj, scene, depsgraph=None):
     return record
 
 
-def extract_image_empty(obj, scene, packed_payload_budget):
+def extract_image_empty(obj, scene, packed_payload_budget,
+                        transform_override=None):
     """Extract a still Image Empty into the existing Picture geometry path."""
     if obj.type != "EMPTY" or str(getattr(obj, "empty_display_type", "")) != "IMAGE":
         return None, ""
@@ -672,7 +675,7 @@ def extract_image_empty(obj, scene, packed_payload_budget):
         aspect_x, aspect_y = 1.0, aspect_y / aspect_x
     else:
         aspect_x, aspect_y = aspect_x / aspect_y, 1.0
-    matrix = obj.matrix_world
+    matrix = transform_override if transform_override is not None else obj.matrix_world
     half_x = (matrix.to_3x3() @ Vector((1.0, 0.0, 0.0))) * (
         aspect_x * float(obj.empty_display_size) * 0.5)
     half_y = (matrix.to_3x3() @ Vector((0.0, 1.0, 0.0))) * (
@@ -2157,6 +2160,9 @@ def extract_scene(input_path, mode):
             unsupported_instance_types = set()
             instance_records = []
             instance_limit_exceeded = False
+            image_instance_count = 0
+            image_instance_pixels = 0
+            image_instance_limit_exceeded = False
 
             # Surface wire extraction updates Blender's dependency graph while
             # evaluating a temporary object, so snapshot instance identities
@@ -2175,10 +2181,26 @@ def extract_scene(input_path, mode):
                     unsupported_instance_types.add(
                         "non-collection-generated-" + source_obj.type)
                     continue
+                is_image_empty = (
+                    source_obj.type == "EMPTY" and
+                    str(getattr(source_obj, "empty_display_type", "")) == "IMAGE")
                 if source_obj.type not in {
-                        "MESH", "CURVE", "SURFACE", "FONT", "META"}:
+                        "MESH", "CURVE", "SURFACE", "FONT", "META"} and not is_image_empty:
                     unsupported_instance_types.add(source_obj.type)
                     continue
+                if is_image_empty:
+                    image = getattr(source_obj, "data", None)
+                    image_size = getattr(image, "size", (0, 0))
+                    width, height = (int(image_size[0]), int(image_size[1]))
+                    image_pixels = max(0, width) * max(0, height)
+                    if (image_instance_count >=
+                            MAX_COLLECTION_IMAGE_EMPTY_INSTANCES or
+                            image_instance_pixels + image_pixels >
+                            MAX_COLLECTION_IMAGE_EMPTY_PIXELS):
+                        image_instance_limit_exceeded = True
+                        continue
+                    image_instance_count += 1
+                    image_instance_pixels += image_pixels
                 if len(instance_records) >= MAX_COLLECTION_INSTANCES:
                     instance_limit_exceeded = True
                     break
@@ -2220,7 +2242,24 @@ def extract_scene(input_path, mode):
                      "::" + instance_suffix)
                     .encode("utf-8")).hexdigest()
                 try:
-                    if source_obj.type in {"FONT", "META"}:
+                    if (source_obj.type == "EMPTY" and
+                            str(getattr(source_obj, "empty_display_type", "")) == "IMAGE"):
+                        item, image_error = extract_image_empty(
+                            source_obj, scene, packed_empty_image_payload_budget,
+                            transform_override=instance_transform)
+                        if item is None:
+                            unsupported_item = unsupported_object_record(
+                                source_obj, scene, instance_depsgraph)
+                            unsupported_item["object_id"] = instance_id
+                            if image_error:
+                                unsupported_item["reason"] = image_error
+                            output["unsupported_items"].append(unsupported_item)
+                        else:
+                            assign_instance_metadata(
+                                item, instance_id, source_obj, parent_source,
+                                instance_transform)
+                            output["items"].append(item)
+                    elif source_obj.type in {"FONT", "META"}:
                         item_features = []
                         evaluated_object = source_obj.evaluated_get(
                             instance_depsgraph)
@@ -2329,6 +2368,14 @@ def extract_scene(input_path, mode):
                     "collection_instance_limit",
                     "supported collection instances exceeded the extraction limit of %d; remaining instances were skipped" %
                     MAX_COLLECTION_INSTANCES,
+                )
+            if image_instance_limit_exceeded:
+                add_unsupported(
+                    output["unsupported_features"], stable_id(scene),
+                    "collection_image_empty_instance_limit",
+                    "static Image Empty collection instances exceeded the per-scene limit of %d instances or %d decoded pixels; remaining image instances were skipped" %
+                    (MAX_COLLECTION_IMAGE_EMPTY_INSTANCES,
+                     MAX_COLLECTION_IMAGE_EMPTY_PIXELS),
                 )
             if unsupported_instance_types:
                 add_unsupported(

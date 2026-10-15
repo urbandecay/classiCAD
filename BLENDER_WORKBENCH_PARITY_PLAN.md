@@ -5270,6 +5270,34 @@ edge comparison remains open.
   `workbench_shadow_receiver_compare.py` plus
   `workbench_effect_delta_compare.py` completed on the paired captures.
 
+### Matched QPainter DOF capture audit (2026-10-14)
+
+- Captured a nonblank 640×480 cube baseline and DOF result from the QPainter
+  production path, then rendered the same documented camera optics with the
+  Blender 5.2.2 helper. Both use a 25 mm perspective camera, f/0.1, six
+  aperture blades, 0.2 rad rotation, 1.2 aperture ratio, and disabled
+  shadows, cavity, specular, and outline.
+- At an RGB channel threshold of 2, Blender changes 11,647 pixels and QPainter
+  changes 4,265; their effect-mask IoU is 0.02447 (15,152 XOR pixels). At
+  threshold 3, the counts are 10,059 and 3,163 and IoU is 0.01684. However,
+  the baseline images already differ by a mean maximum-channel delta of
+  27.75/255, with 113,804 pixels above 2. The DOF images differ by
+  27.70/255. This baseline mismatch prevents attributing the mask disagreement
+  to the DOF gather alone.
+- This confirms that matched QPainter DOF image acceptance remains open. The
+  existing code uses a full-resolution approximation without Blender's
+  temporal jitter and complete near/far pyramid. Align the baseline fixture
+  and color output before using this comparison to justify a renderer change.
+  Blender's stage setup is pinned in
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L53-L85);
+  its gather is pinned in
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L21-L57).
+- Validation: Blender reported 5.2.2 LTS; `cmake --build build -j4` passed
+  with the dependency audit; the rebuilt offscreen
+  `classicad_viewport_render_contracts_test` passed; and
+  `workbench_dof_compare.py` completed on both baseline/effect pairs. The
+  comparison made no renderer code changes.
+
 ### QPainter supersampled light-depth shadow fallback (2026-10-14)
 
 - The CPU light-depth shadow fallback now rasterizes and samples at 2x the

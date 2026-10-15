@@ -1679,7 +1679,7 @@ The screenshot's Overlay and Edit Mode checkboxes are Smooth Wires preferences. 
 - The offscreen render contract now captures both GPU stroke categories with all four Overlay/Edit Mode preference combinations. It checks that changing one preference changes only its matching category. The grid continues through its own MSAA framebuffer, while filled surface edges and Workbench silhouettes stay on the separate scene AA/outline path.
 - Overlay Smooth Wires updates live in both Blender 5.2.2 and classiCAD. Edit Mode Smooth Wires takes effect after restart in both applications; classiCAD saves the requested value while keeping the active viewport value until relaunch.
 - The grid renderer's independent MSAA coverage is tested both in isolation and in composed offscreen captures with a representative Overlay stroke. The composed contract toggles Overlay Smooth Wires, confirms the stroke changes, and compares partial-coverage grid pixels away from the stroke to ensure grid antialiasing remains unchanged.
-- Opaque depth-writing GPU strokes now use a per-pixel line resolve adapted from Blender 5.2.2: record line color, signed perpendicular direction/distance, width, and depth, then resolve the center and four cardinal neighbors with depth-aware alpha-over/under. Neighboring wire samples alpha-over only when strictly nearer; equal-depth neighbors use Blender's alpha-under branch. The dense one-pixel-line correction now runs after the neighboring wire samples have been blended, matching Blender's pass order; its original opaque line-color check is retained. The resolve skips neighbors outside the target instead of duplicating edge texels. It runs only for single-sample targets with a supported matching depth format, full color writes, full opacity, solid strokes, and depth-writing line geometry; other strokes retain the existing direct blend path. The fullscreen resolve writes the nearest accepted line depth while preserving scene depth where no line candidate contributes; it does not copy expanded-quad depth back wholesale. Private depth textures match the caller's depth attachment format for the scene-depth blits. Source: [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L16-L24), [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L22-L38) and [#L82-L180](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L82-L180). Runtime GPU captures and matched Blender crossing-wire comparisons remain unverified in this environment; transparent, patterned, non-depth-writing, and multisampled strokes still use the direct path.
+- Opaque depth-writing GPU strokes now use a per-pixel line resolve adapted from Blender 5.2.2: record line color, signed perpendicular direction/distance, width, and depth, then resolve the center and four cardinal neighbors with depth-aware alpha-over/under. Neighboring wire samples alpha-over only when strictly nearer; equal-depth neighbors use Blender's alpha-under branch. The dense one-pixel-line correction now runs after the neighboring wire samples have been blended, matching Blender's pass order, and checks the original scene pixel's alpha. The resolve skips neighbors outside the target instead of duplicating edge texels. It runs only for single-sample targets with a supported matching depth format, full color writes, full opacity, solid strokes, and depth-writing line geometry; other strokes retain the existing direct blend path. The fullscreen resolve writes the nearest accepted line depth while preserving scene depth where no line candidate contributes; it does not copy expanded-quad depth back wholesale. Private depth textures match the caller's depth attachment format for the scene-depth blits. Source: [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L16-L24), [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L22-L38) and [#L82-L180](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L82-L180). Runtime GPU captures and matched Blender crossing-wire comparisons remain unverified in this environment; transparent, patterned, non-depth-writing, and multisampled strokes still use the direct path.
 - Remaining fallback gap: the prepared-stroke fallback used when native GPU stroke drawing fails now applies depth-aware visibility when scene depth can be read, endpoint fades, and line patterns. Its visibility is sampled and approximate; without depth readback, visible strokes are unoccluded. The direct QPainter drawing paths still do not share the GPU stroke pass's full depth-aware treatment.
 
 ## Implementation stages
@@ -8210,10 +8210,10 @@ resolve remain open.
   The weighted result and retained transparent depth now scale with the
   already bounded pixel target instead of total scene fragment count.
 - Per-object fragment capture remains capped at four million samples, and
-  transparent-shadow receiver data remains capped at one million samples.
-  Those limits can still select painter fallback or omit per-fragment shadow
-  treatment for exceptionally dense scenes. No matched Blender comparison
-  was run; `cmake --build build -j4` passed.
+  that limit can still select painter fallback for exceptionally dense single
+  objects. Transparent receiver shadowing now uses bounded per-pixel shadowed
+  OIT accumulation rather than a one-million-fragment retained list. No
+  matched Blender comparison was run; `cmake --build build -j4` passed.
 
 ### QPainter committed curve depth writes (2026-10-15)
 
@@ -8257,3 +8257,13 @@ resolve remain open.
   transparent receiver layers share one aggregate factor. That remains true
   only when the compositor uses a fallback or a fragment lacks valid receiver
   metadata.
+
+### GPU smooth-wire dense-scene alpha gate (2026-10-15)
+
+- The fullscreen wire resolve now gates Blender's dense one-pixel-line
+  correction on the original scene pixel's alpha. It previously checked the
+  wire sample's alpha, which could apply that correction over a transparent
+  scene pixel even though Blender skips it there. The check now matches the
+  `original_center_has_alpha` condition in pinned
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L140-L193).
+  Build and matched wire-image comparisons remain open.

@@ -163,8 +163,8 @@ void main()
 
     // Blender first folds the four neighboring line samples into the center
     // sample, then applies its dense one-pixel-wire correction to that color.
-    // Keep the correction on the line layer so the opaque scene underneath
-    // does not suppress it through its own alpha.
+    // Blender gates the dense-line correction on the original scene pixel,
+    // before any line sample is blended into it.
     if (centerRecord.w != 0.0) {
         int validNeighborCount = 0;
         for (int index = 0; index < 4; ++index) {
@@ -175,7 +175,7 @@ void main()
             }
         }
         float lineKernelSize = abs(centerRecord.w) * 0.5 - 0.5;
-        if (texelFetch(uLineColor, pixel, 0).a >= 1.0 &&
+        if (texelFetch(uBaseColor, pixel, 0).a >= 1.0 &&
             resolvedLineColor.a > 0.0 && lineKernelSize < 0.45 &&
             validNeighborCount > 2) {
             float blend = clamp(float(validNeighborCount) * 0.5 - 1.0,

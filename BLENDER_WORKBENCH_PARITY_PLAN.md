@@ -263,6 +263,13 @@ open.
   surface depth when culling is requested. Matched visual comparison remains
   pending.
 
+**X-Ray and culling interaction contract (2026-10-15):** The offscreen GPU
+contract now renders an overlapping front/back cube with Solid X-Ray and
+backface culling both enabled and disabled. It requires culling to change the
+center pixel by removing the rear contribution while preserving the nearest
+front depth. This covers the color/depth interaction; a matched Blender frame
+comparison remains open.
+
 ### GPU Workbench X-Ray transparency, depth, and effects (2026-10-12)
 
 - Solid X-Ray now routes every non-preview surface range through transparent

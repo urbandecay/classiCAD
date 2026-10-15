@@ -7442,6 +7442,76 @@ int main(int argc, char *argv[])
                             xrayIgnoredAlphaDepth < 0.999f,
                         "NurbsSolid texture alpha must mask color, object-ID outlines, depth-map shadows, and X-Ray depth consistently, while NONE bypasses the cutoff");
 
+                    const auto renderXrayCube = [&] (
+                        bool backfaceCulling,
+                        QImage *image, float *centerDepth) {
+                        if (image == nullptr || centerDepth == nullptr ||
+                            !framebuffer.bind()) {
+                            return false;
+                        }
+                        ViewportRenderObject cube = polygonCubeObject;
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE,
+                                              GL_TRUE);
+                        functions.glDepthMask(GL_TRUE);
+                        functions.glClearColor(0.02f, 0.02f, 0.02f, 1.0f);
+                        functions.glClearDepth(1.0);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        ViewportShadingSettings settings;
+                        settings.mode = ViewportShadingMode::Solid;
+                        settings.lightingMode = ViewportLightingMode::Flat;
+                        settings.colorMode = ViewportColorMode::Material;
+                        settings.specularLighting = false;
+                        settings.outline = false;
+                        settings.shadows = false;
+                        settings.xray = true;
+                        settings.xrayAlpha = 0.5;
+                        settings.backfaceCulling = backfaceCulling;
+                        if (!gpuSurfaceRenderer.draw(
+                                {cube}, gpuTransform, glSize, 1.0, settings)) {
+                            return false;
+                        }
+                        functions.glFinish();
+                        *image = framebuffer.toImage();
+                        functions.glReadPixels(
+                            glSize.width() / 2, glSize.height() / 2, 1, 1,
+                            GL_DEPTH_COMPONENT, GL_FLOAT, centerDepth);
+                        return !image->isNull();
+                    };
+                    QImage xrayCullImage;
+                    QImage xrayNoCullImage;
+                    float xrayCullDepth = 1.0f;
+                    float xrayNoCullDepth = 1.0f;
+                    const bool xrayCullRendered = renderXrayCube(
+                        true, &xrayCullImage, &xrayCullDepth);
+                    const bool xrayNoCullRendered = renderXrayCube(
+                        false, &xrayNoCullImage, &xrayNoCullDepth);
+                    int xrayCenterColorDifference = 0;
+                    if (xrayCullRendered && xrayNoCullRendered) {
+                        const QColor culledCenter = xrayCullImage.pixelColor(
+                            glSize.width() / 2, glSize.height() / 2);
+                        const QColor unculledCenter = xrayNoCullImage.pixelColor(
+                            glSize.width() / 2, glSize.height() / 2);
+                        xrayCenterColorDifference = std::max({
+                            std::abs(culledCenter.red() - unculledCenter.red()),
+                            std::abs(culledCenter.green() - unculledCenter.green()),
+                            std::abs(culledCenter.blue() - unculledCenter.blue())});
+                    }
+                    passed &= check(
+                        xrayCullRendered && xrayNoCullRendered,
+                        "Solid X-Ray culling fixture must render the culled and unculled cube cases");
+                    passed &= check(
+                        xrayCenterColorDifference >= 2,
+                        "Solid X-Ray backface culling must remove the rear-face contribution from the center pixel");
+                    passed &= check(
+                        std::isfinite(xrayCullDepth) &&
+                            std::isfinite(xrayNoCullDepth) &&
+                            xrayCullDepth < 0.999f &&
+                            std::abs(xrayCullDepth - xrayNoCullDepth) < 1.0e-6f,
+                        "Solid X-Ray culling must preserve the same nearest front-surface depth with rear faces enabled or disabled");
+
                     framebuffer.bind();
                     functions.glViewport(0, 0, glSize.width(), glSize.height());
                     ViewportAaRenderer historyResetRenderer;

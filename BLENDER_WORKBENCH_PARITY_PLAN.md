@@ -8099,3 +8099,17 @@ resolve remain open.
   unavailable; retained transparent surfaces are treated as occluding, and
   failed picture-texture previews still use the unmasked draw path. C++ build
   passed; matched image comparison remains open.
+
+### QPainter Back Image blending with transparent surfaces (2026-10-15)
+
+- When the bounded QPainter surface compositor is active, ordinary Back
+  images are now rasterized into its scene-linear background before surfaces
+  and effects are composited. This lets translucent surfaces blend over the
+  image instead of hiding it as if they were opaque. Imported image opacity is
+  already stored in the image alpha and is preserved; image RGB is converted
+  from sRGB before alpha blending. Precomposited images are skipped in the
+  later scene draw to prevent a second blend. Images are composited one at a
+  time in source order within a 16-million image-pixel work budget. The
+  compositor's background pixels are opaque, so transparent viewport film
+  remains unsupported here; failed renderer fallback and matched image
+  comparison remain open.

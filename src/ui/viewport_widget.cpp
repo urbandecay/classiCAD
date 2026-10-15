@@ -9298,6 +9298,7 @@ protected:
         QVector<ViewportSceneStroke> gpuStrokes;
         QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
         QSet<quint64> surfaceOutlineStrokeObjectIds;
+        QSet<quint64> rasterBackPictureObjectIds;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
         QVector<Shape> gpuExtrudePreviewCapShapes;
@@ -9384,11 +9385,119 @@ protected:
                     rasterSceneLinearBackground = workbenchSrgbToSceneLinear(
                         QVector3D(color.redF(), color.greenF(), color.blueF()));
                 }
-                const std::vector<QVector3D> rasterThemeBackgroundPixels =
+                std::vector<QVector3D> rasterThemeBackgroundPixels =
                     rasterSceneLinearBackground.has_value()
                         ? std::vector<QVector3D>{}
                         : viewportThemeBackgroundSceneLinearPixels(
                               themeBackground_, committedSceneLayer.size());
+                QVector<quint64> backPictureCandidates;
+                const qint64 rasterPixelCount =
+                    qint64(committedSceneLayer.width()) *
+                    committedSceneLayer.height();
+                if (rasterPixelCount > 0 && rasterPixelCount <= 1000000) {
+                    if (rasterSceneLinearBackground.has_value()) {
+                        rasterThemeBackgroundPixels.assign(
+                            static_cast<std::size_t>(rasterPixelCount),
+                            *rasterSceneLinearBackground);
+                    } else if (rasterThemeBackgroundPixels.size() !=
+                               static_cast<std::size_t>(rasterPixelCount)) {
+                        const QColor fallback =
+                            viewportShadingBackgroundColor(
+                                viewportShadingSettings_,
+                                viewportWorldColorSceneLinear);
+                        const QVector3D linearFallback = fallback.isValid()
+                            ? workbenchSrgbToSceneLinear(QVector3D(
+                                  fallback.redF(), fallback.greenF(),
+                                  fallback.blueF()))
+                            : QVector3D(0.0f, 0.0f, 0.0f);
+                        rasterThemeBackgroundPixels.assign(
+                            static_cast<std::size_t>(rasterPixelCount),
+                            linearFallback);
+                    }
+                    QVector<const ViewportRenderObject *> backPictures;
+                    for (const ViewportRenderObject &object :
+                         sceneDrawObjects) {
+                        if (object.shape.geometryType ==
+                                GeometryType::Picture &&
+                            object.shape.pictureImageDepth ==
+                                PictureImageDepth::Back &&
+                            !object.showInFront &&
+                            !object.shape.pictureImage.isNull()) {
+                            backPictures.append(&object);
+                        }
+                    }
+                    // Bound work for stacked images as well as the retained
+                    // scene buffers. Each picture is converted and blended
+                    // separately in scene-linear color.
+                    constexpr qint64 maximumBackPictureWorkPixels =
+                        16'000'000;
+                    const bool canCompositeBackPictures =
+                        !backPictures.isEmpty() &&
+                        rasterThemeBackgroundPixels.size() ==
+                            static_cast<std::size_t>(rasterPixelCount) &&
+                        rasterPixelCount <= maximumBackPictureWorkPixels /
+                                                backPictures.size();
+                    if (canCompositeBackPictures) {
+                        for (const ViewportRenderObject *object :
+                             backPictures) {
+                            QImage backPictureLayer(
+                                committedSceneLayer.size(),
+                                QImage::Format_ARGB32_Premultiplied);
+                            backPictureLayer.setDevicePixelRatio(
+                                committedSceneLayer.devicePixelRatioF());
+                            backPictureLayer.fill(Qt::transparent);
+                            QPainter backPicturePainter(&backPictureLayer);
+                            backPicturePainter.setRenderHint(
+                                QPainter::SmoothPixmapTransform, true);
+                            drawShape(backPicturePainter, object->shape, false,
+                                      false, false, object->layerColor,
+                                      object->layerLineType,
+                                      object->layerLineWeightMm,
+                                      object->objectId,
+                                      object->geometryRevision);
+                            backPicturePainter.end();
+                            for (int y = 0;
+                                 y < backPictureLayer.height(); ++y) {
+                                const auto *row =
+                                    reinterpret_cast<const QRgb *>(
+                                        backPictureLayer.constScanLine(y));
+                                const std::size_t rowOffset =
+                                    static_cast<std::size_t>(y) *
+                                    static_cast<std::size_t>(
+                                        backPictureLayer.width());
+                                for (int x = 0;
+                                     x < backPictureLayer.width(); ++x) {
+                                    const QRgb pixel = row[x];
+                                    const qreal alpha = qAlpha(pixel) / 255.0;
+                                    if (alpha <= 0.0) continue;
+                                    const qreal inverseAlpha = 1.0 / alpha;
+                                    const QVector3D imageSrgb(
+                                        std::clamp(qRed(pixel) * inverseAlpha /
+                                                       255.0,
+                                                   0.0, 1.0),
+                                        std::clamp(qGreen(pixel) * inverseAlpha /
+                                                       255.0,
+                                                   0.0, 1.0),
+                                        std::clamp(qBlue(pixel) * inverseAlpha /
+                                                       255.0,
+                                                   0.0, 1.0));
+                                    const QVector3D imageLinear =
+                                        workbenchSrgbToSceneLinear(imageSrgb);
+                                    QVector3D &backgroundPixel =
+                                        rasterThemeBackgroundPixels[
+                                            rowOffset +
+                                            static_cast<std::size_t>(x)];
+                                    backgroundPixel =
+                                        imageLinear * static_cast<float>(alpha) +
+                                        backgroundPixel *
+                                            static_cast<float>(1.0 - alpha);
+                                }
+                            }
+                            backPictureCandidates.append(
+                                object->objectId.value());
+                        }
+                    }
+                }
                 rasterSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
                     &committedSceneLayer, surfaceDrawObjects,
                     viewportTransform_, renderFrame.viewportSize,
@@ -9416,6 +9525,11 @@ protected:
                                   object.nurbsSolidFaceMaterials);
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels,
                     false, scalarVolumeDrawObjects);
+                if (rasterSurfaceBatchRendered) {
+                    for (quint64 objectId : backPictureCandidates) {
+                        rasterBackPictureObjectIds.insert(objectId);
+                    }
+                }
                 if (rasterSurfaceBatchRendered &&
                     (renderShadingSettings.outline ||
                      renderShadingSettings.shadows ||
@@ -11417,6 +11531,10 @@ protected:
                 // Surface color has already been depth-composited into the
                 // fallback scene layer. Continue through the loop so the
                 // existing stroke/cage collection remains active.
+            } else if (rasterBackPictureObjectIds.contains(
+                           objectId.value())) {
+                // Back images were folded into the scene-linear background
+                // before transparent surfaces and Workbench effects ran.
             } else if (scalePreview || rotatePreview) {
                 drawShape(scenePainter,
                           visibleShape,

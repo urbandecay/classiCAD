@@ -6893,3 +6893,33 @@ resolve remain open.
   with `CLASSICAD_VIEWPORT_LINKED_RANDOM_BLEND` set to the generated Blender
   5.2.2 host fixture. This covers linked identity persistence and both
   renderer paths, not a paired full-frame render comparison.
+
+### QPainter cavity sample range and bounded work (2026-10-15)
+
+- The QPainter World-cavity loop previously clamped `cavitySamples` to 32,
+  although Blender 5.2.2 and classiCAD expose requests through 500. It now
+  honors 1..500 when the covered opaque target fits a deterministic 32-million
+  pixel-sample budget. On denser targets it evenly subsamples the requested
+  Hammersley-like sequence and normalizes by the samples actually evaluated;
+  this keeps the fallback's worst-case work bounded without taking only the
+  sequence's smallest-radius prefix.
+- A production effect contract verifies that the same QPainter fixture changes
+  between 32 and 64 cavity samples. The raster-fragment contract checks the
+  1/500 request limits and the 32-million work-budget results at 100,000 and
+  1,000,000 covered pixels. This corrects setting truncation; it does not close
+  the documented QPainter cavity-factor or full-image parity gap.
+- Blender 5.2.2 accepts 1..500 SSAO samples in
+  [`rna_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc#L8106-L8108).
+  Its cavity effect schedules `samples_len * ssao_samples` and caps the shared
+  GPU sample buffer at 512 in
+  [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L416-L463)
+  and
+  [`workbench_private.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_private.hh#L218-L223).
+  QPainter remains a separate single-frame CPU approximation, so its 32-million
+  sample-work ceiling is a backend resource bound rather than Blender behavior.
+- Validation: `cmake --build build -j4` passed with the dependency audit
+  (320 source files); `QT_QPA_PLATFORM=offscreen
+  ./build/classicad_workbench_raster_fragment_contracts_test` and
+  `QT_QPA_PLATFORM=offscreen
+  ./build/classicad_viewport_render_contracts_test` both passed. No GUI was
+  launched.

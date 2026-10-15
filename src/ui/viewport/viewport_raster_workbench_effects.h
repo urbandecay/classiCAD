@@ -34,6 +34,11 @@ float rasterWorkbenchCavityStep(float baseRadiusPixels,
                                 const Point3D &viewDirection,
                                 bool perspective) noexcept;
 
+// Keep the QPainter SSAO work bounded while honoring Blender's 1..500
+// requested-sample range whenever the covered target fits the CPU budget.
+int rasterWorkbenchCavitySampleCount(int requestedSamples,
+                                     qsizetype coveredPixels) noexcept;
+
 // Blender's opaque Workbench prepass stores the facing-adjusted view normal
 // with normal_encode in an RG16F target, then effects decode that value.
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,

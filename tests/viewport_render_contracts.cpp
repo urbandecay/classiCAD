@@ -2223,6 +2223,14 @@ int main(int argc, char *argv[])
     applyRasterWorkbenchEffects(
         &cavityOnlyImage, {outlineScaleObject}, orthographicDofTransform,
         orthographicDofSize, 1.0, cavityOnlySettings);
+    ViewportShadingSettings cavity64Settings = cavityOnlySettings;
+    cavity64Settings.cavitySamples = 64;
+    QImage cavity64Image(orthographicDofSize,
+                         QImage::Format_ARGB32_Premultiplied);
+    cavity64Image.fill(QColor(120, 120, 120));
+    applyRasterWorkbenchEffects(
+        &cavity64Image, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, cavity64Settings);
     ViewportShadingSettings cavityOutlineSettings = cavityOnlySettings;
     cavityOutlineSettings.outline = true;
     QImage cavityOutlineImage(orthographicDofSize,
@@ -2232,10 +2240,13 @@ int main(int argc, char *argv[])
         &cavityOutlineImage, {outlineScaleObject}, orthographicDofTransform,
         orthographicDofSize, 1.0, cavityOutlineSettings);
     bool cavityChanged = false;
+    bool cavitySampleCountChanged = false;
     bool outlineVisibleOverCavity = false;
     for (int y = 0; y < orthographicDofSize.height(); ++y) {
         for (int x = 0; x < orthographicDofSize.width(); ++x) {
             const QColor cavityPixel = cavityOnlyImage.pixelColor(x, y);
+            cavitySampleCountChanged = cavitySampleCountChanged ||
+                cavity64Image.pixelColor(x, y) != cavityPixel;
             cavityChanged = cavityChanged ||
                             cavityPixel != QColor(120, 120, 120);
             outlineVisibleOverCavity = outlineVisibleOverCavity ||
@@ -2244,6 +2255,8 @@ int main(int argc, char *argv[])
     }
     passed &= check(cavityChanged && outlineVisibleOverCavity,
         "QPainter applies cavity before the object outline so the outline remains visible over cavity-shaded surfaces");
+    passed &= check(cavitySampleCountChanged,
+        "QPainter World cavity must use requested samples above Blender's former 32-sample CPU clamp");
 
     std::vector<float> regularDomainCavityFactors;
     std::vector<float> inFrontDomainCavityFactors;

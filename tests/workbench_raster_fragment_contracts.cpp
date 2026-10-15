@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ui/viewport/viewport_raster_workbench_linear.h"
+#include "ui/viewport/viewport_raster_workbench_effects.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "services/hit_testing/curve_hit_tester.h"
 
@@ -203,6 +204,14 @@ int main(int argc, char **argv)
 {
     QGuiApplication app(argc, argv);
     bool passed = true;
+    passed &= check(
+        rasterWorkbenchCavitySampleCount(64, 1000) == 64 &&
+            rasterWorkbenchCavitySampleCount(500, 1000) == 500 &&
+            rasterWorkbenchCavitySampleCount(500, 100000) == 335 &&
+            rasterWorkbenchCavitySampleCount(500, 1000000) == 33 &&
+            rasterWorkbenchCavitySampleCount(501, 0) == 500 &&
+            rasterWorkbenchCavitySampleCount(0, 0) == 1,
+        "QPainter cavity sampling must honor Blender's 1..500 range within the CPU work budget");
     const QSize size(128, 128);
     ViewportTransform transform;
     transform.zoom() = 32.0;

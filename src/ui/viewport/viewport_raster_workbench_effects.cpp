@@ -410,6 +410,18 @@ float rasterWorkbenchCavityStep(float baseRadiusPixels,
     return std::max(1.0f, radius);
 }
 
+int rasterWorkbenchCavitySampleCount(int requestedSamples,
+                                     qsizetype coveredPixels) noexcept
+{
+    constexpr quint64 maximumSampleWork = 32ull * 1024ull * 1024ull;
+    const int requested = std::clamp(requestedSamples, 1, 500);
+    if (coveredPixels <= 0) return requested;
+    const quint64 budgetedCount = maximumSampleWork /
+        static_cast<quint64>(coveredPixels);
+    return std::min(requested, static_cast<int>(std::clamp<quint64>(
+        budgetedCount, 1, static_cast<quint64>(requested))));
+}
+
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
                                        bool frontFacing,
                                        const QVector3D &viewRight,
@@ -3002,7 +3014,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                       settings.cavityType == ViewportCavityType::Both;
     const bool curvature = settings.cavityType == ViewportCavityType::Screen ||
                            settings.cavityType == ViewportCavityType::Both;
-    const int requested = std::clamp(settings.cavitySamples, 1, 32);
+    const int requested = std::clamp(settings.cavitySamples, 1, 500);
+    qsizetype coveredOpaquePixels = 0;
+    for (const RasterSample &sample : opaqueSamples)
+        coveredOpaquePixels += sample.objectId != 0;
+    const int effectiveSamples = rasterWorkbenchCavitySampleCount(
+        requested, coveredOpaquePixels);
     const float radius = std::clamp(
         static_cast<float>(settings.cavityDistance *
                            transform.viewScalePixelsPerWorldUnit(viewportSize) * dpr),
@@ -3084,14 +3101,21 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             const float noiseRadius = std::clamp(
                 rasterCavityNoise(x, noiseY, 1) - 0.5f, -0.499f, 0.499f) /
                 static_cast<float>(requested);
-            for (int i = 0; i < requested; ++i) {
+            for (int i = 0; i < effectiveSamples; ++i) {
+                // If the bounded CPU budget reduces the sample count, spread
+                // those taps over the requested Workbench sequence instead of
+                // retaining only its small-radius prefix.
+                const int sampleIndex = std::min(
+                    requested - 1, static_cast<int>(
+                        (static_cast<double>(i) + 0.5) * requested /
+                        effectiveSamples));
                 // Match Workbench's deterministic Hammersley-like disk sample
                 // sequence and per-pixel blue-noise rotation/jitter.
                 const float sampleRadius = std::fmod(
-                    (static_cast<float>(i) + 0.5f) /
+                    (static_cast<float>(sampleIndex) + 0.5f) /
                         static_cast<float>(requested), 1.0f);
                 const float angle = radicalInverseVdc(
-                    static_cast<unsigned int>(i)) * 6.28318530718f;
+                    static_cast<unsigned int>(sampleIndex)) * 6.28318530718f;
                 const float directionX = std::cos(angle);
                 const float directionY = std::sin(angle);
                 const float jitteredX = directionX * rotationX -
@@ -3177,10 +3201,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
             if (validNeighbors == 0 && !hadBackgroundCavitySample) continue;
             cavityAmount = ssao
-                ? saturate(cavityAmount / static_cast<float>(requested) * valley)
+                ? saturate(cavityAmount /
+                           static_cast<float>(effectiveSamples) * valley)
                 : 0.0f;
             edgeAmount = ssao
-                ? edgeAmount / static_cast<float>(requested) * ridge
+                ? edgeAmount / static_cast<float>(effectiveSamples) * ridge
                 : 0.0f;
             factors[y * width + x] = std::clamp(
                 (1.0f - cavityAmount) * (1.0f + edgeAmount) *

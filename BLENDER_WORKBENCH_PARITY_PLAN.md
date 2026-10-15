@@ -7365,3 +7365,12 @@ resolve remain open.
   5.2.2 LTS; and `workbench_display_probe_compare.py`,
   `workbench_image_compare.py`, and `workbench_pfm_compare.py` completed on the
   separated matching captures. No GUI was launched.
+
+### QPainter oversized mesh color transform fallback (2026-10-15)
+
+- The bounded flat-polygon fallback for oversized untextured mesh triangles
+  now converts its stored scene-linear Workbench color through the configured
+  Standard, AgX, or custom view transform, exposure, gamma, and LUT before
+  drawing. It preserves the existing packed alpha and flat-shading behavior.
+  Oversized textured triangles still have no raster fallback, and this change
+  has not been validated with a matched Blender image comparison.

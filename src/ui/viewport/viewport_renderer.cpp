@@ -2325,7 +2325,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (width > 16384 || height > 16384 ||
                 qint64(width) * height > 64 * 1024 * 1024) {
                 if (!hasTexture && triangle.useWorkbenchColor) {
-                    painter.setBrush(triangle.color);
+                    const QVector3D displayRgb =
+                        workbenchSceneLinearToDisplaySrgb(
+                            triangle.sceneLinearColor,
+                            shadingSettings_.colorTransform,
+                            shadingSettings_.colorExposure,
+                            shadingSettings_.colorGamma,
+                            shadingSettings_.colorLutData,
+                            shadingSettings_.colorLutMetadata);
+                    painter.setBrush(QColor::fromRgbF(
+                        std::clamp<qreal>(displayRgb.x(), 0.0, 1.0),
+                        std::clamp<qreal>(displayRgb.y(), 0.0, 1.0),
+                        std::clamp<qreal>(displayRgb.z(), 0.0, 1.0),
+                        triangle.color.alphaF()));
                     painter.drawPolygon(triangle.points);
                 }
                 return;

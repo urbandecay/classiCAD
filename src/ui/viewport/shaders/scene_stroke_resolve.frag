@@ -112,36 +112,15 @@ void main()
                                      ivec2(0, 1), ivec2(0, -1));
 
     vec4 centerRecord = fetchLineRecord(pixel);
+    vec4 resolvedLineColor = vec4(0.0);
+    float resolvedLineDepth = 1.0;
     if (centerRecord.w != 0.0) {
-        vec4 centerColor = texelFetch(uLineColor, pixel, 0);
+        resolvedLineColor = texelFetch(uLineColor, pixel, 0);
         float centerCoverage =
             lineCoverage(centerRecord.z, centerRecord.w);
-        centerColor *= centerCoverage;
-
-        // Blender's dense one-pixel-wire fix restores some line opacity when
-        // more than two neighboring pixels also carry a line sample.
-        int validNeighborCount = 0;
-        for (int index = 0; index < 4; ++index) {
-            ivec2 neighborPixel = pixel + offsets[index];
-            if (pixelInViewport(neighborPixel) &&
-                fetchLineRecord(neighborPixel).w != 0.0) {
-                ++validNeighborCount;
-            }
-        }
-        float lineKernelSize = abs(centerRecord.w) * 0.5 - 0.5;
-        if (centerCoverage > 0.0 &&
-            texelFetch(uLineColor, pixel, 0).a >= 1.0 &&
-            lineKernelSize < 0.45 && validNeighborCount > 2) {
-            float blend = clamp(float(validNeighborCount) * 0.5 - 1.0,
-                                0.0, 1.0);
-            centerColor = mix(centerColor,
-                              centerColor / max(centerColor.a, 1.0e-6),
-                              blend);
-        }
-        float centerDepth = correctedMeshWireDepth(
+        resolvedLineColor *= centerCoverage;
+        resolvedLineDepth = correctedMeshWireDepth(
             pixel, centerRecord, texelFetch(uCandidateDepth, pixel, 0).r);
-        blendCandidate(targetColor, targetDepth, centerColor,
-                       centerDepth, 1.0);
     }
 
     for (int index = 0; index < 4; ++index) {
@@ -160,10 +139,39 @@ void main()
         float neighborDepth = correctedMeshWireDepth(
             neighborPixel, neighborRecord,
             texelFetch(uCandidateDepth, neighborPixel, 0).r);
-        blendCandidate(targetColor, targetDepth,
+        blendCandidate(resolvedLineColor, resolvedLineDepth,
                        texelFetch(uLineColor, neighborPixel, 0),
                        neighborDepth, coverage);
     }
+
+    // Blender first folds the four neighboring line samples into the center
+    // sample, then applies its dense one-pixel-wire correction to that color.
+    // Keep the correction on the line layer so the opaque scene underneath
+    // does not suppress it through its own alpha.
+    if (centerRecord.w != 0.0) {
+        int validNeighborCount = 0;
+        for (int index = 0; index < 4; ++index) {
+            ivec2 neighborPixel = pixel + offsets[index];
+            if (pixelInViewport(neighborPixel) &&
+                fetchLineRecord(neighborPixel).w != 0.0) {
+                ++validNeighborCount;
+            }
+        }
+        float lineKernelSize = abs(centerRecord.w) * 0.5 - 0.5;
+        if (texelFetch(uLineColor, pixel, 0).a >= 1.0 &&
+            resolvedLineColor.a > 0.0 && lineKernelSize < 0.45 &&
+            validNeighborCount > 2) {
+            float blend = clamp(float(validNeighborCount) * 0.5 - 1.0,
+                                0.0, 1.0);
+            resolvedLineColor = mix(
+                resolvedLineColor,
+                resolvedLineColor / resolvedLineColor.a,
+                blend);
+        }
+    }
+
+    blendCandidate(targetColor, targetDepth, resolvedLineColor,
+                   resolvedLineDepth, 1.0);
 
     fragmentColor = targetColor;
     // Write the nearest resolved line depth only where a line candidate

@@ -8098,7 +8098,23 @@ resolve remain open.
   and gamma again. This applies where the retained linear compositor is not
   available; AgX, Filmic, Neutral, and imported custom-LUT outline fallback
   blending remain display-space approximations. Alpha is preserved. C++ build
-  passed; matched image comparison remains open.
+  passed; matched image comparison remains open. A follow-up flow audit found
+  that whenever retained scene-linear color is available, the weighted and
+  sorted compositors already apply the outline before the display transform
+  (or retain its coverage for the later effects resolve) for every transform.
+  The remaining approximation is limited to fallback routes without that
+  source-linear backing; reverse-transforming AgX/custom display pixels cannot
+  recover the original scene color.
+
+### QPainter software shadow texture-alpha audit (2026-10-15)
+
+- The software shadow map submits full geometric caster triangles even when
+  the visible receiver raster skips texture-alpha cutouts. This matches
+  Blender 5.2.2 Workbench shadow volumes, which are built from geometry and do
+  not sample image UV alpha. No alpha-mask sampling was added to the shadow
+  map; that would make its shadows differ from Blender. The relevant Blender
+  implementation is
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L348-L390).
 
 ### Blender Image Empty view visibility (2026-10-15)
 

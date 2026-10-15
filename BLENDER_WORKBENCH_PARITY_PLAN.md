@@ -8143,7 +8143,9 @@ resolve remain open.
   populated only by Blender-opaque surface fragments, with `showInFront`
   fragments retaining their separate precedence. Semi-transparent surfaces
   still contribute to visible color and selection contours, but no longer
-  replace the IDs that define Workbench silhouettes. Blender 5.2.2 attaches
+  replace the IDs that define Workbench silhouettes. The bounded weighted and
+  sorted scene-linear compositors now derive Workbench outlines from their
+  opaque object buffers too. Blender 5.2.2 attaches
   the object-ID target to its opaque pass, renders transparent passes
   separately, then runs the outline pass over that target in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2603-L2645)
@@ -8155,9 +8157,9 @@ resolve remain open.
 - QPainter per-pixel surface samples now let a later triangle replace an
   earlier one at equal camera depth, matching Blender's GPU opaque prepass
   `GL_LEQUAL` depth test. This applies to the visible, in-front, cavity/shadow,
-  and opaque outline-ID samples, so coplanar scene order consistently selects
-  the same surface ID and normal. C++ build passed; matched image comparison
-  remains open.
+  and opaque outline-ID samples, including the bounded weighted and sorted
+  compositors, so coplanar scene order consistently selects the same surface
+  ID and normal. C++ build passed; matched image comparison remains open.
 
 ### GPU smooth-wire equal-depth neighbor blending (2026-10-15)
 

@@ -1201,7 +1201,7 @@ bool compositeRasterWorkbenchSurfaces(
                     const QRgb pixel = row[x];
                     if (qAlpha(pixel) < 255 || objectDepth[index] == noDepth)
                         continue;
-                    if (objectDepth[index] > domainOpaqueDepth[index]) {
+                    if (objectDepth[index] >= domainOpaqueDepth[index]) {
                         domainOpaqueDepth[index] = objectDepth[index];
                         domainOpaqueColor[index] = pixel;
                         domainOpaqueObject[index] = objectIndex;
@@ -1221,7 +1221,7 @@ bool compositeRasterWorkbenchSurfaces(
                         fragment.y >= height) continue;
                     const int index = fragment.y * width + fragment.x;
                     const int previous = nearestOpaqueFragment[index];
-                    if (previous < 0 || fragment.cameraDepth <
+                    if (previous < 0 || fragment.cameraDepth <=
                             objectFragments[static_cast<std::size_t>(previous)]
                                 .cameraDepth) {
                         nearestOpaqueFragment[index] = fragmentIndex;
@@ -1544,47 +1544,18 @@ bool compositeRasterWorkbenchSurfaces(
                 static_cast<std::size_t>(pixelCount), 0);
             std::vector<quint64> frontObjectIds(
                 static_cast<std::size_t>(pixelCount), 0);
-            std::vector<float> regularObjectDepth(
-                static_cast<std::size_t>(pixelCount), noDepth);
-            std::vector<float> frontObjectDepth(
-                static_cast<std::size_t>(pixelCount), noDepth);
             for (int index = 0; index < pixelCount; ++index) {
                 const int regularIndex = opaqueObject[index];
                 if (regularIndex >= 0 && regularIndex < objects.size()) {
                     regularObjectIds[static_cast<std::size_t>(index)] =
                         objects[regularIndex].objectId.value();
-                    regularObjectDepth[static_cast<std::size_t>(index)] =
-                        opaqueSceneDepth[index];
                 }
                 const int frontIndex = frontOpaqueObject[index];
                 if (frontIndex >= 0 && frontIndex < objects.size()) {
                     frontObjectIds[static_cast<std::size_t>(index)] =
                         objects[frontIndex].objectId.value();
-                    frontObjectDepth[static_cast<std::size_t>(index)] =
-                        frontOpaqueSceneDepth[index];
                 }
             }
-            const auto updateTransparentObjectIds = [&](
-                const std::vector<RasterWorkbenchLinearFragment> &fragments,
-                std::vector<quint64> *objectIds,
-                std::vector<float> *objectDepth) {
-                for (const RasterWorkbenchLinearFragment &fragment : fragments) {
-                    if (fragment.alpha <= 0.0f || fragment.x < 0 ||
-                        fragment.x >= width || fragment.y < 0 ||
-                        fragment.y >= height) continue;
-                    const int index = fragment.y * width + fragment.x;
-                    const std::size_t pixelIndex =
-                        static_cast<std::size_t>(index);
-                    if (fragment.cameraDepth > (*objectDepth)[pixelIndex]) {
-                        (*objectDepth)[pixelIndex] = fragment.cameraDepth;
-                        (*objectIds)[pixelIndex] = fragment.sourceId;
-                    }
-                }
-            };
-            updateTransparentObjectIds(fragments, &regularObjectIds,
-                                       &regularObjectDepth);
-            updateTransparentObjectIds(frontFragments, &frontObjectIds,
-                                       &frontObjectDepth);
             std::vector<quint64> visibleObjectIds(
                 static_cast<std::size_t>(pixelCount), 0);
             for (int index = 0; index < pixelCount; ++index) {
@@ -1993,10 +1964,6 @@ bool compositeRasterWorkbenchSurfaces(
         canResolveSortedOutlineInSceneLinear && shadingSettings.shadows &&
         !shadingSettings.xrayEnabled();
     std::vector<quint64> sortedVisibleObjectIds;
-    QVector<quint64> sortedRegularTransparentObject;
-    QVector<float> sortedRegularTransparentDepth;
-    QVector<quint64> sortedFrontTransparentObject;
-    QVector<float> sortedFrontTransparentDepth;
     QVector<float> volumeRegularTransparentDepth(pixelCount, noDepth);
     QVector<float> volumeFrontTransparentDepth(pixelCount, noDepth);
     for (const TransparentFragment &fragment : regularTransparentFragments) {
@@ -2033,76 +2000,22 @@ bool compositeRasterWorkbenchSurfaces(
             return false;
     }
     if (canResolveSortedOutlineInSceneLinear) {
-        sortedRegularTransparentObject.fill(0, pixelCount);
-        sortedRegularTransparentDepth.fill(noDepth, pixelCount);
-        sortedFrontTransparentObject.fill(0, pixelCount);
-        sortedFrontTransparentDepth.fill(noDepth, pixelCount);
-        for (const TransparentFragment &fragment : regularTransparentFragments) {
-            if (fragment.alpha <= 0.0f) continue;
-            if (fragment.depth > sortedRegularTransparentDepth[
-                                     static_cast<int>(fragment.pixelIndex)]) {
-                sortedRegularTransparentDepth[
-                    static_cast<int>(fragment.pixelIndex)] = fragment.depth;
-                sortedRegularTransparentObject[
-                    static_cast<int>(fragment.pixelIndex)] =
-                    objects[fragment.objectOrder].objectId.value();
-            }
-        }
-        for (const TransparentFragment &fragment : frontTransparentFragments) {
-            if (fragment.alpha <= 0.0f) continue;
-            const int pixelIndex = fragment.pixelIndex;
-            if (fragment.depth > sortedFrontTransparentDepth[pixelIndex]) {
-                sortedFrontTransparentDepth[pixelIndex] = fragment.depth;
-                sortedFrontTransparentObject[pixelIndex] =
-                    objects[fragment.objectOrder].objectId.value();
-            }
-        }
         std::vector<quint64> regularObjectIds(
             static_cast<std::size_t>(pixelCount), 0);
         std::vector<quint64> frontObjectIds(
             static_cast<std::size_t>(pixelCount), 0);
-        std::vector<float> regularObjectDepth(
-            static_cast<std::size_t>(pixelCount), noDepth);
-        std::vector<float> frontObjectDepth(
-            static_cast<std::size_t>(pixelCount), noDepth);
         for (int index = 0; index < pixelCount; ++index) {
             const int regularIndex = opaqueObject[index];
             if (regularIndex >= 0 && regularIndex < objects.size()) {
                 regularObjectIds[static_cast<std::size_t>(index)] =
                     objects[regularIndex].objectId.value();
-                regularObjectDepth[static_cast<std::size_t>(index)] =
-                    opaqueSceneDepth[index];
             }
             const int frontIndex = frontOpaqueObject[index];
             if (frontIndex >= 0 && frontIndex < objects.size()) {
                 frontObjectIds[static_cast<std::size_t>(index)] =
                     objects[frontIndex].objectId.value();
-                frontObjectDepth[static_cast<std::size_t>(index)] =
-                    frontOpaqueSceneDepth[index];
             }
         }
-        const auto updateTransparentObjectIds = [&](
-            const QVector<quint64> &transparentIds,
-            const QVector<float> &transparentDepth,
-            std::vector<quint64> *objectIds,
-            std::vector<float> *objectDepth) {
-            for (int index = 0; index < pixelCount; ++index) {
-                const quint64 objectId = transparentIds[index];
-                if (objectId == 0 || transparentDepth[index] <=
-                        (*objectDepth)[static_cast<std::size_t>(index)]) {
-                    continue;
-                }
-                (*objectDepth)[static_cast<std::size_t>(index)] =
-                    transparentDepth[index];
-                (*objectIds)[static_cast<std::size_t>(index)] = objectId;
-            }
-        };
-        updateTransparentObjectIds(sortedRegularTransparentObject,
-                                   sortedRegularTransparentDepth,
-                                   &regularObjectIds, &regularObjectDepth);
-        updateTransparentObjectIds(sortedFrontTransparentObject,
-                                   sortedFrontTransparentDepth,
-                                   &frontObjectIds, &frontObjectDepth);
         sortedVisibleObjectIds.resize(static_cast<std::size_t>(pixelCount));
         for (int index = 0; index < pixelCount; ++index) {
             const std::size_t pixelIndex = static_cast<std::size_t>(index);

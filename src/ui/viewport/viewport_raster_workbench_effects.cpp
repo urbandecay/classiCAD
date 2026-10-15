@@ -1185,7 +1185,7 @@ bool compositeRasterWorkbenchSurfaces(
                         fragment.y >= height) continue;
                     const int index = fragment.y * width + fragment.x;
                     const int previous = nearestOpaqueFragment[index];
-                    if (previous < 0 || fragment.cameraDepth >
+                    if (previous < 0 || fragment.cameraDepth <
                             objectFragments[static_cast<std::size_t>(previous)]
                                 .cameraDepth) {
                         nearestOpaqueFragment[index] = fragmentIndex;

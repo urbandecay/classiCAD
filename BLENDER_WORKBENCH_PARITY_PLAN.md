@@ -531,6 +531,28 @@ in ordinary free views or orthographic views is superseded by this correction.
   offscreen `viewport_render_contracts` and
   `workbench_raster_fragment_contracts` passed.
 
+### QPainter opaque face depth resolve (2026-10-15)
+
+- Opaque QPainter fragments now select the smallest captured camera distance
+  at each pixel. This is the nearest fragment under the existing positive
+  camera-distance convention and preserves the per-face scene-linear shading
+  when a NURBS solid's projected faces overlap.
+- A matched 640x480 perspective extrusion capture against Blender 5.2.2 now
+  has a baseline mean maximum-channel delta of 0.00032 (two pixels exceed a
+  delta of 2), down from 19.41 before this correction. This confirms the
+  previously observed QPainter face-color mismatch was in opaque fragment
+  selection, not the prepared NURBS face order.
+- With DOF enabled, the same capture has mean maximum-channel delta 0.604 and
+  effect-mask IoU 0.437. The opaque baseline is now aligned; QPainter's DOF
+  footprint and gather result still do not match Blender closely and remain
+  open. This capture does not verify multiple overlapping objects or the
+  sorted transparent fallback.
+- Reproduce the offscreen capture with `CLASSICAD_VIEWPORT_QPAINTER_DOF_CAPTURE`
+  and `CLASSICAD_VIEWPORT_QPAINTER_DOF_BASELINE_CAPTURE` set to output paths,
+  then compare against the paired Blender 5.2.2 output with
+  `tests/workbench_dof_compare.py`. The build and
+  `classicad_viewport_render_contracts_test` pass with the capture enabled.
+
 ### Workbench Image Texture interpolation (2026-10-12)
 
 - GPU and QPainter Workbench sampling now use nearest only for `Closest` and

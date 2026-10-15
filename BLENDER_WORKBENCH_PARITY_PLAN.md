@@ -6970,3 +6970,29 @@ resolve remain open.
 - Validation: confirmed the source behavior in Blender's v5.2.2 shader and
   classiCAD's production fallback. No C++ change remained to build or test.
   No GUI was launched.
+
+### GPU deferred Studio local-space rotation comparison (2026-10-15)
+
+- Added `studio_paint_local_37` to the existing offscreen lighting capture
+  matrix: Studio `Paint`, local-space lighting, 37-degree rotation, specular
+  enabled, AA Off, and the controlled 640x480 cube camera. The paired Blender
+  5.2.2 fixture uses the same material color `(0.42, 0.42, 0.42)`, roughness
+  `0.25`, metallic `0`, view direction `(4, -6, 4)`, and neutral World color.
+- The Blender and classiCAD GPU scene-linear PFM files are identical across
+  the full frame (zero channel error, foreground IoU 1.0). This verifies the
+  deferred Studio lighting result for this additional local-space rotation.
+  The classiCAD QPainter scene-linear probe MAE is `0.0003687` with maximum
+  `0.0007267`, while its full-frame fallback residual remains larger.
+- Display output is not accepted for this pair: classiCAD GPU common-foreground
+  RGB MAE is `31.51/255` (p95 `34/255`) and mask IoU is `0.997991` (224 XOR
+  pixels). Since the GPU scene-linear frames match bit-for-bit, this mismatch
+  occurs after the deferred Studio lighting output; the render/display capture
+  difference needs a separate investigation. This result does not close
+  general Studio display parity or QPainter parity.
+- Validation: `cmake --build build -j4` passed with the dependency audit
+  (320 source files); the offscreen `classicad_viewport_render_contracts_test`
+  passed with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR` set; Blender reported
+  5.2.2 LTS; and `workbench_pfm_compare.py` confirmed exact full-frame GPU
+  scene-linear output. `workbench_display_probe_compare.py` and
+  `workbench_image_compare.py` measured the display residual above. No GUI was
+  launched.

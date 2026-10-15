@@ -7559,8 +7559,11 @@ resolve remain open.
   Blender Random colors are supported. GPU strokes and the ordinary QPainter
   path depth-test against their retained scene layers. Blender's WIRE display
   hides mesh fills while keeping the edge overlay visible in both paths.
-- This is a partial port: the imported threshold does not yet filter edges,
-  and Blender's view-facing wire color gradient and exact selected-object
-  colors are not reproduced. Loose mesh edges remain represented by their
-  existing companion curves.
+- Object wire colors now use the imported Standard, AgX, Filmic, Neutral, or
+  custom-LUT display transform, including exposure and gamma, after Blender's
+  half-brightness adjustment. This is a partial port: the imported threshold
+  does not yet filter edges, `show_all_edges` has no distinct effect while all
+  polygon edges are drawn, and Blender's view-facing wire color gradient and
+  exact selected-object colors are not reproduced. Loose mesh edges remain
+  represented by their existing companion curves.
   The C++ build passed; matched Blender image comparison remains open.

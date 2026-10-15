@@ -10046,7 +10046,12 @@ protected:
                         ViewportWireColorMode::Object) {
                         const QVector3D linear =
                             renderObject.displayColorSceneLinear.toVector3D() * 0.5f;
-                        const QVector3D srgb = workbenchSceneLinearToSrgb(linear);
+                        const QVector3D srgb = workbenchSceneLinearToDisplaySrgb(
+                            linear, viewportShadingSettings_.colorTransform,
+                            viewportShadingSettings_.colorExposure,
+                            viewportShadingSettings_.colorGamma,
+                            viewportShadingSettings_.colorLutData,
+                            viewportShadingSettings_.colorLutMetadata);
                         wireColor = QColor::fromRgbF(srgb.x(), srgb.y(), srgb.z());
                     } else if (viewportShadingSettings_.wireColorMode ==
                                ViewportWireColorMode::Random) {

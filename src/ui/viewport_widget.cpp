@@ -11235,14 +11235,29 @@ protected:
                 if (renderObject.blenderLooseMeshEdgeCompanion &&
                     viewportShadingSettings_.mode ==
                         ViewportShadingMode::Solid) {
+                    const bool looseEdgeSelected =
+                        selected ||
+                        renderObject.blenderLooseMeshEdgeSourceSelected;
+                    const bool looseEdgeActive =
+                        selection_.primaryObjectId() == objectId ||
+                        renderObject.blenderLooseMeshEdgeSourceActive;
+                    const bool looseEdgeTransforming =
+                        scalePreview || rotatePreview ||
+                        renderObject.blenderLooseMeshEdgeSourceTransforming;
+                    const QColor looseEdgeSelectedThemeColor =
+                        looseEdgeTransforming
+                            ? viewportShadingSettings_.themeTransformColor
+                            : looseEdgeActive
+                                  ? viewportShadingSettings_.themeActiveObjectColor
+                                  : viewportShadingSettings_.themeSelectedObjectColor;
                     QColor looseWireColor;
                     if (viewportShadingSettings_.wireColorMode ==
                         ViewportWireColorMode::Theme) {
                         // Loose mesh edges have no face normal. Blender's
                         // single-color wire path therefore uses zero facing
                         // and resolves to its rim color.
-                        looseWireColor = selected
-                            ? selectedThemeColor
+                        looseWireColor = looseEdgeSelected
+                            ? looseEdgeSelectedThemeColor
                             : viewportShadingSettings_.themeWireColor;
                     } else {
                         QVector3D sourceColor =
@@ -11261,7 +11276,7 @@ protected:
                         }
                         QVector3D rim = sourceColor * 0.5f;
                         QVector3D wire = rim;
-                        if (selected) {
+                        if (looseEdgeSelected) {
                             wire += QVector3D(1.0e-4f, 1.0e-4f, 1.0e-4f);
                             const float brightness = std::max(
                                 wire.x(), std::max(wire.y(), wire.z()));

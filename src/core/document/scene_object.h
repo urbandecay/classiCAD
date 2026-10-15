@@ -125,6 +125,9 @@ struct SceneObject {
     // Imported Blender mesh loose edges are represented by a curve companion
     // but still follow the source mesh's overlay visibility.
     bool blenderLooseMeshEdgeCompanion = false;
+    // Original Blender object identity for derived geometry such as loose-edge
+    // companions. Kept so viewport selection can follow the source object.
+    QString blenderSourceObjectId;
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;

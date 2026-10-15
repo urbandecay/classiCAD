@@ -499,6 +499,8 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("wireDisplay"), sceneObject.wireDisplay);
         serializedObject.insert(QStringLiteral("blenderLooseMeshEdgeCompanion"),
                                 sceneObject.blenderLooseMeshEdgeCompanion);
+        serializedObject.insert(QStringLiteral("blenderSourceObjectId"),
+                                sceneObject.blenderSourceObjectId);
         serializedObject.insert(QStringLiteral("displayBoundsType"),
                                 sceneObject.displayBoundsType);
         serializedObject.insert(QStringLiteral("hasDisplayBoundsData"),
@@ -1400,6 +1402,8 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.wireDisplay = serializedObject.value(QStringLiteral("wireDisplay")).toBool(false);
         sceneObject.blenderLooseMeshEdgeCompanion = serializedObject.value(
             QStringLiteral("blenderLooseMeshEdgeCompanion")).toBool(false);
+        sceneObject.blenderSourceObjectId = serializedObject.value(
+            QStringLiteral("blenderSourceObjectId")).toString();
         sceneObject.displayBoundsType = serializedObject.value(
             QStringLiteral("displayBoundsType")).toString();
         const QJsonValue hasDisplayBoundsData = serializedObject.value(

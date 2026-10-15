@@ -8054,6 +8054,15 @@ resolve remain open.
   their alpha. The same prepared stroke carries these values through the GPU
   and QPainter paths. C++ build passed; matched image comparison remains open.
 
+### Loose mesh wire follows source selection (2026-10-15)
+
+- Native scene objects now retain the source Blender object identity for
+  derived loose-edge companions. The viewport resolves the source mesh's live
+  selected, active, and transform-preview state and uses it when choosing the
+  companion wire color. This keeps the edges separate selectable scene objects
+  while matching the source mesh's selected Theme/Object/Random wire treatment.
+  C++ build passed; matched image comparison remains open.
+
 ### QPainter Workbench outline composition (2026-10-15)
 
 - The QPainter outline fallback now reconstructs bounded scene-linear color

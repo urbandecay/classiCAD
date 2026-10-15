@@ -95,6 +95,9 @@ struct ViewportRenderObject {
     bool showAllEdges = false;
     bool wireDisplay = false;
     bool blenderLooseMeshEdgeCompanion = false;
+    bool blenderLooseMeshEdgeSourceSelected = false;
+    bool blenderLooseMeshEdgeSourceActive = false;
+    bool blenderLooseMeshEdgeSourceTransforming = false;
     QString displayBoundsType;
     bool hasDisplayBoundsData = false;
     Point3D displayBoundsMinimumLocal;

@@ -70,6 +70,15 @@ ViewportRenderFrame buildViewportRenderFrame(
         }
     }
 
+    QHash<QString, ObjectId> blenderObjectIdsBySourceId;
+    blenderObjectIdsBySourceId.reserve(document.size());
+    for (const SceneObject &sceneObject : document.objects()) {
+        if (!sceneObject.blenderSourceObjectId.isEmpty()) {
+            blenderObjectIdsBySourceId.insert(
+                sceneObject.blenderSourceObjectId, sceneObject.id);
+        }
+    }
+
     QSet<quint64> hiddenPreviewIds;
     if (!input.activeToolPreview.shapes.isEmpty()) {
         hiddenPreviewIds.reserve(input.activeToolPreview.hiddenObjectIds.size());
@@ -146,6 +155,20 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.wireDisplay = sceneObject.wireDisplay;
         entry.blenderLooseMeshEdgeCompanion =
             sceneObject.blenderLooseMeshEdgeCompanion;
+        if (sceneObject.blenderLooseMeshEdgeCompanion &&
+            !sceneObject.blenderSourceObjectId.isEmpty()) {
+            const ObjectId sourceObjectId = blenderObjectIdsBySourceId.value(
+                sceneObject.blenderSourceObjectId, ObjectId::invalid());
+            entry.blenderLooseMeshEdgeSourceSelected =
+                sourceObjectId.isValid() &&
+                selectedIds.contains(sourceObjectId.value());
+            entry.blenderLooseMeshEdgeSourceActive =
+                sourceObjectId.isValid() &&
+                input.primarySelectedObjectId == sourceObjectId;
+            entry.blenderLooseMeshEdgeSourceTransforming =
+                sourceObjectId.isValid() &&
+                transformedIds.contains(sourceObjectId.value());
+        }
         entry.displayBoundsType = sceneObject.displayBoundsType;
         entry.hasDisplayBoundsData = sceneObject.hasDisplayBoundsData;
         entry.displayBoundsMinimumLocal = sceneObject.displayBoundsMinimumLocal;

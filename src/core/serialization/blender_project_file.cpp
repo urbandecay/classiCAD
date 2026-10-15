@@ -3008,8 +3008,10 @@ bool importBlenderScene(const QString &path,
         importedIndexBySourceId.insert(objectId, imported.size());
         const QString sourceObjectId = item.value(
             QStringLiteral("source_object_id")).toString();
+        sceneObject.blenderSourceObjectId =
+            sourceObjectId.isEmpty() ? objectId : sourceObjectId;
         sourceObjectIdsByImportedIndex.append(
-            sourceObjectId.isEmpty() ? objectId : sourceObjectId);
+            sceneObject.blenderSourceObjectId);
         imported.append(std::move(sceneObject));
     }
 

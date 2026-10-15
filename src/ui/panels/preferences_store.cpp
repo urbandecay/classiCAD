@@ -148,7 +148,7 @@ StoredPreferences loadStoredPreferences()
         camera.sensorWidthMillimeters).toDouble();
     camera.opticalSensorSizeMillimeters = settings.value(
         QStringLiteral("viewport/opticalSensorSizeMillimeters"),
-        camera.sensorWidthMillimeters).toDouble();
+        camera.opticalSensorSizeMillimeters).toDouble();
     dialog.cameraPreferences = camera;
 
     ViewportNavigationPreferences navigation;
@@ -328,7 +328,7 @@ void saveCameraPreferences(const ViewportCameraPreferences &preferences)
         settings.setValue(QStringLiteral("viewport/sensorWidthMillimeters"),
                           preferences.sensorWidthMillimeters);
         settings.setValue(QStringLiteral("viewport/opticalSensorSizeMillimeters"),
-                          preferences.sensorWidthMillimeters);
+                          preferences.opticalSensorSizeMillimeters);
     });
 }
 

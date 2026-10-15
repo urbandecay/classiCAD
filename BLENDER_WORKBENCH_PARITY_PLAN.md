@@ -5981,9 +5981,12 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - The isolated QSettings contract now round-trips all seven Workbench
   viewport AA preferences (`Off`, `Single Pass`, and 5/8/11/16/32 samples)
   and all four Overlay/Edit Mode Smooth Wires combinations independently.
-  This closes the Workbench shading/material portion of the persistence
-  checklist; camera preferences and unrelated application settings are not
-  covered by this matrix.
+  The update-session contract also round-trips all eleven camera preference
+  fields. The isolated QSettings test exposed and fixed a mapping error where
+  optical sensor size was saved from projection sensor width; distinct values
+  now survive both stores. This closes the Workbench shading/material and
+  camera-preference portions of persistence coverage. Native project camera
+  settings and unrelated application preferences remain outside this matrix.
 - Validation: `cmake --build build` passed with the 316-file dependency
   audit; `ctest --test-dir build -R '^workbench_persistence_contracts$'
   --output-on-failure` passed (1/1).

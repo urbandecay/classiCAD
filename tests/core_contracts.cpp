@@ -432,12 +432,16 @@ bool persistedWorkbenchSettingsContracts()
         passed &= check(false, "texture round-trip fixture object must exist");
     }
 
+    const ViewportCameraPreferences cameraPreferences{
+        85.2, 0.125, 12000.0, true, 124.5, 5.6, 7, -0.375, 0.8,
+        42.5, 29.7};
     QTemporaryDir updateSessionDir;
     passed &= check(updateSessionDir.isValid(),
                     "Workbench update-session test must create a temporary directory");
     if (updateSessionDir.isValid()) {
         UpdateSessionViewState view;
         view.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        view.cameraPreferences = cameraPreferences;
         ViewportShadingSettings &shading = view.shading;
         shading.mode = ViewportShadingMode::Wireframe;
         shading.lightingMode = ViewportLightingMode::MatCap;
@@ -558,6 +562,28 @@ bool persistedWorkbenchSettingsContracts()
                 close(actual.colorGamma, expected.colorGamma) &&
                 close(actual.colorDitherIntensity,
                       expected.colorDitherIntensity);
+            const ViewportCameraPreferences &actualCamera =
+                restored.view.cameraPreferences;
+            const bool cameraRoundTrip =
+                close(actualCamera.focalLengthMillimeters,
+                      cameraPreferences.focalLengthMillimeters) &&
+                close(actualCamera.clipStart, cameraPreferences.clipStart) &&
+                close(actualCamera.clipEnd, cameraPreferences.clipEnd) &&
+                actualCamera.sceneCameraEnabled ==
+                    cameraPreferences.sceneCameraEnabled &&
+                close(actualCamera.focusDistance,
+                      cameraPreferences.focusDistance) &&
+                close(actualCamera.fStop, cameraPreferences.fStop) &&
+                actualCamera.apertureBlades ==
+                    cameraPreferences.apertureBlades &&
+                close(actualCamera.apertureRotationRadians,
+                      cameraPreferences.apertureRotationRadians) &&
+                close(actualCamera.apertureRatio,
+                      cameraPreferences.apertureRatio) &&
+                close(actualCamera.sensorWidthMillimeters,
+                      cameraPreferences.sensorWidthMillimeters) &&
+                close(actualCamera.opticalSensorSizeMillimeters,
+                      cameraPreferences.opticalSensorSizeMillimeters);
             const auto &reopenedTexture = restored.document.objects().first()
                                               .workbenchMaterial;
             const bool materialRoundTrip =
@@ -571,8 +597,9 @@ bool persistedWorkbenchSettingsContracts()
                 reopenedTexture.textureImageTiles.first().number == 1001 &&
                 reopenedTexture.textureImageTiles.first().packedDataBase64 ==
                     packedUdimPayload;
-            passed &= check(shadingRoundTrip && materialRoundTrip,
-                            "update-session save/reopen must preserve all Workbench shading, LUT, material, and UDIM settings together");
+            passed &= check(shadingRoundTrip && cameraRoundTrip &&
+                                materialRoundTrip,
+                            "update-session save/reopen must preserve Workbench shading, camera optics, LUT, material, and UDIM settings together");
         } else {
             passed &= check(false,
                             "Workbench update-session fixture must save and reopen");
@@ -609,6 +636,36 @@ bool persistedWorkbenchSettingsContracts()
         }
         passed &= check(smoothWiresRoundTrip,
                         "Overlay and Edit Mode Smooth Wires preferences must each reload independently from QSettings");
+        saveCameraPreferences(cameraPreferences);
+        const ViewportCameraPreferences reloadedCamera =
+            loadStoredPreferences().dialogValues.cameraPreferences;
+        const auto closeCameraValue = [](qreal a, qreal b) {
+            return std::abs(a - b) < 1.0e-12;
+        };
+        const bool cameraPreferencesRoundTrip =
+            closeCameraValue(reloadedCamera.focalLengthMillimeters,
+                             cameraPreferences.focalLengthMillimeters) &&
+            closeCameraValue(reloadedCamera.clipStart,
+                             cameraPreferences.clipStart) &&
+            closeCameraValue(reloadedCamera.clipEnd,
+                             cameraPreferences.clipEnd) &&
+            reloadedCamera.sceneCameraEnabled ==
+                cameraPreferences.sceneCameraEnabled &&
+            closeCameraValue(reloadedCamera.focusDistance,
+                             cameraPreferences.focusDistance) &&
+            closeCameraValue(reloadedCamera.fStop,
+                             cameraPreferences.fStop) &&
+            reloadedCamera.apertureBlades == cameraPreferences.apertureBlades &&
+            closeCameraValue(reloadedCamera.apertureRotationRadians,
+                             cameraPreferences.apertureRotationRadians) &&
+            closeCameraValue(reloadedCamera.apertureRatio,
+                             cameraPreferences.apertureRatio) &&
+            closeCameraValue(reloadedCamera.sensorWidthMillimeters,
+                             cameraPreferences.sensorWidthMillimeters) &&
+            closeCameraValue(reloadedCamera.opticalSensorSizeMillimeters,
+                             cameraPreferences.opticalSensorSizeMillimeters);
+        passed &= check(cameraPreferencesRoundTrip,
+                        "all Workbench camera optics preferences must reload from QSettings");
     }
     return passed;
 }

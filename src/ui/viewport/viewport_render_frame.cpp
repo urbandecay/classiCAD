@@ -159,51 +159,15 @@ ViewportRenderFrame buildViewportRenderFrame(
                 entry.meshMaterials.reserve(mesh.materialSlotIds.size());
                 for (const QString &slotId : mesh.materialSlotIds) {
                     WorkbenchMaterialData slotData;
-                    for (const DocumentMaterial &material : document.materials()) {
-                        if (material.id == slotId) {
-                            if (material.baseColorSceneLinear.size() >= 3) {
-                                slotData.baseColorSceneLinear = QVector3D(
-                                    material.baseColorSceneLinear[0],
-                                    material.baseColorSceneLinear[1],
-                                    material.baseColorSceneLinear[2]);
-                            }
-                            slotData.roughness = material.roughness;
-                            slotData.metallic = material.metallic;
-                            slotData.alpha = material.alpha;
-                            for (const DocumentImageTextureReference &image : material.imageTextures) {
-                                slotData.textureImageTiles = image.tiles;
-                                slotData.textureImageSrgb =
-                                    image.colorSpace.compare(QStringLiteral("sRGB"),
-                                                             Qt::CaseInsensitive) == 0;
-                                slotData.textureImageColorTransformId =
-                                    image.sourceTransformId;
-                                slotData.textureImageSceneLinearFloatDataBase64 =
-                                    image.sceneLinearFloatDataBase64;
-                                slotData.textureImageSceneLinearFloatWidth =
-                                    image.sceneLinearFloatWidth;
-                                slotData.textureImageSceneLinearFloatHeight =
-                                    image.sceneLinearFloatHeight;
-                                slotData.textureImageAlphaMode = image.alphaMode;
-                                slotData.textureImageInterpolation = image.interpolation;
-                                slotData.textureImageExtension = image.extension;
-                                if (!image.tiles.isEmpty()) {
-                                    // A UDIM template is not a single image
-                                    // path; retain its tile set as the active
-                                    // Workbench texture input.
-                                    break;
-                                }
-                                if (image.packed && !image.packedDataBase64.isEmpty()) {
-                                    slotData.textureImagePackedDataBase64 =
-                                        image.packedDataBase64;
-                                    break;
-                                }
-                                if (image.sourceFileExists && !image.filepath.isEmpty()) {
-                                    slotData.textureImagePath = image.filepath;
-                                    break;
-                                }
-                            }
-                            break;
-                        }
+                    const auto material = std::find_if(
+                        document.materials().cbegin(),
+                        document.materials().cend(),
+                        [&slotId](const DocumentMaterial &candidate) {
+                            return candidate.id == slotId;
+                        });
+                    if (material != document.materials().cend()) {
+                        slotData =
+                            workbenchMaterialDataFromDocumentMaterial(*material);
                     }
                     entry.meshMaterials.append(slotData);
                 }

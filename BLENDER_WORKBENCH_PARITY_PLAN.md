@@ -4126,6 +4126,20 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L37)
   and
   [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L538-L553).
+- **Polygon-mesh frame material adapter convergence (2026-10-14):**
+  ID-backed mesh slots in `buildViewportRenderFrame` now use
+  `workbenchMaterialDataFromDocumentMaterial`, matching NURBS-solid seed
+  materials and Blender import. This removes a second field/image-precedence
+  projection while preserving the legacy inline `PolygonMeshMaterialSlot`
+  path. The frame-builder contract verifies scene-linear base color,
+  roughness, metallic, alpha, packed bytes, float payload metadata, alpha mode,
+  interpolation, and extension survive the shared adapter. Geometry and
+  `DrawRange` contracts are unchanged. Blender's supported material inputs
+  remain pinned in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L538-L553).
+- Validation: `cmake --build build -j4` passed with the dependency audit
+  checking 317 source files, and offscreen `viewport_render_contracts` passed
+  (1/1).
 - **Canonical material adapter projection:** Blender import and immutable
   viewport-frame construction now share
   `workbenchMaterialDataFromDocumentMaterial` in

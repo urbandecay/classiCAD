@@ -277,6 +277,78 @@ int main(int argc, char *argv[])
                                ViewportRenderFrameInput::Visibility::Render),
             "Workbench render frames must omit objects hidden only from rendering");
 
+        Document meshMaterialDocument;
+        SceneObject materialMesh;
+        materialMesh.geometry.geometryType = GeometryType::PolygonMesh;
+        materialMesh.geometry.polygonMesh.vertices = {
+            {0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}};
+        materialMesh.geometry.polygonMesh.faces = {{0, 1, 2}};
+        materialMesh.geometry.polygonMesh.faceMaterialIndices = {0};
+        const ObjectId materialMeshId =
+            meshMaterialDocument.insertObject(0, materialMesh);
+        Document::Snapshot materialSnapshot = meshMaterialDocument.snapshot();
+        DocumentMaterial frameMaterial;
+        frameMaterial.id = QStringLiteral("viewport-frame-material");
+        frameMaterial.name = QStringLiteral("ViewportFrameMaterial");
+        frameMaterial.baseColorSceneLinear = {0.21f, 0.43f, 0.65f, 0.77f};
+        frameMaterial.roughness = 0.28f;
+        frameMaterial.metallic = 0.39f;
+        frameMaterial.alpha = 0.77f;
+        DocumentImageTextureReference frameImage;
+        frameImage.colorSpace = QStringLiteral("ACEScg");
+        frameImage.sourceTransformId = QStringLiteral("frame-color-transform");
+        frameImage.sceneLinearFloatDataBase64 = QStringLiteral("float-frame-payload");
+        frameImage.sceneLinearFloatWidth = 2;
+        frameImage.sceneLinearFloatHeight = 1;
+        frameImage.alphaMode = QStringLiteral("PREMUL");
+        frameImage.interpolation = QStringLiteral("Closest");
+        frameImage.extension = QStringLiteral("EXTEND");
+        frameImage.packed = true;
+        frameImage.packedDataBase64 = QStringLiteral("packed-frame-bytes");
+        frameMaterial.imageTextures.append(frameImage);
+        materialSnapshot.materials.append(frameMaterial);
+        for (SceneObject &object : materialSnapshot.objects) {
+            if (object.id == materialMeshId) {
+                object.geometry.polygonMesh.materialSlotIds = {frameMaterial.id};
+            }
+        }
+        meshMaterialDocument.restoreSnapshot(materialSnapshot);
+        ViewportRenderFrameInput materialFrameInput;
+        materialFrameInput.visibility =
+            ViewportRenderFrameInput::Visibility::Viewport;
+        const ViewportRenderFrame materialFrame = buildViewportRenderFrame(
+            meshMaterialDocument, ViewportTransform(), QSize(64, 64),
+            materialFrameInput);
+        const ViewportRenderObject *materialFrameObject =
+            materialFrame.find(materialMeshId);
+        passed &= check(
+            materialFrameObject != nullptr &&
+                materialFrameObject->meshMaterials.size() == 1 &&
+                materialFrameObject->meshMaterials[0].baseColorSceneLinear ==
+                    QVector3D(0.21f, 0.43f, 0.65f) &&
+                std::abs(materialFrameObject->meshMaterials[0].roughness -
+                         0.28) < 1.0e-6 &&
+                std::abs(materialFrameObject->meshMaterials[0].metallic -
+                         0.39) < 1.0e-6 &&
+                std::abs(materialFrameObject->meshMaterials[0].alpha -
+                         0.77) < 1.0e-6 &&
+                materialFrameObject->meshMaterials[0]
+                        .textureImageColorTransformId ==
+                    QStringLiteral("frame-color-transform") &&
+                materialFrameObject->meshMaterials[0]
+                        .textureImagePackedDataBase64 ==
+                    QStringLiteral("packed-frame-bytes") &&
+                materialFrameObject->meshMaterials[0]
+                        .textureImageSceneLinearFloatDataBase64 ==
+                    QStringLiteral("float-frame-payload") &&
+                materialFrameObject->meshMaterials[0]
+                        .textureImageInterpolation == QStringLiteral("Closest") &&
+                materialFrameObject->meshMaterials[0]
+                        .textureImageExtension == QStringLiteral("EXTEND") &&
+                materialFrameObject->meshMaterials[0]
+                        .textureImageAlphaMode == QStringLiteral("PREMUL"),
+            "polygon-mesh frame construction must project shared document material values and image metadata through the Workbench adapter");
+
         DocumentCollection collection;
         collection.name = QStringLiteral("Visibility");
         collection.sourceId = QStringLiteral("collection-visibility");

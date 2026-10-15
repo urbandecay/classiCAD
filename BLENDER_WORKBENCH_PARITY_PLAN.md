@@ -8267,3 +8267,11 @@ resolve remain open.
   `original_center_has_alpha` condition in pinned
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L140-L193).
   Build and matched wire-image comparisons remain open.
+
+### Blender mesh color attribute selection (2026-10-15)
+
+- Attribute shading now prefers the mesh's default color attribute, which is
+  Blender Workbench's render choice, and falls back to the active editing
+  attribute when no default is available. Both GPU and QPainter mesh paths use
+  the same preference. This fixes files where Blender's active and default
+  attributes differ. No matched Blender image comparison was run.

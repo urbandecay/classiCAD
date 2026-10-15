@@ -1648,14 +1648,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
         const MeshColorAttribute *activeAttribute = nullptr;
         if (shadingSettings_.colorMode == ViewportColorMode::Attribute) {
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
-                if (attribute.name == mesh.activeColorAttributeName) {
+                if (attribute.name == mesh.defaultColorAttributeName) {
                     activeAttribute = &attribute;
                     break;
                 }
             }
             if (activeAttribute == nullptr) {
                 for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
-                    if (attribute.name == mesh.defaultColorAttributeName) {
+                    if (attribute.name == mesh.activeColorAttributeName) {
                         activeAttribute = &attribute;
                         break;
                     }

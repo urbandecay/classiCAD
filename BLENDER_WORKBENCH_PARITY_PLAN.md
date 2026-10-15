@@ -8604,11 +8604,12 @@ resolve remain open.
   default attribute when both existed. C++ build passed; matched image
   comparison remains open.
 
-### QPainter textured shadow-caster cutouts (2026-10-15)
+### QPainter textured shadow-caster audit correction (2026-10-15)
 
-- The software light-depth map now samples a textured face's filtered alpha
-  for each light-map texel and skips fragments below Blender's 0.1 cutout
-  threshold. Previously the camera-facing software coverage honored this
-  alpha mask, but the separate shadow caster list kept every triangle solid.
-  GPU depth-map cutout handling remains separate; matched shadow images remain
-  open.
+- An attempted software shadow-map texture-alpha cutoff was removed after
+  checking Blender 5.2.2's active shadow pass. Blender builds its stencil
+  shadow volume from object edge and surface geometry and does not sample the
+  image alpha there, even though the visible color/depth shaders discard low
+  alpha fragments. The QPainter shadow caster therefore remains geometric to
+  match Blender. See [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L348-L389)
+  and [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L59).

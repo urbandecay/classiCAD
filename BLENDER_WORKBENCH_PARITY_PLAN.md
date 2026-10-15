@@ -5477,6 +5477,29 @@ edge comparison remains open.
   shadow setting pairs. `workbench_shadow_receiver_compare.py` completed on
   the default and alternate captures against Blender 5.2.2.
 
+### QPainter polygon shadow-ray experiment (2026-10-15)
+
+- Evaluated a bounded CPU ray-to-light visibility path for opaque polygon
+  scenes against the existing 640×480 plane-and-cube shadow fixture. The
+  prototype used a closed opaque polygon mesh as an activation requirement,
+  retained the current factor/shift/focus resolve, and left open-only scenes
+  on the light-depth fallback. This was intended to test whether geometric
+  visibility could close the mask gap between QPainter's depth map and
+  Blender's stencil shadow volumes.
+- The captured QPainter cast-shadow mask contained 72,080 pixels against
+  Blender's 8,060 (IoU 0.054377). Mean attenuation on the QPainter mask was
+  0.08079, close to Blender's 0.08130, but the much broader mask materially
+  worsened coverage compared with the existing supersampled depth fallback's
+  4,415 pixels and IoU 0.494191. The ray path was rejected and removed; the
+  depth-map approximation remains active. A better bounded shadow-volume or
+  receiver-coverage method is still open.
+- Validation: Blender reported 5.2.2 LTS; the capture-enabled offscreen
+  `viewport_render_contracts` test passed on the gated prototype, and
+  `workbench_shadow_receiver_compare.py` completed on matched scene-linear
+  captures. After removing the rejected prototype, `cmake --build build -j4`
+  and the offscreen `viewport_render_contracts` test passed against the
+  retained depth-map implementation.
+
 ### QPainter full-frame MatCap presets (2026-10-14)
 
 - Compared the existing QPainter polygon-cube captures for `check_normal+y`

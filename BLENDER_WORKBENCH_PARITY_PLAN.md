@@ -285,6 +285,29 @@ and saved-file comparison remain open.
   Blender image comparison and a direct CAD-stroke-through-cutout image check
   remain open.
 
+### GPU Workbench display-transform captures (2026-10-14)
+
+- Added optional matched 640×480 polygon-cube captures for AgX at default
+  exposure, Standard at default exposure, and AgX at +4 exposure. Blender 5.2.2
+  and classiCAD use Studio Default lighting, Material color, AA Off, zero
+  dither, the same orthographic camera, and the same scene-linear World color.
+  The classiCAD contract confirms the scene-linear source pixels remain
+  identical across all three display settings while the displayed images
+  change as expected.
+- `tests/workbench_display_transform_compare.py` compares stable cube
+  interiors, excluding pixels whose 8-neighbor scene-linear change exceeds
+  0.025. Across 107,888 common interior pixels, Blender and classiCAD match
+  exactly in both scene-linear RGB and final display RGB for all three states.
+  The +4 exposure case scales source-linear values by 16; the effective
+  display-transform input reaches 4.7539 and has 77,195 interior pixels above
+  1.0 in each renderer. Silhouette and face-boundary raster differences are
+  outside this interior comparison; other lighting presets, colors, custom
+  OCIO views, and broader image combinations remain open.
+- Validation: full `cmake --build build -j4` passed with the 316-source
+  dependency audit; offscreen `viewport_render_contracts` passed with all
+  display captures enabled; Blender reported 5.2.2 LTS; and the comparison
+  script completed on captures under `/tmp/classicad-display-transform`.
+
 ### GPU Workbench outline and world-cavity combination capture (2026-10-14)
 
 - The optional viewport contract now captures a matched polygon cube in four

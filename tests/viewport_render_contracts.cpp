@@ -13837,6 +13837,80 @@ int main(int argc, char *argv[])
                             capturesSaved,
                             "matched GPU shadow receiver and receiver-only scene-linear captures must save");
                     }
+                    const QString gpuTransformPrefix = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_GPU_DISPLAY_TRANSFORM_PREFIX");
+                    if (!gpuTransformPrefix.isEmpty()) {
+                        struct DisplayTransformCapture {
+                            const char *suffix;
+                            int transform;
+                            qreal exposure;
+                            qreal gamma;
+                        };
+                        const DisplayTransformCapture captures[] = {
+                            {"agx", 0, 0.0, 1.0},
+                            {"standard", 1, 0.0, 1.0},
+                            {"hdr-agx", 0, 4.0, 1.0},
+                        };
+                        const QVector3D worldColor(0.12f, 0.07f, 0.035f);
+                        QVector<float> referenceLinear;
+                        QImage agxDisplay;
+                        QImage standardDisplay;
+                        QImage hdrAgxDisplay;
+                        bool capturesSaved = true;
+                        for (const DisplayTransformCapture &capture : captures) {
+                            ViewportShadingSettings settings = rawFaceShading;
+                            settings.outline = false;
+                            settings.shadows = false;
+                            settings.cavity = false;
+                            settings.colorTransform = capture.transform;
+                            settings.colorExposure = capture.exposure;
+                            settings.colorGamma = capture.gamma;
+                            QImage image;
+                            QVector<float> linear;
+                            const QString stem = gpuTransformPrefix +
+                                QStringLiteral("-") +
+                                QString::fromLatin1(capture.suffix);
+                            const bool rendered = renderCoordinatedScene(
+                                settings,
+                                QByteArrayLiteral("gpu-display-transform-") +
+                                    QByteArray(capture.suffix),
+                                &image, &polygonCubeObject, nullptr, nullptr,
+                                QString{}, &linear, &worldColor);
+                            QFile file(stem + QStringLiteral(".pfm"));
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            const bool linearSaved =
+                                linear.size() == 640 * 480 * 3 &&
+                                file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               linear.constData()),
+                                           linear.size() * qsizetype(sizeof(float))) ==
+                                    linear.size() * qsizetype(sizeof(float));
+                            capturesSaved &= rendered && linearSaved &&
+                                image.save(stem + QStringLiteral(".png"));
+                            if (referenceLinear.isEmpty()) {
+                                referenceLinear = linear;
+                            } else {
+                                capturesSaved &= linear == referenceLinear;
+                            }
+                            if (capture.transform == 0 && capture.exposure == 0.0) {
+                                agxDisplay = image;
+                            } else if (capture.transform == 1) {
+                                standardDisplay = image;
+                            } else {
+                                hdrAgxDisplay = image;
+                            }
+                        }
+                        passed &= check(
+                            capturesSaved &&
+                                !agxDisplay.isNull() &&
+                                !standardDisplay.isNull() &&
+                                !hdrAgxDisplay.isNull() &&
+                                agxDisplay != standardDisplay &&
+                                standardDisplay != hdrAgxDisplay,
+                            "matched GPU display-transform captures must preserve scene-linear shading and change final AgX, Standard, and HDR output");
+                    }
                     const QString polygonCubeCavityCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAVITY_CAPTURE");

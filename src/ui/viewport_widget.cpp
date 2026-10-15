@@ -341,6 +341,84 @@ void fillViewportBackground(QPainter &painter,
     paintViewportThemeBackground(painter, bounds, themeBackground);
 }
 
+float displaySrgbToLinear(float value)
+{
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value <= 0.04045f
+               ? value / 12.92f
+               : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
+float linearToDisplaySrgb(float value)
+{
+    value = std::clamp(value, 0.0f, 1.0f);
+    return value <= 0.0031308f
+               ? value * 12.92f
+               : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
+void compositeDisplayImageLinear(QImage *destination, const QImage &source)
+{
+    if (destination == nullptr || destination->isNull() || source.isNull() ||
+        destination->size() != source.size()) {
+        return;
+    }
+    if (destination->format() != QImage::Format_ARGB32_Premultiplied) {
+        *destination = destination->convertToFormat(
+            QImage::Format_ARGB32_Premultiplied);
+    }
+    const QImage sourcePremultiplied = source.convertToFormat(
+        QImage::Format_ARGB32_Premultiplied);
+    if (sourcePremultiplied.isNull()) return;
+    for (int y = 0; y < destination->height(); ++y) {
+        auto *destinationRow = reinterpret_cast<QRgb *>(
+            destination->scanLine(y));
+        const auto *sourceRow = reinterpret_cast<const QRgb *>(
+            sourcePremultiplied.constScanLine(y));
+        for (int x = 0; x < destination->width(); ++x) {
+            const QRgb sourcePixel = sourceRow[x];
+            const float sourceAlpha = qAlpha(sourcePixel) / 255.0f;
+            if (sourceAlpha <= 0.0f) continue;
+            const QRgb destinationPixel = destinationRow[x];
+            const float destinationAlpha = qAlpha(destinationPixel) / 255.0f;
+            const float outputAlpha = sourceAlpha + destinationAlpha *
+                (1.0f - sourceAlpha);
+            if (outputAlpha <= 0.0f) {
+                destinationRow[x] = 0;
+                continue;
+            }
+            const auto unpremultipliedLinear = [](int channel, float alpha) {
+                const float encoded = std::clamp(
+                    (channel / 255.0f) / alpha, 0.0f, 1.0f);
+                return displaySrgbToLinear(encoded);
+            };
+            const float inverseSourceAlpha = 1.0f - sourceAlpha;
+            const auto compositeChannel = [&](int sourceChannel,
+                                              int destinationChannel) {
+                const float sourceLinear = unpremultipliedLinear(
+                    sourceChannel, sourceAlpha);
+                const float destinationLinear = destinationAlpha > 0.0f
+                    ? unpremultipliedLinear(destinationChannel,
+                                             destinationAlpha)
+                    : 0.0f;
+                const float outputPremultiplied =
+                    sourceLinear * sourceAlpha + destinationLinear *
+                        destinationAlpha * inverseSourceAlpha;
+                const float outputLinear = std::clamp(
+                    outputPremultiplied / outputAlpha, 0.0f, 1.0f);
+                return std::clamp(qRound(
+                    linearToDisplaySrgb(outputLinear) * outputAlpha * 255.0f),
+                    0, 255);
+            };
+            destinationRow[x] = qRgba(
+                compositeChannel(qRed(sourcePixel), qRed(destinationPixel)),
+                compositeChannel(qGreen(sourcePixel), qGreen(destinationPixel)),
+                compositeChannel(qBlue(sourcePixel), qBlue(destinationPixel)),
+                std::clamp(qRound(outputAlpha * 255.0f), 0, 255));
+        }
+    }
+}
+
 Shape pictureFrameOutline(const Shape &picture)
 {
     Shape frame = picture;
@@ -13008,36 +13086,46 @@ protected:
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
-            fillViewportBackground(
-                painter, rect(), viewportShadingSettings_,
-                viewportWorldColorSceneLinear, themeBackground_);
-            if (gpuViewportBackground.isNull()) {
-                drawGrid(painter);
-                drawOrigin(painter);
-            }
-            painter.drawImage(QPoint(0, 0), effectTarget);
-            if (rasterWorkbenchEffectsLayered) {
-                painter.drawImage(QPoint(0, 0), committedSceneLayer);
-            }
-            if (!gpuViewportBackground.isNull()) {
-                painter.drawImage(QPoint(0, 0), gpuViewportBackground);
-            }
             if (rasterSurfaceBatchRendered &&
                 !rasterBackPictures.isEmpty()) {
-                QImage backPictureLayer(
+                QImage displayOutputLayer(
                     committedSceneLayer.size(),
                     QImage::Format_ARGB32_Premultiplied);
-                backPictureLayer.setDevicePixelRatio(
+                displayOutputLayer.setDevicePixelRatio(
                     committedSceneLayer.devicePixelRatioF());
-                backPictureLayer.fill(Qt::transparent);
-                QPainter backPicturePainter(&backPictureLayer);
-                backPicturePainter.setRenderHint(
-                    QPainter::SmoothPixmapTransform, true);
+                displayOutputLayer.fill(Qt::transparent);
+                QPainter displayOutputPainter(&displayOutputLayer);
+                fillViewportBackground(
+                    displayOutputPainter, rect(), viewportShadingSettings_,
+                    viewportWorldColorSceneLinear, themeBackground_);
+                if (gpuViewportBackground.isNull()) {
+                    drawGrid(displayOutputPainter);
+                    drawOrigin(displayOutputPainter);
+                }
+                displayOutputPainter.drawImage(QPoint(0, 0), effectTarget);
+                if (rasterWorkbenchEffectsLayered) {
+                    displayOutputPainter.drawImage(
+                        QPoint(0, 0), committedSceneLayer);
+                }
+                if (!gpuViewportBackground.isNull()) {
+                    displayOutputPainter.drawImage(
+                        QPoint(0, 0), gpuViewportBackground);
+                }
+                displayOutputPainter.end();
                 for (const ViewportRenderObject *object :
                      rasterBackPictures) {
                     if (object == nullptr) continue;
+                    QImage pictureLayer(
+                        committedSceneLayer.size(),
+                        QImage::Format_ARGB32_Premultiplied);
+                    pictureLayer.setDevicePixelRatio(
+                        committedSceneLayer.devicePixelRatioF());
+                    pictureLayer.fill(Qt::transparent);
+                    QPainter picturePainter(&pictureLayer);
+                    picturePainter.setRenderHint(
+                        QPainter::SmoothPixmapTransform, true);
                     drawShape(
-                        backPicturePainter, object->shape, false,
+                        picturePainter, object->shape, false,
                         object->selected, false, object->layerColor,
                         object->layerLineType, object->layerLineWeightMm,
                         object->objectId, object->geometryRevision,
@@ -13047,10 +13135,29 @@ protected:
                         object->workbenchMaterial, object->displayName,
                         workbenchRandomIdentityLibraryPath(*object),
                         object->meshObjectTransform, object->meshMaterials,
-                        nullptr, object->nurbsSolidFaceMaterials);
+                        nullptr, object->nurbsSolidFaceMaterials,
+                        &rasterSurfaceLayers.opaqueSceneDepth,
+                        rasterSurfaceLayers.opaqueSceneDepthSize);
+                    picturePainter.end();
+                    compositeDisplayImageLinear(
+                        &displayOutputLayer, pictureLayer);
                 }
-                backPicturePainter.end();
-                painter.drawImage(QPoint(0, 0), backPictureLayer);
+                painter.drawImage(QPoint(0, 0), displayOutputLayer);
+            } else {
+                fillViewportBackground(
+                    painter, rect(), viewportShadingSettings_,
+                    viewportWorldColorSceneLinear, themeBackground_);
+                if (gpuViewportBackground.isNull()) {
+                    drawGrid(painter);
+                    drawOrigin(painter);
+                }
+                painter.drawImage(QPoint(0, 0), effectTarget);
+                if (rasterWorkbenchEffectsLayered) {
+                    painter.drawImage(QPoint(0, 0), committedSceneLayer);
+                }
+                if (!gpuViewportBackground.isNull()) {
+                    painter.drawImage(QPoint(0, 0), gpuViewportBackground);
+                }
             }
 
             // The ordinary QPainter scene path does not replay all GPU scene

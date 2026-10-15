@@ -8424,3 +8424,21 @@ resolve remain open.
   [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh)
   and [`object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc).
   C++ build passed; no matched view comparison has been run.
+
+### QPainter Back Image linear-light blending (2026-10-15)
+
+- In the bounded surface-raster path, Back images are now drawn one at a time
+  over the assembled final viewport output. Their premultiplied pixels are
+  decoded from display sRGB, composited in linear light, then encoded back to
+  display sRGB. This follows Blender's final overlay placement and
+  premultiplied blend in
+  [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl)
+  and the Back image pass setup in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh).
+- Each deferred image also uses the retained opaque scene depth, so opaque
+  objects still hide the portions of a Back image behind them.
+- The deferred pass keeps its existing 16-million target-pixel budget across
+  all Back images. The CPU blend assumes imported image RGB is sRGB; arbitrary
+  Blender image color-space metadata is not retained by this path. Other
+  QPainter fallbacks continue using their existing composition. Build passed;
+  no matched Blender comparison has been run.

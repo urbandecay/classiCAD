@@ -12832,6 +12832,83 @@ protected:
                         const bool visible = strokeDepth <= surfaceDepth + 0.0005;
                         return frontPass ? visible : !visible;
                     };
+                    const auto writeStrokeDepth = [&](
+                        const Point3D &first, const Point3D &second,
+                        qreal ta, qreal tb, const QPointF &a,
+                        const QPointF &b) {
+                        if (!hasDepth || !stroke.writeDepth) return;
+                        const QPointF delta = b - a;
+                        const qreal lengthSquared =
+                            delta.x() * delta.x() + delta.y() * delta.y();
+                        const qreal radius = std::max<qreal>(
+                            0.5, qreal(stroke.width) * 0.5);
+                        const qreal coverageRadius =
+                            radius + 0.5 / fallbackDpr;
+                        const int rawMinX = qFloor(
+                            (std::min(a.x(), b.x()) - coverageRadius) *
+                            fallbackDpr);
+                        const int rawMaxX = qCeil(
+                            (std::max(a.x(), b.x()) + coverageRadius) *
+                            fallbackDpr);
+                        const int rawMinY = qFloor(
+                            (std::min(a.y(), b.y()) - coverageRadius) *
+                            fallbackDpr);
+                        const int rawMaxY = qCeil(
+                            (std::max(a.y(), b.y()) + coverageRadius) *
+                            fallbackDpr);
+                        if (rawMaxX < 0 || rawMinX >= fallbackPixelSize.width() ||
+                            rawMaxY < 0 || rawMinY >= fallbackPixelSize.height()) {
+                            return;
+                        }
+                        const int minX = std::clamp(
+                            rawMinX,
+                            0, fallbackPixelSize.width() - 1);
+                        const int maxX = std::clamp(
+                            rawMaxX,
+                            0, fallbackPixelSize.width() - 1);
+                        const int minY = std::clamp(
+                            rawMinY,
+                            0, fallbackPixelSize.height() - 1);
+                        const int maxY = std::clamp(
+                            rawMaxY,
+                            0, fallbackPixelSize.height() - 1);
+                        for (int yTop = minY; yTop <= maxY; ++yTop) {
+                            const qreal sampleY =
+                                (yTop + 0.5) / fallbackDpr;
+                            for (int x = minX; x <= maxX; ++x) {
+                                const qreal sampleX = (x + 0.5) / fallbackDpr;
+                                const QPointF fromA(sampleX - a.x(),
+                                                    sampleY - a.y());
+                                const qreal segmentT = lengthSquared > 1.0e-12
+                                    ? std::clamp(
+                                        (fromA.x() * delta.x() +
+                                         fromA.y() * delta.y()) /
+                                            lengthSquared,
+                                        0.0, 1.0)
+                                    : 0.5;
+                                const QPointF closest = a + delta * segmentT;
+                                if (QLineF(closest, QPointF(sampleX, sampleY))
+                                        .length() > coverageRadius) {
+                                    continue;
+                                }
+                                const qreal worldT = ta + (tb - ta) * segmentT;
+                                const Point3D world{
+                                    first.x + (second.x - first.x) * worldT,
+                                    first.y + (second.y - first.y) * worldT,
+                                    first.z + (second.z - first.z) * worldT};
+                                const qreal strokeDepth = projectedDepth(world);
+                                if (!std::isfinite(strokeDepth)) continue;
+                                const int y = fallbackPixelSize.height() - 1 - yTop;
+                                float &surfaceDepth = fallbackSceneDepth[
+                                    y * fallbackPixelSize.width() + x];
+                                if (strokeDepth <= surfaceDepth + 0.0005) {
+                                    surfaceDepth = std::min(
+                                        surfaceDepth,
+                                        static_cast<float>(strokeDepth));
+                                }
+                            }
+                        }
+                    };
                     const auto colorAt = [&](int vertex, qreal t,
                                              qreal fade) {
                         QColor color = stroke.color;
@@ -12939,6 +13016,10 @@ protected:
                                 pen.setJoinStyle(Qt::RoundJoin);
                                 painter.setPen(pen);
                                 painter.drawLine(a, b);
+                                if (frontPass) {
+                                    writeStrokeDepth(first, second, ta, tb,
+                                                    a, b);
+                                }
                             }
                             connectedPatternOffset += length;
                             previousEnd = second;

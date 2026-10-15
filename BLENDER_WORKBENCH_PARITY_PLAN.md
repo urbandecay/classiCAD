@@ -8214,3 +8214,15 @@ resolve remain open.
   Those limits can still select painter fallback or omit per-fragment shadow
   treatment for exceptionally dense scenes. No matched Blender comparison
   was run; `cmake --build build -j4` passed.
+
+### QPainter committed curve depth writes (2026-10-15)
+
+- The prepared-stroke fallback now updates its retained depth after drawing
+  each visible committed Solid curve segment whose GPU stroke would write
+  depth. Later fallback strokes test against that updated depth, so a farther
+  curve cannot paint over a nearer curve simply because it was drawn later.
+  The CPU update stamps the segment's visible width into covered target pixels;
+  it remains a bounded approximation of Blender's per-fragment line coverage.
+- X-Ray hidden strokes and non-depth-writing overlays do not update the depth
+  buffer. No matched Blender comparison was run; `cmake --build build -j4`
+  passed.

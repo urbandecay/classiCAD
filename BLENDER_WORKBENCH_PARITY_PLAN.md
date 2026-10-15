@@ -6070,6 +6070,31 @@ resolve remain open.
   for `gl_FragCoord`-derived texture coordinates and the GPU resolve in
   [`viewport_surface_renderer.cpp`](src/ui/viewport/viewport_surface_renderer.cpp).
 
+### QPainter cavity signed-radius clamp audit (2026-10-15)
+
+- Blender 5.2.2 adds its per-pixel jitter directly to each sample radius,
+  while QPainter wraps the same sum in `max(0, ...)`. The clamp looks
+  different in isolation, but it is unreachable for the supported sequence:
+  the smallest base radius is `0.5 / requestedSamples`, and the jitter is
+  clamped above `-0.5 / requestedSamples` (specifically `-0.499 / N`). Every
+  generated radius stays positive, including when the CPU work budget
+  subsamples the requested sequence. Removing the clamp would therefore make
+  no change to the rendered result; no production change was retained.
+- The post-audit matched cube capture reproduced the existing QPainter factor
+  MAE `0.067453`, p95 `0.240885`, and cavity-mask IoU `0.201666` against
+  Blender 5.2.2 at 3/255. This confirms that the signed-radius syntax
+  difference does not explain the open cavity gap. The remaining factor and
+  effect mismatch still needs an attributable source-backed correction.
+- Blender's sample-radius and jitter addition are pinned in
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L503-L520);
+  classiCAD's jitter bound and CPU sequence are in
+  [`viewport_cavity_jitter.h`](src/ui/viewport/viewport_cavity_jitter.h)
+  and [`viewport_raster_workbench_effects.cpp`](src/ui/viewport/viewport_raster_workbench_effects.cpp).
+- Validation: capture-enabled offscreen `viewport_render_contracts` passed;
+  `workbench_qpainter_cavity_diagnostic.py` compared the new capture against
+  the matching Blender and GPU files. No renderer change remained to build;
+  no GUI was launched.
+
 ### GPU per-face mesh texture-slot comparison (2026-10-14)
 
 - Added an opt-in GPU capture of the existing two-triangle planar mesh with

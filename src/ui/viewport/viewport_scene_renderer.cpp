@@ -16,6 +16,7 @@
 #include "viewport_shading.h"
 
 #include <QImage>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDataStream>
 #include <QFont>
@@ -24,11 +25,13 @@
 #include <QOpenGLContext>
 #include <QPainter>
 #include <QVector4D>
+#include <QtEndian>
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
+#include <cstring>
 #include <map>
 
 namespace classiCAD {
@@ -2397,27 +2400,65 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     if (image.isNull()) {
         return false;
     }
-    // Blender builds image mipmaps from scene-linear texels. Convert the
-    // decoded sRGB bytes before uploading so OpenGL's mip reduction averages
-    // linear color rather than encoded display values.
-    for (int y = 0; y < image.height(); ++y) {
-        uchar *row = image.scanLine(y);
-        for (int x = 0; x < image.width(); ++x) {
-            uchar *pixel = row + x * 4;
-            for (int channel = 0; channel < 3; ++channel) {
-                const float encoded = float(pixel[channel]) / 255.0f;
-                float linear = encoded <= 0.04045f
-                    ? encoded / 12.92f
-                    : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
-                if (picture.picturePremultipliedAlpha) {
-                    linear *= float(pixel[3]) / 255.0f;
+    const qint64 pixelCount = qint64(image.width()) * image.height();
+    const bool hasSceneLinearPayload =
+        picture.pictureSceneLinearFloatWidth == image.width() &&
+        picture.pictureSceneLinearFloatHeight == image.height() &&
+        picture.pictureSceneLinearFloatData.size() == pixelCount * 16;
+    QVector<float> sceneLinearPixels;
+    GLint internalFormat = GL_RGBA8;
+    GLenum uploadType = GL_UNSIGNED_BYTE;
+    const void *uploadData = image.constBits();
+    if (hasSceneLinearPayload) {
+        sceneLinearPixels.resize(qsizetype(pixelCount) * 4);
+        const auto *source = reinterpret_cast<const uchar *>(
+            picture.pictureSceneLinearFloatData.constData());
+        for (qsizetype index = 0; index < sceneLinearPixels.size(); ++index) {
+            const quint32 bits = qFromLittleEndian<quint32>(source + index * 4);
+            std::memcpy(&sceneLinearPixels[index], &bits, sizeof(bits));
+        }
+        internalFormat = GL_RGBA32F;
+        uploadType = GL_FLOAT;
+        uploadData = sceneLinearPixels.constData();
+    } else {
+        const QString colorSpace = picture.pictureColorSpace.trimmed();
+        const bool sourceIsLinear = colorSpace.startsWith(
+            QStringLiteral("Linear"), Qt::CaseInsensitive) ||
+            colorSpace.compare(QStringLiteral("Non-Color"),
+                               Qt::CaseInsensitive) == 0;
+        // Blender builds mipmaps after source-to-scene-linear conversion.
+        // Preserve known linear byte sources and decode sRGB before filtering.
+        for (int y = 0; y < image.height(); ++y) {
+            uchar *row = image.scanLine(y);
+            for (int x = 0; x < image.width(); ++x) {
+                uchar *pixel = row + x * 4;
+                for (int channel = 0; channel < 3; ++channel) {
+                    const float encoded = float(pixel[channel]) / 255.0f;
+                    float linear = sourceIsLinear ? encoded
+                        : encoded <= 0.04045f
+                            ? encoded / 12.92f
+                            : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+                    if (picture.picturePremultipliedAlpha) {
+                        linear *= float(pixel[3]) / 255.0f;
+                    }
+                    pixel[channel] = static_cast<uchar>(
+                        qRound(std::clamp(linear, 0.0f, 1.0f) * 255.0f));
                 }
-                pixel[channel] = static_cast<uchar>(
-                    qRound(std::clamp(linear, 0.0f, 1.0f) * 255.0f));
             }
         }
     }
-    const qint64 imageCacheKey = picture.pictureImage.cacheKey();
+    const QByteArray payloadHash = hasSceneLinearPayload
+        ? QCryptographicHash::hash(picture.pictureSceneLinearFloatData,
+                                   QCryptographicHash::Sha256).toHex()
+        : QByteArrayLiteral("byte");
+    const QString imageCacheKey = QStringLiteral("%1|%2|%3|%4|%5|%6")
+        .arg(picture.pictureImage.cacheKey())
+        .arg(picture.pictureSourceTransformId,
+             picture.pictureColorSpace,
+             QString::fromLatin1(payloadHash),
+             picture.picturePremultipliedAlpha
+                 ? QStringLiteral("premul") : QStringLiteral("straight"),
+             QString::number(internalFormat));
     auto texture = pictureTextures_.find(imageCacheKey);
     if (texture == pictureTextures_.end()) {
         PictureTexture newTexture;
@@ -2434,21 +2475,23 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     if (texture->size != image.size() ||
-        texture->premultipliedAlpha != picture.picturePremultipliedAlpha) {
+        texture->premultipliedAlpha != picture.picturePremultipliedAlpha ||
+        texture->internalFormat != internalFormat) {
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D,
                      0,
-                     GL_RGBA8,
+                     internalFormat,
                      image.width(),
                      image.height(),
                      0,
                      GL_RGBA,
-                     GL_UNSIGNED_BYTE,
-                     image.constBits());
+                     uploadType,
+                     uploadData);
         glGenerateMipmap(GL_TEXTURE_2D);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         texture->size = image.size();
         texture->premultipliedAlpha = picture.picturePremultipliedAlpha;
+        texture->internalFormat = internalFormat;
     }
 
     std::array<PictureVertex, 6> vertices{};

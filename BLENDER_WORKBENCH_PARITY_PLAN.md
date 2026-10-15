@@ -8438,10 +8438,32 @@ resolve remain open.
 - Each deferred image also uses the retained opaque scene depth, so opaque
   objects still hide the portions of a Back image behind them.
 - The deferred pass keeps its existing 16-million target-pixel budget across
-  all Back images. The CPU blend assumes imported image RGB is sRGB; arbitrary
-  Blender image color-space metadata is not retained by this path. Other
-  QPainter fallbacks continue using their existing composition. Build passed;
-  no matched Blender comparison has been run.
+  all Back images. The CPU blend receives display-sRGB pixels after applying
+  the image source conversion and selected viewport display transform when
+  supported; failed or over-budget conversions retain the sRGB fallback.
+  Other QPainter fallbacks continue using their existing composition. Build
+  passed; no matched Blender comparison has been run.
+
+### Blender Image Empty source color management (2026-10-15)
+
+- Image Empty imports now retain the Blender source color-space name and a
+  stable source-transform identity. Byte sRGB sources decode to scene-linear;
+  known Linear and Non-Color byte sources are treated as linear data. Other
+  supported source spaces and float image buffers carry a bounded
+  scene-linear RGBA32F payload from Blender, including its PREMUL semantics.
+- Payload transport is limited to 32 MiB per image (2,097,152 RGBA pixels)
+  and 64 MiB across a scene. Invalid payloads are ignored with an import
+  warning, and unsupported conversions keep the image visible with an sRGB
+  fallback. Native JSON preserves the metadata and bounded payload.
+- The GPU Image Empty texture uploads supported float payloads directly as
+  RGBA32F, and includes source-space/transform/payload identity in its texture
+  cache key. The QPainter path applies the active Standard, AgX, PBR Neutral,
+  Filmic, or imported LUT display transform to scene-linear pixels. Its
+  16-million-pixel processing cap still returns the original image above the
+  limit. QPainter still composites translucent Image Empties after the view
+  transform, while Blender composites in scene-linear space before it; exact
+  transparent-image parity in that fallback remains open. C++ build passed;
+  GPU runtime and matched Blender comparisons remain open.
 
 ### GPU depth-of-field alpha gather (2026-10-15)
 

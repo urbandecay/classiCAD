@@ -241,6 +241,7 @@ private:
         GLuint texture = 0;
         QSize size;
         bool premultipliedAlpha = false;
+        GLint internalFormat = GL_RGBA8;
     };
 
     bool initialize();
@@ -268,7 +269,7 @@ private:
     QOpenGLBuffer lineWireOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
-    QHash<qint64, PictureTexture> pictureTextures_;
+    QHash<QString, PictureTexture> pictureTextures_;
     GLuint overlayTextTexture_ = 0;
     GLuint strokeBaseFramebuffer_ = 0;
     GLuint strokeLineFramebuffer_ = 0;

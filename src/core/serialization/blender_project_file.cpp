@@ -1799,6 +1799,7 @@ bool parseBlenderPictureItem(
     const QJsonObject &item,
     const QHash<QString, classiCAD::CollectionId> &collectionIds,
     classiCAD::SceneObject *sceneObject,
+    QStringList *warnings,
     QString *errorMessage)
 {
     if (sceneObject == nullptr ||
@@ -1899,6 +1900,43 @@ bool parseBlenderPictureItem(
         setError(errorMessage, QStringLiteral("Image Empty image could not be read or exceeds its size limit"));
         return false;
     }
+    const QString pictureColorSpace = item.value(
+        QStringLiteral("picture_color_space")).toString(QStringLiteral("sRGB"));
+    const QString pictureSourceTransformId = item.value(
+        QStringLiteral("picture_source_transform_id")).toString(
+            QStringLiteral("identity"));
+    const QString encodedSceneLinear = item.value(
+        QStringLiteral("picture_scene_linear_float_data_base64")).toString();
+    QByteArray sceneLinearFloatData;
+    int sceneLinearFloatWidth = 0;
+    int sceneLinearFloatHeight = 0;
+    if (!encodedSceneLinear.isEmpty()) {
+        if (!decodeFiniteSceneLinearFloatPayload(
+                encodedSceneLinear,
+                item.value(QStringLiteral("picture_scene_linear_float_width")),
+                item.value(QStringLiteral("picture_scene_linear_float_height")),
+                &sceneLinearFloatData, &sceneLinearFloatWidth,
+                &sceneLinearFloatHeight) ||
+            sceneLinearFloatWidth != image.width() ||
+            sceneLinearFloatHeight != image.height() ||
+            (pictureSourceTransformId.size() != 64 &&
+             pictureSourceTransformId != QStringLiteral("blender-float-buffer"))) {
+            sceneLinearFloatData.clear();
+            sceneLinearFloatWidth = 0;
+            sceneLinearFloatHeight = 0;
+            if (warnings != nullptr) {
+                warnings->append(QStringLiteral("%1: invalid Image Empty scene-linear image data was ignored")
+                                     .arg(blenderItemLabel(item)));
+            }
+        }
+    }
+    const QString sourceTransformError = item.value(
+        QStringLiteral("picture_source_transform_error")).toString();
+    if (!sourceTransformError.isEmpty() && warnings != nullptr) {
+        warnings->append(QStringLiteral("%1: %2")
+                             .arg(blenderItemLabel(item),
+                                  sourceTransformError));
+    }
     QVector<double> pictureColor;
     if (!jsonNumberArray(item.value(QStringLiteral("picture_color_linear")), 4,
                          &pictureColor)) {
@@ -1922,6 +1960,11 @@ bool parseBlenderPictureItem(
     }
     result.geometry.pictureImage = image;
     result.geometry.pictureImageData = imageBytes;
+    result.geometry.pictureColorSpace = pictureColorSpace;
+    result.geometry.pictureSourceTransformId = pictureSourceTransformId;
+    result.geometry.pictureSceneLinearFloatData = sceneLinearFloatData;
+    result.geometry.pictureSceneLinearFloatWidth = sceneLinearFloatWidth;
+    result.geometry.pictureSceneLinearFloatHeight = sceneLinearFloatHeight;
     result.geometry.pictureColorSceneLinear = QVector4D(
         float(pictureColor[0]), float(pictureColor[1]),
         float(pictureColor[2]), float(pictureColor[3]));
@@ -2968,7 +3011,7 @@ bool importBlenderScene(const QString &path,
         QString itemError;
         const bool parsed = objectType == QLatin1String("EMPTY_IMAGE")
             ? parseBlenderPictureItem(item, collectionIdsBySource,
-                                      &sceneObject, &itemError)
+                                      &sceneObject, &warnings, &itemError)
             : objectType == QLatin1String("VOLUME")
             ? parseBlenderScalarVolumeItem(item, collectionIdsBySource,
                                            &sceneObject, &itemError)

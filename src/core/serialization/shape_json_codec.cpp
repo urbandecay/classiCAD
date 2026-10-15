@@ -12,15 +12,43 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QIODevice>
+#include <QtEndian>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <utility>
 
 namespace classiCAD {
 
 namespace {
+
+bool decodePictureFloatPayload(const QString &encoded,
+                               int width,
+                               int height,
+                               QByteArray *decoded)
+{
+    if (decoded == nullptr || width <= 0 || height <= 0 ||
+        width > 16384 || height > 16384 ||
+        quint64(width) * quint64(height) * 16ULL > 32ULL * 1024 * 1024 ||
+        encoded.size() > 44 * 1024 * 1024) {
+        return false;
+    }
+    const QByteArray bytes = QByteArray::fromBase64(
+        encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (quint64(bytes.size()) != quint64(width) * quint64(height) * 16ULL)
+        return false;
+    const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+    for (qsizetype offset = 0; offset < bytes.size(); offset += 4) {
+        const quint32 bits = qFromLittleEndian<quint32>(source + offset);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        if (!std::isfinite(value)) return false;
+    }
+    *decoded = bytes;
+    return true;
+}
 
 QJsonArray point3DToJson(const Point3D &point)
 {
@@ -847,6 +875,19 @@ QJsonObject shapeToJson(const Shape &shape)
                       shape.pictureUseAlphaBlend);
         object.insert(QStringLiteral("picturePremultipliedAlpha"),
                       shape.picturePremultipliedAlpha);
+        object.insert(QStringLiteral("pictureColorSpace"),
+                      shape.pictureColorSpace);
+        object.insert(QStringLiteral("pictureSourceTransformId"),
+                      shape.pictureSourceTransformId);
+        if (!shape.pictureSceneLinearFloatData.isEmpty()) {
+            object.insert(QStringLiteral("pictureSceneLinearFloatData"),
+                          QString::fromLatin1(
+                              shape.pictureSceneLinearFloatData.toBase64()));
+            object.insert(QStringLiteral("pictureSceneLinearFloatWidth"),
+                          shape.pictureSceneLinearFloatWidth);
+            object.insert(QStringLiteral("pictureSceneLinearFloatHeight"),
+                          shape.pictureSceneLinearFloatHeight);
+        }
         QByteArray encodedImage = shape.pictureImageData;
         if (encodedImage.isEmpty() && !shape.pictureImage.isNull()) {
             QBuffer imageBuffer(&encodedImage);
@@ -1009,6 +1050,11 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     QVector4D pictureColorSceneLinear(1.0f, 1.0f, 1.0f, 1.0f);
     bool pictureUseAlphaBlend = true;
     bool picturePremultipliedAlpha = false;
+    QString pictureColorSpace = QStringLiteral("sRGB");
+    QString pictureSourceTransformId = QStringLiteral("identity");
+    QByteArray pictureSceneLinearFloatData;
+    int pictureSceneLinearFloatWidth = 0;
+    int pictureSceneLinearFloatHeight = 0;
     if (geometryType == GeometryType::Picture) {
         const auto readBoolean = [&object](const QString &key, bool fallback,
                                            bool *destination) {
@@ -1051,6 +1097,51 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             !readBoolean(QStringLiteral("picturePremultipliedAlpha"), false,
                          &picturePremultipliedAlpha)) {
             return false;
+        }
+        const QJsonValue pictureColorSpaceValue =
+            object.value(QStringLiteral("pictureColorSpace"));
+        const QJsonValue pictureSourceTransformIdValue =
+            object.value(QStringLiteral("pictureSourceTransformId"));
+        const QJsonValue pictureFloatDataValue =
+            object.value(QStringLiteral("pictureSceneLinearFloatData"));
+        if ((!pictureColorSpaceValue.isUndefined() &&
+             !pictureColorSpaceValue.isString()) ||
+            (!pictureSourceTransformIdValue.isUndefined() &&
+             !pictureSourceTransformIdValue.isString()) ||
+            (!pictureFloatDataValue.isUndefined() &&
+             !pictureFloatDataValue.isString())) {
+            return false;
+        }
+        pictureColorSpace = pictureColorSpaceValue.toString(
+            QStringLiteral("sRGB"));
+        pictureSourceTransformId = pictureSourceTransformIdValue.toString(
+            QStringLiteral("identity"));
+        const QString encodedPictureFloatData =
+            pictureFloatDataValue.toString();
+        if (!encodedPictureFloatData.isEmpty()) {
+            const QJsonValue widthValue = object.value(
+                QStringLiteral("pictureSceneLinearFloatWidth"));
+            const QJsonValue heightValue = object.value(
+                QStringLiteral("pictureSceneLinearFloatHeight"));
+            const double widthNumber = widthValue.toDouble(-1.0);
+            const double heightNumber = heightValue.toDouble(-1.0);
+            if (!widthValue.isDouble() || !heightValue.isDouble() ||
+                !std::isfinite(widthNumber) || !std::isfinite(heightNumber) ||
+                std::floor(widthNumber) != widthNumber ||
+                std::floor(heightNumber) != heightNumber ||
+                widthNumber < 1.0 || heightNumber < 1.0 ||
+                widthNumber > 16384.0 || heightNumber > 16384.0) {
+                return false;
+            }
+            pictureSceneLinearFloatWidth = static_cast<int>(widthNumber);
+            pictureSceneLinearFloatHeight = static_cast<int>(heightNumber);
+            if (!decodePictureFloatPayload(
+                    encodedPictureFloatData,
+                    pictureSceneLinearFloatWidth,
+                    pictureSceneLinearFloatHeight,
+                    &pictureSceneLinearFloatData)) {
+                return false;
+            }
         }
         const QJsonValue sideValue =
             object.value(QStringLiteral("pictureImageSide"));
@@ -1142,6 +1233,11 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         reader.setAutoTransform(true);
         pictureImage = reader.read();
         if (pictureImage.isNull()) {
+            return false;
+        }
+        if (!pictureSceneLinearFloatData.isEmpty() &&
+            (pictureSceneLinearFloatWidth != pictureImage.width() ||
+             pictureSceneLinearFloatHeight != pictureImage.height())) {
             return false;
         }
     }
@@ -1357,6 +1453,11 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureColorSceneLinear = pictureColorSceneLinear;
     shape->pictureUseAlphaBlend = pictureUseAlphaBlend;
     shape->picturePremultipliedAlpha = picturePremultipliedAlpha;
+    shape->pictureColorSpace = pictureColorSpace;
+    shape->pictureSourceTransformId = pictureSourceTransformId;
+    shape->pictureSceneLinearFloatData = pictureSceneLinearFloatData;
+    shape->pictureSceneLinearFloatWidth = pictureSceneLinearFloatWidth;
+    shape->pictureSceneLinearFloatHeight = pictureSceneLinearFloatHeight;
     shape->pictureImageData = geometryType == GeometryType::Picture
                                   ? QByteArray::fromBase64(
                                         object.value(QStringLiteral("pictureImage"))

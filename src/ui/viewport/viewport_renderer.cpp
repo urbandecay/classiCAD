@@ -41,6 +41,7 @@
 #include <bit>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -53,13 +54,23 @@ constexpr int kGridLineHalfCount = 75;
 constexpr qint64 kMaximumPictureProcessPixels = 16'000'000;
 
 QImage pictureImageForPainter(const Shape &picture,
-                              bool deferCutoutAlphaThreshold)
+                              bool deferCutoutAlphaThreshold,
+                              const ViewportShadingSettings &shadingSettings)
 {
     if (picture.pictureImage.isNull()) return {};
     const QVector4D tint = picture.pictureColorSceneLinear;
     const bool tinted = tint != QVector4D(1.0f, 1.0f, 1.0f, 1.0f);
-    if (!tinted && picture.pictureUseAlphaBlend)
-        return picture.pictureImage;
+    const bool hasSceneLinearPayload =
+        picture.pictureSceneLinearFloatWidth == picture.pictureImage.width() &&
+        picture.pictureSceneLinearFloatHeight == picture.pictureImage.height() &&
+        picture.pictureSceneLinearFloatData.size() ==
+            qint64(picture.pictureImage.width()) *
+                picture.pictureImage.height() * 16;
+    const QString colorSpace = picture.pictureColorSpace.trimmed();
+    const bool sourceIsLinear = colorSpace.startsWith(
+        QStringLiteral("Linear"), Qt::CaseInsensitive) ||
+        colorSpace.compare(QStringLiteral("Non-Color"),
+                           Qt::CaseInsensitive) == 0;
     const qint64 pixelCount = qint64(picture.pictureImage.width()) *
                               picture.pictureImage.height();
     if (pixelCount <= 0 || pixelCount > kMaximumPictureProcessPixels)
@@ -73,30 +84,68 @@ QImage pictureImageForPainter(const Shape &picture,
                    ? value / 12.92f
                    : std::pow((value + 0.055f) / 1.055f, 2.4f);
     };
-    const auto encodeSrgb = [](float value) {
-        value = std::clamp(value, 0.0f, 1.0f);
-        return value <= 0.0031308f
-                   ? value * 12.92f
-                   : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+    const auto sceneLinearChannel = [&](const QRgb source,
+                                        int channel,
+                                        qsizetype pixelOffset) {
+        if (hasSceneLinearPayload) {
+            const auto *bytes = reinterpret_cast<const uchar *>(
+                picture.pictureSceneLinearFloatData.constData());
+            const quint32 bits = qFromLittleEndian<quint32>(
+                bytes + pixelOffset + channel * 4);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            if (picture.picturePremultipliedAlpha) {
+                const quint32 alphaBits = qFromLittleEndian<quint32>(
+                    bytes + pixelOffset + 12);
+                float sourceAlpha = 0.0f;
+                std::memcpy(&sourceAlpha, &alphaBits, sizeof(sourceAlpha));
+                value = sourceAlpha > 1.0e-8f ? value / sourceAlpha : 0.0f;
+            }
+            return value;
+        }
+        const int encodedChannel = channel == 0 ? qRed(source)
+            : channel == 1 ? qGreen(source) : qBlue(source);
+        const float encoded = float(encodedChannel) / 255.0f;
+        return sourceIsLinear ? encoded : decodeSrgb(encoded);
     };
     for (int y = 0; y < result.height(); ++y) {
         auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));
         for (int x = 0; x < result.width(); ++x) {
             const QRgb source = row[x];
+            const qsizetype pixelOffset =
+                (qsizetype(y) * result.width() + x) * 16;
             const int sourceAlpha = qAlpha(source);
+            float sourceAlphaFloat = float(sourceAlpha) / 255.0f;
+            if (hasSceneLinearPayload) {
+                const auto *bytes = reinterpret_cast<const uchar *>(
+                    picture.pictureSceneLinearFloatData.constData());
+                const quint32 bits = qFromLittleEndian<quint32>(
+                    bytes + pixelOffset + 12);
+                std::memcpy(&sourceAlphaFloat, &bits, sizeof(sourceAlphaFloat));
+            }
             const int alpha = picture.pictureUseAlphaBlend
-                ? qRound(sourceAlpha * std::clamp(tint.w(), 0.0f, 1.0f))
+                ? qRound(std::clamp(sourceAlphaFloat *
+                                        std::clamp(tint.w(), 0.0f, 1.0f),
+                                    0.0f, 1.0f) * 255.0f)
                 : deferCutoutAlphaThreshold
-                    ? sourceAlpha
-                    : sourceAlpha < qRound(0.05 * 255.0) ? 0 : 255;
-            const auto convertChannel = [&](int channel, float colorTint) {
-                float linear = decodeSrgb(float(channel) / 255.0f);
-                if (tinted) linear *= colorTint;
-                return qRound(encodeSrgb(linear) * 255.0f);
-            };
-            const int red = convertChannel(qRed(source), tint.x());
-            const int green = convertChannel(qGreen(source), tint.y());
-            const int blue = convertChannel(qBlue(source), tint.z());
+                    ? qRound(std::clamp(sourceAlphaFloat, 0.0f, 1.0f) * 255.0f)
+                    : sourceAlphaFloat < 0.05f ? 0 : 255;
+            QVector3D linearColor(sceneLinearChannel(source, 0, pixelOffset),
+                                  sceneLinearChannel(source, 1, pixelOffset),
+                                  sceneLinearChannel(source, 2, pixelOffset));
+            if (tinted) {
+                linearColor.setX(linearColor.x() * tint.x());
+                linearColor.setY(linearColor.y() * tint.y());
+                linearColor.setZ(linearColor.z() * tint.z());
+            }
+            const QVector3D displayColor = workbenchSceneLinearToDisplaySrgb(
+                linearColor, shadingSettings.colorTransform,
+                shadingSettings.colorExposure, shadingSettings.colorGamma,
+                shadingSettings.colorLutData,
+                shadingSettings.colorLutMetadata);
+            const int red = qRound(std::clamp(displayColor.x(), 0.0f, 1.0f) * 255.0f);
+            const int green = qRound(std::clamp(displayColor.y(), 0.0f, 1.0f) * 255.0f);
+            const int blue = qRound(std::clamp(displayColor.z(), 0.0f, 1.0f) * 255.0f);
             row[x] = qRgba(red, green, blue, alpha);
         }
     }
@@ -3217,7 +3266,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             (canUseSceneDepthRaster || canUseViewportCutoutRaster);
         const QImage painterImage = imageVisible
             ? pictureImageForPainter(
-                  shape, rasterizePicture && !shape.pictureUseAlphaBlend)
+                  shape, rasterizePicture && !shape.pictureUseAlphaBlend,
+                  shadingSettings_)
             : QImage{};
         if (imageVisible && painterImage.isNull()) return;
 

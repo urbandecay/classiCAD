@@ -61,6 +61,11 @@ struct Shape {
     // Picture frame corners are stored in points; image bytes are embedded.
     QImage pictureImage;
     QByteArray pictureImageData;
+    QString pictureColorSpace = QStringLiteral("sRGB");
+    QString pictureSourceTransformId = QStringLiteral("identity");
+    QByteArray pictureSceneLinearFloatData;
+    int pictureSceneLinearFloatWidth = 0;
+    int pictureSceneLinearFloatHeight = 0;
     bool pictureShowPerspective = true;
     bool pictureShowOrthographic = true;
     bool pictureOnlyAxisAligned = false;

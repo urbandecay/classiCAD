@@ -707,6 +707,9 @@ def extract_image_empty(obj, scene, packed_payload_budget,
                center + half_x + half_y,
                center + half_x - half_y,
                center - half_x - half_y]
+    source_transform = bake_image_source_transform(
+        image, "image:%s:%s" %
+        (image.name_full, source_library_path(image)))
     item = object_metadata(obj, scene, depsgraph)
     item.update({
         "object_type": "EMPTY_IMAGE",
@@ -719,6 +722,12 @@ def extract_image_empty(obj, scene, packed_payload_budget,
             evaluated, "use_empty_image_alpha", False)),
         "picture_premultiplied_alpha": str(
             getattr(image, "alpha_mode", "STRAIGHT")) == "PREMUL",
+        "picture_color_space": image.colorspace_settings.name,
+        "picture_source_transform_id": source_transform["id"],
+        "picture_scene_linear_float_data_base64": source_transform["payload"],
+        "picture_scene_linear_float_width": source_transform["width"],
+        "picture_scene_linear_float_height": source_transform["height"],
+        "picture_source_transform_error": source_transform["error"],
         "empty_image_depth": str(getattr(evaluated, "empty_image_depth", "DEFAULT")),
         "show_empty_image_perspective": bool(
             getattr(evaluated, "show_empty_image_perspective", True)),

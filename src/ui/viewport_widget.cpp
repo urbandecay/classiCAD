@@ -12724,10 +12724,10 @@ protected:
             // after scene color resolve. Preserve scene depth for the image's
             // depth test, but composite its display-referred pixels only after
             // Workbench's scene-linear color transform.
+            QVector<const TransientPreviewPicture *> backPictures;
             if (sceneRenderer != nullptr) {
                 QVector<const TransientPreviewPicture *> regularPictures;
                 QVector<const TransientPreviewPicture *> frontPictures;
-                QVector<const TransientPreviewPicture *> backPictures;
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex < 0) continue;
                     if (preview.showInFront ||
@@ -12799,7 +12799,6 @@ protected:
                 };
                 drawPictureGroup(regularPictures, true);
                 drawPictureGroup(frontPictures, false);
-                drawPictureGroup(backPictures, false);
             }
             // Selected-face highlighting is also an edit-mode overlay. Draw it
             // after resolve/history presentation against the unjittered scene
@@ -12949,6 +12948,20 @@ protected:
                         arcHudPanelWidth,
                         !gpuActiveToolPreview || !gpuPreviewRendered,
                         viewportOverlay_.snapLabelsVisible());
+            }
+            // Blender composites Back Image Empties in its final output pass,
+            // after the regular and in-front overlay passes. Keep them above
+            // scene wires, the grid, and editor previews as well.
+            if (sceneRenderer != nullptr) {
+                for (const TransientPreviewPicture *preview : backPictures) {
+                    if (preview == nullptr) continue;
+                    if (!sceneRenderer->drawPicture(
+                            preview->image, overlayCamera,
+                            renderFrame.viewportSize, devicePixelRatioF(),
+                            preview->opacity, false, false, true)) {
+                        failedScenePicturePreviews.append(&preview->image);
+                    }
+                }
             }
             QVector<float> fallbackSceneDepth;
             const qreal fallbackDpr = std::max<qreal>(devicePixelRatioF(), 1.0);

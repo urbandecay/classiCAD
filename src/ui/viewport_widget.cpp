@@ -13197,8 +13197,8 @@ protected:
                         QPainter::SmoothPixmapTransform, true);
                     const bool pictureDepthTested =
                         !object->showInFront &&
-                        object->shape.pictureImageDepth !=
-                            PictureImageDepth::Front;
+                        object->shape.pictureImageDepth ==
+                            PictureImageDepth::Default;
                     drawShape(
                         picturePainter, object->shape, false,
                         object->selected, false, object->layerColor,

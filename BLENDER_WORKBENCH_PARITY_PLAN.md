@@ -8227,10 +8227,12 @@ resolve remain open.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 
-- The QPainter picture path now uses retained scene depth when available.
+- The direct QPainter picture fallback uses retained scene depth when available.
   Default images are masked where a nearer surface is present, Back images are
   masked wherever the retained scene has geometry, and Front images bypass the
-  mask. The original image alpha and filtering are preserved. The bounded
+  mask. In the bounded deferred overlay route, Back and Front images bypass
+  scene-depth masking, matching Blender's final color-only output target. The
+  original image alpha and filtering are preserved. The bounded
   raster mask is skipped above 16 million depth pixels or when depth is
   unavailable; retained transparent surfaces are treated as occluding, and
   failed picture-texture previews still use the unmasked draw path. C++ build
@@ -8666,11 +8668,12 @@ resolve remain open.
   pixels with linear-light alpha arithmetic.
   Their source color uses Blender's sRGB display encoding without the
   Workbench view transform. Default images keep scene-depth masking; Back and
-  Front retain their separate depth behavior. Direct QPainter fallback scenes
-  still use encoded-space blending when the bounded deferred path is
-  unavailable. If scene-linear image allocation or conversion fails, QPainter
-  now switches that draw back to its encoded-image path instead of treating
-  source bytes as linear color. Front-depth and object-level In Front images
+  Front bypass it because Blender composites them in a depthless color-only
+  target. Direct QPainter fallback scenes still use encoded-space blending
+  and the retained-depth approximation described above when the bounded
+  deferred path is unavailable. If scene-linear image allocation or
+  conversion fails, QPainter switches that draw back to its encoded-image path
+  instead of treating source bytes as linear color. Front-depth and object-level In Front images
   bypass scene depth, matching Blender's no-depth image pass. See Blender's image shader,
   [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1121-L1145), and [`gpu_shader_image_overlays_merge_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/shaders/gpu_shader_image_overlays_merge_frag.glsl). C++ build and matched Image Empty comparisons remain open.
 

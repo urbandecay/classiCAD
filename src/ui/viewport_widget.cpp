@@ -12677,13 +12677,11 @@ protected:
                 const Point3D viewDirection = viewportTransform_.viewDirection();
                 const QVector<Point3D> &segments =
                     stroke.preparedDepthGeometry->preciseLineVertices;
+                const QVector<QVector4D> &endpointColors =
+                    stroke.lineVertexColors;
                 painter.save();
                 painter.setRenderHint(QPainter::Antialiasing,
                                       smoothWiresOverlay_);
-                QPen pen(stroke.color);
-                pen.setWidthF(std::max<qreal>(1.0, stroke.width));
-                pen.setCapStyle(Qt::RoundCap);
-                painter.setPen(pen);
                 for (int index = 0; index + 1 < segments.size(); index += 2) {
                     const Point3D &first = segments[index];
                     const Point3D &second = segments[index + 1];
@@ -12755,7 +12753,31 @@ protected:
                                     rasterSurfaceLayers.inFrontSceneDepth[pixel]);
                             }
                         }
-                        if (visible) painter.drawLine(a, b);
+                        if (visible) {
+                            QColor wireColor = stroke.color;
+                            if (endpointColors.size() == segments.size()) {
+                                const QVector4D firstColor =
+                                    endpointColors[index];
+                                const QVector4D secondColor =
+                                    endpointColors[index + 1];
+                                const QVector4D color =
+                                    firstColor * float(1.0 - tm) +
+                                    secondColor * float(tm);
+                                wireColor.setRedF(std::clamp<qreal>(
+                                    wireColor.redF() * color.x(), 0.0, 1.0));
+                                wireColor.setGreenF(std::clamp<qreal>(
+                                    wireColor.greenF() * color.y(), 0.0, 1.0));
+                                wireColor.setBlueF(std::clamp<qreal>(
+                                    wireColor.blueF() * color.z(), 0.0, 1.0));
+                                wireColor.setAlphaF(std::clamp<qreal>(
+                                    wireColor.alphaF() * color.w(), 0.0, 1.0));
+                            }
+                            QPen pen(wireColor);
+                            pen.setWidthF(std::max<qreal>(1.0, stroke.width));
+                            pen.setCapStyle(Qt::RoundCap);
+                            painter.setPen(pen);
+                            painter.drawLine(a, b);
+                        }
                     }
                 }
                 painter.restore();

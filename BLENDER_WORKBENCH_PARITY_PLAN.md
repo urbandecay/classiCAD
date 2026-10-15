@@ -7635,6 +7635,10 @@ resolve remain open.
   rotated curves and surfaces use object-aligned proxies instead of a world
   axis-aligned box. Capsule placement follows Blender's local X-size formula.
   These proxies have not been matched visually against Blender.
+  The ordinary QPainter mesh-wire overlay interpolates Blender's per-endpoint
+  colors for each visible edge sample and preserves the configured wire
+  opacity, matching the GPU stroke color treatment. Matched Blender wire-color
+  image comparison remains open.
   These theme colors come from the Blender installation used for import, not
   the `.blend` file, so another system can render a different theme. Polygon
   edge filtering uses Blender's face-angle

@@ -8169,6 +8169,176 @@ int main(int argc, char *argv[])
                     passed &= check(
                         gpuLinkedRandomPathsMatch,
                         "GPU Workbench Random shading must use Blender's linked-library-path hue for same-named objects");
+                    const QString linkedRandomBlendPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_LINKED_RANDOM_BLEND");
+                    if (!linkedRandomBlendPath.isEmpty()) {
+                        QVector<SceneObject> linkedRandomSceneObjects;
+                        QVector<DocumentCollection> linkedRandomCollections;
+                        QVector<DocumentMaterial> linkedRandomMaterials;
+                        BlenderSceneImportReport linkedRandomImportReport;
+                        QString linkedRandomImportError;
+                        const bool linkedRandomBlendLoaded =
+                            importBlenderScene(
+                                linkedRandomBlendPath,
+                                QStringLiteral("original"),
+                                &linkedRandomSceneObjects,
+                                &linkedRandomCollections,
+                                &linkedRandomMaterials,
+                                &linkedRandomImportReport,
+                                &linkedRandomImportError);
+                        Document linkedRandomDocument;
+                        History linkedRandomHistory(linkedRandomDocument);
+                        DocumentTransaction linkedRandomTransaction(
+                            linkedRandomDocument, linkedRandomHistory);
+                        bool linkedRandomDocumentBuilt =
+                            linkedRandomBlendLoaded &&
+                            linkedRandomSceneObjects.size() == 2 &&
+                            linkedRandomMaterials.isEmpty();
+                        if (linkedRandomBlendLoaded) {
+                            for (SceneObject &object :
+                                 linkedRandomSceneObjects) {
+                                object.collectionIds.clear();
+                            }
+                            const QVector<ObjectId> insertedIds =
+                                linkedRandomTransaction.insertObjects(
+                                    0, linkedRandomSceneObjects);
+                            linkedRandomDocumentBuilt &=
+                                insertedIds.size() ==
+                                linkedRandomSceneObjects.size();
+                            linkedRandomDocumentBuilt &=
+                                linkedRandomTransaction.commit();
+                        }
+                        const ViewportRenderFrame linkedRandomFrame =
+                            linkedRandomDocumentBuilt
+                                ? buildViewportRenderFrame(
+                                      linkedRandomDocument, gpuTransform,
+                                      glSize, {})
+                                : ViewportRenderFrame{};
+                        QSet<QString> linkedRandomLibraryPaths;
+                        QSet<quint64> linkedRandomObjectIds;
+                        bool linkedRandomFrameIdentityMatches =
+                            linkedRandomFrame.objects.size() == 2;
+                        const QString linkedRandomDisplayName =
+                            QStringLiteral("LinkedFixture");
+                        for (const ViewportRenderObject &object :
+                             linkedRandomFrame.objects) {
+                            linkedRandomFrameIdentityMatches &=
+                                object.displayName == linkedRandomDisplayName &&
+                                !object.libraryPath.isEmpty() &&
+                                object.shape.geometryType ==
+                                    GeometryType::PolygonMesh;
+                            linkedRandomLibraryPaths.insert(
+                                object.libraryPath);
+                            linkedRandomObjectIds.insert(
+                                object.objectId.value());
+                        }
+                        linkedRandomFrameIdentityMatches &=
+                            linkedRandomLibraryPaths.size() == 2 &&
+                            linkedRandomObjectIds.size() == 2;
+
+                        ViewportShadingSettings linkedRandomImportedSettings =
+                            rawFaceShading;
+                        linkedRandomImportedSettings.lightingMode =
+                            ViewportLightingMode::Flat;
+                        linkedRandomImportedSettings.colorMode =
+                            ViewportColorMode::Random;
+                        linkedRandomImportedSettings.outline = false;
+                        linkedRandomImportedSettings.shadows = false;
+                        linkedRandomImportedSettings.cavity = false;
+                        linkedRandomImportedSettings.specularLighting = false;
+                        CurveHitTester linkedRandomHitTester;
+                        ViewportRenderer linkedRandomQPainterRenderer(
+                            gpuTransform, linkedRandomHitTester);
+                        linkedRandomQPainterRenderer.setShadingSettings(
+                            linkedRandomImportedSettings);
+                        linkedRandomQPainterRenderer
+                            .setWorkbenchRasterAntialiasingEnabled(false);
+                        bool linkedRandomQPainterMatches =
+                            linkedRandomFrameIdentityMatches;
+                        bool linkedRandomGpuMatches =
+                            linkedRandomFrameIdentityMatches;
+                        for (const ViewportRenderObject &object :
+                             linkedRandomFrame.objects) {
+                            const QColor randomColor = workbenchRandomColor(
+                                object.objectId, object.displayName,
+                                object.libraryPath);
+                            const QVector3D expectedColor =
+                                workbenchRec709ToSceneLinear(QVector3D(
+                                    randomColor.redF(), randomColor.greenF(),
+                                    randomColor.blueF()));
+                            RasterWorkbenchFragmentSink fragments;
+                            QImage qPainterImage(
+                                glSize, QImage::Format_ARGB32_Premultiplied);
+                            qPainterImage.fill(QColor(34, 34, 34));
+                            QPainter qPainter(&qPainterImage);
+                            linkedRandomQPainterRenderer.drawShape(
+                                qPainter, object.shape, glSize, false,
+                                object.selected, true, object.layerColor,
+                                object.layerLineType,
+                                object.layerLineWeightMm, object.objectId,
+                                object.geometryRevision,
+                                object.preparedDepthGeometry.data(),
+                                object.preparedGeometryOffset,
+                                object.displayColorSceneLinear,
+                                object.hasWorkbenchMaterial
+                                    ? std::optional<WorkbenchMaterialData>(
+                                          object.workbenchMaterial)
+                                    : std::nullopt,
+                                object.displayName, object.libraryPath,
+                                object.meshObjectTransform,
+                                object.meshMaterials, &fragments);
+                            qPainter.end();
+                            bool qPainterColorFound = false;
+                            for (const RasterWorkbenchLinearFragment &fragment :
+                                 fragments) {
+                                const QVector3D actual(
+                                    fragment.sceneLinearRgb[0],
+                                    fragment.sceneLinearRgb[1],
+                                    fragment.sceneLinearRgb[2]);
+                                qPainterColorFound |=
+                                    (actual - expectedColor).length() <
+                                    0.001f;
+                            }
+                            linkedRandomQPainterMatches &=
+                                qPainterColorFound;
+
+                            ViewportRenderObject gpuObject = object;
+                            QVector<float> gpuSceneLinear;
+                            QImage gpuImage;
+                            const bool gpuRendered = renderCoordinatedScene(
+                                linkedRandomImportedSettings,
+                                QByteArrayLiteral("imported-linked-random-") +
+                                    object.libraryPath.toUtf8(),
+                                &gpuImage, &gpuObject,
+                                nullptr, nullptr, QString{}, &gpuSceneLinear);
+                            bool gpuColorFound = false;
+                            for (qsizetype pixel = 0;
+                                 pixel + 2 < gpuSceneLinear.size();
+                                 pixel += 3) {
+                                const QVector3D actual(
+                                    gpuSceneLinear[pixel],
+                                    gpuSceneLinear[pixel + 1],
+                                    gpuSceneLinear[pixel + 2]);
+                                gpuColorFound |=
+                                    (actual - expectedColor).length() <
+                                    0.001f;
+                            }
+                            linkedRandomGpuMatches &=
+                                gpuRendered && gpuColorFound;
+                        }
+                        passed &= check(
+                            linkedRandomBlendLoaded &&
+                                linkedRandomDocumentBuilt &&
+                                linkedRandomFrameIdentityMatches &&
+                                linkedRandomQPainterMatches &&
+                                linkedRandomGpuMatches,
+                            linkedRandomImportError.isEmpty()
+                                ? "linked Blender objects must retain distinct Random identities through import, Document, render frame, QPainter, and GPU"
+                                : qPrintable(QStringLiteral(
+                                      "linked Blender Random identity import failed: %1")
+                                      .arg(linkedRandomImportError)));
+                    }
                     {
                         ViewportRenderObject shadowFactorReceiver;
                         shadowFactorReceiver.shape.geometryType =

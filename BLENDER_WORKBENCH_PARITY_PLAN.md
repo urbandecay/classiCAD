@@ -6846,3 +6846,32 @@ resolve remain open.
 - Validation: `cmake --build build -j4` passed with the 316-source dependency
   audit; `ctest --test-dir build -R '^vignola_file$' --output-on-failure`
   passed (1/1, 6.32 seconds); the fixture runtime reported Blender 5.2.2 LTS.
+
+### Linked Blender object Random identity import (2026-10-15)
+
+- Added a Blender 5.2.2 fixture generator with two separate source libraries,
+  each containing a mesh object named `LinkedFixture`, and a host `.blend`
+  linking both. The host passes through classiCAD's production
+  `importBlenderScene` path, a `DocumentTransaction`, and
+  `buildViewportRenderFrame`; the contract verifies the base object name,
+  distinct library paths and IDs, and matching Random color samples from both
+  QPainter and GPU render paths.
+- The end-to-end contract exposed an import identity mismatch: Blender
+  Workbench hashes the object's `ID.name` and separately mixes the linked
+  library filepath, while Blender Python's `name_full` adds a library suffix.
+  Scene extraction now supplies `obj.name` as the viewport display/hash name;
+  its stable import ID continues to use `name_full` and the library path so
+  separate linked objects remain distinct. Blender 5.2.2's hash inputs are
+  pinned in [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L33).
+- Validation: Blender reported 5.2.2 LTS and created the linked fixture;
+  `cmake --build build -j4` passed with the 318-source dependency audit; the
+  offscreen `classicad_viewport_render_contracts_test` passed with
+  `CLASSICAD_VIEWPORT_LINKED_RANDOM_BLEND` set to the generated host file.
+  Reproduce fixture generation with
+  `blender --background --python tests/blender_linked_random_import_fixture.py -- OUTPUT_DIRECTORY`,
+  then run the viewport contract with
+  `QT_QPA_PLATFORM=offscreen CLASSICAD_BLENDER_EXECUTABLE=blender
+  CLASSICAD_VIEWPORT_LINKED_RANDOM_BLEND=OUTPUT_DIRECTORY/linked-random-host.blend
+  ./build/classicad_viewport_render_contracts_test`. This validates identity
+  transport and each renderer's color input, not a paired full-frame Blender
+  render comparison.

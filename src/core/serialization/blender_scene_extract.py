@@ -588,7 +588,10 @@ def object_metadata(obj, scene):
     parent = obj.parent
     return {
         "object_id": stable_id(obj),
-        "name": obj.name_full,
+        # Workbench Random hashes ID.name, which is obj.name in Blender's
+        # Python API. name_full adds a linked-library suffix and would change
+        # the Workbench color before the separate library path is mixed in.
+        "name": obj.name,
         "library_path": source_library_path(obj),
         "library_path_exists": source_library_exists(obj),
         "scene_name": scene.name_full,

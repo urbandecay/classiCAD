@@ -869,7 +869,7 @@ bool ViewportAaRenderer::initialize()
                 // is sampleIndex / sampleCount; this jitters only the gather
                 // origin and does not rotate the fixed sample pattern.
                 ivec2 noiseCoord = ivec2(gl_FragCoord.xy) % 64;
-                float blueNoise = texelFetch(uNoise, noiseCoord, 0).r;
+                float blueNoise = texelFetch(uNoise, noiseCoord, 0).a;
                 float ign = fract(uJitterOffset + 52.9829189 * fract(
                     0.06711056 * gl_FragCoord.x +
                     0.00583715 * gl_FragCoord.y));

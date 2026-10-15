@@ -8545,3 +8545,11 @@ resolve remain open.
   transform, unless Qt's source storage format already caused that
   unpremultiplication. Alpha zero and one keep Blender's bypass behavior.
   C++ build passed; matched PREMUL Image Empty edge comparison remains open.
+
+### GPU DOF blue-noise channel (2026-10-15)
+
+- The gather angle now reads alpha from the 64×64 blue-noise LUT, matching
+  Blender's `get_random_vector()` in
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L24-L32).
+  The radial offset remains driven by interleaved gradient noise. C++ build
+  passed; matched DOF output comparison remains open.

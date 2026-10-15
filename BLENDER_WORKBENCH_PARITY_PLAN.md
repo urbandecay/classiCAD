@@ -7737,3 +7737,13 @@ resolve remain open.
   per-instance Blender Random variation are not represented; non-mesh
   collection instances are reported as unsupported. The C++ build passed;
   no matched Blender instance comparison has been run.
+
+### QPainter Workbench effect and overlay ordering (2026-10-15)
+
+- When the bounded raster surface compositor succeeds, QPainter now keeps the
+  scene and editor overlays in separate images whenever outline, shadows, or
+  depth of field is enabled. Effects resolve on the scene image before the
+  overlay image is composited, including when shadows and depth of field are
+  both enabled. This remains limited to compositor-supported frames and is
+  disabled for X-Ray. The C++ build passed; no matched Blender comparison has
+  been run.

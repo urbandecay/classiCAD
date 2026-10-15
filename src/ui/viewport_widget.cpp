@@ -9413,11 +9413,9 @@ protected:
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels,
                     false, scalarVolumeDrawObjects);
                 if (rasterSurfaceBatchRendered &&
-                    renderShadingSettings.outline &&
-                    (renderShadingSettings.shadows ||
+                    (renderShadingSettings.outline ||
+                     renderShadingSettings.shadows ||
                      renderShadingSettings.depthOfField) &&
-                    !(renderShadingSettings.shadows &&
-                      renderShadingSettings.depthOfField) &&
                     !renderShadingSettings.xrayEnabled()) {
                     // Workbench resolves scene effects before editor wires,
                     // previews, and other QPainter overlays. Keep the surface

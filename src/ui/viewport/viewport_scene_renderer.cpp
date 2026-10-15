@@ -2495,7 +2495,11 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     else
         glDisable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // The picture shader emits straight RGB. Match Blender's premultiplied
+    // image pass while keeping that RGB representation: alpha is accumulated
+    // once, not multiplied by the source alpha a second time.
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
     pictureVertexArray_.bind();
     pictureVertexBuffer_.bind();

@@ -8401,3 +8401,14 @@ resolve remain open.
   now use the Edit Mode Smooth Wires preference, leaving ordinary curve
   strokes on the independent Overlay preference. C++ build passed; matched
   wire-image comparison remains open.
+
+### Image Empty alpha-channel blending (2026-10-15)
+
+- The GPU Image Empty shader emits straight RGB, so its blend state now uses
+  source alpha for RGB while accumulating alpha with `ONE,
+  ONE_MINUS_SRC_ALPHA`. This avoids multiplying source alpha twice in the
+  render target and matches Blender's premultiplied image output/blend
+  contract in
+  [`overlay_image_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_image_frag.glsl#L29-L30)
+  and [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L80-L87).
+  C++ build passed; matched alpha-composite comparison remains open.

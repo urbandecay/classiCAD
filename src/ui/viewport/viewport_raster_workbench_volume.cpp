@@ -132,6 +132,16 @@ bool rasterTriangle(const std::array<Vertex,3> &v, qreal dpr,
 
 } // namespace
 
+float rasterWorkbenchVolumeDitherNoise(int x, int y,
+                                       int viewportPixelHeight) noexcept
+{
+    static constexpr int matrix[16] = {
+        0, 8, 2, 10, 12, 4, 14, 6,
+        3, 11, 1, 9, 15, 7, 13, 5};
+    const int glY = viewportPixelHeight - 1 - y;
+    return (float(matrix[(x & 3) * 4 + (glY & 3)]) + 0.5f) / 16.0f;
+}
+
 bool rasterWorkbenchVolumeSliceSamples(
     const ViewportRenderObject &object, const ViewportTransform &camera,
     const QSize &viewportSize, qreal devicePixelRatio,
@@ -430,12 +440,6 @@ bool rasterWorkbenchVolumeRaySamples(
     const float stepLength = std::max(1.0e-16f, sampleSpacing.length());
     const int maxSteps = std::min(2560, std::max({nx, ny, nz}) * 5);
     const float densityScale = std::max(0.0f, volume.densityScale);
-    const auto bayerNoise = [](int x, int y) {
-        static constexpr int matrix[16] = {
-            0, 8, 2, 10, 12, 4, 14, 6,
-            3, 11, 1, 9, 15, 7, 13, 5};
-        return (float(matrix[(x & 3) * 4 + (y & 3)]) + 0.5f) / 16.0f;
-    };
     std::size_t integratedSamples = 0;
     samples->reserve(qsizetype(std::min(candidatePixels, kMaximumRayPixels)));
     for (int y = minY; y <= maxY; ++y) {
@@ -499,7 +503,8 @@ bool rasterWorkbenchVolumeRaySamples(
             const double worldChordLength = farT - nearT;
             const float rayStepWorld = stepLength / viewCosine;
             if (rayStepWorld <= 0.0f || !std::isfinite(rayStepWorld)) continue;
-            const float noise = bayerNoise(x, y);
+            const float noise = rasterWorkbenchVolumeDitherNoise(
+                x, y, height);
             float transmittance = 1.0f;
             QVector3D radiance;
             bool exhaustedWork = false;

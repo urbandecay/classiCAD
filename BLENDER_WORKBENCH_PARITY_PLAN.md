@@ -5064,6 +5064,25 @@ resolve remain open.
   Offscreen `viewport_render_contracts` passed. Matched Blender output and
   additional opaque/transparent volume-depth combinations remain open.
 
+### QPainter scalar-volume Bayer row orientation (2026-10-15)
+
+- The ray marcher now maps its top-left CPU image row to Blender's bottom-up
+  fragment row before indexing the 4×4 volume dither matrix. Blender 5.2.2
+  indexes the matrix with `int2(gl_FragCoord.xy) % 4`; the previous QPainter
+  loop used its top-down array row directly. The matrix is asymmetric under
+  vertical reflection, so the old code started rays at a different offset.
+  The new `rasterWorkbenchVolumeDitherNoise` helper keeps that coordinate
+  conversion explicit and covered independently.
+- The focused contract checks the top and bottom row phases against the pinned
+  Blender matrix. This corrects sample placement only; it does not establish
+  matched volume output, density integration parity, or full camera/depth
+  coverage. Those volume acceptance items remain open.
+- Blender 5.2.2's Bayer matrix and bottom-up coordinate source are pinned in
+  [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L1627-L1645).
+- Validation: `cmake --build build -j4` passed with the 320-source dependency
+  audit; offscreen `viewport_render_contracts` and
+  `workbench_raster_fragment_contracts` passed (2/2). No GUI was launched.
+
 ### Matched GPU object-outline comparison (2026-10-14)
 
 - Fresh 640×480 background captures from Blender 5.2.2 and classiCAD use the

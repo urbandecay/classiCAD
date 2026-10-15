@@ -28,6 +28,10 @@ struct RasterWorkbenchVolumeRaySample {
     RasterWorkbenchLinearPixel premultipliedColor;
 };
 
+// Translate a top-left CPU row into Workbench's bottom-left Bayer coordinates.
+float rasterWorkbenchVolumeDitherNoise(int x, int y,
+                                       int viewportPixelHeight) noexcept;
+
 // Builds samples only for a valid, enabled scalar-volume slice. False means
 // unsupported input, a safety limit was exceeded, or the slice projected no
 // covered pixels. The output is cleared on failure.

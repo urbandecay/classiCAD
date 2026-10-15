@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "ui/viewport/viewport_raster_workbench_linear.h"
 #include "ui/viewport/viewport_raster_workbench_effects.h"
+#include "ui/viewport/viewport_raster_workbench_volume.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "services/hit_testing/curve_hit_tester.h"
 
@@ -212,6 +213,12 @@ int main(int argc, char **argv)
             rasterWorkbenchCavitySampleCount(501, 0) == 500 &&
             rasterWorkbenchCavitySampleCount(0, 0) == 1,
         "QPainter cavity sampling must honor Blender's 1..500 range within the CPU work budget");
+    passed &= check(
+        std::abs(rasterWorkbenchVolumeDitherNoise(0, 0, 4) -
+                 (10.5f / 16.0f)) < 1.0e-6f &&
+            std::abs(rasterWorkbenchVolumeDitherNoise(0, 3, 4) -
+                     (0.5f / 16.0f)) < 1.0e-6f,
+        "QPainter scalar-volume dither must map top-down rows to Blender's bottom-up pixel coordinates");
     const QSize size(128, 128);
     ViewportTransform transform;
     transform.zoom() = 32.0;

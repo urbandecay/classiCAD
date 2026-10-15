@@ -234,7 +234,8 @@ public:
                      qreal devicePixelRatio,
                      float opacity,
                      bool sceneLinearOutput = false,
-                     bool depthTest = false);
+                     bool depthTest = false,
+                     bool displayReferredOverlay = false);
 
 private:
     struct PictureTexture {
@@ -270,6 +271,8 @@ private:
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<QString, PictureTexture> pictureTextures_;
+    GLuint pictureDestinationTexture_ = 0;
+    QSize pictureDestinationTextureSize_;
     GLuint overlayTextTexture_ = 0;
     GLuint strokeBaseFramebuffer_ = 0;
     GLuint strokeLineFramebuffer_ = 0;

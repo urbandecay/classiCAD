@@ -12601,31 +12601,12 @@ protected:
             bool sceneDrawn = true;
             bool surfacesDrawn = true;
             if (aaRenderer != nullptr) {
-                // Only committed picture images are drawn into the Workbench
-                // scene before its AA resolve. Tool/duplicate/mirror previews,
-                // strokes, cages, selection overlays and the grid are later
-                // overlay passes and must not reset scene accumulation.
+                // Component tint changes the scene color. Image Empties,
+                // tool previews, strokes, cages, selection overlays and the
+                // grid are later overlay passes and do not reset accumulation.
                 QByteArray sceneContentStateKey;
                 QDataStream sceneStateStream(&sceneContentStateKey,
                                              QIODevice::WriteOnly);
-                int scenePictureCount = 0;
-                for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                    if (preview.sceneShapeIndex >= 0) {
-                        ++scenePictureCount;
-                    }
-                }
-                sceneStateStream << qint32(scenePictureCount);
-                for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                    if (preview.sceneShapeIndex < 0) {
-                        continue;
-                    }
-                    sceneStateStream << qint32(preview.sceneShapeIndex)
-                                     << preview.opacity
-                                     << QJsonDocument(shapeToJson(preview.image))
-                                            .toJson(QJsonDocument::Compact)
-                                     << QJsonDocument(shapeToJson(preview.frame))
-                                            .toJson(QJsonDocument::Compact);
-                }
                 int componentTintSuppressionCount = 0;
                 for (const ViewportRenderObject &object : renderFrame.objects) {
                     if (object.selected &&
@@ -12683,23 +12664,6 @@ protected:
             }
 
             if (!cachedScenePresented) {
-                if (sceneRenderer != nullptr) {
-                    for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                        if (preview.sceneShapeIndex >= 0 &&
-                            !preview.showInFront &&
-                            preview.image.pictureImageDepth ==
-                                PictureImageDepth::Back &&
-                            !sceneRenderer->drawPicture(preview.image,
-                                                        sceneCamera,
-                                                        renderFrame.viewportSize,
-                                                        devicePixelRatioF(),
-                                                        preview.opacity,
-                                                        aaSceneSampleActive,
-                                                        true)) {
-                            failedScenePicturePreviews.append(&preview.image);
-                        }
-                    }
-                }
                 QVector<ViewportRenderObject> surfaceDrawObjects =
                     visibleSurfaceShapes;
                 for (ViewportRenderObject &object : surfaceDrawObjects) {
@@ -12722,23 +12686,6 @@ protected:
                             aaRenderer != nullptr ? &aaRenderer->targets()
                                                   : nullptr,
                             aaSceneSampleActive);
-                }
-                if (sceneRenderer != nullptr) {
-                    for (const TransientPreviewPicture &preview :
-                         gpuPreviewPictures) {
-                        if (preview.sceneShapeIndex < 0 ||
-                            preview.showInFront ||
-                            preview.image.pictureImageDepth !=
-                                PictureImageDepth::Default) {
-                            continue;
-                        }
-                        if (!sceneRenderer->drawPicture(
-                                preview.image, sceneCamera,
-                                renderFrame.viewportSize, devicePixelRatioF(),
-                                preview.opacity, aaSceneSampleActive, true)) {
-                            failedScenePicturePreviews.append(&preview.image);
-                        }
-                    }
                 }
                 surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {
@@ -12773,23 +12720,86 @@ protected:
                     overlayCamera, renderFrame.viewportSize,
                     devicePixelRatioF(), visibleSurfaceShapes);
             }
-            // If the native surface pass failed, the software fallback was
-            // painted after the initial Default-depth pictures and covered
-            // them. Re-draw those pictures against the rebuilt scene depth.
-            if (nativeSurfacePassFailed && sceneRenderer != nullptr) {
+            // Blender draws ordinary Image Empties in its overlay framebuffer,
+            // after scene color resolve. Preserve scene depth for the image's
+            // depth test, but composite its display-referred pixels only after
+            // Workbench's scene-linear color transform.
+            if (sceneRenderer != nullptr) {
+                QVector<const TransientPreviewPicture *> regularPictures;
+                QVector<const TransientPreviewPicture *> frontPictures;
+                QVector<const TransientPreviewPicture *> backPictures;
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                    if (preview.sceneShapeIndex < 0 || preview.showInFront ||
-                        preview.image.pictureImageDepth !=
-                            PictureImageDepth::Default) {
-                        continue;
-                    }
-                    if (!sceneRenderer->drawPicture(
-                            preview.image, overlayCamera,
-                            renderFrame.viewportSize, devicePixelRatioF(),
-                            preview.opacity, false, true)) {
-                        failedScenePicturePreviews.append(&preview.image);
+                    if (preview.sceneShapeIndex < 0) continue;
+                    if (preview.showInFront ||
+                        preview.image.pictureImageDepth == PictureImageDepth::Front) {
+                        frontPictures.append(&preview);
+                    } else if (preview.image.pictureImageDepth ==
+                               PictureImageDepth::Back) {
+                        backPictures.append(&preview);
+                    } else {
+                        regularPictures.append(&preview);
                     }
                 }
+                const Point3D cameraPosition =
+                    overlayCamera.cameraPosition(renderFrame.viewportSize);
+                const Point3D viewDirection = overlayCamera.viewDirection();
+                const auto sortFarToNear = [&](
+                    QVector<const TransientPreviewPicture *> *pictures) {
+                    std::stable_sort(
+                        pictures->begin(), pictures->end(),
+                        [&](const TransientPreviewPicture *left,
+                            const TransientPreviewPicture *right) {
+                            const auto depth = [&](
+                                const TransientPreviewPicture *entry) {
+                                if (entry == nullptr) {
+                                    return std::numeric_limits<qreal>::infinity();
+                                }
+                                const QVector<QPointF> corners =
+                                    pictureFrameCorners(entry->image);
+                                if (corners.size() != 4) {
+                                    return std::numeric_limits<qreal>::infinity();
+                                }
+                                QPointF center;
+                                for (const QPointF &corner : corners) {
+                                    center += corner * 0.25;
+                                }
+                                const Point3D world =
+                                    workPlaneFramePointToWorld(
+                                        center,
+                                        shapeWorkPlaneFrame(entry->image));
+                                const qreal value = -(
+                                    (cameraPosition.x - world.x) *
+                                        viewDirection.x +
+                                    (cameraPosition.y - world.y) *
+                                        viewDirection.y +
+                                    (cameraPosition.z - world.z) *
+                                        viewDirection.z);
+                                return std::isfinite(value)
+                                           ? value
+                                           : std::numeric_limits<qreal>::infinity();
+                            };
+                            return depth(left) < depth(right);
+                        });
+                };
+                sortFarToNear(&regularPictures);
+                sortFarToNear(&frontPictures);
+                sortFarToNear(&backPictures);
+                const auto drawPictureGroup = [&](
+                    const QVector<const TransientPreviewPicture *> &pictures,
+                    bool depthTest) {
+                    for (const TransientPreviewPicture *preview : pictures) {
+                        if (preview == nullptr) continue;
+                        if (!sceneRenderer->drawPicture(
+                                preview->image, overlayCamera,
+                                renderFrame.viewportSize, devicePixelRatioF(),
+                                preview->opacity, false, depthTest, true)) {
+                            failedScenePicturePreviews.append(&preview->image);
+                        }
+                    }
+                };
+                drawPictureGroup(regularPictures, true);
+                drawPictureGroup(frontPictures, false);
+                drawPictureGroup(backPictures, false);
             }
             // Selected-face highlighting is also an edit-mode overlay. Draw it
             // after resolve/history presentation against the unjittered scene
@@ -12838,10 +12848,7 @@ protected:
                 renderGridAppearance);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                    if (preview.sceneShapeIndex >= 0 &&
-                        !preview.showInFront &&
-                        preview.image.pictureImageDepth !=
-                            PictureImageDepth::Front) {
+                    if (preview.sceneShapeIndex >= 0) {
                         continue;
                     }
                     if (!previewRenderer->drawPicture(preview.image,

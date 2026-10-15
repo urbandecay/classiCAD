@@ -8724,3 +8724,20 @@ resolve remain open.
   unavailable. This removes the general curved-surface dependence on triangle
   density and the fixed crease-angle threshold. `cmake --build build -j4`
   passed; matched Blender surface-shading comparison remains open.
+
+### GPU Image Empty overlay composition (2026-10-15)
+
+- Committed GPU Image Empties now draw after the scene's AA/DOF and display
+  transform, matching Blender's separate overlay framebuffer. Default-depth
+  images retain scene-depth testing and opaque depth writes; Front and Back
+  images bypass scene depth and draw in their corresponding late overlay
+  groups. Alpha-blended images use a viewport snapshot and an explicit
+  linear-light composite into the display-sRGB target. Blender 5.2.2 routes
+  ordinary Image Empties to `overlay_fb`, in-front images to
+  `overlay_color_only_fb`, and Back images to
+  `overlay_output_color_only_fb`; its image pass uses premultiplied alpha and
+  sorts transparent groups by camera depth. See pinned
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1037-L1145)
+  and [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L888-L995).
+  `cmake --build build -j4` passed; matched Blender Image Empty comparisons
+  remain open.

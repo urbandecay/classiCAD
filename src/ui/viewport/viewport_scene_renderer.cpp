@@ -845,6 +845,10 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
                 glDeleteTextures(1, &texture->texture);
             }
         }
+        if (pictureDestinationTexture_ != 0) {
+            glDeleteTextures(1, &pictureDestinationTexture_);
+            pictureDestinationTexture_ = 0;
+        }
         if (overlayTextTexture_ != 0) {
             glDeleteTextures(1, &overlayTextTexture_);
             overlayTextTexture_ = 0;
@@ -2379,7 +2383,8 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         qreal devicePixelRatio,
                                         float opacity,
                                         bool sceneLinearOutput,
-                                        bool depthTest)
+                                        bool depthTest,
+                                        bool displayReferredOverlay)
 {
     if (picture.geometryType != GeometryType::Picture) return false;
     if (!viewportPictureFrameVisibleInView(picture, transform))
@@ -2537,16 +2542,62 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     const QSize pixelSize(qRound(viewportSize.width() * dpr),
                           qRound(viewportSize.height() * dpr));
+    const bool useAlphaBlend = picture.pictureUseAlphaBlend ||
+        picture.pictureImageDepth != PictureImageDepth::Default ||
+        opacity < 1.0f;
+    constexpr qint64 maximumLinearBlendPixels = 16'000'000;
+    const qint64 viewportPixelCount = qint64(pixelSize.width()) *
+                                      pixelSize.height();
+    const bool linearDestinationBlend = displayReferredOverlay &&
+        useAlphaBlend && viewportPixelCount > 0 &&
+        viewportPixelCount <= maximumLinearBlendPixels;
+    GLint previousFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousReadBuffer = GL_BACK;
+    GLint previousTextureUnit = GL_TEXTURE0;
+    GLint previousTextureOnUnitOne = 0;
+    GLboolean previousFramebufferSrgb = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    if (linearDestinationBlend) {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousFramebuffer);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+        glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousTextureUnit);
+        glActiveTexture(GL_TEXTURE1);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureOnUnitOne);
+        if (pictureDestinationTexture_ == 0) {
+            glGenTextures(1, &pictureDestinationTexture_);
+        }
+        glBindTexture(GL_TEXTURE_2D, pictureDestinationTexture_);
+        if (pictureDestinationTextureSize_ != pixelSize) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+                         pixelSize.width(), pixelSize.height(), 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            pictureDestinationTextureSize_ = pixelSize;
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(previousFramebuffer));
+        glReadBuffer(previousFramebuffer == 0 ? GL_BACK : GL_COLOR_ATTACHMENT0);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0,
+                            pixelSize.width(), pixelSize.height());
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(previousReadFramebuffer));
+        glReadBuffer(static_cast<GLenum>(previousReadBuffer));
+        glActiveTexture(static_cast<GLenum>(previousTextureUnit));
+    }
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     const GLboolean wasDepthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
     GLint previousDepthFunction = GL_LESS;
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     GLboolean previousDepthWrite = GL_TRUE;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthWrite);
-    const bool writesImageDepth = depthTest &&
+    const bool effectiveDepthTest = depthTest &&
+        picture.pictureImageDepth == PictureImageDepth::Default;
+    const bool writesImageDepth = effectiveDepthTest &&
         picture.pictureImageDepth == PictureImageDepth::Default &&
-        !picture.pictureUseAlphaBlend;
-    if (depthTest) {
+        !useAlphaBlend;
+    if (effectiveDepthTest) {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(writesImageDepth ? GL_LESS : GL_LEQUAL);
     } else {
@@ -2554,12 +2605,11 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     }
     glDepthMask(writesImageDepth ? GL_TRUE : GL_FALSE);
     glDisable(GL_CULL_FACE);
-    if (picture.pictureUseAlphaBlend ||
-        picture.pictureImageDepth == PictureImageDepth::Front ||
-        opacity < 1.0f)
+    if (useAlphaBlend && !linearDestinationBlend)
         glEnable(GL_BLEND);
     else
         glDisable(GL_BLEND);
+    glDisable(GL_FRAMEBUFFER_SRGB);
     glBlendEquation(GL_FUNC_ADD);
     // The picture shader emits straight RGB. Match Blender's premultiplied
     // image pass while keeping that RGB representation: alpha is accumulated
@@ -2588,13 +2638,15 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                   transform, viewportSize))
             : 0.0f);
     pictureProgram_.setUniformValue("uPicture", 0);
+    pictureProgram_.setUniformValue("uDestination", 1);
     pictureProgram_.setUniformValue("uOpacity", std::clamp(opacity, 0.0f, 1.0f));
     pictureProgram_.setUniformValue("uSceneLinearOutput",
                                     sceneLinearOutput ? 1 : 0);
     pictureProgram_.setUniformValue(
         "uColor", picture.pictureColorSceneLinear);
-    pictureProgram_.setUniformValue("uUseAlphaBlend",
-                                    picture.pictureUseAlphaBlend ? 1 : 0);
+    pictureProgram_.setUniformValue("uUseAlphaBlend", useAlphaBlend ? 1 : 0);
+    pictureProgram_.setUniformValue("uLinearDestinationBlend",
+                                    linearDestinationBlend ? 1 : 0);
     pictureProgram_.setUniformValue("uPremultipliedAlpha",
                                     picture.picturePremultipliedAlpha ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
@@ -2602,7 +2654,15 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     pictureVertexBuffer_.release();
     pictureVertexArray_.release();
     glBindTexture(GL_TEXTURE_2D, 0);
+    if (linearDestinationBlend) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D,
+                      static_cast<GLuint>(previousTextureOnUnitOne));
+        glActiveTexture(static_cast<GLenum>(previousTextureUnit));
+    }
     glDisable(GL_BLEND);
+    if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
+    else glDisable(GL_FRAMEBUFFER_SRGB);
     glDepthMask(previousDepthWrite);
     glDepthFunc(static_cast<GLenum>(previousDepthFunction));
     if (wasDepthTestEnabled) glEnable(GL_DEPTH_TEST);

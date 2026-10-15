@@ -8149,3 +8149,12 @@ resolve remain open.
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2603-L2645)
   and [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L367).
   C++ build passed; matched outline comparison remains open.
+
+### QPainter opaque prepass coplanar depth ties (2026-10-15)
+
+- QPainter per-pixel surface samples now let a later triangle replace an
+  earlier one at equal camera depth, matching Blender's GPU opaque prepass
+  `GL_LEQUAL` depth test. This applies to the visible, in-front, cavity/shadow,
+  and opaque outline-ID samples, so coplanar scene order consistently selects
+  the same surface ID and normal. C++ build passed; matched image comparison
+  remains open.

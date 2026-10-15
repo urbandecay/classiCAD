@@ -39,6 +39,11 @@ struct RasterSample {
     float sourceAlpha = 1.0f;
 };
 
+struct RasterOutlineSample {
+    float depth = -std::numeric_limits<float>::infinity();
+    quint64 objectId = 0;
+};
+
 float rasterCavityNoise(int x, int y, int channel)
 {
     static const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
@@ -2395,8 +2400,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const bool rasterWorkbenchOutlineEnabled = settings.outline &&
         !(surfaceLayers != nullptr &&
           surfaceLayers->outlineAppliedBeforeDisplay);
-    QVector<RasterSample> outlineSamples;
-    QVector<RasterSample> inFrontOutlineSamples;
+    QVector<RasterOutlineSample> outlineSamples;
+    QVector<RasterOutlineSample> inFrontOutlineSamples;
     if (rasterWorkbenchOutlineEnabled) {
         outlineSamples.resize(width * height);
         inFrontOutlineSamples.resize(width * height);
@@ -2892,8 +2897,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         viewFacingVector);
                     const auto writeNearest = [&](RasterSample &target) {
                         // Camera depth grows farther into the scene, so keep
-                        // the smallest depth when surfaces overlap.
-                        if (target.objectId != 0 && z >= target.depth) return;
+                        // the smallest depth when surfaces overlap. The GPU
+                        // opaque prepass uses LEQUAL, so later coplanar
+                        // fragments replace earlier samples.
+                        if (target.objectId != 0 && z > target.depth) return;
                         target.depth = z;
                         target.position = interpolatedPosition;
                         target.normal = interpolatedNormal;
@@ -2904,10 +2911,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const float sourceAlpha = triangleSourceAlpha;
                     if (rasterWorkbenchOutlineEnabled &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {
-                        QVector<RasterSample> &domainOutlineSamples =
+                        QVector<RasterOutlineSample> &domainOutlineSamples =
                             object.showInFront ? inFrontOutlineSamples
                                                : outlineSamples;
-                        writeNearest(domainOutlineSamples[y * width + x]);
+                        RasterOutlineSample &outlineSample =
+                            domainOutlineSamples[y * width + x];
+                        if (outlineSample.objectId == 0 ||
+                            z <= outlineSample.depth) {
+                            outlineSample.depth = z;
+                            outlineSample.objectId = id;
+                        }
                     }
                     if ((cavityEnabled || shadowEnabled) &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {

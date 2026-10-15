@@ -3085,6 +3085,47 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         // Integer ID sampling resolves the fractional scale to the nearest
         // texel, as the GPU texture lookup does.
         const int outlineSampleOffset = workbenchEffectUiScale(dpr);
+        const float outlineExposureScale = std::exp2(
+            static_cast<float>(settings.colorExposure));
+        const bool standardLinearOutlineBlend = drawWorkbenchOutline &&
+            settings.colorTransform == 1 &&
+            settings.colorGamma > workbenchGammaEpsilon &&
+            std::isfinite(settings.colorGamma) &&
+            std::isfinite(outlineExposureScale) && outlineExposureScale > 0.0f;
+        const QVector3D outlineSceneLinear = workbenchSrgbToSceneLinear(
+            QVector3D(outline.redF(), outline.greenF(), outline.blueF()));
+        const auto blendStandardOutline = [&](QRgb pixel, float coverage) {
+            const float sourceAlpha = static_cast<float>(outline.alphaF()) *
+                                      coverage;
+            const float destinationAlpha = qAlpha(pixel) / 255.0f;
+            const float outputAlpha = sourceAlpha + destinationAlpha *
+                                                       (1.0f - sourceAlpha);
+            if (sourceAlpha <= 0.0f || outputAlpha <= 0.0f) return pixel;
+            const QVector3D encodedDestination(
+                std::pow(qRed(pixel) / 255.0f,
+                         static_cast<float>(settings.colorGamma)),
+                std::pow(qGreen(pixel) / 255.0f,
+                         static_cast<float>(settings.colorGamma)),
+                std::pow(qBlue(pixel) / 255.0f,
+                         static_cast<float>(settings.colorGamma)));
+            const QVector3D destinationLinear =
+                workbenchSrgbToSceneLinear(encodedDestination) /
+                outlineExposureScale;
+            const QVector3D outputLinear =
+                (outlineSceneLinear * sourceAlpha +
+                 destinationLinear *
+                     (destinationAlpha * (1.0f - sourceAlpha))) /
+                outputAlpha;
+            const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+                outputLinear, settings.colorTransform,
+                settings.colorExposure, settings.colorGamma,
+                settings.colorLutData, settings.colorLutMetadata);
+            return qRgba(
+                std::clamp(qRound(display.x() * 255.0f), 0, 255),
+                std::clamp(qRound(display.y() * 255.0f), 0, 255),
+                std::clamp(qRound(display.z() * 255.0f), 0, 255),
+                std::clamp(qRound(outputAlpha * 255.0f), 0, 255));
+        };
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -3136,8 +3177,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                    std::clamp(qRound(outAlpha * 255.0f), 0, 255));
                 };
                 if (drawWorkbenchOutline) {
-                    blend(outline,
-                          static_cast<float>(differentNeighbors) / 4.0f);
+                    const float coverage =
+                        static_cast<float>(differentNeighbors) / 4.0f;
+                    if (standardLinearOutlineBlend) {
+                        out[x] = blendStandardOutline(out[x], coverage);
+                    } else {
+                        blend(outline, coverage);
+                    }
                 }
                 if (drawSelectionOutline) {
                     blend(selectionOutline,

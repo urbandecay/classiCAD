@@ -8017,6 +8017,16 @@ resolve remain open.
   overlays are hidden; Wireframe mode keeps them visible. Ordinary CAD curves
   are unaffected. C++ build passed; a matched view comparison remains open.
 
+### QPainter Workbench outline composition (2026-10-15)
+
+- The QPainter outline fallback now reconstructs bounded scene-linear color
+  from display RGB for the Standard transform, blends Blender's outline color
+  and coverage in scene-linear space, then applies exposure, sRGB conversion,
+  and gamma again. This applies where the retained linear compositor is not
+  available; AgX, Filmic, Neutral, and imported custom-LUT outline fallback
+  blending remain display-space approximations. Alpha is preserved. C++ build
+  passed; matched image comparison remains open.
+
 ### Blender Image Empty view visibility (2026-10-15)
 
 - Imported Image Empties now retain their perspective/orthographic display

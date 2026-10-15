@@ -57,8 +57,7 @@ QImage pictureImageForPainter(const Shape &picture)
     if (picture.pictureImage.isNull()) return {};
     const QVector4D tint = picture.pictureColorSceneLinear;
     const bool tinted = tint != QVector4D(1.0f, 1.0f, 1.0f, 1.0f);
-    if (!tinted && picture.pictureUseAlphaBlend &&
-        !picture.picturePremultipliedAlpha)
+    if (!tinted && picture.pictureUseAlphaBlend)
         return picture.pictureImage;
     const qint64 pixelCount = qint64(picture.pictureImage.width()) *
                               picture.pictureImage.height();
@@ -84,16 +83,11 @@ QImage pictureImageForPainter(const Shape &picture)
         for (int x = 0; x < result.width(); ++x) {
             const QRgb source = row[x];
             const int sourceAlpha = qAlpha(source);
-            const float alphaFraction = float(sourceAlpha) / 255.0f;
             const int alpha = picture.pictureUseAlphaBlend
                 ? qRound(sourceAlpha * std::clamp(tint.w(), 0.0f, 1.0f))
                 : sourceAlpha < qRound(0.05 * 255.0) ? 0 : 255;
             const auto convertChannel = [&](int channel, float colorTint) {
                 float linear = decodeSrgb(float(channel) / 255.0f);
-                if (picture.picturePremultipliedAlpha &&
-                    sourceAlpha > 0 && sourceAlpha < 255) {
-                    linear /= alphaFraction;
-                }
                 if (tinted) linear *= colorTint;
                 return qRound(encodeSrgb(linear) * 255.0f);
             };

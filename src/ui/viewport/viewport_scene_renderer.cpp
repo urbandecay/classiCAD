@@ -2391,6 +2391,26 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     if (image.isNull()) {
         return false;
     }
+    // Blender builds image mipmaps from scene-linear texels. Convert the
+    // decoded sRGB bytes before uploading so OpenGL's mip reduction averages
+    // linear color rather than encoded display values.
+    for (int y = 0; y < image.height(); ++y) {
+        uchar *row = image.scanLine(y);
+        for (int x = 0; x < image.width(); ++x) {
+            uchar *pixel = row + x * 4;
+            for (int channel = 0; channel < 3; ++channel) {
+                const float encoded = float(pixel[channel]) / 255.0f;
+                float linear = encoded <= 0.04045f
+                    ? encoded / 12.92f
+                    : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+                if (picture.picturePremultipliedAlpha) {
+                    linear *= float(pixel[3]) / 255.0f;
+                }
+                pixel[channel] = static_cast<uchar>(
+                    qRound(std::clamp(linear, 0.0f, 1.0f) * 255.0f));
+            }
+        }
+    }
     const qint64 imageCacheKey = picture.pictureImage.cacheKey();
     auto texture = pictureTextures_.find(imageCacheKey);
     if (texture == pictureTextures_.end()) {
@@ -2403,11 +2423,12 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     }
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture->texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    if (texture->size != image.size()) {
+    if (texture->size != image.size() ||
+        texture->premultipliedAlpha != picture.picturePremultipliedAlpha) {
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D,
                      0,
@@ -2418,8 +2439,10 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                      GL_RGBA,
                      GL_UNSIGNED_BYTE,
                      image.constBits());
+        glGenerateMipmap(GL_TEXTURE_2D);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         texture->size = image.size();
+        texture->premultipliedAlpha = picture.picturePremultipliedAlpha;
     }
 
     std::array<PictureVertex, 6> vertices{};

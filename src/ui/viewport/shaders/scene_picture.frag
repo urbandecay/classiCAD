@@ -16,10 +16,7 @@ void main()
     vec4 texColor = texture(uPicture, vTextureCoordinate);
     if (uUseAlphaBlend == 0 && texColor.a < 0.05) discard;
     vec4 color = texColor;
-    vec3 encoded = color.rgb;
-    vec3 linearColor = mix(encoded / 12.92,
-                           pow((encoded + 0.055) / 1.055, vec3(2.4)),
-                           step(vec3(0.04045), encoded));
+    vec3 linearColor = texColor.rgb;
     if (uPremultipliedAlpha != 0 &&
         texColor.a > 0.0 && texColor.a < 1.0) {
         linearColor /= texColor.a;

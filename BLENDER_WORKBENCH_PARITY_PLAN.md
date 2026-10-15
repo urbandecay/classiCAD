@@ -7817,9 +7817,12 @@ resolve remain open.
   and scene-linear object tint are retained. QPainter preprocesses tint and
   alpha cutouts only up to 16M image pixels; larger native images keep their
   original appearance in that fallback. Blender's image alpha mode is also
-  retained: GPU drawing unpremultiplies sampled linear RGB before tinting,
-  while QPainter unpremultiplies source pixels before filtering. Generated or
-  animated images and matched comparison remain unsupported.
+  retained: GPU drawing converts decoded RGB to scene-linear, premultiplies
+  when Blender requests PREMUL, then unpremultiplies the filtered sample before
+  tinting. QPainter works from Qt's straight-format conversion. Generated or
+  animated images and matched comparison remain unsupported. GPU Image Empty
+  textures now generate mip levels and use trilinear minification; the
+  QPainter fallback still relies on Qt's smooth image transform.
   The C++ build passed;
   no matched Blender image-empty comparison has been run.
 
@@ -8126,17 +8129,30 @@ resolve remain open.
 
 ### Blender Image Empty premultiplied alpha (2026-10-15)
 
-- Image Empty import now retains whether decoded image samples still need
-  Blender's PREMUL interpretation; Qt-decoded premultiplied formats are
-  already converted to straight RGB and are not divided again. The GPU shader
-  unpremultiplies sampled scene-linear RGB for alpha strictly between zero and
-  one before tinting, matching Blender's `texture_read_as_linearrgb` path.
-  QPainter normalizes source pixels before resampling; filtering at
-  translucent edges can differ because Blender normalizes after texture
-  sampling. Blender's handling is pinned in
+- Image Empty import now retains Blender's PREMUL setting as an image semantic,
+  independent of Qt's decoded pixel format. Both renderers first convert
+  premultiplied QImage storage to straight RGB when needed. The GPU path then
+  converts RGB to scene-linear, premultiplies it when Blender requests PREMUL,
+  and unpremultiplies the filtered sample before tinting. This matches the
+  premultiply-on-upload and `texture_read_as_linearrgb` shader stages in
+  Blender's path, pinned in
   [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L301-L307)
   and [`draw_colormanagement_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/shaders/draw_colormanagement_lib.glsl#L16-L25).
   C++ build passed; matched comparison remains open.
+
+### Blender Image Empty mipmapped minification (2026-10-15)
+
+- The GPU Image Empty texture now builds a mip chain after upload and uses
+  trilinear minification with linear magnification. Its decoded sRGB RGB
+  bytes are converted to scene-linear values before upload so mip reduction
+  averages light rather than encoded display values; PREMUL images are
+  premultiplied before mip generation, and the texture cache refreshes when
+  that image setting changes. Blender builds and enables
+  image mipmaps in
+  [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L2917-L2928).
+  QPainter continues to use Qt's smooth image transform without an explicit
+  mip chain, so strong minification may still differ. No matched image
+  comparison has been run.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 

@@ -240,6 +240,7 @@ private:
     struct PictureTexture {
         GLuint texture = 0;
         QSize size;
+        bool premultipliedAlpha = false;
     };
 
     bool initialize();

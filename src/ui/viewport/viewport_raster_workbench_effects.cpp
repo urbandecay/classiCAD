@@ -1320,6 +1320,28 @@ bool compositeRasterWorkbenchSurfaces(
         const bool hasPixelBackground =
             sceneLinearBackgroundPixels.size() ==
             static_cast<std::size_t>(pixelCount);
+        bool sceneLinearDofBackgroundAvailable =
+            hasPixelBackground || sceneLinearBackground.has_value();
+        if (!sceneLinearDofBackgroundAvailable &&
+            width == colorImage->width() && height == colorImage->height()) {
+            sceneLinearDofBackgroundAvailable = true;
+            for (int y = 0; y < height && sceneLinearDofBackgroundAvailable; ++y) {
+                const auto *row = reinterpret_cast<const QRgb *>(
+                    colorImage->constScanLine(y));
+                for (int x = 0; x < width; ++x) {
+                    if (qAlpha(row[x]) != 0) {
+                        sceneLinearDofBackgroundAvailable = false;
+                        break;
+                    }
+                }
+            }
+        }
+        const bool retainWeightedSceneLinearDof =
+            surfaceLayers != nullptr && shadingSettings.depthOfField &&
+            !shadingSettings.xrayEnabled() &&
+            transform.cameraPreferences().sceneCameraEnabled &&
+            width == colorImage->width() && height == colorImage->height() &&
+            sceneLinearDofBackgroundAvailable;
         const bool haveRegularCavityFactors =
             regularCavityFactors.size() == static_cast<std::size_t>(pixelCount);
         const bool haveInFrontCavityFactors =
@@ -1508,6 +1530,11 @@ bool compositeRasterWorkbenchSurfaces(
                     surfaceLayers->transparentShadowFragments.clear();
                 }
             }
+        }
+        if (retainWeightedSceneLinearDof) {
+            surfaceLayers->sceneLinearColor = resolved;
+            surfaceLayers->sceneLinearSize = QSize(width, height);
+            surfaceLayers->sceneLinearDofPending = true;
         }
         if (canResolveOutlineInSceneLinear) {
             std::vector<quint64> regularObjectIds(

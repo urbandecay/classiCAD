@@ -7570,10 +7570,11 @@ resolve remain open.
   custom-LUT display transform, including exposure and gamma, after Blender's
   half-brightness adjustment. Imported Blender preferences now supply the
   Theme wire, background, active-object, and selected-object colors. Theme
-  mesh wires and unselected Object/Random mesh wires use the view-facing endpoint
-  gradient; selected Theme wires use the active/selected rim color. These
-  theme colors come from the Blender installation used for import, not the
-  `.blend` file, so another system can render a different theme. Polygon edge filtering uses Blender's face-angle
+  mesh wires and unselected Object/Random mesh wires use the view-facing
+  endpoint gradient; selected Theme wires use the active/selected rim color.
+  These theme colors come from the Blender installation used for import, not
+  the `.blend` file, so another system can render a different theme. Polygon
+  edge filtering uses Blender's face-angle
   factor and square-root threshold conversion; boundary and nonmanifold edges
   remain visible, while `show_all_edges` bypasses the threshold. Blender's
   selected NURBS surface wire overlays still use classiCAD's selection color.
@@ -7588,3 +7589,14 @@ resolve remain open.
   QPainter batch list, and GPU surface wire strokes now invalidate with the
   object's geometry revision.
   The C++ build passed; matched Blender image comparison remains open.
+
+### QPainter DOF scene-linear retention (2026-10-15)
+
+- The weighted QPainter surface compositor now keeps its scene-linear result
+  for DOF when the background is also available in scene-linear form or the
+  destination is transparent. Eligible scenes therefore blur before the
+  Standard, AgX, or custom display transform, matching Blender's color-space
+  order. If the QPainter target already contains a display-referred background,
+  this path still uses its existing display-color gather because that background
+  cannot be recovered accurately. The C++ build passed; matched Blender DOF
+  comparison remains open.

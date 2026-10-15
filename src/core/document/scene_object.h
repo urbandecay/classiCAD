@@ -122,6 +122,9 @@ struct SceneObject {
     bool showWire = false;
     bool showAllEdges = false;
     bool wireDisplay = false;
+    // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
+    // Empty means the object's imported geometry is drawn normally.
+    QString displayBoundsType;
     QJsonObject viewLayerHidden;
     QString defaultViewLayerKey;
     // Blender ID identity used by Workbench Random color. Imported linked

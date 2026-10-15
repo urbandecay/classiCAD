@@ -608,6 +608,10 @@ def object_metadata(obj, scene):
         "show_wire": bool(getattr(obj, "show_wire", False)),
         "show_all_edges": bool(getattr(obj, "show_all_edges", False)),
         "wire_display": str(getattr(obj, "display_type", "")) == "WIRE",
+        "bounds_display_type": (
+            str(getattr(obj, "display_bounds_type", "BOX"))
+            if str(getattr(obj, "display_type", "")) == "BOUNDS" else ""
+        ),
         "display_color_linear": vector_values(obj.color),
         "classiCAD_geometry_type": obj.get("classiCAD_geometry_type", ""),
         "classiCAD_proxy_geometry": obj.get("classiCAD_proxy_geometry", ""),

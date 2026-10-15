@@ -7573,6 +7573,12 @@ resolve remain open.
   mesh wires and Object/Random mesh wires use the view-facing endpoint
   gradient. Selected Theme wires use the active/selected rim color; selected
   Object/Random wires use Blender's normalized wire and brightened rim values.
+  The imported Blender `BOUNDS` display type is preserved in native documents
+  and replaces the source fill with generated Box, Sphere, Cylinder, Cone, or
+  Capsule wire proxies. Polygon meshes derive their bounds from the current
+  imported mesh vertices; curves and surfaces use prepared display geometry.
+  The latter remains tessellation-based, and the five proxy shapes have not
+  been matched visually against Blender.
   These theme colors come from the Blender installation used for import, not
   the `.blend` file, so another system can render a different theme. Polygon
   edge filtering uses Blender's face-angle

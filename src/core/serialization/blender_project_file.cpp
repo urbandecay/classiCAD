@@ -923,6 +923,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
+    result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
     const QJsonArray sourceCollectionIds = item.value(QStringLiteral("collection_ids")).toArray();
     for (const QJsonValue &collectionValue : sourceCollectionIds) {
         const QString sourceId = collectionValue.toString();
@@ -1349,6 +1350,7 @@ bool parseBlenderPolyCurveItem(
     result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
+    result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1592,6 +1594,7 @@ bool parseBlenderSurfaceItem(
     result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
+    result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1757,6 +1760,7 @@ bool parseBlenderScalarVolumeItem(
     result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
     result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
     result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
+    result.displayBoundsType = item.value(QStringLiteral("bounds_display_type")).toString();
     result.hideViewport = item.value(QStringLiteral("hide_viewport")).toBool(false);
     result.hideRender = item.value(QStringLiteral("hide_render")).toBool(false);
     result.hideSelect = item.value(QStringLiteral("hide_select")).toBool(false);

@@ -8947,6 +8947,9 @@ protected:
         QVector<ViewportRenderObject> visibleSurfaceShapes;
         visibleSurfaceShapes.reserve(visibleShapes.size());
         for (const ViewportRenderObject &object : visibleShapes) {
+            if (!object.displayBoundsType.isEmpty()) {
+                continue;
+            }
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (object.shape.geometryType == GeometryType::PolygonMesh ||
                  object.shape.geometryType == GeometryType::NurbsSurface) &&
@@ -9298,6 +9301,7 @@ protected:
                 if (object.shape.geometryType == GeometryType::ScalarVolume) {
                     scalarVolumeDrawObjects.append(object);
                 } else if (hasSurfaceGeometry(object) &&
+                           object.displayBoundsType.isEmpty() &&
                            !(viewportShadingSettings_.mode ==
                                  ViewportShadingMode::Solid &&
                              (object.shape.geometryType ==
@@ -9398,11 +9402,222 @@ protected:
                 }
             }
         }
+        const auto makeBoundsDisplayGeometry =
+            [](const ViewportRenderObject &object) {
+                auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+                constexpr qreal pi = 3.14159265358979323846;
+                QVector<Point3D> sourcePoints;
+                const bool meshLocal =
+                    object.shape.geometryType == GeometryType::PolygonMesh;
+                if (meshLocal) {
+                    sourcePoints = object.shape.polygonMesh.vertices;
+                } else if (object.preparedDepthGeometry) {
+                    const auto &prepared = *object.preparedDepthGeometry;
+                    sourcePoints.reserve(prepared.surfaceVertices.size() +
+                                         prepared.preciseLineVertices.size() +
+                                         prepared.pointVertices.size());
+                    for (const QVector3D &point : prepared.surfaceVertices)
+                        sourcePoints.append({point.x(), point.y(), point.z()});
+                    sourcePoints += prepared.preciseLineVertices;
+                    for (const QVector3D &point : prepared.pointVertices)
+                        sourcePoints.append({point.x(), point.y(), point.z()});
+                }
+                if (sourcePoints.isEmpty()) return geometry;
+
+                Point3D minimum = sourcePoints.first();
+                Point3D maximum = sourcePoints.first();
+                for (const Point3D &point : sourcePoints) {
+                    if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+                        !std::isfinite(point.z)) {
+                        continue;
+                    }
+                    minimum.x = std::min(minimum.x, point.x);
+                    minimum.y = std::min(minimum.y, point.y);
+                    minimum.z = std::min(minimum.z, point.z);
+                    maximum.x = std::max(maximum.x, point.x);
+                    maximum.y = std::max(maximum.y, point.y);
+                    maximum.z = std::max(maximum.z, point.z);
+                }
+                const Point3D center{(minimum.x + maximum.x) * 0.5,
+                                     (minimum.y + maximum.y) * 0.5,
+                                     (minimum.z + maximum.z) * 0.5};
+                const qreal radiusX = std::max((maximum.x - minimum.x) * 0.5,
+                                               1.0e-6);
+                const qreal radiusY = std::max((maximum.y - minimum.y) * 0.5,
+                                               1.0e-6);
+                const qreal radiusZ = std::max((maximum.z - minimum.z) * 0.5,
+                                               1.0e-6);
+                const qreal radialSize = std::max(radiusX, radiusY);
+                const auto localPoint = [&](qreal x, qreal y, qreal z) {
+                    if (!meshLocal) return Point3D{x, y, z};
+                    const auto &m = object.meshObjectTransform;
+                    const qreal w = m[12] * x + m[13] * y + m[14] * z + m[15];
+                    const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+                    return Point3D{
+                        (m[0] * x + m[1] * y + m[2] * z + m[3]) / divisor,
+                        (m[4] * x + m[5] * y + m[6] * z + m[7]) / divisor,
+                        (m[8] * x + m[9] * y + m[10] * z + m[11]) / divisor};
+                };
+                const auto appendSegment =
+                    [&geometry, &localPoint](const Point3D &first,
+                                             const Point3D &second) {
+                        const Point3D a = localPoint(first.x, first.y, first.z);
+                        const Point3D b = localPoint(second.x, second.y, second.z);
+                        geometry->preciseLineVertices << a << b;
+                        geometry->lineVertices
+                            << QVector3D(float(a.x), float(a.y), float(a.z))
+                            << QVector3D(float(b.x), float(b.y), float(b.z));
+                    };
+                const auto appendLoop =
+                    [&appendSegment](const QVector<Point3D> &points) {
+                        for (int index = 0; index < points.size(); ++index)
+                            appendSegment(points[index],
+                                points[(index + 1) % points.size()]);
+                    };
+                if (object.displayBoundsType == QLatin1String("SPHERE")) {
+                    constexpr int segments = 32;
+                    const qreal sphereRadius = std::max(radialSize, radiusZ);
+                    for (int plane = 0; plane < 3; ++plane) {
+                        QVector<Point3D> circle;
+                        circle.reserve(segments);
+                        for (int index = 0; index < segments; ++index) {
+                            const qreal angle = 2.0 * pi * index / segments;
+                            const qreal cosine = std::cos(angle);
+                            const qreal sine = std::sin(angle);
+                            if (plane == 0)
+                                circle.append({center.x + sphereRadius * cosine,
+                                               center.y + sphereRadius * sine,
+                                               center.z});
+                            else if (plane == 1)
+                                circle.append({center.x + sphereRadius * cosine,
+                                               center.y,
+                                               center.z + sphereRadius * sine});
+                            else
+                                circle.append({center.x,
+                                               center.y + sphereRadius * cosine,
+                                               center.z + sphereRadius * sine});
+                        }
+                        appendLoop(circle);
+                    }
+                } else if (object.displayBoundsType == QLatin1String("CYLINDER") ||
+                           object.displayBoundsType == QLatin1String("CONE") ||
+                           object.displayBoundsType == QLatin1String("CAPSULE")) {
+                    constexpr int segments = 24;
+                    const qreal capRadius = radialSize;
+                    const qreal capCenterOffset =
+                        std::max(0.0, radiusZ - capRadius);
+                    const qreal lowerCenter = center.z - capCenterOffset;
+                    const qreal upperCenter = center.z + capCenterOffset;
+                    for (int index = 0; index < segments; ++index) {
+                        const qreal angle = 2.0 * pi * index / segments;
+                        const qreal x = center.x + radialSize * std::cos(angle);
+                        const qreal y = center.y + radialSize * std::sin(angle);
+                        const Point3D base{x, y, minimum.z};
+                        if (object.displayBoundsType == QLatin1String("CONE")) {
+                            appendSegment(base,
+                                          {center.x, center.y, maximum.z});
+                        } else if (object.displayBoundsType == QLatin1String("CYLINDER")) {
+                            appendSegment(base, {x, y, maximum.z});
+                        } else {
+                            appendSegment({center.x + capRadius * std::cos(angle),
+                                           center.y + capRadius * std::sin(angle),
+                                           lowerCenter},
+                                          {center.x + capRadius * std::cos(angle),
+                                           center.y + capRadius * std::sin(angle),
+                                           upperCenter});
+                        }
+                    }
+                    if (object.displayBoundsType == QLatin1String("CYLINDER") ||
+                        object.displayBoundsType == QLatin1String("CAPSULE")) {
+                        for (int ring = 0; ring < 2; ++ring) {
+                            const qreal z = ring == 0 ? minimum.z : maximum.z;
+                            QVector<Point3D> circle;
+                            circle.reserve(segments);
+                            for (int index = 0; index < segments; ++index) {
+                                const qreal angle = 2.0 * pi * index / segments;
+                                if (object.displayBoundsType ==
+                                    QLatin1String("CAPSULE")) {
+                                    circle.append({center.x + capRadius * std::cos(angle),
+                                                   center.y + capRadius * std::sin(angle), z});
+                                } else {
+                                    circle.append({center.x + radialSize * std::cos(angle),
+                                                   center.y + radialSize * std::sin(angle), z});
+                                }
+                            }
+                            appendLoop(circle);
+                        }
+                        if (object.displayBoundsType == QLatin1String("CAPSULE")) {
+                            for (int hemisphere = 0; hemisphere < 2; ++hemisphere) {
+                                const qreal zCenter = hemisphere == 0
+                                    ? lowerCenter : upperCenter;
+                                for (int latitude = 1; latitude < 4; ++latitude) {
+                                    const qreal angle = (pi * 0.5) * latitude / 4.0;
+                                    const qreal radial = capRadius * std::cos(angle);
+                                    const qreal z = zCenter +
+                                        (hemisphere == 0 ? -1.0 : 1.0) *
+                                            capRadius * std::sin(angle);
+                                    QVector<Point3D> circle;
+                                    circle.reserve(segments);
+                                    for (int index = 0; index < segments; ++index) {
+                                        const qreal around = 2.0 * pi * index / segments;
+                                        circle.append({center.x + radial * std::cos(around),
+                                                       center.y + radial * std::sin(around), z});
+                                    }
+                                    appendLoop(circle);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    const Point3D corners[8] = {
+                        {minimum.x, minimum.y, minimum.z},
+                        {maximum.x, minimum.y, minimum.z},
+                        {maximum.x, maximum.y, minimum.z},
+                        {minimum.x, maximum.y, minimum.z},
+                        {minimum.x, minimum.y, maximum.z},
+                        {maximum.x, minimum.y, maximum.z},
+                        {maximum.x, maximum.y, maximum.z},
+                        {minimum.x, maximum.y, maximum.z}};
+                    constexpr int edges[12][2] = {
+                        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+                        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+                        {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+                    for (const auto &edge : edges)
+                        appendSegment(corners[edge[0]], corners[edge[1]]);
+                }
+                return geometry;
+            };
         for (const ViewportRenderObject &renderObject : sceneDrawObjects) {
             const int index = renderObject.objectIndex;
             const ObjectId objectId = renderObject.objectId;
             const Shape &visibleShape = renderObject.shape;
             if (isDimensionGeometryType(visibleShape.geometryType)) {
+                continue;
+            }
+            if (!renderObject.displayBoundsType.isEmpty()) {
+                const bool boundsVisible =
+                    viewportShadingSettings_.mode == ViewportShadingMode::Wireframe ||
+                    viewportShadingSettings_.wireOverlaysVisible;
+                if (boundsVisible) {
+                    auto boundsGeometry = makeBoundsDisplayGeometry(renderObject);
+                    if (!boundsGeometry->lineVertices.isEmpty()) {
+                        ViewportSceneStroke boundsStroke;
+                        boundsStroke.color = renderObject.selected
+                            ? viewportSelectionColor()
+                            : viewportShadingSettings_.themeWireColor;
+                        boundsStroke.width = 1.0f;
+                        boundsStroke.writeDepth = true;
+                        boundsStroke.blenderMeshWire = true;
+                        boundsStroke.smoothWireCategory =
+                            ViewportSmoothWireCategory::Overlay;
+                        boundsStroke.objectId = renderObject.objectId;
+                        boundsStroke.geometryRevision = renderObject.geometryRevision;
+                        boundsStroke.cacheableGeometry = renderObject.cacheable;
+                        boundsStroke.preparedDepthGeometry = std::move(boundsGeometry);
+                        boundsStroke.worldOffset = renderObject.preparedGeometryOffset;
+                        gpuStrokes.append(std::move(boundsStroke));
+                    }
+                }
                 continue;
             }
             const QColor &layerColor = renderObject.layerColor;

@@ -2988,6 +2988,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
         bool preparedCurveDrawn = false;
         if (canUsePreparedCurve) {
+            painter.save();
+            if (!preview) {
+                painter.setRenderHint(QPainter::Antialiasing,
+                                      smoothWiresOverlay_);
+            }
             for (const Shape::NurbsCurve2D &component : shape.components) {
                 if (isValidNurbsCurve(component)) {
                     preparedCurveDrawn = drawPreparedCurveSegments(
@@ -2997,6 +3002,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     break;
                 }
             }
+            painter.restore();
         }
         if (!preparedCurveDrawn) {
             for (int index = 0; index < shape.components.size(); ++index) {

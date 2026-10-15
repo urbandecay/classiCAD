@@ -7397,3 +7397,11 @@ resolve remain open.
   and lack of temporal accumulation remain documented approximations.
 - Validation for this audit was source inspection only; no matched image
   comparison or GUI run is claimed.
+
+### QPainter prepared PolyCurve Smooth Wires (2026-10-15)
+
+- Prepared PolyCurve strokes now set and restore the Overlay Smooth Wires
+  preference, matching direct curve evaluation and the other committed curve
+  paths. Previously, the prepared path inherited the painter's prior
+  antialiasing state. The C++ build passed; no matched image comparison is
+  claimed.

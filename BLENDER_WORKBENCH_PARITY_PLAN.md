@@ -529,6 +529,14 @@ in ordinary free views or orthographic views is superseded by this correction.
 - QPainter still gathers at full resolution, has no temporal jitter, and
   composites transparent colors upstream. Matched QPainter image comparison
   remains open.
+
+### Blender texture-alpha shadow cutouts in the QPainter fallback (2026-10-15)
+
+- Software shadow casters now carry the same per-triangle UV/image data as the
+  receiver rasterizer. The light-space shadow-map rasterizer interpolates UVs
+  and skips texels below Blender's `0.1` alpha cutoff, including image and
+  UDIM-backed textures. GPU shadow depth passes already apply that cutoff.
+  C++ build and matched image comparison remain open.
 - Validation: `cmake --build build -j4` passed with the dependency audit;
   offscreen `viewport_render_contracts` and
   `workbench_raster_fragment_contracts` passed.

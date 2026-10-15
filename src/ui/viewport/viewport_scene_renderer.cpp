@@ -52,6 +52,101 @@ struct OverlayVertex {
 
 using SurfaceVertexKey = std::array<quint32, 3>;
 
+struct StrokeDepthFormat {
+    GLenum internalFormat = GL_NONE;
+    GLenum textureFormat = GL_NONE;
+    GLenum textureType = GL_NONE;
+    GLenum attachment = GL_DEPTH_ATTACHMENT;
+
+    bool isValid() const
+    {
+        return internalFormat != GL_NONE && textureFormat != GL_NONE &&
+               textureType != GL_NONE;
+    }
+};
+
+StrokeDepthFormat strokeDepthFormatForFramebuffer(
+    QOpenGLFunctions_3_3_Core &functions)
+{
+    StrokeDepthFormat result;
+    GLint objectType = GL_NONE;
+    GLint objectName = 0;
+    functions.glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
+    functions.glGetFramebufferAttachmentParameteriv(
+        GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
+
+    GLint internalFormat = GL_NONE;
+    if (objectType == GL_RENDERBUFFER) {
+        GLint previousRenderbuffer = 0;
+        functions.glGetIntegerv(GL_RENDERBUFFER_BINDING,
+                                &previousRenderbuffer);
+        functions.glBindRenderbuffer(GL_RENDERBUFFER,
+                                     static_cast<GLuint>(objectName));
+        functions.glGetRenderbufferParameteriv(
+            GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+            &internalFormat);
+        functions.glBindRenderbuffer(
+            GL_RENDERBUFFER, static_cast<GLuint>(previousRenderbuffer));
+    } else if (objectType == GL_TEXTURE) {
+        GLint textureTargetFace = 0;
+        GLint textureLayer = -1;
+        functions.glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE,
+            &textureTargetFace);
+        functions.glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER, &textureLayer);
+        if (textureTargetFace != 0 || textureLayer >= 0) {
+            return result;
+        }
+        GLint previousTexture = 0;
+        functions.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+        functions.glBindTexture(GL_TEXTURE_2D,
+                                static_cast<GLuint>(objectName));
+        functions.glGetTexLevelParameteriv(
+            GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+        functions.glBindTexture(GL_TEXTURE_2D,
+                                static_cast<GLuint>(previousTexture));
+    } else {
+        return result;
+    }
+
+    result.internalFormat = static_cast<GLenum>(internalFormat);
+    switch (result.internalFormat) {
+    case GL_DEPTH24_STENCIL8:
+        result.textureFormat = GL_DEPTH_STENCIL;
+        result.textureType = GL_UNSIGNED_INT_24_8;
+        result.attachment = GL_DEPTH_STENCIL_ATTACHMENT;
+        break;
+    case GL_DEPTH32F_STENCIL8:
+        result.textureFormat = GL_DEPTH_STENCIL;
+        result.textureType = GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
+        result.attachment = GL_DEPTH_STENCIL_ATTACHMENT;
+        break;
+    case GL_DEPTH_COMPONENT16:
+        result.textureFormat = GL_DEPTH_COMPONENT;
+        result.textureType = GL_UNSIGNED_SHORT;
+        break;
+    case GL_DEPTH_COMPONENT24:
+    case GL_DEPTH_COMPONENT32:
+        result.textureFormat = GL_DEPTH_COMPONENT;
+        result.textureType = GL_UNSIGNED_INT;
+        break;
+    case GL_DEPTH_COMPONENT32F:
+        result.textureFormat = GL_DEPTH_COMPONENT;
+        result.textureType = GL_FLOAT;
+        break;
+    default:
+        result = {};
+        break;
+    }
+    return result;
+}
+
 struct SurfaceEdgeKey {
     SurfaceVertexKey first;
     SurfaceVertexKey second;
@@ -746,10 +841,30 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
             glDeleteTextures(1, &overlayTextTexture_);
             overlayTextTexture_ = 0;
         }
+        const GLuint strokeTextures[] = {
+            strokeBaseColorTexture_, strokeSceneDepthTexture_,
+            strokeLineColorTexture_, strokeLineDataTexture_,
+            strokeLineDepthTexture_, strokeWorkingDepthTexture_};
+        glDeleteTextures(6, strokeTextures);
+        const GLuint strokeFramebuffers[] = {
+            strokeBaseFramebuffer_, strokeLineFramebuffer_};
+        glDeleteFramebuffers(2, strokeFramebuffers);
+        strokeBaseColorTexture_ = 0;
+        strokeSceneDepthTexture_ = 0;
+        strokeLineColorTexture_ = 0;
+        strokeLineDataTexture_ = 0;
+        strokeLineDepthTexture_ = 0;
+        strokeWorkingDepthTexture_ = 0;
+        strokeBaseFramebuffer_ = 0;
+        strokeLineFramebuffer_ = 0;
+        if (strokeResolveVertexArray_.isCreated()) {
+            strokeResolveVertexArray_.destroy();
+        }
         program_.removeAllShaders();
         pointProgram_.removeAllShaders();
         pictureProgram_.removeAllShaders();
         overlayProgram_.removeAllShaders();
+        strokeResolveProgram_.removeAllShaders();
     }
 }
 
@@ -784,6 +899,145 @@ bool ViewportSceneRenderer::initialize()
         return false;
     }
     initialized_ = true;
+    return true;
+}
+
+bool ViewportSceneRenderer::initializeStrokeResolve()
+{
+    if (strokeResolveInitializationAttempted_) {
+        return strokeResolveInitialized_;
+    }
+    strokeResolveInitializationAttempted_ = true;
+    if (QOpenGLContext::currentContext() == nullptr ||
+        !initializeOpenGLFunctions() ||
+        !strokeResolveProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Vertex,
+            QStringLiteral(":/classiCAD/shaders/scene_stroke_resolve.vert")) ||
+        !strokeResolveProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Fragment,
+            QStringLiteral(":/classiCAD/shaders/scene_stroke_resolve.frag")) ||
+        !strokeResolveProgram_.link() ||
+        !strokeResolveVertexArray_.create()) {
+        qWarning().noquote() << "Viewport smooth-wire resolve setup failed:"
+                             << strokeResolveProgram_.log();
+        return false;
+    }
+    strokeResolveInitialized_ = true;
+    return true;
+}
+
+bool ViewportSceneRenderer::ensureStrokeResolveTargets(
+    const QSize &pixelSize,
+    GLenum depthInternalFormat,
+    GLenum depthTextureFormat,
+    GLenum depthTextureType,
+    GLenum depthAttachment)
+{
+    if (pixelSize.width() <= 0 || pixelSize.height() <= 0 ||
+        !initializeStrokeResolve()) {
+        return false;
+    }
+    if (strokeResolvePixelSize_ == pixelSize &&
+        strokeResolveDepthInternalFormat_ == depthInternalFormat &&
+        strokeResolveDepthTextureFormat_ == depthTextureFormat &&
+        strokeResolveDepthTextureType_ == depthTextureType &&
+        strokeResolveDepthAttachment_ == depthAttachment &&
+        strokeBaseFramebuffer_ != 0 && strokeLineFramebuffer_ != 0) {
+        return true;
+    }
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTextureBinding = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding);
+    if (strokeBaseFramebuffer_ == 0) {
+        glGenFramebuffers(1, &strokeBaseFramebuffer_);
+    }
+    if (strokeLineFramebuffer_ == 0) {
+        glGenFramebuffers(1, &strokeLineFramebuffer_);
+    }
+    const GLuint oldTextures[] = {
+        strokeBaseColorTexture_, strokeSceneDepthTexture_,
+        strokeLineColorTexture_, strokeLineDataTexture_,
+        strokeLineDepthTexture_, strokeWorkingDepthTexture_};
+    glDeleteTextures(6, oldTextures);
+    GLuint newTextures[6] = {};
+    glGenTextures(6, newTextures);
+    strokeBaseColorTexture_ = newTextures[0];
+    strokeSceneDepthTexture_ = newTextures[1];
+    strokeLineColorTexture_ = newTextures[2];
+    strokeLineDataTexture_ = newTextures[3];
+    strokeLineDepthTexture_ = newTextures[4];
+    strokeWorkingDepthTexture_ = newTextures[5];
+
+    const auto allocateTexture = [&](GLuint texture, GLenum internalFormat,
+                                     GLenum format, GLenum type) {
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     format, type, nullptr);
+    };
+    allocateTexture(strokeBaseColorTexture_, GL_RGBA16F,
+                    GL_RGBA, GL_HALF_FLOAT);
+    allocateTexture(strokeSceneDepthTexture_, depthInternalFormat,
+                    depthTextureFormat, depthTextureType);
+    allocateTexture(strokeLineColorTexture_, GL_RGBA16F,
+                    GL_RGBA, GL_HALF_FLOAT);
+    allocateTexture(strokeLineDataTexture_, GL_RGBA32F,
+                    GL_RGBA, GL_FLOAT);
+    allocateTexture(strokeLineDepthTexture_, GL_R32F, GL_RED, GL_FLOAT);
+    allocateTexture(strokeWorkingDepthTexture_, depthInternalFormat,
+                    depthTextureFormat, depthTextureType);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, strokeBaseFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, strokeBaseColorTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, depthAttachment,
+                           GL_TEXTURE_2D, strokeSceneDepthTexture_, 0);
+    const GLenum baseDrawBuffer = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &baseDrawBuffer);
+    const bool baseComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, strokeLineFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, strokeLineColorTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, strokeLineDataTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
+                           GL_TEXTURE_2D, strokeLineDepthTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, depthAttachment,
+                           GL_TEXTURE_2D, strokeWorkingDepthTexture_, 0);
+    const GLenum lineDrawBuffers[] = {
+        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
+    glDrawBuffers(3, lineDrawBuffers);
+    const bool lineComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glBindTexture(GL_TEXTURE_2D,
+                  static_cast<GLuint>(previousTextureBinding));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    if (!baseComplete || !lineComplete) {
+        qWarning() << "Viewport smooth-wire resolve framebuffer is incomplete"
+                   << baseComplete << lineComplete;
+        return false;
+    }
+    strokeResolvePixelSize_ = pixelSize;
+    strokeResolveDepthInternalFormat_ = depthInternalFormat;
+    strokeResolveDepthTextureFormat_ = depthTextureFormat;
+    strokeResolveDepthTextureType_ = depthTextureType;
+    strokeResolveDepthAttachment_ = depthAttachment;
     return true;
 }
 
@@ -887,8 +1141,12 @@ bool ViewportSceneRenderer::draw(
     qreal opacity,
     bool smoothOverlayWires,
     bool smoothEditModeWires,
-    bool sceneLinearOutput)
+    bool sceneLinearOutput,
+    bool *strokeResolveUsed)
 {
+    if (strokeResolveUsed != nullptr) {
+        *strokeResolveUsed = false;
+    }
     if (strokes.isEmpty()) {
         strokeGeometryKeys_.clear();
         strokeRanges_.clear();
@@ -981,6 +1239,117 @@ bool ViewportSceneRenderer::draw(
     const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     const QSize pixelSize(qRound(viewportSize.width() * dpr),
                           qRound(viewportSize.height() * dpr));
+    GLint originalDrawFramebuffer = 0;
+    GLint originalReadFramebuffer = 0;
+    GLint originalReadBuffer = GL_BACK;
+    GLint originalDrawFramebufferReadBuffer = GL_BACK;
+    GLint originalSamples = 0;
+    GLint originalDepthAttachment = GL_NONE;
+    GLint originalFramebufferColorEncoding = GL_LINEAR;
+    GLboolean originalColorWriteMask[4] = {
+        GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &originalDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &originalReadFramebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &originalReadBuffer);
+    glGetIntegerv(GL_SAMPLES, &originalSamples);
+    glGetBooleanv(GL_COLOR_WRITEMASK, originalColorWriteMask);
+    if (originalDrawFramebuffer != 0) {
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
+            &originalDepthAttachment);
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING,
+            &originalFramebufferColorEncoding);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glGetIntegerv(GL_READ_BUFFER, &originalDrawFramebufferReadBuffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalReadFramebuffer));
+    }
+    const StrokeDepthFormat sourceDepthFormat =
+        originalDrawFramebuffer != 0
+            ? strokeDepthFormatForFramebuffer(*this)
+            : StrokeDepthFormat{};
+    const bool colorWritesEnabled = originalColorWriteMask[0] &&
+                                    originalColorWriteMask[1] &&
+                                    originalColorWriteMask[2] &&
+                                    originalColorWriteMask[3];
+    bool strokeResolveActive = depthTest && originalSamples == 0 &&
+        originalDepthAttachment != GL_NONE && sourceDepthFormat.isValid() &&
+        colorWritesEnabled && opacity >= 0.999999;
+    if (strokeResolveActive) {
+        for (const ViewportSceneStroke &stroke : strokes) {
+            const ViewportSceneStrokePattern pattern =
+                viewportSceneStrokePattern(stroke, stroke.width * float(dpr));
+            if (stroke.pointDiameter > 0.0f || !stroke.writeDepth ||
+                stroke.color.alpha() != 255 ||
+                pattern.style != ViewportSceneLineStyle::Solid) {
+                strokeResolveActive = false;
+                break;
+            }
+            for (const QVector4D &color : stroke.lineVertexColors) {
+                if (color.w() < 0.999999f) {
+                    strokeResolveActive = false;
+                    break;
+                }
+            }
+            if (!strokeResolveActive) {
+                break;
+            }
+        }
+    }
+    if (strokeResolveActive &&
+        !ensureStrokeResolveTargets(
+            pixelSize, sourceDepthFormat.internalFormat,
+            sourceDepthFormat.textureFormat, sourceDepthFormat.textureType,
+            sourceDepthFormat.attachment)) {
+        strokeResolveActive = false;
+    }
+    if (strokeResolveActive) {
+        if (strokeResolveUsed != nullptr) {
+            *strokeResolveUsed = true;
+        }
+        // Copy the already-rendered scene and its depth into private targets.
+        // Multisample framebuffers stay on the established direct path above.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glReadBuffer(originalDrawFramebuffer == 0
+                         ? GL_BACK
+                         : GL_COLOR_ATTACHMENT0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeBaseFramebuffer_);
+        glBlitFramebuffer(0, 0, pixelSize.width(), pixelSize.height(),
+                          0, 0, pixelSize.width(), pixelSize.height(),
+                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                          GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, strokeBaseFramebuffer_);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeLineFramebuffer_);
+        glBlitFramebuffer(0, 0, pixelSize.width(), pixelSize.height(),
+                          0, 0, pixelSize.width(), pixelSize.height(),
+                          GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalReadFramebuffer));
+        glReadBuffer(originalReadBuffer);
+        if (originalDrawFramebuffer != originalReadFramebuffer) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(originalDrawFramebuffer));
+            glReadBuffer(originalDrawFramebufferReadBuffer);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(originalReadFramebuffer));
+            glReadBuffer(originalReadBuffer);
+        }
+        glViewport(0, 0, pixelSize.width(), pixelSize.height());
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeLineFramebuffer_);
+        const GLfloat clearLineColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const GLfloat clearLineRecord[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        const GLfloat clearCandidateDepth[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        glClearBufferfv(GL_COLOR, 0, clearLineColor);
+        glClearBufferfv(GL_COLOR, 1, clearLineRecord);
+        glClearBufferfv(GL_COLOR, 2, clearCandidateDepth);
+    }
     const QMatrix4x4 viewProjection =
         viewportViewProjection(transform, viewportSize);
     QVector<float> patternOffsets = cachedPatternOffsets_;
@@ -1036,15 +1405,9 @@ bool ViewportSceneRenderer::draw(
     GLint previousBlendEquationRgb = GL_FUNC_ADD;
     GLint previousBlendEquationAlpha = GL_FUNC_ADD;
     const GLboolean previousFramebufferSrgb = glIsEnabled(GL_FRAMEBUFFER_SRGB);
-    GLint drawFramebuffer = 0;
+    GLint drawFramebuffer = originalDrawFramebuffer;
     GLint framebufferColorEncoding = GL_LINEAR;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
-    if (drawFramebuffer != 0) {
-        glGetFramebufferAttachmentParameteriv(
-            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING,
-            &framebufferColorEncoding);
-    }
+    framebufferColorEncoding = originalFramebufferColorEncoding;
     const bool linearDisplayBlendAvailable =
         drawFramebuffer != 0 && framebufferColorEncoding == GL_SRGB;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
@@ -1063,8 +1426,13 @@ bool ViewportSceneRenderer::draw(
     } else {
         glDisable(GL_DEPTH_TEST);
     }
-    glDepthMask(GL_FALSE);
-    glEnable(GL_BLEND);
+    glDepthMask(strokeResolveActive ? GL_TRUE : GL_FALSE);
+    if (strokeResolveActive) {
+        glDisable(GL_BLEND);
+        glDisable(GL_FRAMEBUFFER_SRGB);
+    } else {
+        glEnable(GL_BLEND);
+    }
     glEnable(GL_MULTISAMPLE);
     glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
@@ -1125,6 +1493,8 @@ bool ViewportSceneRenderer::draw(
                 nextProgram->setUniformValue(
                     "uViewportSize",
                     QVector2D(pixelSize.width(), pixelSize.height()));
+                nextProgram->setUniformValue(
+                    "uRecordLine", strokeResolveActive ? 1 : 0);
             }
             // Move edit wires and component points a tiny amount toward the
             // camera so equal-depth surface pixels do not hide their overlays.
@@ -1219,6 +1589,53 @@ bool ViewportSceneRenderer::draw(
     vertexArray_.release();
     if (boundProgram != nullptr) {
         boundProgram->release();
+    }
+    if (strokeResolveActive) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_ALWAYS);
+        glDepthMask(GL_TRUE);
+        if (framebufferColorEncoding == GL_SRGB) {
+            glEnable(GL_FRAMEBUFFER_SRGB);
+        } else {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
+
+        GLint previousActiveTexture = GL_TEXTURE0;
+        GLint previousTextureBindings[5] = {};
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+        const GLuint resolveTextures[] = {
+            strokeBaseColorTexture_, strokeLineColorTexture_,
+            strokeLineDataTexture_, strokeLineDepthTexture_,
+            strokeSceneDepthTexture_};
+        for (int unit = 0; unit < 5; ++unit) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                          &previousTextureBindings[unit]);
+            glBindTexture(GL_TEXTURE_2D, resolveTextures[unit]);
+        }
+        strokeResolveProgram_.bind();
+        strokeResolveProgram_.setUniformValue("uBaseColor", 0);
+        strokeResolveProgram_.setUniformValue("uLineColor", 1);
+        strokeResolveProgram_.setUniformValue("uLineRecord", 2);
+        strokeResolveProgram_.setUniformValue("uCandidateDepth", 3);
+        strokeResolveProgram_.setUniformValue("uSceneDepth", 4);
+        const GLint viewportSizeLocation =
+            strokeResolveProgram_.uniformLocation("uViewportSize");
+        glUniform2i(viewportSizeLocation, pixelSize.width(),
+                    pixelSize.height());
+        strokeResolveVertexArray_.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        strokeResolveVertexArray_.release();
+        strokeResolveProgram_.release();
+        for (int unit = 0; unit < 5; ++unit) {
+            glActiveTexture(GL_TEXTURE0 + unit);
+            glBindTexture(GL_TEXTURE_2D,
+                          static_cast<GLuint>(previousTextureBindings[unit]));
+        }
+        glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     }
     glDisable(GL_PROGRAM_POINT_SIZE);
     glDepthMask(previousDepthMask);

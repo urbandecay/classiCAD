@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #version 330 core
 
+// Per-pixel line coverage and composition follow Blender 5.2.2's Overlay
+// anti-aliasing pass (overlay_antialiasing.bsl.hh), adapted for CAD strokes.
+
 uniform vec4 uColor;
 uniform float uWidth;
 uniform int uLineStyle;
@@ -12,13 +15,17 @@ uniform float uPatternSegments[8];
 uniform int uSmoothWire;
 uniform int uEditModeWire;
 uniform int uLinearDisplayBlend;
+uniform int uRecordLine;
 smooth in vec4 gEdgeColor;
 flat in float vLength;
 flat in float gPatternOffsetPixels;
 flat in vec4 gStartColor;
 flat in vec4 gEndColor;
 noperspective in vec2 vStrokePosition;
-out vec4 fragmentColor;
+flat in vec2 gStrokeDirection;
+layout(location = 0) out vec4 fragmentColor;
+layout(location = 1) out vec4 lineRecord;
+layout(location = 2) out float candidateDepth;
 
 vec3 srgbToLinear(vec3 color)
 {
@@ -133,6 +140,14 @@ void main()
     vec3 strokeColor = uLinearDisplayBlend != 0
                            ? srgbToLinear(uColor.rgb)
                            : uColor.rgb;
+    float alpha = uColor.a * edgeColor.a;
+    if (uRecordLine != 0) {
+        fragmentColor = vec4(strokeColor * edgeColor.rgb * alpha, alpha);
+        lineRecord = vec4(gStrokeDirection, vStrokePosition.y,
+                          (uSmoothWire != 0 ? 1.0 : -1.0) * uWidth);
+        candidateDepth = gl_FragCoord.z;
+        return;
+    }
     fragmentColor = vec4(strokeColor * edgeColor.rgb,
-                         uColor.a * edgeColor.a * coverage);
+                         alpha * coverage);
 }

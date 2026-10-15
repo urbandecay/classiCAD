@@ -15,6 +15,7 @@ flat out float vLength;
 flat out float gPatternOffsetPixels;
 flat out vec4 gStartColor;
 flat out vec4 gEndColor;
+flat out vec2 gStrokeDirection;
 noperspective out vec2 vStrokePosition;
 in float vPatternOffsetPixels[];
 in vec4 vEndpointColor[];
@@ -55,6 +56,7 @@ void main()
     }
     vec2 tangent = screenDelta / lengthPixels;
     vec2 normal = vec2(-tangent.y, tangent.x);
+    gStrokeDirection = normal;
     if (uEditModeWire != 0) {
         // Blender expands along the minor screen axis, with no end caps.
         float halfSize = uWidth * 0.5 + (uSmoothWire != 0 ? 0.5 : 0.0);

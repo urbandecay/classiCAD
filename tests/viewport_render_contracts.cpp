@@ -18794,7 +18794,8 @@ int main(int argc, char *argv[])
                         bool editModeStyle,
                         bool smoothOverlay,
                         bool smoothEditMode,
-                        bool *drawSucceeded) {
+                        bool *drawSucceeded,
+                        bool *resolveUsed) {
                         wireFramebuffer.bind();
                         functions.glViewport(0, 0, glSize.width(),
                                              glSize.height());
@@ -18807,6 +18808,7 @@ int main(int argc, char *argv[])
                         ViewportSceneStroke stroke;
                         stroke.color = Qt::black;
                         stroke.width = 1.0f;
+                        stroke.writeDepth = true;
                         stroke.editModeWire = editModeStyle;
                         stroke.smoothWireCategory = category;
                         stroke.preparedDepthGeometry =
@@ -18814,7 +18816,8 @@ int main(int argc, char *argv[])
                         *drawSucceeded = linePointsValid &&
                             wireRenderer.draw(
                                 {stroke}, wireTransform, glSize, 1.0,
-                                false, 1.0, smoothOverlay, smoothEditMode);
+                                true, 1.0, smoothOverlay, smoothEditMode,
+                                false, resolveUsed);
                         functions.glFinish();
                         return wireFramebuffer.toImage();
                     };
@@ -18822,6 +18825,8 @@ int main(int argc, char *argv[])
                     std::array<QImage, 4> editModePreferenceImages;
                     std::array<bool, 4> overlayDrawSucceeded{};
                     std::array<bool, 4> editModeDrawSucceeded{};
+                    std::array<bool, 4> overlayResolveUsed{};
+                    std::array<bool, 4> editModeResolveUsed{};
                     for (int overlay = 0; overlay < 2; ++overlay) {
                         for (int edit = 0; edit < 2; ++edit) {
                             const int index = overlay * 2 + edit;
@@ -18829,12 +18834,14 @@ int main(int argc, char *argv[])
                                 captureSmoothWireCategory(
                                     ViewportSmoothWireCategory::Overlay,
                                     false, overlay != 0, edit != 0,
-                                    &overlayDrawSucceeded[index]);
+                                    &overlayDrawSucceeded[index],
+                                    &overlayResolveUsed[index]);
                             editModePreferenceImages[index] =
                                 captureSmoothWireCategory(
                                     ViewportSmoothWireCategory::EditMode,
                                     true, overlay != 0, edit != 0,
-                                    &editModeDrawSucceeded[index]);
+                                    &editModeDrawSucceeded[index],
+                                    &editModeResolveUsed[index]);
                         }
                     }
                     const auto imageDifferenceCount = [](const QImage &first,
@@ -18855,6 +18862,8 @@ int main(int argc, char *argv[])
                     const bool overlayPreferenceIsolated =
                         overlayDrawSucceeded[0] && overlayDrawSucceeded[1] &&
                         overlayDrawSucceeded[2] && overlayDrawSucceeded[3] &&
+                        overlayResolveUsed[0] && overlayResolveUsed[1] &&
+                        overlayResolveUsed[2] && overlayResolveUsed[3] &&
                         imageDifferenceCount(overlayPreferenceImages[0],
                                              overlayPreferenceImages[1]) == 0 &&
                         imageDifferenceCount(overlayPreferenceImages[2],
@@ -18866,6 +18875,8 @@ int main(int argc, char *argv[])
                     const bool editModePreferenceIsolated =
                         editModeDrawSucceeded[0] && editModeDrawSucceeded[1] &&
                         editModeDrawSucceeded[2] && editModeDrawSucceeded[3] &&
+                        editModeResolveUsed[0] && editModeResolveUsed[1] &&
+                        editModeResolveUsed[2] && editModeResolveUsed[3] &&
                         imageDifferenceCount(editModePreferenceImages[0],
                                              editModePreferenceImages[2]) == 0 &&
                         imageDifferenceCount(editModePreferenceImages[1],
@@ -18877,6 +18888,98 @@ int main(int argc, char *argv[])
                     passed &= check(overlayPreferenceIsolated &&
                                         editModePreferenceIsolated,
                                     "the four Smooth Wires combinations must affect only their matching Overlay or Edit Mode stroke category");
+
+                    const auto makeDepthStroke = [&] (
+                        const QColor &color, const QPointF &firstScreen,
+                        const QPointF &secondScreen, float depth) {
+                        ViewportSceneStroke stroke;
+                        stroke.color = color;
+                        stroke.width = 2.0f;
+                        stroke.writeDepth = true;
+                        stroke.smoothWireCategory =
+                            ViewportSmoothWireCategory::Overlay;
+                        QPointF firstWorld;
+                        QPointF secondWorld;
+                        if (wireTransform.screenToWorkPlane(
+                                firstScreen, glSize, WorkPlane::XY, 0.0,
+                                &firstWorld) &&
+                            wireTransform.screenToWorkPlane(
+                                secondScreen, glSize, WorkPlane::XY, 0.0,
+                                &secondWorld)) {
+                            ViewportDepthGeometry geometry;
+                            geometry.lineVertices = {
+                                QVector3D(float(firstWorld.x()),
+                                          float(firstWorld.y()), depth),
+                                QVector3D(float(secondWorld.x()),
+                                          float(secondWorld.y()), depth)};
+                            stroke.preparedDepthGeometry =
+                                QSharedPointer<ViewportDepthGeometry>::create(
+                                    std::move(geometry));
+                        }
+                        return stroke;
+                    };
+                    const ViewportSceneStroke redCrossing = makeDepthStroke(
+                        QColor(235, 35, 25), QPointF(80.0, 240.0),
+                        QPointF(560.0, 240.0), 0.025f);
+                    const ViewportSceneStroke blueCrossing = makeDepthStroke(
+                        QColor(20, 70, 240), QPointF(320.0, 80.0),
+                        QPointF(320.0, 400.0), -0.025f);
+                    const auto captureCrossingOrder = [&] (
+                        const QVector<ViewportSceneStroke> &crossingStrokes,
+                        bool *resolveUsed, bool *drawSucceeded,
+                        GLenum *drawError) {
+                        wireFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                        functions.glColorMask(GL_TRUE, GL_TRUE,
+                                              GL_TRUE, GL_TRUE);
+                        functions.glClearColor(128.0f / 255.0f,
+                                               128.0f / 255.0f,
+                                               128.0f / 255.0f, 1.0f);
+                        functions.glClearDepth(1.0);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        while (functions.glGetError() != GL_NO_ERROR) {
+                        }
+                        *drawSucceeded = wireRenderer.draw(
+                            crossingStrokes, wireTransform, glSize, 1.0,
+                            true, 1.0, true, true, false, resolveUsed);
+                        functions.glFinish();
+                        *drawError = functions.glGetError();
+                        return wireFramebuffer.toImage();
+                    };
+                    bool crossingResolveForward = false;
+                    bool crossingResolveReverse = false;
+                    bool crossingDrawForward = false;
+                    bool crossingDrawReverse = false;
+                    GLenum crossingErrorForward = GL_NO_ERROR;
+                    GLenum crossingErrorReverse = GL_NO_ERROR;
+                    const QImage crossingForward = captureCrossingOrder(
+                        {redCrossing, blueCrossing}, &crossingResolveForward,
+                        &crossingDrawForward, &crossingErrorForward);
+                    const QImage crossingReverse = captureCrossingOrder(
+                        {blueCrossing, redCrossing}, &crossingResolveReverse,
+                        &crossingDrawReverse, &crossingErrorReverse);
+                    wireFramebuffer.bind();
+                    GLfloat crossingDepth = 1.0f;
+                    GLfloat outsideCrossingDepth = 0.0f;
+                    functions.glReadPixels(320, 239, 1, 1, GL_DEPTH_COMPONENT,
+                                          GL_FLOAT, &crossingDepth);
+                    functions.glReadPixels(300, 220, 1, 1, GL_DEPTH_COMPONENT,
+                                          GL_FLOAT, &outsideCrossingDepth);
+                    passed &= check(crossingDrawForward && crossingDrawReverse &&
+                                        crossingResolveForward &&
+                                        crossingResolveReverse &&
+                                        crossingErrorForward == GL_NO_ERROR &&
+                                        crossingErrorReverse == GL_NO_ERROR,
+                                    "opaque depth-writing Smooth Wires must execute the per-pixel resolve without framebuffer errors");
+                    passed &= check(!crossingForward.isNull() &&
+                                        crossingForward == crossingReverse,
+                                    "crossing smooth strokes at different depths must resolve independently of submission order");
+                    passed &= check(crossingDepth < 1.0f &&
+                                        outsideCrossingDepth > 0.99999f,
+                                    "the Smooth Wires resolve must write visible line depth without extending depth into invisible quad corners");
 
                     wireFramebuffer.bind();
                     functions.glViewport(0, 0, glSize.width(),

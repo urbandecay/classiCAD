@@ -196,7 +196,8 @@ public:
               qreal opacity = 1.0,
               bool smoothOverlayWires = true,
               bool smoothEditModeWires = true,
-              bool sceneLinearOutput = false);
+              bool sceneLinearOutput = false,
+              bool *strokeResolveUsed = nullptr);
     bool drawDepthOnly(const QVector<ViewportSceneStroke> &strokes,
                        const ViewportTransform &transform,
                        const QSize &viewportSize,
@@ -233,6 +234,12 @@ private:
     };
 
     bool initialize();
+    bool initializeStrokeResolve();
+    bool ensureStrokeResolveTargets(const QSize &pixelSize,
+                                    GLenum depthInternalFormat,
+                                    GLenum depthTextureFormat,
+                                    GLenum depthTextureType,
+                                    GLenum depthAttachment);
     bool initializeOverlay();
     bool initializePicture();
 
@@ -240,7 +247,9 @@ private:
     QOpenGLShaderProgram pointProgram_;
     QOpenGLShaderProgram pictureProgram_;
     QOpenGLShaderProgram overlayProgram_;
+    QOpenGLShaderProgram strokeResolveProgram_;
     QOpenGLVertexArrayObject vertexArray_;
+    QOpenGLVertexArrayObject strokeResolveVertexArray_;
     QOpenGLVertexArrayObject overlayVertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer overlayVertexBuffer_{QOpenGLBuffer::VertexBuffer};
@@ -250,6 +259,19 @@ private:
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<qint64, PictureTexture> pictureTextures_;
     GLuint overlayTextTexture_ = 0;
+    GLuint strokeBaseFramebuffer_ = 0;
+    GLuint strokeLineFramebuffer_ = 0;
+    GLuint strokeBaseColorTexture_ = 0;
+    GLuint strokeSceneDepthTexture_ = 0;
+    GLuint strokeLineColorTexture_ = 0;
+    GLuint strokeLineDataTexture_ = 0;
+    GLuint strokeLineDepthTexture_ = 0;
+    GLuint strokeWorkingDepthTexture_ = 0;
+    QSize strokeResolvePixelSize_;
+    GLenum strokeResolveDepthInternalFormat_ = 0;
+    GLenum strokeResolveDepthTextureFormat_ = 0;
+    GLenum strokeResolveDepthTextureType_ = 0;
+    GLenum strokeResolveDepthAttachment_ = GL_DEPTH_ATTACHMENT;
     QVector<QByteArray> strokeGeometryKeys_;
     QVector<QPair<int, int>> strokeRanges_;
     QVector<QVector3D> cachedVertices_;
@@ -257,6 +279,8 @@ private:
     QVector<float> cachedPatternOffsets_;
     bool initializationAttempted_ = false;
     bool initialized_ = false;
+    bool strokeResolveInitializationAttempted_ = false;
+    bool strokeResolveInitialized_ = false;
     bool overlayInitializationAttempted_ = false;
     bool overlayInitialized_ = false;
     bool pictureInitializationAttempted_ = false;

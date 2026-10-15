@@ -108,7 +108,8 @@ if blend_output:
     scene.display.render_aa = "OFF"
     scene.display.shading.light = "STUDIO"
     scene.display.shading.studio_light = "Default"
-    scene.display.shading.color_type = "MATERIAL"
+    scene.display.shading.color_type = os.environ.get(
+        "CLASSICAD_SURFACE_MATERIAL_COLOR_MODE", "MATERIAL").upper()
     scene.display.shading.show_specular_highlight = True
     scene.display.shading.show_shadows = False
     scene.display.shading.show_cavity = False

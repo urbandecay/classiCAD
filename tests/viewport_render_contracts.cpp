@@ -6498,6 +6498,12 @@ int main(int argc, char *argv[])
                                         *importedSurfaceMaterialGpuObject));
                         }
                         bool importedSurfaceQPainterCaptureSaved = false;
+                        bool importedSurfaceQPainterTextureVisible = false;
+                        const bool importedSurfaceTextureMode =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_COLOR_MODE")
+                                .compare(QStringLiteral("Texture"),
+                                         Qt::CaseInsensitive) == 0;
                         const QString importedCaptureDirectory =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_CAPTURE_DIR");
@@ -6512,7 +6518,9 @@ int main(int argc, char *argv[])
                             importedSurfaceShading.studioLightPreset =
                                 QStringLiteral("Default");
                             importedSurfaceShading.colorMode =
-                                ViewportColorMode::Material;
+                                importedSurfaceTextureMode
+                                    ? ViewportColorMode::Texture
+                                    : ViewportColorMode::Material;
                             importedSurfaceShading.specularLighting = true;
                             importedSurfaceShading.outline = false;
                             importedSurfaceShading.shadows = false;
@@ -6550,6 +6558,18 @@ int main(int argc, char *argv[])
                                 importedSurfaceObject.meshMaterials,
                                 &importedSurfaceFragments);
                             importedSurfacePainter.end();
+                            const QColor importedSurfaceQPainterProbeA =
+                                importedSurfaceDisplay.pixelColor(300, 240);
+                            const QColor importedSurfaceQPainterProbeB =
+                                importedSurfaceDisplay.pixelColor(340, 240);
+                            importedSurfaceQPainterTextureVisible =
+                                !importedSurfaceTextureMode ||
+                                std::abs(importedSurfaceQPainterProbeA.red() -
+                                         importedSurfaceQPainterProbeB.red()) +
+                                    std::abs(importedSurfaceQPainterProbeA.green() -
+                                             importedSurfaceQPainterProbeB.green()) +
+                                    std::abs(importedSurfaceQPainterProbeA.blue() -
+                                             importedSurfaceQPainterProbeB.blue()) > 8;
                             constexpr float importedSurfaceBackground =
                                 0.0219421387f;
                             QVector<float> importedSurfaceSceneLinear(
@@ -6612,6 +6632,7 @@ int main(int argc, char *argv[])
                             importedSurfaceLoaded &&
                                 importedSurfaceDocumentBuilt &&
                                 importedSurfaceMaterialMatches &&
+                                importedSurfaceQPainterTextureVisible &&
                                 (importedCaptureDirectory.isEmpty() ||
                                  importedSurfaceQPainterCaptureSaved),
                             qPrintable(QStringLiteral(
@@ -7722,7 +7743,12 @@ int main(int argc, char *argv[])
                         importedSurfaceGpuShading.studioLightPreset =
                             QStringLiteral("Default");
                         importedSurfaceGpuShading.colorMode =
-                            ViewportColorMode::Material;
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_COLOR_MODE")
+                                    .compare(QStringLiteral("Texture"),
+                                             Qt::CaseInsensitive) == 0
+                                ? ViewportColorMode::Texture
+                                : ViewportColorMode::Material;
                         importedSurfaceGpuShading.specularLighting = true;
                         importedSurfaceGpuShading.outline = false;
                         importedSurfaceGpuShading.shadows = false;
@@ -7787,10 +7813,26 @@ int main(int argc, char *argv[])
                                 }
                             }
                         }
+                        const QColor importedSurfaceGpuProbeA =
+                            importedSurfaceGpuDisplay.pixelColor(300, 240);
+                        const QColor importedSurfaceGpuProbeB =
+                            importedSurfaceGpuDisplay.pixelColor(340, 240);
+                        const bool importedSurfaceGpuTextureVisible =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_COLOR_MODE")
+                                    .compare(QStringLiteral("Texture"),
+                                             Qt::CaseInsensitive) != 0 ||
+                            std::abs(importedSurfaceGpuProbeA.red() -
+                                     importedSurfaceGpuProbeB.red()) +
+                                std::abs(importedSurfaceGpuProbeA.green() -
+                                         importedSurfaceGpuProbeB.green()) +
+                                std::abs(importedSurfaceGpuProbeA.blue() -
+                                         importedSurfaceGpuProbeB.blue()) > 8;
                         passed &= check(
                             importedSurfaceGpuPfmSaved &&
                                 importedSurfaceGpuPngSaved &&
-                                importedSurfaceForegroundPixels > 5000,
+                                importedSurfaceForegroundPixels > 5000 &&
+                                importedSurfaceGpuTextureVisible,
                             "a real Blender NURBS surface material must render through the production GPU scene pass");
                     }
                     // A face-material split can make one imported mesh

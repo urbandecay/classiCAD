@@ -1199,6 +1199,7 @@ struct TransientPreviewPicture {
     Shape frame;
     int duplicateIndex = -1;
     int sceneShapeIndex = -1;
+    bool showInFront = false;
     ObjectId mirrorObjectId = ObjectId::invalid();
     bool activeToolPreview = false;
     float opacity = 0.78f;
@@ -10254,6 +10255,7 @@ protected:
                      pictureFrameOutline(visibleShape),
                      -1,
                      index,
+                     renderObject.showInFront,
                      ObjectId::invalid(),
                      false,
                      1.0f,
@@ -10282,6 +10284,7 @@ protected:
                      pictureFrameOutline(visibleShape),
                      -1,
                      index,
+                     renderObject.showInFront,
                      ObjectId::invalid(),
                      false,
                      1.0f,
@@ -11411,6 +11414,7 @@ protected:
                          pictureFrameOutline(picture),
                          duplicateIndex,
                          -1,
+                         false,
                          mirrorObjectId,
                          activeToolPreview,
                          0.78f,
@@ -12245,6 +12249,9 @@ protected:
                 if (sceneRenderer != nullptr) {
                     for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                         if (preview.sceneShapeIndex >= 0 &&
+                            !preview.showInFront &&
+                            preview.image.pictureImageDepth ==
+                                PictureImageDepth::Back &&
                             !sceneRenderer->drawPicture(preview.image,
                                                         sceneCamera,
                                                         renderFrame.viewportSize,
@@ -12278,6 +12285,23 @@ protected:
                                                   : nullptr,
                             aaSceneSampleActive);
                 }
+                if (sceneRenderer != nullptr) {
+                    for (const TransientPreviewPicture &preview :
+                         gpuPreviewPictures) {
+                        if (preview.sceneShapeIndex < 0 ||
+                            preview.showInFront ||
+                            preview.image.pictureImageDepth !=
+                                PictureImageDepth::Default) {
+                            continue;
+                        }
+                        if (!sceneRenderer->drawPicture(
+                                preview.image, sceneCamera,
+                                renderFrame.viewportSize, devicePixelRatioF(),
+                                preview.opacity, aaSceneSampleActive, true)) {
+                            failedScenePicturePreviews.append(&preview.image);
+                        }
+                    }
+                }
                 surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {
                     aaRenderer->markCurrentSampleAttachmentsValid(
@@ -12310,6 +12334,24 @@ protected:
                 nativeRenderer->renderUnjitteredSceneDepthToCurrentFramebuffer(
                     overlayCamera, renderFrame.viewportSize,
                     devicePixelRatioF(), visibleSurfaceShapes);
+            }
+            // If the native surface pass failed, the software fallback was
+            // painted after the initial Default-depth pictures and covered
+            // them. Re-draw those pictures against the rebuilt scene depth.
+            if (nativeSurfacePassFailed && sceneRenderer != nullptr) {
+                for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
+                    if (preview.sceneShapeIndex < 0 || preview.showInFront ||
+                        preview.image.pictureImageDepth !=
+                            PictureImageDepth::Default) {
+                        continue;
+                    }
+                    if (!sceneRenderer->drawPicture(
+                            preview.image, overlayCamera,
+                            renderFrame.viewportSize, devicePixelRatioF(),
+                            preview.opacity, false, true)) {
+                        failedScenePicturePreviews.append(&preview.image);
+                    }
+                }
             }
             // Selected-face highlighting is also an edit-mode overlay. Draw it
             // after resolve/history presentation against the unjittered scene
@@ -12358,7 +12400,10 @@ protected:
                 renderGridAppearance);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                    if (preview.sceneShapeIndex >= 0) {
+                    if (preview.sceneShapeIndex >= 0 &&
+                        !preview.showInFront &&
+                        preview.image.pictureImageDepth !=
+                            PictureImageDepth::Front) {
                         continue;
                     }
                     if (!previewRenderer->drawPicture(preview.image,

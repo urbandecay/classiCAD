@@ -233,7 +233,8 @@ public:
                      const QSize &viewportSize,
                      qreal devicePixelRatio,
                      float opacity,
-                     bool sceneLinearOutput = false);
+                     bool sceneLinearOutput = false,
+                     bool depthTest = false);
 
 private:
     struct PictureTexture {

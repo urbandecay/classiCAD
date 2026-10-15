@@ -2371,7 +2371,8 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         const QSize &viewportSize,
                                         qreal devicePixelRatio,
                                         float opacity,
-                                        bool sceneLinearOutput)
+                                        bool sceneLinearOutput,
+                                        bool depthTest)
 {
     if (picture.geometryType != GeometryType::Picture) return false;
     if (!viewportPictureVisibleInView(picture, transform, viewportSize))
@@ -2444,7 +2445,18 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     const QSize pixelSize(qRound(viewportSize.width() * dpr),
                           qRound(viewportSize.height() * dpr));
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
-    glDisable(GL_DEPTH_TEST);
+    const GLboolean wasDepthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
+    GLint previousDepthFunction = GL_LESS;
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    GLboolean previousDepthWrite = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthWrite);
+    if (depthTest) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    glDepthMask(GL_FALSE);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
@@ -2474,6 +2486,10 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     pictureVertexArray_.release();
     glBindTexture(GL_TEXTURE_2D, 0);
     glDisable(GL_BLEND);
+    glDepthMask(previousDepthWrite);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    if (wasDepthTestEnabled) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
     return true;
 }
 

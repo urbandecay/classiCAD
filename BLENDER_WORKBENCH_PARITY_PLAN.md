@@ -8001,7 +8001,11 @@ resolve remain open.
   depth preference in native shape data. Both QPainter and GPU picture paths
   apply the projection, side, and axis-alignment visibility rules from Blender's
   [empty-image visibility checks](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc#L3577-L3629).
-  The depth preference is preserved but its occlusion ordering remains a
-  follow-up category. The overlay pass behavior is documented in Blender's
-  [pinned image Empty path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L247-L354).
-  C++ build passed; matched image comparison remains open.
+  GPU drawing now places Back images before scene surfaces, depth-tests Default
+  images against the scene, and draws Front or `showInFront` images in the
+  overlay pass. If the GPU surface pass fails, Default images are redrawn
+  against the rebuilt scene depth after the software surface fallback. Blender's
+  overlay behavior is documented in the [pinned image Empty path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L247-L354).
+  The QPainter scene path and failed picture-texture fallback still do not
+  reproduce all three depth modes. C++ build passed; matched image comparison
+  remains open.

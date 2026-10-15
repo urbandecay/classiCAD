@@ -1929,6 +1929,39 @@ bool parseBlenderPictureItem(
     }
     result.geometry.pictureImage = image;
     result.geometry.pictureImageData = opacity >= 1.0 ? imageBytes : QByteArray{};
+    result.geometry.pictureShowPerspective = item.value(
+        QStringLiteral("show_empty_image_perspective")).toBool(true);
+    result.geometry.pictureShowOrthographic = item.value(
+        QStringLiteral("show_empty_image_orthographic")).toBool(true);
+    result.geometry.pictureOnlyAxisAligned = item.value(
+        QStringLiteral("show_empty_image_only_axis_aligned")).toBool(false);
+    const QString imageSide = item.value(
+        QStringLiteral("empty_image_side")).toString(
+            QStringLiteral("DOUBLE_SIDED"));
+    if (imageSide == QLatin1String("FRONT")) {
+        result.geometry.pictureImageSide = classiCAD::PictureImageSide::Front;
+    } else if (imageSide == QLatin1String("BACK")) {
+        result.geometry.pictureImageSide = classiCAD::PictureImageSide::Back;
+    } else if (imageSide != QLatin1String("DOUBLE_SIDED")) {
+        setError(errorMessage, QStringLiteral("Image Empty side setting is invalid"));
+        return false;
+    }
+    const QString imageDepth = item.value(
+        QStringLiteral("empty_image_depth")).toString(
+            QStringLiteral("DEFAULT"));
+    if (imageDepth != QLatin1String("DEFAULT") &&
+        imageDepth != QLatin1String("FRONT") &&
+        imageDepth != QLatin1String("BACK")) {
+        setError(errorMessage, QStringLiteral("Image Empty depth setting is invalid"));
+        return false;
+    }
+    if (imageDepth == QLatin1String("FRONT")) {
+        result.geometry.pictureImageDepth =
+            classiCAD::PictureImageDepth::Front;
+    } else if (imageDepth == QLatin1String("BACK")) {
+        result.geometry.pictureImageDepth =
+            classiCAD::PictureImageDepth::Back;
+    }
     QVector<double> objectColor;
     if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
                          &objectColor)) {

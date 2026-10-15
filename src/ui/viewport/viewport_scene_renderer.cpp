@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_scene_renderer.h"
+#include "viewport_picture_visibility.h"
 
 #include "blender_grid_renderer.h"
 #include "core/geometry/arc_curve_factory.h"
@@ -2372,8 +2373,10 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         float opacity,
                                         bool sceneLinearOutput)
 {
+    if (picture.geometryType != GeometryType::Picture) return false;
+    if (!viewportPictureVisibleInView(picture, transform, viewportSize))
+        return true;
     if (picture.pictureImage.isNull() ||
-        picture.geometryType != GeometryType::Picture ||
         QOpenGLContext::currentContext() == nullptr || !initializePicture()) {
         return false;
     }

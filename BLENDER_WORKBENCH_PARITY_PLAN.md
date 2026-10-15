@@ -7993,3 +7993,15 @@ resolve remain open.
   texel. Directional shadow volumes preserve their position in the plane
   perpendicular to the light, so caster shadows cannot extend beyond those
   projected bounds. C++ build passed; matched image comparison remains open.
+
+### Blender Image Empty view visibility (2026-10-15)
+
+- Imported Image Empties now retain their perspective/orthographic display
+  flags, front/back/both side, axis-aligned-only setting, and Default/Front/Back
+  depth preference in native shape data. Both QPainter and GPU picture paths
+  apply the projection, side, and axis-alignment visibility rules from Blender's
+  [empty-image visibility checks](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc#L3577-L3629).
+  The depth preference is preserved but its occlusion ordering remains a
+  follow-up category. The overlay pass behavior is documented in Blender's
+  [pinned image Empty path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L247-L354).
+  C++ build passed; matched image comparison remains open.

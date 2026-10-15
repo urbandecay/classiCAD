@@ -818,6 +818,26 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("arcSweep"), shape.arcSweep);
 
     if (shape.geometryType == GeometryType::Picture) {
+        object.insert(QStringLiteral("pictureShowPerspective"),
+                      shape.pictureShowPerspective);
+        object.insert(QStringLiteral("pictureShowOrthographic"),
+                      shape.pictureShowOrthographic);
+        object.insert(QStringLiteral("pictureOnlyAxisAligned"),
+                      shape.pictureOnlyAxisAligned);
+        const QString pictureSide =
+            shape.pictureImageSide == PictureImageSide::Front
+                ? QStringLiteral("FRONT")
+                : shape.pictureImageSide == PictureImageSide::Back
+                      ? QStringLiteral("BACK")
+                      : QStringLiteral("DOUBLE_SIDED");
+        object.insert(QStringLiteral("pictureImageSide"), pictureSide);
+        const QString pictureDepth =
+            shape.pictureImageDepth == PictureImageDepth::Front
+                ? QStringLiteral("FRONT")
+                : shape.pictureImageDepth == PictureImageDepth::Back
+                      ? QStringLiteral("BACK")
+                      : QStringLiteral("DEFAULT");
+        object.insert(QStringLiteral("pictureImageDepth"), pictureDepth);
         QByteArray encodedImage = shape.pictureImageData;
         if (encodedImage.isEmpty() && !shape.pictureImage.isNull()) {
             QBuffer imageBuffer(&encodedImage);
@@ -972,6 +992,58 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         !scalarVolumeFromJson(object.value(QStringLiteral("scalarVolume")),
                               &scalarVolume)) return false;
     QImage pictureImage;
+    bool pictureShowPerspective = true;
+    bool pictureShowOrthographic = true;
+    bool pictureOnlyAxisAligned = false;
+    PictureImageSide pictureImageSide = PictureImageSide::Both;
+    PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
+    if (geometryType == GeometryType::Picture) {
+        const auto readBoolean = [&object](const QString &key, bool fallback,
+                                           bool *destination) {
+            const QJsonValue value = object.value(key);
+            if (value.isUndefined()) {
+                *destination = fallback;
+                return true;
+            }
+            if (!value.isBool()) return false;
+            *destination = value.toBool();
+            return true;
+        };
+        if (!readBoolean(QStringLiteral("pictureShowPerspective"), true,
+                         &pictureShowPerspective) ||
+            !readBoolean(QStringLiteral("pictureShowOrthographic"), true,
+                         &pictureShowOrthographic) ||
+            !readBoolean(QStringLiteral("pictureOnlyAxisAligned"), false,
+                         &pictureOnlyAxisAligned)) {
+            return false;
+        }
+        const QJsonValue sideValue =
+            object.value(QStringLiteral("pictureImageSide"));
+        if (!sideValue.isUndefined()) {
+            if (!sideValue.isString()) return false;
+            const QString side = sideValue.toString();
+            if (side == QLatin1String("FRONT")) {
+                pictureImageSide = PictureImageSide::Front;
+            } else if (side == QLatin1String("BACK")) {
+                pictureImageSide = PictureImageSide::Back;
+            } else if (side != QLatin1String("DOUBLE_SIDED")) {
+                return false;
+            }
+        }
+        const QJsonValue depthValue =
+            object.value(QStringLiteral("pictureImageDepth"));
+        if (!depthValue.isUndefined()) {
+            if (!depthValue.isString()) return false;
+            const QString depth = depthValue.toString();
+            if (depth == QLatin1String("FRONT")) {
+                pictureImageDepth = PictureImageDepth::Front;
+            } else if (depth == QLatin1String("BACK")) {
+                pictureImageDepth = PictureImageDepth::Back;
+            } else if (depth != QLatin1String("DEFAULT")) {
+                return false;
+            }
+        }
+    }
     NurbsExtrusionSolid3D nurbsSolid;
     if (geometryType == GeometryType::NurbsSolid) {
         const QJsonObject solid = object.value(QStringLiteral("nurbsSolid")).toObject();
@@ -1242,6 +1314,11 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->dimensionOffset = dimensionOffset;
     shape->dimensionOffsetValid = dimensionOffsetValid;
     shape->pictureImage = pictureImage;
+    shape->pictureShowPerspective = pictureShowPerspective;
+    shape->pictureShowOrthographic = pictureShowOrthographic;
+    shape->pictureOnlyAxisAligned = pictureOnlyAxisAligned;
+    shape->pictureImageSide = pictureImageSide;
+    shape->pictureImageDepth = pictureImageDepth;
     shape->pictureImageData = geometryType == GeometryType::Picture
                                   ? QByteArray::fromBase64(
                                         object.value(QStringLiteral("pictureImage"))

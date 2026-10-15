@@ -720,6 +720,10 @@ def extract_image_empty(obj, scene, packed_payload_budget,
             getattr(evaluated, "show_empty_image_perspective", True)),
         "show_empty_image_orthographic": bool(
             getattr(evaluated, "show_empty_image_orthographic", True)),
+        "show_empty_image_only_axis_aligned": bool(
+            getattr(evaluated, "show_empty_image_only_axis_aligned", False)),
+        "empty_image_side": str(
+            getattr(evaluated, "empty_image_side", "DOUBLE_SIDED")),
     })
     return item, ""
 

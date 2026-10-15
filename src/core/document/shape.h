@@ -17,6 +17,18 @@
 
 namespace classiCAD {
 
+enum class PictureImageSide : int {
+    Both = 0,
+    Front = 1,
+    Back = 2,
+};
+
+enum class PictureImageDepth : int {
+    Default = 0,
+    Front = 1,
+    Back = 2,
+};
+
 // Persistent geometry and its local-to-world mapping. Shape owns exact curve
 // and surface data; tessellations and screen-space data live in services.
 struct Shape {
@@ -48,6 +60,11 @@ struct Shape {
     // Picture frame corners are stored in points; image bytes are embedded.
     QImage pictureImage;
     QByteArray pictureImageData;
+    bool pictureShowPerspective = true;
+    bool pictureShowOrthographic = true;
+    bool pictureOnlyAxisAligned = false;
+    PictureImageSide pictureImageSide = PictureImageSide::Both;
+    PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
     WorkPlane workPlane = WorkPlane::XY;
     qreal workPlaneOffset = 0.0;
     // When valid, this frame is authoritative for local 2D geometry. An

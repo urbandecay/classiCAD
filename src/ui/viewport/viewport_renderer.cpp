@@ -1,4 +1,5 @@
 #include "viewport_renderer.h"
+#include "viewport_picture_visibility.h"
 
 #include "core/geometry/curve_construction.h"
 #include "core/geometry/shape_mapping.h"
@@ -2918,7 +2919,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     if (shape.geometryType == GeometryType::Picture) {
         const QVector<QPointF> corners = pictureFrameCorners(shape);
-        if (shape.pictureImage.isNull() || corners.size() != 4) {
+        if (shape.pictureImage.isNull() || corners.size() != 4 ||
+            !viewportPictureVisibleInView(shape, transform_, viewportSize)) {
             return;
         }
 

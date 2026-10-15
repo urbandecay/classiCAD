@@ -5385,6 +5385,26 @@ edge comparison remains open.
   the matched GPU and Blender captures. This comparison-only update made no
   C++ changes and required no rebuild.
 
+### Independent weighted OIT equation contract (2026-10-14)
+
+- Replaced the resolver test's circular depth-weight expectations with
+  independent Blender 5.2.2 Eq. 7 float values at camera depths 2 and 8
+  (`62.49608994` and `3.90623450`), plus signed-depth equivalence and both
+  clamp endpoints. The weighted-color result now uses those fixed values
+  instead of calling the production helper to compute its expected output.
+- Added transparent-film checks for alpha 0, alpha 1, and two-fragment
+  multiplicative revealage (`0.625` output alpha). Blender's weight equation
+  and accumulation output are pinned in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L435-L470)
+  and
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
+- This closes the independent scalar/resolver equation contract. It does not
+  close the separate GPU/QPainter final-image comparison against Blender for
+  transparent multi-surface scenes.
+- Validation: `cmake --build build -j4` passed with the dependency audit, and
+  `ctest --test-dir build -R '^workbench_scene_linear_resolve_contracts$'
+  --output-on-failure` passed (1/1). No production renderer code changed.
+
 ### Matched Studio color-source captures (2026-10-14)
 
 - Extended the offscreen lighting capture contract to compare Studio Default,

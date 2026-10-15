@@ -73,10 +73,23 @@ int main()
                              (0.25f * 0.3f + 0.75f * 0.5f * 4.0f)),
                     "transparent-film output must preserve premultiplied linear RGB and alpha");
 
+    // Independent values from Blender 5.2.2's Eq. 7. Keep these constants
+    // separate from rasterWorkbenchTransparentWeight so the contract can
+    // catch drift in the production helper itself.
+    constexpr float blenderWeightAtDepth2 = 62.49608994f;
+    constexpr float blenderWeightAtDepth8 = 3.90623450f;
     passed &= check(near(rasterWorkbenchTransparentWeight(0.0f), 300.0f) &&
                         near(rasterWorkbenchTransparentWeight(1000.0f),
-                             0.01f),
-                    "Workbench transparent weights must match the 5.2.2 Eq. 7 clamp");
+                             0.01f) &&
+                        near(rasterWorkbenchTransparentWeight(2.0f),
+                             blenderWeightAtDepth2, 1.0e-5f) &&
+                        near(rasterWorkbenchTransparentWeight(8.0f),
+                             blenderWeightAtDepth8, 1.0e-5f) &&
+                        near(rasterWorkbenchTransparentWeight(-2.0f),
+                             blenderWeightAtDepth2, 1.0e-5f) &&
+                        near(rasterWorkbenchTransparentWeight(-8.0f),
+                             blenderWeightAtDepth8, 1.0e-5f),
+                    "Workbench transparent weights must match independent Blender 5.2.2 Eq. 7 values and clamp");
     const std::vector<RasterWorkbenchLinearFragment> weightedFragments{
         {0, 0, 8.0f, {0.8f, 0.15f, 0.3f}, 0.25f},
         {0, 0, 2.0f, {0.2f, 0.4f, 4.0f}, 0.5f},
@@ -84,8 +97,8 @@ int main()
     passed &= check(resolveRasterWorkbenchWeightedOitFragments(
                         1, 1, background, weightedFragments, &resolved),
                     "weighted OIT resolver must accept valid fragments");
-    const float weight8 = rasterWorkbenchTransparentWeight(8.0f);
-    const float weight2 = rasterWorkbenchTransparentWeight(2.0f);
+    const float weight8 = blenderWeightAtDepth8;
+    const float weight2 = blenderWeightAtDepth2;
     const float sumWeight = 0.25f * weight8 + 0.5f * weight2;
     const float revealage = (1.0f - 0.25f) * (1.0f - 0.5f);
     const float coverage = 1.0f - revealage;
@@ -104,6 +117,31 @@ int main()
                              weightedBlue * coverage + background.blue * revealage),
                     "weighted OIT must use depth-weighted color and multiplicative revealage");
     const auto weightedResult = resolved;
+    const std::vector<RasterWorkbenchLinearFragment> zeroAlphaFragments{
+        {0, 0, 2.0f, {3.0f, 2.0f, 1.0f}, 0.0f},
+    };
+    passed &= check(resolveRasterWorkbenchWeightedOitFragments(
+                        1, 1, transparentBase, zeroAlphaFragments, &resolved) &&
+                        near(resolved[0].red, 0.0f) &&
+                        near(resolved[0].green, 0.0f) &&
+                        near(resolved[0].blue, 0.0f) &&
+                        near(resolved[0].alpha, 0.0f),
+                    "weighted OIT alpha zero must leave transparent film unchanged");
+    const std::vector<RasterWorkbenchLinearFragment> opaqueAlphaFragments{
+        {0, 0, 8.0f, {0.7f, 0.2f, 0.1f}, 1.0f},
+    };
+    passed &= check(resolveRasterWorkbenchWeightedOitFragments(
+                        1, 1, transparentBase, opaqueAlphaFragments, &resolved) &&
+                        near(resolved[0].red, 0.7f) &&
+                        near(resolved[0].green, 0.2f) &&
+                        near(resolved[0].blue, 0.1f) &&
+                        near(resolved[0].alpha, 1.0f),
+                    "weighted OIT alpha one must fully replace transparent film");
+    passed &= check(resolveRasterWorkbenchWeightedOitFragments(
+                        1, 1, transparentBase, weightedFragments, &resolved) &&
+                        near(resolved[0].alpha, coverage) &&
+                        near(resolved[0].alpha, 0.625f),
+                    "weighted OIT revealage must multiply independent fragment transmittances");
     const std::vector<RasterWorkbenchLinearFragment> reversedWeightedFragments{
         weightedFragments.rbegin(), weightedFragments.rend()};
     passed &= check(resolveRasterWorkbenchWeightedOitFragments(

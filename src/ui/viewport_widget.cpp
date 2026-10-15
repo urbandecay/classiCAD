@@ -11819,6 +11819,155 @@ protected:
             if (!gpuViewportBackground.isNull()) {
                 painter.drawImage(QPoint(0, 0), gpuViewportBackground);
             }
+
+            // The raster Workbench renderer does not replay the GPU scene
+            // stroke list. Draw selected surface/solid component edges here,
+            // after the scene effects resolve, using the retained raster
+            // depth as an overlay-only visibility test.
+            if (componentSelectionMode_ == ComponentSelectionMode::Edge &&
+                viewportShadingSettings_.mode == ViewportShadingMode::Solid) {
+                const QSize depthSize =
+                    rasterSurfaceLayers.regularSceneDepthSize;
+                const qreal depthScaleX = depthSize.width() > 0 &&
+                        renderFrame.viewportSize.width() > 0
+                    ? qreal(depthSize.width()) /
+                          renderFrame.viewportSize.width()
+                    : std::max<qreal>(devicePixelRatioF(), 1.0);
+                const qreal depthScaleY = depthSize.height() > 0 &&
+                        renderFrame.viewportSize.height() > 0
+                    ? qreal(depthSize.height()) /
+                          renderFrame.viewportSize.height()
+                    : std::max<qreal>(devicePixelRatioF(), 1.0);
+                const Point3D cameraPosition = viewportTransform_.cameraPosition(
+                    renderFrame.viewportSize);
+                const Point3D viewDirection = viewportTransform_.viewDirection();
+                const auto lineVisibleAt = [&](const QPointF &screen,
+                                               const Point3D &world,
+                                               bool showInFront) {
+                    const int x = std::clamp(
+                        qRound(screen.x() * depthScaleX), 0,
+                        std::max(0, depthSize.width() - 1));
+                    const int y = std::clamp(
+                        qRound(screen.y() * depthScaleY), 0,
+                        std::max(0, depthSize.height() - 1));
+                    const int pixelIndex = y * depthSize.width() + x;
+                    const QVector<float> &depth = showInFront
+                        ? rasterSurfaceLayers.inFrontSceneDepth
+                        : rasterSurfaceLayers.regularSceneDepth;
+                    const QSize storedSize = showInFront
+                        ? rasterSurfaceLayers.inFrontSceneDepthSize
+                        : rasterSurfaceLayers.regularSceneDepthSize;
+                    if (storedSize != depthSize ||
+                        pixelIndex < 0 || pixelIndex >= depth.size()) {
+                        return true;
+                    }
+                    float surfaceDepth = depth[pixelIndex];
+                    if (!showInFront &&
+                        pixelIndex <
+                            rasterSurfaceLayers.inFrontSceneDepth.size()) {
+                        const float inFrontDepth =
+                            rasterSurfaceLayers.inFrontSceneDepth[pixelIndex];
+                        if (std::isfinite(inFrontDepth)) {
+                            return false;
+                        }
+                    }
+                    if (!std::isfinite(surfaceDepth)) {
+                        return true;
+                    }
+                    const float strokeDepth = rasterWorkbenchCameraDepth(
+                        QVector3D(float(world.x), float(world.y),
+                                  float(world.z)),
+                        cameraPosition, viewDirection);
+                    const float tolerance = std::max(
+                        5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
+                    return strokeDepth >= surfaceDepth - tolerance;
+                };
+
+                painter.save();
+                painter.setRenderHint(QPainter::Antialiasing,
+                                      smoothWiresEditMode_);
+                for (const ViewportRenderObject &renderObject : visibleShapes) {
+                    if (renderObject.shape.geometryType !=
+                            GeometryType::NurbsSurface &&
+                        renderObject.shape.geometryType !=
+                            GeometryType::NurbsSolid) {
+                        continue;
+                    }
+                    const QSet<int> &selectedEdges =
+                        componentSelectionForObject(renderObject.objectId);
+                    if (selectedEdges.isEmpty()) {
+                        continue;
+                    }
+                    const ViewportDepthGeometry cage =
+                        selectedSurfaceControlNet(renderObject.shape);
+                    const QVector<QPair<int, int>> edgeVertices =
+                        selectedSurfaceControlNetEdgeVertexIndices(
+                            renderObject.shape);
+                    for (const int edgeIndex : selectedEdges) {
+                        const int firstIndex = edgeIndex * 2;
+                        if (edgeIndex < 0 || edgeIndex >= edgeVertices.size() ||
+                            firstIndex + 1 >= cage.preciseLineVertices.size()) {
+                            continue;
+                        }
+                        const auto active = componentSelectionObject_ ==
+                                renderObject.objectId &&
+                            edgeIndex == activeComponentIndex();
+                        QPen pen(active ? QColor(Qt::white)
+                                        : QColor(QStringLiteral("#ff7a00")));
+                        pen.setWidthF(2.0);
+                        pen.setCapStyle(Qt::RoundCap);
+                        pen.setJoinStyle(Qt::RoundJoin);
+                        painter.setPen(pen);
+                        const Point3D &firstLocal =
+                            cage.preciseLineVertices[firstIndex];
+                        const Point3D &secondLocal =
+                            cage.preciseLineVertices[firstIndex + 1];
+                        Point3D first{firstLocal.x +
+                                          renderObject.placementTranslation.x,
+                                      firstLocal.y +
+                                          renderObject.placementTranslation.y,
+                                      firstLocal.z +
+                                          renderObject.placementTranslation.z};
+                        Point3D second{secondLocal.x +
+                                           renderObject.placementTranslation.x,
+                                       secondLocal.y +
+                                           renderObject.placementTranslation.y,
+                                       secondLocal.z +
+                                           renderObject.placementTranslation.z};
+                        QPointF firstScreen;
+                        QPointF secondScreen;
+                        if (!viewportTransform_.worldPointToScreen(
+                                first, renderFrame.viewportSize, &firstScreen) ||
+                            !viewportTransform_.worldPointToScreen(
+                                second, renderFrame.viewportSize, &secondScreen)) {
+                            continue;
+                        }
+                        const qreal screenLength = QLineF(
+                            firstScreen, secondScreen).length();
+                        const int subdivisions = std::max(
+                            1, qCeil(screenLength *
+                                     std::max(depthScaleX, depthScaleY)));
+                        for (int sample = 0; sample < subdivisions; ++sample) {
+                            const qreal t0 = qreal(sample) / subdivisions;
+                            const qreal t1 = qreal(sample + 1) / subdivisions;
+                            const qreal tm = (t0 + t1) * 0.5;
+                            const QPointF a = firstScreen +
+                                (secondScreen - firstScreen) * t0;
+                            const QPointF b = firstScreen +
+                                (secondScreen - firstScreen) * t1;
+                            const Point3D midpoint{
+                                first.x + (second.x - first.x) * tm,
+                                first.y + (second.y - first.y) * tm,
+                                first.z + (second.z - first.z) * tm};
+                            if (lineVisibleAt(a + (b - a) * 0.5, midpoint,
+                                              renderObject.showInFront)) {
+                                painter.drawLine(a, b);
+                            }
+                        }
+                    }
+                }
+                painter.restore();
+            }
         }
 
         for (const ViewportRenderObject &renderObject : visibleShapes) {

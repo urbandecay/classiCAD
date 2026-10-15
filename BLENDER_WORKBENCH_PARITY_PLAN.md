@@ -8668,3 +8668,14 @@ resolve remain open.
   source dimensions, including long images. Blender still selects LOD per
   fragment, so perspective-skewed quads can differ; levels are regenerated
   per draw. C++ build and matched image comparison remain open.
+
+### QPainter SSAO attenuation lower bound (2026-10-15)
+
+- The QPainter World/Both cavity path now preserves Blender's full
+  nonnegative attenuation range instead of forcing values below `0.01` up to
+  that floor. Blender 5.2.2 exposes `matcap_ssao_attenuation` with a hard
+  minimum of zero; its cavity shader separately protects the attenuation
+  denominator with `1e-8`. Screen-only curvature is unaffected. See
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L100)
+  and [`rna_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc).
+  C++ build passed; matched cavity comparison remains open.

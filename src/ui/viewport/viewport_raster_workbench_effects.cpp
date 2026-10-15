@@ -3251,7 +3251,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         static_cast<float>(
             transform.viewScalePixelsPerWorldUnit(viewportSize)),
         static_cast<float>(dpr));
-    const float attenuation = std::max(0.01f,
+    const float attenuation = std::max(0.0f,
         static_cast<float>(settings.cavityAttenuation));
     const Point3D cameraPosition = perspective
         ? transform.cameraPosition(viewportSize) : transform.viewTarget();

@@ -157,19 +157,114 @@ int main(int argc, char **argv)
     const QString path = QDir(temporaryDirectory.path()).filePath(
         QStringLiteral("round-trip.vignola"));
 
+    ProjectViewportCameraSettings cameraSettings;
+    cameraSettings.focalLengthMillimeters = 85.2;
+    cameraSettings.clipStart = 0.125;
+    cameraSettings.clipEnd = 12000.0;
+    cameraSettings.sceneCameraEnabled = true;
+    cameraSettings.focusDistance = 124.5;
+    cameraSettings.fStop = 5.6;
+    cameraSettings.apertureBlades = 7;
+    cameraSettings.apertureRotationRadians = -0.375;
+    cameraSettings.apertureRatio = 0.8;
+    cameraSettings.sensorWidthMillimeters = 42.5;
+    cameraSettings.opticalSensorSizeMillimeters = 29.7;
+    cameraSettings.storedInProject = true;
+    cameraSettings.view.zoom = 2.75;
+    cameraSettings.view.panX = 14.25;
+    cameraSettings.view.panY = -8.5;
+    cameraSettings.view.orbitPivotX = 2.0;
+    cameraSettings.view.orbitPivotY = -3.0;
+    cameraSettings.view.orbitPivotZ = 5.5;
+    cameraSettings.view.yawRadians = 0.625;
+    cameraSettings.view.pitchRadians = -0.25;
+    cameraSettings.view.perspective = true;
+    cameraSettings.view.preset = 8;
+    cameraSettings.view.gridViewDistance = 275.0;
+    cameraSettings.view.orientationW = 0.9238795325;
+    cameraSettings.view.orientationX = 0.0;
+    cameraSettings.view.orientationY = 0.3826834324;
+    cameraSettings.view.orientationZ = 0.0;
+    cameraSettings.view.hasOrientation = true;
+    cameraSettings.view.targetX = 1.25;
+    cameraSettings.view.targetY = -2.5;
+    cameraSettings.view.targetZ = 3.75;
+    cameraSettings.view.storedInProject = true;
+
     QString errorMessage;
-    if (!saveVignolaDocument(path, source, &errorMessage)) {
+    if (!saveVignolaDocument(path, source, cameraSettings, &errorMessage)) {
         qCritical("Could not save Vignola test document: %s", qPrintable(errorMessage));
         return 1;
     }
 
     Document restored;
-    if (!loadVignolaDocument(path, &restored, &errorMessage)) {
+    ProjectViewportCameraSettings restoredCamera;
+    if (!loadVignolaDocument(path, &restored, &restoredCamera, &errorMessage)) {
         qCritical("Could not load Vignola test document: %s", qPrintable(errorMessage));
         return 1;
     }
     passed &= check(equivalentJson(documentToJson(source), documentToJson(restored)),
                     "Vignola save/load must preserve document geometry, IDs, layers, and dimension anchors");
+    const auto cameraClose = [](double first, double second) {
+        return std::abs(first - second) < 1.0e-10;
+    };
+    const bool cameraSettingsRoundTrip =
+        cameraClose(restoredCamera.focalLengthMillimeters,
+                    cameraSettings.focalLengthMillimeters) &&
+        cameraClose(restoredCamera.clipStart, cameraSettings.clipStart) &&
+        cameraClose(restoredCamera.clipEnd, cameraSettings.clipEnd) &&
+        restoredCamera.sceneCameraEnabled == cameraSettings.sceneCameraEnabled &&
+        cameraClose(restoredCamera.focusDistance, cameraSettings.focusDistance) &&
+        cameraClose(restoredCamera.fStop, cameraSettings.fStop) &&
+        restoredCamera.apertureBlades == cameraSettings.apertureBlades &&
+        cameraClose(restoredCamera.apertureRotationRadians,
+                    cameraSettings.apertureRotationRadians) &&
+        cameraClose(restoredCamera.apertureRatio, cameraSettings.apertureRatio) &&
+        cameraClose(restoredCamera.sensorWidthMillimeters,
+                    cameraSettings.sensorWidthMillimeters) &&
+        cameraClose(restoredCamera.opticalSensorSizeMillimeters,
+                    cameraSettings.opticalSensorSizeMillimeters) &&
+        restoredCamera.storedInProject && restoredCamera.view.storedInProject &&
+        cameraClose(restoredCamera.view.zoom, cameraSettings.view.zoom) &&
+        cameraClose(restoredCamera.view.panX, cameraSettings.view.panX) &&
+        cameraClose(restoredCamera.view.panY, cameraSettings.view.panY) &&
+        cameraClose(restoredCamera.view.orbitPivotX,
+                    cameraSettings.view.orbitPivotX) &&
+        cameraClose(restoredCamera.view.orbitPivotY,
+                    cameraSettings.view.orbitPivotY) &&
+        cameraClose(restoredCamera.view.orbitPivotZ,
+                    cameraSettings.view.orbitPivotZ) &&
+        cameraClose(restoredCamera.view.yawRadians,
+                    cameraSettings.view.yawRadians) &&
+        cameraClose(restoredCamera.view.pitchRadians,
+                    cameraSettings.view.pitchRadians) &&
+        restoredCamera.view.perspective == cameraSettings.view.perspective &&
+        restoredCamera.view.preset == cameraSettings.view.preset &&
+        cameraClose(restoredCamera.view.gridViewDistance,
+                    cameraSettings.view.gridViewDistance) &&
+        restoredCamera.view.hasOrientation &&
+        cameraClose(restoredCamera.view.orientationW,
+                    cameraSettings.view.orientationW) &&
+        cameraClose(restoredCamera.view.orientationX,
+                    cameraSettings.view.orientationX) &&
+        cameraClose(restoredCamera.view.orientationY,
+                    cameraSettings.view.orientationY) &&
+        cameraClose(restoredCamera.view.orientationZ,
+                    cameraSettings.view.orientationZ) &&
+        cameraClose(restoredCamera.view.targetX, cameraSettings.view.targetX) &&
+        cameraClose(restoredCamera.view.targetY, cameraSettings.view.targetY) &&
+        cameraClose(restoredCamera.view.targetZ, cameraSettings.view.targetZ);
+    passed &= check(cameraSettingsRoundTrip,
+                    "native Vignola save/load must preserve camera optics and stored viewport camera state");
+    ProjectViewportCameraSettings invalidCameraSettings = cameraSettings;
+    invalidCameraSettings.opticalSensorSizeMillimeters = 0.5;
+    QString invalidCameraError;
+    passed &= check(!saveVignolaDocument(
+                        QDir(temporaryDirectory.path()).filePath(
+                            QStringLiteral("invalid-camera.vignola")),
+                        source, invalidCameraSettings, &invalidCameraError) &&
+                        !invalidCameraError.isEmpty(),
+                    "native project save must reject out-of-range optical sensor settings");
     const SceneObject *restoredSolidObject = restored.object(solidObjectId);
     passed &= check(restoredSolidObject != nullptr &&
                         restoredSolidObject->nurbsSolidFaceMaterialIds ==
@@ -207,16 +302,13 @@ int main(int argc, char **argv)
         rhinoModel.AddManagedModelGeometryComponent(
             new ON_LineCurve(ON_3dPoint(0.0, 0.0, 0.0), ON_3dPoint(1.0, 1.0, 2.0)),
             new ON_3dmObjectAttributes(spatialCurveAttributes));
-        // A tilted straight line is still planar. Four noncoplanar CVs are
-        // needed to exercise rejection of a genuinely spatial NURBS curve.
-        auto *nonplanar = new ON_NurbsCurve(3, false, 4, 4);
-        nonplanar->SetCV(0, ON_3dPoint(0.0, 0.0, 0.0));
-        nonplanar->SetCV(1, ON_3dPoint(1.0, 0.0, 0.0));
-        nonplanar->SetCV(2, ON_3dPoint(0.0, 1.0, 0.0));
-        nonplanar->SetCV(3, ON_3dPoint(0.0, 0.0, 1.0));
-        nonplanar->MakeClampedUniformKnotVector();
+        // Spatial NURBS curves are supported. Use a mesh to exercise the
+        // importer's explicit unsupported-geometry report instead.
+        auto *unsupportedMesh = new ON_Mesh();
+        unsupportedMesh->SetVertex(0, ON_3dPoint(0.0, 0.0, 0.0));
         rhinoModel.AddManagedModelGeometryComponent(
-            nonplanar, new ON_3dmObjectAttributes(spatialCurveAttributes));
+            unsupportedMesh,
+            new ON_3dmObjectAttributes(spatialCurveAttributes));
     }
 
     const QString rhinoPath = QDir(temporaryDirectory.path()).filePath(

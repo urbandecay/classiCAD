@@ -5990,3 +5990,18 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - Validation: `cmake --build build` passed with the 316-file dependency
   audit; `ctest --test-dir build -R '^workbench_persistence_contracts$'
   --output-on-failure` passed (1/1).
+
+### Native project camera settings round-trip (2026-10-14)
+
+- Extended the `.vignola` save/load contract to persist distinct values for all
+  eleven `ProjectViewportCameraSettings` optical fields and all twenty stored
+  viewport `viewState` fields, including projection sensor width separately
+  from optical sensor size. An out-of-range optical sensor value is rejected
+  before the project save starts. The document geometry/ID/material round-trip
+  assertions remain in the same end-to-end fixture.
+- Corrected the existing ordinary Rhino import fixture to use a mesh for its
+  unsupported-geometry report. The importer supports spatial NURBS curves, so
+  the earlier test's expectation that a nonplanar curve be skipped was stale.
+- Validation: `cmake --build build -j4` passed with the 316-source dependency
+  audit; `ctest --test-dir build -R '^vignola_file$' --output-on-failure`
+  passed (1/1, 6.32 seconds); the fixture runtime reported Blender 5.2.2 LTS.

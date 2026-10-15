@@ -8110,6 +8110,7 @@ resolve remain open.
   from sRGB before alpha blending. Precomposited images are skipped in the
   later scene draw to prevent a second blend. Images are composited one at a
   time in source order within a 16-million image-pixel work budget. The
-  compositor's background pixels are opaque, so transparent viewport film
-  remains unsupported here; failed renderer fallback and matched image
-  comparison remain open.
+  later scene draw to prevent a second blend; selected Back images keep their
+  selection outline. The compositor's background pixels are opaque, so
+  transparent viewport film remains unsupported here; failed renderer fallback
+  and matched image comparison remain open.

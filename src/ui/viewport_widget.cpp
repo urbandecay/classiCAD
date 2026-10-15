@@ -11535,6 +11535,16 @@ protected:
                            objectId.value())) {
                 // Back images were folded into the scene-linear background
                 // before transparent surfaces and Workbench effects ran.
+                if (selected) {
+                    Shape outlineOnlyPicture = visibleShape;
+                    outlineOnlyPicture.pictureImage = QImage(
+                        1, 1, QImage::Format_ARGB32_Premultiplied);
+                    outlineOnlyPicture.pictureImage.fill(Qt::transparent);
+                    drawShape(scenePainter, outlineOnlyPicture, false, true,
+                              true, layerColor, layerLineType,
+                              layerLineWeightMm, objectId,
+                              renderObject.geometryRevision);
+                }
             } else if (scalePreview || rotatePreview) {
                 drawShape(scenePainter,
                           visibleShape,

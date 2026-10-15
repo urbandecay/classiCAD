@@ -1,7 +1,7 @@
 """Verify Blender extraction and render fixtures for NURBS surface materials.
 
 Set CLASSICAD_SURFACE_MATERIAL_BLEND_OUTPUT to save a paired Workbench capture;
-CLASSICAD_SURFACE_MATERIAL_MULTI_SPAN=1 adds a multi-span surface fixture.
+the MULTI_SPAN and ALPHA_CUTOUT flags add those fixture variants.
 Run with Blender 5.2.2: blender --background --python
 tests/blender_surface_material_import_contract.py
 """
@@ -11,7 +11,10 @@ import importlib.util
 import math
 import os
 import pathlib
+import struct
 import sys
+import tempfile
+import zlib
 
 import bpy
 from mathutils import Vector
@@ -28,14 +31,43 @@ extractor.SOURCE_PROJECT_NAMESPACE = "surface-material-import-contract"
 bpy.ops.object.select_all(action="SELECT")
 bpy.ops.object.delete(use_global=False)
 
-image = bpy.data.images.new("SurfacePackedTexture", width=2, height=2)
-image.pixels[:] = [
-    0.2, 0.4, 0.6, 0.8,
-    0.8, 0.6, 0.4, 1.0,
-    0.1, 0.3, 0.5, 0.7,
-    0.9, 0.7, 0.5, 0.3,
-]
-image.alpha_mode = "PREMUL"
+alpha_cutout = os.environ.get("CLASSICAD_SURFACE_MATERIAL_ALPHA_CUTOUT") == "1"
+if alpha_cutout:
+    width, height = 8, 4
+    rows = []
+    for y in range(4):
+        row = bytearray((0,))
+        for x in range(8):
+            row.extend((40 + x * 20, 70 + y * 20,
+                        180 - x * 10, 0 if x < 4 else 255))
+        rows.append(bytes(row))
+
+    def png_chunk(tag, data):
+        return (struct.pack(">I", len(data)) + tag + data +
+                struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+
+    png_bytes = (b"\x89PNG\r\n\x1a\n" +
+                 png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height,
+                                                   8, 6, 0, 0, 0)) +
+                 png_chunk(b"IDAT", zlib.compress(b"".join(rows))) +
+                 png_chunk(b"IEND", b""))
+    temp_fd, temp_path = tempfile.mkstemp(suffix=".png")
+    with os.fdopen(temp_fd, "wb") as png_file:
+        png_file.write(png_bytes)
+    image = bpy.data.images.load(temp_path, check_existing=False)
+    image.name = "SurfacePackedTexture"
+    image.alpha_mode = "STRAIGHT"
+    image.pack()
+    pathlib.Path(temp_path).unlink()
+else:
+    image = bpy.data.images.new("SurfacePackedTexture", width=2, height=2)
+    image.pixels[:] = [
+        0.2, 0.4, 0.6, 0.8,
+        0.8, 0.6, 0.4, 1.0,
+        0.1, 0.3, 0.5, 0.7,
+        0.9, 0.7, 0.5, 0.3,
+    ]
+    image.alpha_mode = "PREMUL"
 image.pack()
 
 material = bpy.data.materials.new("SurfaceTextureMaterial")
@@ -126,7 +158,14 @@ assert not reference["tiles"], reference
 assert reference["packed"] and reference["packed_data_base64"], reference
 assert base64.b64decode(reference["packed_data_base64"]) == bytes(
     image.packed_file.data), "packed regular image bytes must be preserved"
-assert reference["alpha_mode"] == "PREMUL", reference
+assert reference["alpha_mode"] == ("STRAIGHT" if alpha_cutout else "PREMUL"), reference
+if alpha_cutout:
+    packed_png = base64.b64decode(reference["packed_data_base64"])
+    assert packed_png[:8] == b"\x89PNG\r\n\x1a\n", packed_png[:8]
+    assert packed_png[25] == 6, "the packed cutout image must retain its RGBA channel"
+    alpha_values = [image.pixels[index * 4 + 3]
+                    for index in range(width * height)]
+    assert min(alpha_values) == 0.0 and max(alpha_values) == 1.0
 assert reference["interpolation"] == "Closest", reference
 assert reference["extension"] == "EXTEND", reference
 assert reference["source_transform_id"] == "identity", reference

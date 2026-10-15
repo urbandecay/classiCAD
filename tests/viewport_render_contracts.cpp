@@ -6410,6 +6410,10 @@ int main(int argc, char *argv[])
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_MULTI_SPAN") ==
                         QStringLiteral("1");
+                    const bool importedSurfaceAlphaCutoutExpected =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_ALPHA_CUTOUT") ==
+                        QStringLiteral("1");
                     if (!importedSurfaceBlendPath.isEmpty()) {
                         QVector<SceneObject> importedSurfaceObjects;
                         QVector<DocumentCollection> importedSurfaceCollections;
@@ -6500,7 +6504,9 @@ int main(int argc, char *argv[])
                                 .hasWorkbenchMaterial &&
                             importedSurfaceFrame.objects[0]
                                     .workbenchMaterial.textureImageAlphaMode ==
-                                QStringLiteral("PREMUL") &&
+                                (importedSurfaceAlphaCutoutExpected
+                                     ? QStringLiteral("STRAIGHT")
+                                     : QStringLiteral("PREMUL")) &&
                             importedSurfaceFrame.objects[0]
                                     .workbenchMaterial.textureImageInterpolation ==
                                 QStringLiteral("Closest") &&
@@ -6532,6 +6538,7 @@ int main(int argc, char *argv[])
                         }
                         bool importedSurfaceQPainterCaptureSaved = false;
                         bool importedSurfaceQPainterTextureVisible = false;
+                        bool importedSurfaceQPainterAlphaVisible = false;
                         const bool importedSurfaceTextureMode =
                             qEnvironmentVariable(
                                 "CLASSICAD_VIEWPORT_IMPORTED_SURFACE_COLOR_MODE")
@@ -6603,6 +6610,23 @@ int main(int argc, char *argv[])
                                              importedSurfaceQPainterProbeB.green()) +
                                     std::abs(importedSurfaceQPainterProbeA.blue() -
                                              importedSurfaceQPainterProbeB.blue()) > 8;
+                            int importedSurfaceQPainterForegroundPixels = 0;
+                            for (int y = 0; y < glSize.height(); ++y) {
+                                for (int x = 0; x < glSize.width(); ++x) {
+                                    if (importedSurfaceDisplay.pixelColor(x, y) !=
+                                        QColor(34, 34, 34)) {
+                                        ++importedSurfaceQPainterForegroundPixels;
+                                    }
+                                }
+                            }
+                            importedSurfaceQPainterAlphaVisible =
+                                !importedSurfaceAlphaCutoutExpected ||
+                                (importedSurfaceQPainterProbeA ==
+                                     QColor(34, 34, 34) &&
+                                 importedSurfaceQPainterProbeB !=
+                                     QColor(34, 34, 34) &&
+                                 importedSurfaceQPainterForegroundPixels > 1000 &&
+                                 importedSurfaceQPainterForegroundPixels < 7000);
                             constexpr float importedSurfaceBackground =
                                 0.0219421387f;
                             QVector<float> importedSurfaceSceneLinear(
@@ -6645,7 +6669,9 @@ int main(int argc, char *argv[])
                             const QByteArray importedSurfacePfmHeader =
                                 QByteArrayLiteral("PF\n640 480\n-1.0\n");
                             const bool pfmSaved =
-                                importedSurfaceFragments.size() > 5000 &&
+                                importedSurfaceFragments.size() >
+                                    (importedSurfaceAlphaCutoutExpected
+                                         ? 1000 : 5000) &&
                                 importedSurfacePfm.open(QIODevice::WriteOnly) &&
                                 importedSurfacePfm.write(
                                     importedSurfacePfmHeader) ==
@@ -6666,6 +6692,7 @@ int main(int argc, char *argv[])
                                 importedSurfaceDocumentBuilt &&
                                 importedSurfaceMaterialMatches &&
                                 importedSurfaceQPainterTextureVisible &&
+                                importedSurfaceQPainterAlphaVisible &&
                                 (importedCaptureDirectory.isEmpty() ||
                                  importedSurfaceQPainterCaptureSaved),
                             qPrintable(QStringLiteral(
@@ -7861,11 +7888,20 @@ int main(int argc, char *argv[])
                                          importedSurfaceGpuProbeB.green()) +
                                 std::abs(importedSurfaceGpuProbeA.blue() -
                                          importedSurfaceGpuProbeB.blue()) > 8;
+                        const bool importedSurfaceGpuAlphaVisible =
+                            !importedSurfaceAlphaCutoutExpected ||
+                            (importedSurfaceGpuProbeA == QColor(34, 34, 34) &&
+                             importedSurfaceGpuProbeB != QColor(34, 34, 34) &&
+                             importedSurfaceForegroundPixels > 1000 &&
+                             importedSurfaceForegroundPixels < 7000);
                         passed &= check(
                             importedSurfaceGpuPfmSaved &&
                                 importedSurfaceGpuPngSaved &&
-                                importedSurfaceForegroundPixels > 5000 &&
-                                importedSurfaceGpuTextureVisible,
+                                (importedSurfaceAlphaCutoutExpected
+                                     ? importedSurfaceForegroundPixels > 1000
+                                     : importedSurfaceForegroundPixels > 5000) &&
+                                importedSurfaceGpuTextureVisible &&
+                                importedSurfaceGpuAlphaVisible,
                             "a real Blender NURBS surface material must render through the production GPU scene pass");
                     }
                     // A face-material split can make one imported mesh

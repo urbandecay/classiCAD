@@ -3556,7 +3556,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
   and Paint world-space rotations 0°, 37°, and 90°. Exact edge parity remains
   open. Other presets, AA modes, camera orientations, and broader full-frame
   QPainter parity remain open (see [QPainter MatCap full-frame comparison](#qpainter-matcap-full-frame-comparison-2026-10-14)).
-- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched GPU and QPainter curved NURBS captures compare STRAIGHT cutout and NONE alpha bypass in orthographic and perspective views; a curved trimmed patch with an interior hole now also has matched STRAIGHT/NONE alpha captures. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. Saved Blender 5.2.2 `.blend` fixtures with polygon meshes and single-/multi-span NURBS Surfaces pass through classiCAD's production import, frame, GPU, and QPainter paths with paired material/texture captures. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Broader trimmed-surface textures and alpha modes, curved-surface alpha modes/settings/camera coverage, other imported-surface knot/UV modes and filters, broader QPainter parity, and other UDIM filters/extensions remain open.
+- Every color source, using objects with material values, object colors, color attributes, and UV-mapped textures. Full-frame GPU cube comparisons cover Material, Object, Random, constant- and varying-UV Texture, Custom/Single, per-corner Vertex Attribute, and Point-domain Attribute; matched regular planar NURBS patch comparisons cover filtered Texture UVs and STRAIGHT, PREMUL, NONE/IGNORE, and CHANNEL_PACKED alpha. Matched GPU and QPainter curved NURBS captures compare STRAIGHT cutout and NONE alpha bypass in orthographic and perspective views; a curved trimmed patch with an interior hole now also has matched STRAIGHT/NONE alpha captures. Matched QPainter captures cover regular planar mesh textures (per-face slots, alpha modes, and perspective UV interpolation), a constant-texture mesh shared-edge alpha case, a two-tile mesh UDIM Closest- and Linear-filter image comparison, Flat/Material three-slot and Flat/Object/Random/Custom-Single/Corner-Attribute/Point-Attribute/Texture cube comparisons. Saved Blender 5.2.2 `.blend` fixtures with polygon meshes and single-/multi-span NURBS Surfaces pass through classiCAD's production import, frame, GPU, and QPainter paths with paired material/texture captures plus imported STRAIGHT-alpha cutout checks. CPU contracts cover Point interpolation and constant Face-domain colors. Blender 5.2.2 does not recognize Face-domain `FLOAT_COLOR` as a color attribute, so that classiCAD extension has no Blender reference equivalent. Residual silhouette and display-edge differences remain. Broader trimmed-surface textures and alpha modes, curved-surface alpha modes/settings/camera coverage, other imported-surface knot/UV modes, alpha combinations and filters, broader QPainter parity, and other UDIM filters/extensions remain open.
 - Background choices and color management.
 - Culling, X-Ray, shadows, outlines, specular, and cavity/curvature, both individually and in combinations. Verify camera DOF now that classiCAD imports and persists camera optics, including aperture shape controls.
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
@@ -4187,6 +4187,25 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L100-L105)
   and
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L433).
+- **Imported NURBS Surface image alpha cutoff (2026-10-15):** a separate
+  Blender fixture now packs a real RGBA PNG with STRAIGHT alpha, zero alpha on
+  one UV half and opaque texels on the other. The fixture verifies its packed
+  PNG retains RGBA channels, then the saved `.blend` passes through the
+  importer, viewport frame, GPU, and QPainter Texture paths. Both backends
+  show the transparent probe as background and the opaque probe as textured
+  surface. At 640×480 Blender has 3,976 foreground pixels; classiCAD has
+  3,974 in each backend, with mask IoU `0.999497` (2 XOR edge pixels). GPU
+  common-foreground display MAE is `0.283/255`, QPainter is `0.363/255`, each
+  with p95 `1/255` and sparse max `8/255`. GPU scene-linear full-frame RGB MAE
+  is `[6.57e-8, 2.25e-8, 3.13e-8]`, with p95 and p99 zero and sparse max
+  `0.008255`. This confirms imported STRAIGHT alpha reaches the Blender-style
+  `0.1` fragment cutoff in both backends; shadow-caster alpha is outside this
+  image-color comparison. Other imported alpha modes and transparency
+  combinations remain open. Blender's cutoff exception flags and shader
+  discard are pinned in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L536-L553)
+  and
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429).
 - **End-to-end imported mesh material rendering (2026-10-14):** the reference
   fixture can save its configured material-slot scene as an ordinary Blender
   `.blend`. A headless acceptance path imports that file through

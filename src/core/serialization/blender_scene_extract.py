@@ -44,6 +44,7 @@ COLOR_LUT_SHAPER_SCALE = 64.0
 MAX_VOLUME_GRID_RECORDS = 262144
 MAX_VOLUME_GRID_VOXELS = 16 * 1024 * 1024
 MAX_VOLUME_GRID_PAYLOAD_BYTES = 16 * 1024 * 1024
+MAX_COLLECTION_INSTANCE_MESHES = 50000
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -842,7 +843,8 @@ def object_hidden_in_layer(obj, view_layer):
         return bool(obj.hide_get())
 
 
-def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
+def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
+                        transform_override=None, evaluated_object_override=None):
     item_id = stable_id(obj)
     item = object_metadata(obj, scene,
                            depsgraph if mode == "evaluated" else None)
@@ -865,14 +867,18 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
                       "was imported")
         add_unsupported(unsupported, item_id, "shape_keys", reason)
     if mode == "evaluated":
-        evaluated_obj = obj.evaluated_get(depsgraph)
+        evaluated_obj = (evaluated_object_override
+                         if evaluated_object_override is not None
+                         else obj.evaluated_get(depsgraph))
         mesh = evaluated_obj.to_mesh(preserve_all_data_layers=True,
                                      depsgraph=depsgraph)
-        transform = evaluated_obj.matrix_world
+        transform = (transform_override if transform_override is not None
+                     else evaluated_obj.matrix_world)
     else:
         evaluated_obj = None
         mesh = obj.data
-        transform = obj.matrix_world
+        transform = (transform_override if transform_override is not None
+                     else obj.matrix_world)
     if mesh is None:
         raise ValueError("Blender did not provide mesh data")
     try:
@@ -1792,6 +1798,13 @@ def extract_scene(input_path, mode):
             object_count += 1
             object_id = stable_id(obj)
             scene_record["object_ids"].append(object_id)
+            if obj.type == "EMPTY" and obj.instance_collection is not None:
+                add_unsupported(
+                    output["unsupported_features"], object_id,
+                    "collection_instance_hierarchy",
+                    "collection instances are expanded into mesh copies; their hierarchy, instance selection, and per-instance Random variation are not represented",
+                )
+                continue
             if obj.type == "CURVE":
                 item = extract_poly_curve_object(
                     obj, scene, output["unsupported_features"], depsgraph)
@@ -1956,6 +1969,92 @@ def extract_scene(input_path, mode):
                     "object_type": obj.type,
                     "reason": "mesh extraction failed; whole object skipped: " + str(error),
                 })
+        instance_depsgraph = depsgraph or depsgraph_for_scene(scene)
+        if instance_depsgraph is not None:
+            emitted_instance_keys = set()
+            emitted_instance_meshes = 0
+            unsupported_instance_types = set()
+            for instance in instance_depsgraph.object_instances:
+                if not instance.is_instance:
+                    continue
+                evaluated_obj = instance.object
+                source_obj = getattr(evaluated_obj, "original", evaluated_obj)
+                if source_obj.type != "MESH":
+                    unsupported_instance_types.add(source_obj.type)
+                    continue
+                parent = instance.parent
+                parent_source = getattr(parent, "original", parent)
+                if parent_source is None:
+                    continue
+                persistent_id = tuple(int(value) for value in instance.persistent_id)
+                source_id = stable_id(source_obj)
+                parent_id = stable_id(parent_source)
+                instance_key = (source_id, parent_id, persistent_id)
+                if instance_key in emitted_instance_keys:
+                    continue
+                emitted_instance_keys.add(instance_key)
+                if emitted_instance_meshes >= MAX_COLLECTION_INSTANCE_MESHES:
+                    add_unsupported(
+                        output["unsupported_features"], stable_id(scene),
+                        "collection_instance_limit",
+                        "mesh collection instances exceeded the extraction limit of %d; remaining instances were skipped" %
+                        MAX_COLLECTION_INSTANCE_MESHES,
+                    )
+                    break
+                emitted_instance_meshes += 1
+                instance_suffix = ":".join(str(value) for value in persistent_id)
+                instance_id = "classiCAD::instance::" + hashlib.sha256(
+                    (source_id + "::" + parent_id + "::" + instance_suffix)
+                    .encode("utf-8")).hexdigest()
+                try:
+                    item = extract_mesh_object(
+                        source_obj, scene, mode, instance_depsgraph,
+                        output["materials"], output["unsupported_features"],
+                        transform_override=instance.matrix_world,
+                        evaluated_object_override=evaluated_obj,
+                    )
+                    item["object_id"] = instance_id
+                    item["parent_id"] = parent_id
+                    item["collection_ids"] = sorted(
+                        stable_id(collection)
+                        for collection in parent_source.users_collection)
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): (
+                            object_hidden_in_layer(source_obj, view_layer) or
+                            object_hidden_in_layer(parent_source, view_layer))
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    loose_edges_world = item.pop("_loose_edges_world", [])
+                    loose_edges_item = (
+                        loose_edge_curve_item(
+                            source_obj, scene, item, loose_edges_world)
+                        if loose_edges_world and
+                        not item["bounds_display_type"] else None
+                    )
+                    output["items"].append(item)
+                    scene_record["object_ids"].append(instance_id)
+                    object_count += 1
+                    mesh_count += 1
+                    if loose_edges_item is not None:
+                        output["items"].append(loose_edges_item)
+                except Exception as error:
+                    output["unsupported_items"].append({
+                        **object_metadata(source_obj, scene, depsgraph),
+                        "object_id": instance_id,
+                        "object_type": "MESH",
+                        "reason": "collection mesh instance extraction failed; instance skipped: " + str(error),
+                    })
+            if unsupported_instance_types:
+                add_unsupported(
+                    output["unsupported_features"], stable_id(scene),
+                    "non_mesh_collection_instances",
+                    "collection instances containing non-mesh objects were skipped: " +
+                    ", ".join(sorted(unsupported_instance_types)),
+                )
         output["scenes"].append(scene_record)
     output["summary"] = {
         "scene_count": len(output["scenes"]),

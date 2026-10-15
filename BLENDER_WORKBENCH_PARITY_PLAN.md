@@ -1377,9 +1377,11 @@ This is the status after the first implementation pass and the team's code revie
 **Image Empty import update (2026-10-15):** Static file-backed Blender Image
 Empties with readable still images now import through classiCAD's existing
 Picture geometry and retain their transformed quad and image opacity. Other
-Empty types remain metadata-only. Projection-specific visibility, image side,
-depth mode, alpha blending, generated or animated images, and image tint are
-not represented. Quad sizing and offset follow Blender 5.2.2's
+Empty types remain metadata-only. Image projection visibility, side, and depth
+preference are represented and applied by the GPU and QPainter paths; QPainter
+depth masking and transparent-surface behavior remain bounded approximations,
+as described in the dated Image Empty sections below. Generated or animated
+images and image tint remain unsupported. Quad sizing and offset follow Blender 5.2.2's
 [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1432-L1548).
 
 **Import update:** The scene extractor bridge now accepts versions 10 through 14; the native document schema writes version 21 and reads versions 1 through 20. Ordinary Blender `.blend` Open now imports the first scene's `scene.display.shading` Solid settings into the initial classiCAD viewport and preserves `scene.display.render_aa` for offscreen Workbench render results. It maps bundled studio-light/MatCap presets, color source and background, shadow/cavity/curvature/outline controls, `show_xray`, the distinct `show_xray_wireframe`, `matcap_flip_x` when Blender exposes it, and studio-light rotation converted from radians to degrees. Custom unavailable presets, scene-light rendering, and Blender 5.2.2's RNA-hidden MatCap flip are reported as unsupported. `studiolight_background_alpha` and `studiolight_background_blur` are preserved in the extracted record but belong to Eevee Lookdev rather than Workbench Solid. Blender 5.2.2 Workbench does not use `studiolight_intensity`. Imported World backgrounds are retained and used for both interactive and offscreen rendering. In Original mesh mode, source geometry stays unevaluated while the active camera and focus-object transforms are resolved from the scene dependency graph. Existing classiCAD project opens do not apply imported Blender shading. Ordinary `.blend` Open creates a new classiCAD document; its source path is not used as the Save target, so users must use Save As to create a native project.
@@ -8085,9 +8087,11 @@ resolve remain open.
   overlay pass. If the GPU surface pass fails, Default images are redrawn
   against the rebuilt scene depth after the software surface fallback. Blender's
   overlay behavior is documented in the [pinned image Empty path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L247-L354).
-  The QPainter scene path and failed picture-texture fallback still do not
-  reproduce all three depth modes. C++ build passed; matched image comparison
-  remains open.
+  QPainter applies these visibility rules and uses retained scene depth when
+  available. Its bounded surface compositor now blends Back images beneath
+  transparent surfaces; direct depth masking still treats retained transparent
+  surfaces as opaque, and failed picture-texture previews remain unmasked.
+  C++ build passed; matched image comparison remains open.
 
 ### QPainter Image Empty scene-depth masking (2026-10-15)
 

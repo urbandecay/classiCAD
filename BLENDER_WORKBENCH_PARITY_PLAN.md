@@ -199,10 +199,12 @@ across output formats remain open.
 readback now tags film-transparent and missing-World-background output as
 `QImage::Format_RGBA64_Premultiplied`, matching the display transform's
 premultiplied framebuffer values. Opaque-background output remains straight
-alpha. QPainter annotation composition and later conversion to straight-alpha
-PNG/TIFF writer formats can therefore interpret the captured pixels
-consistently. The C++ build passes. Rendered annotation composition over
-semitransparent scene pixels remains open.
+alpha. A focused contract composites a 50%-alpha annotation over a 50%-alpha
+display pixel and premultiplied scene-linear pixel, verifies source-over RGB
+and alpha, preserves an untouched transparent pixel, then round-trips the
+display result through PNG and TIFF. The build and format contract pass. This
+verifies classiCAD's alpha-composition contract; matched Blender saved-file
+annotation comparison remains open.
 
 **Transparent-film Combined comparison (2026-10-14):** Added a paired
 `TRANSPARENT_OVERLAP` capture for Blender 5.2.2 and classiCAD with a transparent

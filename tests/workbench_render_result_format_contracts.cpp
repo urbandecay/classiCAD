@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QColorSpace>
 #include <QImageWriter>
 #include <QTemporaryDir>
 
@@ -142,6 +143,96 @@ int main(int argc, char *argv[])
                 transparentTiffBackground.green() == 0 &&
                 transparentTiffBackground.blue() == 0,
             "TIFF Combined output must unpremultiply semitransparent RGBA64 readback and preserve transparent black pixels");
+    }
+
+    QImage annotatedDisplay(
+        2, 1, QImage::Format_RGBA64_Premultiplied);
+    annotatedDisplay.fill(Qt::transparent);
+    annotatedDisplay.setPixelColor(0, 0, QColor(40, 80, 120, 128));
+    QImage displayAnnotation(
+        2, 1, QImage::Format_RGBA64_Premultiplied);
+    displayAnnotation.fill(Qt::transparent);
+    displayAnnotation.setPixelColor(0, 0, QColor(200, 50, 20, 128));
+    QVector<float> annotatedSceneLinear{
+        0.1f, 0.2f, 0.3f, 0.5f,
+        0.0f, 0.0f, 0.0f, 0.0f};
+    QImage linearAnnotation(
+        2, 1, QImage::Format_RGBA64_Premultiplied);
+    linearAnnotation.setColorSpace(QColorSpace(QColorSpace::SRgbLinear));
+    linearAnnotation.fill(Qt::transparent);
+    auto *linearAnnotationPixels = reinterpret_cast<QRgba64 *>(
+        linearAnnotation.bits());
+    linearAnnotationPixels[0] = QRgba64::fromRgba64(
+        6554, 3277, 1638, 32768);
+    const bool annotationComposited = compositeWorkbenchRenderAnnotations(
+        &annotatedDisplay, displayAnnotation, &annotatedSceneLinear,
+        QSize(2, 1), &linearAnnotation);
+    const QColor annotatedDisplayPixel = annotatedDisplay.pixelColor(0, 0);
+    const QColor annotatedDisplayBackground = annotatedDisplay.pixelColor(1, 0);
+    passed &= check(
+        annotationComposited &&
+            qAbs(annotatedDisplayPixel.alpha() - 191) <= 2 &&
+            qAbs(annotatedDisplayPixel.red() - 147) <= 3 &&
+            qAbs(annotatedDisplayPixel.green() - 60) <= 3 &&
+            qAbs(annotatedDisplayPixel.blue() - 53) <= 3 &&
+            annotatedDisplayBackground.alpha() == 0 &&
+            annotatedDisplayBackground.red() == 0 &&
+            annotatedDisplayBackground.green() == 0 &&
+            annotatedDisplayBackground.blue() == 0 &&
+            qAbs(annotatedSceneLinear[0] - 0.15f) < 0.0001f &&
+            qAbs(annotatedSceneLinear[1] - 0.15f) < 0.0001f &&
+            qAbs(annotatedSceneLinear[2] - 0.175f) < 0.0001f &&
+            qAbs(annotatedSceneLinear[3] - 0.75f) < 0.0001f &&
+            annotatedSceneLinear[4] == 0.0f &&
+            annotatedSceneLinear[5] == 0.0f &&
+            annotatedSceneLinear[6] == 0.0f &&
+            annotatedSceneLinear[7] == 0.0f,
+        "semitransparent annotations must source-over premultiplied display and scene-linear pixels while leaving transparent pixels unchanged");
+    WorkbenchRenderResult annotatedResult;
+    annotatedResult.combined = annotatedDisplay;
+    annotatedResult.blenderImageFormat = QStringLiteral("PNG");
+    annotatedResult.colorMode = QStringLiteral("RGBA");
+    const QString annotatedPngPath = outputDirectory.filePath(
+        QStringLiteral("annotated-transparent.png"));
+    QString annotatedPngError;
+    const bool annotatedPngWritten = annotatedResult.saveCombinedImage(
+        annotatedPngPath, &annotatedPngError);
+    const QImage annotatedPng(annotatedPngPath);
+    const QColor annotatedPngPixel = annotatedPng.pixelColor(0, 0);
+    const QColor annotatedPngBackground = annotatedPng.pixelColor(1, 0);
+    passed &= check(
+        annotatedPngWritten && !annotatedPng.isNull() &&
+            qAbs(annotatedPngPixel.alpha() - 191) <= 2 &&
+            qAbs(annotatedPngPixel.red() - 147) <= 3 &&
+            qAbs(annotatedPngPixel.green() - 60) <= 3 &&
+            qAbs(annotatedPngPixel.blue() - 53) <= 3 &&
+            annotatedPngBackground.alpha() == 0 &&
+            annotatedPngBackground.red() == 0 &&
+            annotatedPngBackground.green() == 0 &&
+            annotatedPngBackground.blue() == 0,
+        "PNG Combined output must preserve the composited semitransparent annotation and untouched transparent pixel");
+    if (hasTiffWriter) {
+        annotatedResult.blenderImageFormat = QStringLiteral("TIFF");
+        annotatedResult.tiffCodec = QStringLiteral("NONE");
+        const QString annotatedTiffPath = outputDirectory.filePath(
+            QStringLiteral("annotated-transparent.tif"));
+        QString annotatedTiffError;
+        const bool annotatedTiffWritten = annotatedResult.saveCombinedImage(
+            annotatedTiffPath, &annotatedTiffError);
+        const QImage annotatedTiff(annotatedTiffPath);
+        const QColor annotatedTiffPixel = annotatedTiff.pixelColor(0, 0);
+        const QColor annotatedTiffBackground = annotatedTiff.pixelColor(1, 0);
+        passed &= check(
+            annotatedTiffWritten && !annotatedTiff.isNull() &&
+                qAbs(annotatedTiffPixel.alpha() - 191) <= 2 &&
+                qAbs(annotatedTiffPixel.red() - 147) <= 3 &&
+                qAbs(annotatedTiffPixel.green() - 60) <= 3 &&
+                qAbs(annotatedTiffPixel.blue() - 53) <= 3 &&
+                annotatedTiffBackground.alpha() == 0 &&
+                annotatedTiffBackground.red() == 0 &&
+                annotatedTiffBackground.green() == 0 &&
+                annotatedTiffBackground.blue() == 0,
+            "TIFF Combined output must preserve the composited semitransparent annotation and untouched transparent pixel");
     }
     result.blenderImageFormat = QStringLiteral("TIFF");
     result.tiffCodec = QStringLiteral("NONE");

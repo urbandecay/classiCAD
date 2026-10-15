@@ -1448,8 +1448,17 @@ QPainter Texture raster pixels now decode sRGB images into scene-linear RGB, mul
   scene-linear through both domains and applies the display transform once.
 - The sorted CPU fallback composes in the same order: regular opaque, regular
   transparent, in-front opaque, then in-front transparent. Each domain tests
-  its transparent fragments against its own opaque depth. Retained cavity
+  its transparent fragments against its own opaque depth. In-front transparent
+  fragments therefore bypass regular depth but remain occluded by nearer
+  in-front opaque surfaces. Retained cavity
   layers contain the composed opaque receiver and ordered transparent overlay.
+- **2026-10-15 correction:** the bounded sorted fallback now applies that
+  in-front opaque-depth test to `showInFront` transparent fragments as well as
+  regular fragments. Previously it let front transparency show through front
+  opaque geometry. Blender attaches `depth_in_front_tx` to its separate
+  in-front transparent pass (see the pass setup and draw linked below). The
+  C++ build passed; no matched Blender image comparison has been run for this
+  fallback case.
 - The QPainter cavity/outline sample raster also resolves separate regular
   and in-front samples, choosing nearest depth within each domain before
   allowing in-front coverage to replace the regular sample. This keeps effect

@@ -1831,12 +1831,11 @@ bool compositeRasterWorkbenchSurfaces(
             previousColor = fragment.sceneLinearRgb;
             previousAlpha = fragment.alpha;
             havePrevious = true;
-            // Workbench's in-front transparent range resolves after the
-            // in-front opaque range, so preserve that explicit pass order.
-            // Regular transparent fragments still test against regular opaque
-            // depth before entering the sorted fallback.
-            if (!object.showInFront &&
-                fragment.cameraDepth <= domainOpaqueDepth[index]) continue;
+            // Each Workbench transparent domain depth-tests against its own
+            // opaque pass before resolving. In-front fragments bypass regular
+            // scene depth, but still remain hidden by nearer in-front opaque
+            // geometry.
+            if (fragment.cameraDepth <= domainOpaqueDepth[index]) continue;
             if (regularTransparentFragments.size() +
                     frontTransparentFragments.size() >=
                 kMaximumTransparentFragments) {

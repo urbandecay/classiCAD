@@ -8043,8 +8043,16 @@ resolve remain open.
   offsets and neighboring scene-depth correction while keeping them in the
   Overlay category. They have no imported face-corner normals or adjacent-face
   curvature data, so those offsets use the renderer's existing zero/default
-  behavior. Their generic curve color mapping remains a separate parity gap.
-  C++ build passed; matched image comparison remains open.
+  behavior. C++ build passed; matched image comparison remains open.
+
+### Blender loose mesh wire color and opacity (2026-10-15)
+
+- Loose-edge companions now use the imported viewport wire color mode instead
+  of the generic Solid curve color. Theme mode follows Blender's selected or
+  unselected rim color; Object and Random modes use Blender's selected-color
+  adjustment and no-normal facing mix. The wireframe opacity setting controls
+  their alpha. The same prepared stroke carries these values through the GPU
+  and QPainter paths. C++ build passed; matched image comparison remains open.
 
 ### QPainter Workbench outline composition (2026-10-15)
 

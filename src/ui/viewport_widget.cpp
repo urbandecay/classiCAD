@@ -11232,6 +11232,83 @@ protected:
                             viewportShadingSettings_.themeEditWireColor;
                     }
                 }
+                if (renderObject.blenderLooseMeshEdgeCompanion &&
+                    viewportShadingSettings_.mode ==
+                        ViewportShadingMode::Solid) {
+                    QColor looseWireColor;
+                    if (viewportShadingSettings_.wireColorMode ==
+                        ViewportWireColorMode::Theme) {
+                        // Loose mesh edges have no face normal. Blender's
+                        // single-color wire path therefore uses zero facing
+                        // and resolves to its rim color.
+                        looseWireColor = selected
+                            ? selectedThemeColor
+                            : viewportShadingSettings_.themeWireColor;
+                    } else {
+                        QVector3D sourceColor =
+                            renderObject.displayColorSceneLinear.toVector3D();
+                        const bool randomColor =
+                            viewportShadingSettings_.wireColorMode ==
+                            ViewportWireColorMode::Random;
+                        if (randomColor) {
+                            const QColor random = workbenchRandomObjectWireColor(
+                                renderObject.objectId.value(),
+                                renderObject.displayName,
+                                workbenchRandomIdentityLibraryPath(renderObject));
+                            sourceColor = QVector3D(
+                                float(random.redF()), float(random.greenF()),
+                                float(random.blueF()));
+                        }
+                        QVector3D rim = sourceColor * 0.5f;
+                        QVector3D wire = rim;
+                        if (selected) {
+                            wire += QVector3D(1.0e-4f, 1.0e-4f, 1.0e-4f);
+                            const float brightness = std::max(
+                                wire.x(), std::max(wire.y(), wire.z()));
+                            if (brightness > 1.0e-12f) {
+                                wire *= 0.5f / brightness;
+                            }
+                            rim += QVector3D(0.75f, 0.75f, 0.75f);
+                        } else {
+                            rim *= 0.5f;
+                            wire += QVector3D(0.5f, 0.5f, 0.5f);
+                        }
+                        if (!randomColor) {
+                            const auto toWireDisplay = [this](
+                                const QVector3D &color) {
+                                return workbenchSceneLinearToDisplaySrgb(
+                                    color,
+                                    viewportShadingSettings_.colorTransform,
+                                    viewportShadingSettings_.colorExposure,
+                                    viewportShadingSettings_.colorGamma,
+                                    viewportShadingSettings_.colorLutData,
+                                    viewportShadingSettings_.colorLutMetadata);
+                            };
+                            rim = toWireDisplay(rim);
+                            wire = toWireDisplay(wire);
+                        }
+                        const auto gamma = [](float channel) {
+                            return std::pow(
+                                std::clamp(channel, 0.0f, 1.0f), 1.0f / 2.2f);
+                        };
+                        const QVector3D rimGamma(gamma(rim.x()),
+                                                 gamma(rim.y()),
+                                                 gamma(rim.z()));
+                        const QVector3D wireGamma(gamma(wire.x()),
+                                                  gamma(wire.y()),
+                                                  gamma(wire.z()));
+                        const QVector3D front = rimGamma * 0.65f +
+                                                wireGamma * 0.35f;
+                        const QVector3D mixed = rimGamma * 0.5f + front * 0.5f;
+                        looseWireColor = QColor::fromRgbF(
+                            std::pow(std::clamp(mixed.x(), 0.0f, 1.0f), 2.2f),
+                            std::pow(std::clamp(mixed.y(), 0.0f, 1.0f), 2.2f),
+                            std::pow(std::clamp(mixed.z(), 0.0f, 1.0f), 2.2f));
+                    }
+                    looseWireColor.setAlphaF(std::clamp(
+                        viewportShadingSettings_.wireframeOpacity, 0.0, 1.0));
+                    sceneStroke.color = looseWireColor;
+                }
                 if (viewportShadingSettings_.mode ==
                         ViewportShadingMode::Wireframe &&
                     viewportShadingSettings_.wireColorMode ==

@@ -7350,6 +7350,21 @@ public:
             readBoolean(QStringLiteral("show_overlays"),
                         &settings.wireOverlaysVisible);
         }
+        for (const auto &entry : {
+                 std::pair{QStringLiteral("show_floor"),
+                           &settings.gridFloorVisible},
+                 std::pair{QStringLiteral("show_ortho_grid"),
+                           &settings.orthographicGridVisible},
+                 std::pair{QStringLiteral("show_axis_x"),
+                           &settings.gridAxisXVisible},
+                 std::pair{QStringLiteral("show_axis_y"),
+                           &settings.gridAxisYVisible},
+                 std::pair{QStringLiteral("show_axis_z"),
+                           &settings.gridAxisZVisible}}) {
+            if (source.contains(entry.first)) {
+                readBoolean(entry.first, entry.second);
+            }
+        }
         readBoolean(QStringLiteral("show_wireframes"), &settings.solidWireframes);
         readNumber(QStringLiteral("wireframe_opacity"), 0.0, 1.0,
                    &settings.wireframeOpacity);
@@ -8924,7 +8939,19 @@ protected:
         updateAssociativeDimensions(document_, curveSampler_);
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
-        viewportRenderer_.setGridAppearance(gridAppearance_);
+        BlenderGridAppearance renderGridAppearance = gridAppearance_;
+        const bool overlaysVisible = viewportShadingSettings_.wireOverlaysVisible;
+        renderGridAppearance.showFloor = overlaysVisible &&
+            viewportShadingSettings_.gridFloorVisible;
+        renderGridAppearance.showOrthographicGrid = overlaysVisible &&
+            viewportShadingSettings_.orthographicGridVisible;
+        renderGridAppearance.showAxisX = overlaysVisible &&
+            viewportShadingSettings_.gridAxisXVisible;
+        renderGridAppearance.showAxisY = overlaysVisible &&
+            viewportShadingSettings_.gridAxisYVisible;
+        renderGridAppearance.showAxisZ = overlaysVisible &&
+            viewportShadingSettings_.gridAxisZVisible;
+        viewportRenderer_.setGridAppearance(renderGridAppearance);
         viewportRenderer_.setSmoothWirePreferences(
             smoothWiresOverlay_, smoothWiresEditMode_);
         // The CPU Workbench fallback uses one pixel-center coverage sample
@@ -9222,7 +9249,7 @@ protected:
             gpuViewportBackground = blenderGridRenderer_.render(
                 renderFrame.camera, renderFrame.viewportSize,
                 devicePixelRatioF(), visibleShapes,
-                baseGridStep, gridAppearance_);
+                baseGridStep, renderGridAppearance);
             const qreal devicePixelRatio =
                 std::max<qreal>(devicePixelRatioF(), 1.0);
             // The QPainter fallback cannot accumulate temporal Workbench
@@ -12151,7 +12178,7 @@ protected:
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 overlayCamera, renderFrame.viewportSize,
                 devicePixelRatioF(), visibleSurfaceShapes, baseGridStep,
-                gridAppearance_);
+                renderGridAppearance);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex >= 0) {

@@ -26,6 +26,11 @@ struct BlenderGridAppearance {
     qreal orthographicEdgeFadeExponent = 2.0;
     qreal farFadeStart = 0.5;
     qreal farFadeEnd = 1.0;
+    bool showFloor = true;
+    bool showOrthographicGrid = true;
+    bool showAxisX = true;
+    bool showAxisY = true;
+    bool showAxisZ = true;
 
     bool operator==(const BlenderGridAppearance &) const = default;
 };

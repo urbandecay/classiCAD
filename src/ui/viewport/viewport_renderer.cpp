@@ -813,6 +813,10 @@ void ViewportRenderer::drawGrid(QPainter &painter,
                                                                viewportSize);
     const WorkPlane plane = gridFrame.plane;
     const qreal planeOffset = gridFrame.planeOffset;
+    const bool floorVisible = transform_.isPerspectiveEnabled()
+                                  ? gridAppearance_.showFloor
+                                  : gridAppearance_.showOrthographicGrid;
+    if (!floorVisible) return;
     if (transform_.isPerspectiveEnabled()) {
         const qreal farClipDistance = transform_.cameraPreferences().clipEnd;
         const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
@@ -1058,7 +1062,13 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
             }
             return gridAppearance_.axisZColor;
         };
-        if (gridFrame.visibleAxes[static_cast<size_t>(globalUAxis)]) {
+        const auto axisEnabled = [this](int axis) {
+            return axis == 0 ? gridAppearance_.showAxisX
+                 : axis == 1 ? gridAppearance_.showAxisY
+                             : gridAppearance_.showAxisZ;
+        };
+        if (gridFrame.visibleAxes[static_cast<size_t>(globalUAxis)] &&
+            axisEnabled(globalUAxis)) {
             const QColor color = axisColorForIndex(globalUAxis);
             appendPerspectiveLine(
                 transform_, viewportSize, plane, planeOffset, cameraPosition,
@@ -1067,7 +1077,8 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
                 color.alphaF() * gridAppearance_.opacity, 128, uAxisBins,
                 gridAppearance_, noAdditionalFade);
         }
-        if (gridFrame.visibleAxes[static_cast<size_t>(globalVAxis)]) {
+        if (gridFrame.visibleAxes[static_cast<size_t>(globalVAxis)] &&
+            axisEnabled(globalVAxis)) {
             const QColor color = axisColorForIndex(globalVAxis);
             appendPerspectiveLine(
                 transform_, viewportSize, plane, planeOffset, cameraPosition,
@@ -1122,14 +1133,21 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
         }
         return screenPoint;
     };
-    if (gridFrame.visibleAxes[static_cast<size_t>(globalUAxis)]) {
+    const auto axisEnabled = [this](int axis) {
+        return axis == 0 ? gridAppearance_.showAxisX
+             : axis == 1 ? gridAppearance_.showAxisY
+                         : gridAppearance_.showAxisZ;
+    };
+    if (gridFrame.visibleAxes[static_cast<size_t>(globalUAxis)] &&
+        axisEnabled(globalUAxis)) {
         QColor color = axisColors[static_cast<size_t>(globalUAxis)];
         color.setAlphaF(color.alphaF() * gridAppearance_.opacity);
         painter.setPen(QPen(color, 1.25));
         painter.drawLine(projectGridPoint(QPointF(minimumU, 0.0)),
                          projectGridPoint(QPointF(maximumU, 0.0)));
     }
-    if (gridFrame.visibleAxes[static_cast<size_t>(globalVAxis)]) {
+    if (gridFrame.visibleAxes[static_cast<size_t>(globalVAxis)] &&
+        axisEnabled(globalVAxis)) {
         QColor color = axisColors[static_cast<size_t>(globalVAxis)];
         color.setAlphaF(color.alphaF() * gridAppearance_.opacity);
         painter.setPen(QPen(color, 1.25));

@@ -194,6 +194,12 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
                   static_cast<int>(settings.wireColorMode));
     object.insert(QStringLiteral("wireOverlaysVisible"),
                   settings.wireOverlaysVisible);
+    object.insert(QStringLiteral("gridFloorVisible"), settings.gridFloorVisible);
+    object.insert(QStringLiteral("orthographicGridVisible"),
+                  settings.orthographicGridVisible);
+    object.insert(QStringLiteral("gridAxisXVisible"), settings.gridAxisXVisible);
+    object.insert(QStringLiteral("gridAxisYVisible"), settings.gridAxisYVisible);
+    object.insert(QStringLiteral("gridAxisZVisible"), settings.gridAxisZVisible);
     object.insert(QStringLiteral("colorMode"),
                   static_cast<int>(settings.colorMode));
     object.insert(QStringLiteral("backgroundMode"),
@@ -361,6 +367,21 @@ bool viewportShadingFromJson(const QJsonValue &value,
         !boolean(QStringLiteral("wireOverlaysVisible"),
                  &restored.wireOverlaysVisible)) {
         return false;
+    }
+    for (const auto &entry : {
+             std::pair{QStringLiteral("gridFloorVisible"),
+                       &restored.gridFloorVisible},
+             std::pair{QStringLiteral("orthographicGridVisible"),
+                       &restored.orthographicGridVisible},
+             std::pair{QStringLiteral("gridAxisXVisible"),
+                       &restored.gridAxisXVisible},
+             std::pair{QStringLiteral("gridAxisYVisible"),
+                       &restored.gridAxisYVisible},
+             std::pair{QStringLiteral("gridAxisZVisible"),
+                       &restored.gridAxisZVisible}}) {
+        if (object.contains(entry.first) && !boolean(entry.first, entry.second)) {
+            return false;
+        }
     }
     if (!integer(QStringLiteral("colorMode"), 0, 5, &parsed)) {
         return false;

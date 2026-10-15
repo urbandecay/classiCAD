@@ -1910,9 +1910,12 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
     const BlenderGridFrame gridFrame = resolveBlenderGridFrame(transform,
                                                                viewportSize);
     const bool perspective = transform.isPerspectiveEnabled();
-    const int gridLineCount = perspective
-                                  ? kPerspectiveGridLineCount
-                                  : kOrthographicGridLineCount;
+    const bool floorVisible = perspective ? appearance.showFloor
+                                          : appearance.showOrthographicGrid;
+    const int gridLineCount = !floorVisible
+        ? 0
+        : perspective ? kPerspectiveGridLineCount
+                      : kOrthographicGridLineCount;
     const WorkPlane plane = gridFrame.plane;
     const Point3D planeOrigin = workPlanePointToWorld({},
                                                        plane,
@@ -1953,9 +1956,12 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
     program_.setUniformValue("uGridOrigin", planeBase);
     program_.setUniformValue("uAxisU", axisU);
     program_.setUniformValue("uAxisV", axisV);
-    program_.setUniformValue("uAxisVisibleX", gridFrame.visibleAxes[0] ? 1 : 0);
-    program_.setUniformValue("uAxisVisibleY", gridFrame.visibleAxes[1] ? 1 : 0);
-    program_.setUniformValue("uAxisVisibleZ", gridFrame.visibleAxes[2] ? 1 : 0);
+    program_.setUniformValue("uAxisVisibleX",
+        gridFrame.visibleAxes[0] && appearance.showAxisX ? 1 : 0);
+    program_.setUniformValue("uAxisVisibleY",
+        gridFrame.visibleAxes[1] && appearance.showAxisY ? 1 : 0);
+    program_.setUniformValue("uAxisVisibleZ",
+        gridFrame.visibleAxes[2] && appearance.showAxisZ ? 1 : 0);
     program_.setUniformValue("uPlaneNormal", normal);
     program_.setUniformValue("uCameraPosition", eye);
     program_.setUniformValue("uViewDirection", asVector(cameraOut));

@@ -769,6 +769,11 @@ def saved_viewport_shading_record(scene):
                 record = workbench_shading_record(scene, space.shading)
                 overlay = space.overlay
                 record["show_overlays"] = bool(overlay.show_overlays)
+                record["show_floor"] = bool(overlay.show_floor)
+                record["show_ortho_grid"] = bool(overlay.show_ortho_grid)
+                record["show_axis_x"] = bool(overlay.show_axis_x)
+                record["show_axis_y"] = bool(overlay.show_axis_y)
+                record["show_axis_z"] = bool(overlay.show_axis_z)
                 record["show_wireframes"] = bool(overlay.show_wireframes)
                 record["wireframe_color_type"] = str(
                     overlay.wireframe_color_type)

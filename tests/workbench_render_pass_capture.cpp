@@ -268,9 +268,13 @@ int main(int argc, char **argv)
 
         ViewportTransform camera;
         camera.zoom() = 17.28;
-        const bool inFrontFixture = qEnvironmentVariable(
-            "CLASSICAD_WORKBENCH_PASS_SCENE") == QStringLiteral("TRANSPARENT_IN_FRONT");
-        if (inFrontFixture) {
+        const QString fixtureName = qEnvironmentVariable(
+            "CLASSICAD_WORKBENCH_PASS_SCENE");
+        const bool inFrontFixture =
+            fixtureName == QStringLiteral("TRANSPARENT_IN_FRONT");
+        const bool transparentOverlapFixture =
+            fixtureName == QStringLiteral("TRANSPARENT_OVERLAP");
+        if (inFrontFixture || transparentOverlapFixture) {
             camera.setViewPreset(ViewportViewPreset::Top);
         } else {
             camera.setViewDirection({4.0, -6.0, 4.0});
@@ -293,7 +297,7 @@ int main(int argc, char **argv)
         cube.preparedDepthGeometry = QSharedPointer<ViewportDepthGeometry>::create(
             buildViewportDepthGeometry(cube.shape));
         QVector<ViewportRenderObject> sceneObjects{cube};
-        if (inFrontFixture) {
+        if (inFrontFixture || transparentOverlapFixture) {
             sceneObjects.clear();
             const Point3D towardCamera = camera.viewDirection();
             const Point3D up = camera.viewUp();
@@ -332,20 +336,31 @@ int main(int argc, char **argv)
                         buildViewportDepthGeometry(object.shape));
                 sceneObjects.append(std::move(object));
             };
-            addQuad(2, {right.x * 0.0, right.y * 0.0, right.z * 0.0},
-                    3.2, QVector3D(0.12f, 0.62f, 0.18f), 1.0, false);
-            addQuad(3, {right.x * -0.55 + towardCamera.x * 0.25,
-                        right.y * -0.55 + towardCamera.y * 0.25,
-                        right.z * -0.55 + towardCamera.z * 0.25},
-                    2.5, QVector3D(0.08f, 0.25f, 0.95f), 0.55, false);
-            addQuad(4, {right.x * 0.35 - towardCamera.x * 0.2,
-                        right.y * 0.35 - towardCamera.y * 0.2,
-                        right.z * 0.35 - towardCamera.z * 0.2},
-                    1.15, QVector3D(0.95f, 0.72f, 0.05f), 1.0, true);
-            addQuad(5, {right.x * 0.55 + towardCamera.x * 0.4,
-                        right.y * 0.55 + towardCamera.y * 0.4,
-                        right.z * 0.55 + towardCamera.z * 0.4},
-                    1.4, QVector3D(0.95f, 0.12f, 0.04f), 0.48, true);
+            if (transparentOverlapFixture) {
+                addQuad(6, {right.x * -0.25 - towardCamera.x * 0.35,
+                            right.y * -0.25 - towardCamera.y * 0.35,
+                            right.z * -0.25 - towardCamera.z * 0.35},
+                        2.4, QVector3D(0.08f, 0.25f, 0.95f), 0.55, false);
+                addQuad(7, {right.x * 0.25 + towardCamera.x * 0.35,
+                            right.y * 0.25 + towardCamera.y * 0.35,
+                            right.z * 0.25 + towardCamera.z * 0.35},
+                        2.0, QVector3D(0.95f, 0.12f, 0.04f), 0.48, false);
+            } else {
+                addQuad(2, {right.x * 0.0, right.y * 0.0, right.z * 0.0},
+                        3.2, QVector3D(0.12f, 0.62f, 0.18f), 1.0, false);
+                addQuad(3, {right.x * -0.55 + towardCamera.x * 0.25,
+                            right.y * -0.55 + towardCamera.y * 0.25,
+                            right.z * -0.55 + towardCamera.z * 0.25},
+                        2.5, QVector3D(0.08f, 0.25f, 0.95f), 0.55, false);
+                addQuad(4, {right.x * 0.35 - towardCamera.x * 0.2,
+                            right.y * 0.35 - towardCamera.y * 0.2,
+                            right.z * 0.35 - towardCamera.z * 0.2},
+                        1.15, QVector3D(0.95f, 0.72f, 0.05f), 1.0, true);
+                addQuad(5, {right.x * 0.55 + towardCamera.x * 0.4,
+                            right.y * 0.55 + towardCamera.y * 0.4,
+                            right.z * 0.55 + towardCamera.z * 0.4},
+                        1.4, QVector3D(0.95f, 0.12f, 0.04f), 0.48, true);
+            }
         }
 
         ViewportShadingSettings shading;
@@ -353,7 +368,7 @@ int main(int argc, char **argv)
         shading.outline = false;
         ViewportAaRenderer aa;
         aa.setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
-        aa.setDisplayTransform(shading, true);
+        aa.setDisplayTransform(shading, true, transparentOverlapFixture);
         ViewportSurfaceRenderer renderer;
         const auto rejectedPassHasNoOutputs = [&](
             const ViewportWorkbenchScenePassPacket &packet) {
@@ -398,7 +413,11 @@ int main(int argc, char **argv)
                         "render-pass capture must begin its production AA sample");
         ViewportWorkbenchSceneColorPassResult scenePass;
         if (sampleStarted) {
-            const GLfloat background[4] = {0.0232f, 0.0232f, 0.0232f, 1.0f};
+            const GLfloat background[4] = {
+                transparentOverlapFixture ? 0.0f : 0.0232f,
+                transparentOverlapFixture ? 0.0f : 0.0232f,
+                transparentOverlapFixture ? 0.0f : 0.0232f,
+                transparentOverlapFixture ? 0.0f : 1.0f};
             gl.glClearBufferfv(GL_COLOR, 0, background);
             scenePass = ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                 renderer,
@@ -409,9 +428,13 @@ int main(int argc, char **argv)
                 aa.markCurrentSampleAttachmentsValid(
                     scenePass.report.populatedAttachments);
             }
-            passed &= check(scenePass.rendered &&
-                                scenePass.completed(ViewportRenderPass::OpaqueColor),
-                            "render-pass capture must complete the production opaque-color pass");
+            const bool expectedColorPass = transparentOverlapFixture
+                                               ? scenePass.completed(
+                                                     ViewportRenderPass::TransparentResolve)
+                                               : scenePass.completed(
+                                                     ViewportRenderPass::OpaqueColor);
+            passed &= check(scenePass.rendered && expectedColorPass,
+                            "render-pass capture must complete the production Solid color pass");
             passed &= check(
                 (scenePass.report.populatedAttachments &
                  ViewportRenderTargets::CurrentSampleColor) != 0,
@@ -511,7 +534,8 @@ int main(int argc, char **argv)
         renderFrame.objects = sceneObjects;
         ViewportAaRenderer frameAa;
         frameAa.setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
-        frameAa.setDisplayTransform(shading, true);
+        frameAa.setDisplayTransform(shading, true,
+                                    transparentOverlapFixture);
         gl.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                    GL_STENCIL_BUFFER_BIT);
         const bool frameSampleStarted = frameAa.beginSceneSample(
@@ -521,7 +545,11 @@ int main(int argc, char **argv)
                         "frame-based scene-pass packet must begin its AA sample");
         ViewportWorkbenchSceneColorPassResult frameScenePass;
         if (frameSampleStarted) {
-            const GLfloat background[4] = {0.0232f, 0.0232f, 0.0232f, 1.0f};
+            const GLfloat background[4] = {
+                transparentOverlapFixture ? 0.0f : 0.0232f,
+                transparentOverlapFixture ? 0.0f : 0.0232f,
+                transparentOverlapFixture ? 0.0f : 0.0232f,
+                transparentOverlapFixture ? 0.0f : 1.0f};
             gl.glClearBufferfv(GL_COLOR, 0, background);
             frameScenePass =
                 ViewportWorkbenchScenePassCoordinator::renderSceneColor(
@@ -668,6 +696,27 @@ int main(int argc, char **argv)
         passed &= check(linearBottomUp.size() == size.width() * size.height() * 4 &&
                             viewZBottomUp.size() == size.width() * size.height(),
                         "render-pass Combined and Z captures must retain 640x480 dimensions");
+        if (transparentOverlapFixture) {
+            const qsizetype cornerPixel = 5 * size.width() + 5;
+            const qsizetype overlapPixel = 240 * size.width() + 320;
+            const float cornerAlpha = linearBottomUp[cornerPixel * 4 + 3];
+            const QVector4D overlap(
+                linearBottomUp[overlapPixel * 4],
+                linearBottomUp[overlapPixel * 4 + 1],
+                linearBottomUp[overlapPixel * 4 + 2],
+                linearBottomUp[overlapPixel * 4 + 3]);
+            const QColor displayCorner = fromSceneDisplay.pixelColor(5, 5);
+            passed &= check(
+                cornerAlpha < 1.0e-4f && displayCorner.alpha() == 0 &&
+                    std::abs(linearBottomUp[cornerPixel * 4]) < 1.0e-4f &&
+                    std::abs(linearBottomUp[cornerPixel * 4 + 1]) < 1.0e-4f &&
+                    std::abs(linearBottomUp[cornerPixel * 4 + 2]) < 1.0e-4f &&
+                    overlap.w() > 0.5f && overlap.w() < 1.0f &&
+                    overlap.x() <= overlap.w() + 1.0e-4f &&
+                    overlap.y() <= overlap.w() + 1.0e-4f &&
+                    overlap.z() <= overlap.w() + 1.0e-4f,
+                "transparent-film Combined must preserve zero-alpha background, premultiplied color, and partial alpha through overlapping surfaces and display readback");
+        }
         passed &= check(sceneDepthStatus == GL_FRAMEBUFFER_COMPLETE &&
                             maxTargetDepthDifference < 1.0e-6f,
                         "result target depth must preserve every production AA scene-depth sample");
@@ -738,6 +787,13 @@ int main(int argc, char **argv)
             const bool wroteColor = writePfm(
                 QDir(captureDirectory).filePath(QStringLiteral("classiCAD-combined.pfm")),
                 "PF", size, rgbBottomUp);
+            QVector<float> alphaBottomUp(size.width() * size.height());
+            for (qsizetype pixel = 0; pixel < alphaBottomUp.size(); ++pixel) {
+                alphaBottomUp[pixel] = linearBottomUp[pixel * 4 + 3];
+            }
+            const bool wroteAlpha = !transparentOverlapFixture || writePfm(
+                QDir(captureDirectory).filePath(QStringLiteral("classiCAD-alpha.pfm")),
+                "Pf", size, alphaBottomUp);
             const bool wroteDepth = writePfm(
                 QDir(captureDirectory).filePath(QStringLiteral("classiCAD-z.pfm")),
                 "Pf", size, viewZBottomUp);
@@ -746,8 +802,9 @@ int main(int argc, char **argv)
                 "Pf", size, frontDepthBottomUp);
             const bool wroteDisplay = outputFramebuffer.toImage().save(
                 QDir(captureDirectory).filePath(QStringLiteral("classiCAD-display.png")));
-            passed &= check(wroteColor && wroteDepth && wroteFrontDepth && wroteDisplay,
-                            "opt-in render-pass captures must write scene-linear Combined PFM, view-Z PFM, front-domain depth PFM when selected, and display PNG");
+            passed &= check(wroteColor && wroteAlpha && wroteDepth &&
+                                wroteFrontDepth && wroteDisplay,
+                            "opt-in render-pass captures must write scene-linear Combined and transparent alpha PFM, view-Z PFM, front-domain depth PFM when selected, and display PNG");
         }
         gl.glDeleteTextures(1, &outputDepthStencilTexture);
     }

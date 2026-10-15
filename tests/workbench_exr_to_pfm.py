@@ -18,6 +18,10 @@ def arguments():
     parser.add_argument("input", help="Blender multilayer OpenEXR path")
     parser.add_argument("color_output", help="RGB Combined PFM path")
     parser.add_argument("depth_output", help="scalar view-space Depth PFM path")
+    parser.add_argument(
+        "--alpha-output",
+        help="optional scalar Combined alpha PFM path",
+    )
     return parser.parse_args(argv)
 
 
@@ -32,7 +36,7 @@ def write_pfm(path, pixels):
         pixels.tofile(output)
 
 
-def convert_exr(input_path, color_output, depth_output):
+def convert_exr(input_path, color_output, depth_output, alpha_output=None):
     image = oiio.ImageInput.open(input_path)
     if image is None:
         raise RuntimeError(f"Could not open EXR: {input_path}")
@@ -45,6 +49,16 @@ def convert_exr(input_path, color_output, depth_output):
         for channel in ("R", "G", "B")
     ]
     write_pfm(color_output, color_pixels[:, :, color_indices])
+    if alpha_output is not None:
+        alpha_index = next(
+            (i for i, name in enumerate(color_channels)
+             if name.endswith(".A")),
+            None,
+        )
+        if alpha_index is None:
+            image.close()
+            raise RuntimeError("EXR Combined pass has no alpha channel")
+        write_pfm(alpha_output, color_pixels[:, :, alpha_index])
 
     if not image.seek_subimage(1, 0):
         image.close()

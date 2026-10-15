@@ -201,8 +201,24 @@ readback now tags film-transparent and missing-World-background output as
 premultiplied framebuffer values. Opaque-background output remains straight
 alpha. QPainter annotation composition and later conversion to straight-alpha
 PNG/TIFF writer formats can therefore interpret the captured pixels
-consistently. The C++ build passes; a semitransparent-pixel annotation capture
-and saved-file comparison remain open.
+consistently. The C++ build passes. Rendered annotation composition over
+semitransparent scene pixels remains open.
+
+**Transparent-film Combined comparison (2026-10-14):** Added a paired
+`TRANSPARENT_OVERLAP` capture for Blender 5.2.2 and classiCAD with a transparent
+film, a zero-alpha background, and overlapping semitransparent surfaces. The
+capture exports scene-linear RGB and alpha PFM files plus display PNGs. Alpha
+matches exactly at all 307,200 pixels: the corner is zero and the overlap is
+0.764648. On 104,592 common covered pixels, mean scene-linear RGB channel
+errors are 0.0000114, 0.0000651, and 0.0001577; the 95th percentile maximum
+channel error is 0.0002442. Display PNG alpha matches exactly and RGB differs
+by at most one 8-bit code value. The comparator enforces these bounds. PNG and
+TIFF writer contracts also round-trip a 50%-alpha RGBA64 premultiplied pixel
+and transparent black. The build, render-pass capture, and writer contract
+pass. Capture with `CLASSICAD_WORKBENCH_PASS_SCENE=TRANSPARENT_OVERLAP`, then
+run `tests/workbench_transparent_film_compare.py` against the Blender reference
+outputs. Annotation composition over semitransparent scene pixels remains
+open.
 
 ### QPainter perspective cavity footprint (2026-10-13)
 

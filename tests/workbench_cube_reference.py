@@ -314,6 +314,10 @@ def arguments():
         help="convert the scene-linear Combined pass to an RGB PFM capture",
     )
     parser.add_argument(
+        "--linear-alpha-pfm-output",
+        help="also convert scene-linear Combined alpha to a scalar PFM capture",
+    )
+    parser.add_argument(
         "--jitter-pixels",
         nargs=2,
         type=float,
@@ -328,6 +332,8 @@ def arguments():
         help="render one AA-off Blender reference for every offset in a classiCAD capture metadata file",
     )
     args = parser.parse_args(argv)
+    if args.linear_alpha_pfm_output and not args.linear_pfm_output:
+        parser.error("--linear-alpha-pfm-output requires --linear-pfm-output")
     if sum((args.texture_udim, args.texture_udim_vertical,
             args.texture_udim_parameter_uvs)) > 1:
         parser.error("choose only one UDIM mode")
@@ -1048,7 +1054,8 @@ def main():
             from workbench_exr_to_pfm import convert_exr
 
             depth_output = args.linear_pfm_output + ".depth.pfm"
-            convert_exr(args.linear_output, args.linear_pfm_output, depth_output)
+            convert_exr(args.linear_output, args.linear_pfm_output, depth_output,
+                        args.linear_alpha_pfm_output)
             os.remove(depth_output)
 
 

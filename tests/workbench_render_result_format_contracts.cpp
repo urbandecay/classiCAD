@@ -92,6 +92,57 @@ int main(int argc, char *argv[])
         [](const QByteArray &format) {
             return format.compare("tiff", Qt::CaseInsensitive) == 0;
         });
+    WorkbenchRenderResult transparentResult;
+    transparentResult.combined = QImage(
+        2, 1, QImage::Format_RGBA64_Premultiplied);
+    transparentResult.combined.fill(Qt::transparent);
+    transparentResult.combined.setPixelColor(0, 0, QColor(220, 100, 40, 128));
+    transparentResult.blenderImageFormat = QStringLiteral("PNG");
+    transparentResult.colorMode = QStringLiteral("RGBA");
+    transparentResult.colorDepth = 8;
+    const QString transparentPngPath = outputDirectory.filePath(
+        QStringLiteral("transparent-readback.png"));
+    QString transparentPngError;
+    const bool transparentPngWritten = transparentResult.saveCombinedImage(
+        transparentPngPath, &transparentPngError);
+    const QImage transparentPng(transparentPngPath);
+    const QColor transparentPngPixel = transparentPng.pixelColor(0, 0);
+    const QColor transparentPngBackground = transparentPng.pixelColor(1, 0);
+    passed &= check(
+        transparentPngWritten && !transparentPng.isNull() &&
+            qAbs(transparentPngPixel.alpha() - 128) <= 1 &&
+            qAbs(transparentPngPixel.red() - 220) <= 1 &&
+            qAbs(transparentPngPixel.green() - 100) <= 1 &&
+            qAbs(transparentPngPixel.blue() - 40) <= 1 &&
+            transparentPngBackground.alpha() == 0 &&
+            transparentPngBackground.red() == 0 &&
+            transparentPngBackground.green() == 0 &&
+            transparentPngBackground.blue() == 0,
+        "PNG Combined output must unpremultiply semitransparent RGBA64 readback and preserve transparent black pixels");
+    if (hasTiffWriter) {
+        transparentResult.blenderImageFormat = QStringLiteral("TIFF");
+        transparentResult.tiffCodec = QStringLiteral("NONE");
+        const QString transparentTiffPath = outputDirectory.filePath(
+            QStringLiteral("transparent-readback.tif"));
+        QString transparentTiffError;
+        const bool transparentTiffWritten = transparentResult.saveCombinedImage(
+            transparentTiffPath, &transparentTiffError);
+        const QImage transparentTiff(transparentTiffPath);
+        const QColor transparentTiffPixel = transparentTiff.pixelColor(0, 0);
+        const QColor transparentTiffBackground =
+            transparentTiff.pixelColor(1, 0);
+        passed &= check(
+            transparentTiffWritten && !transparentTiff.isNull() &&
+                qAbs(transparentTiffPixel.alpha() - 128) <= 1 &&
+                qAbs(transparentTiffPixel.red() - 220) <= 1 &&
+                qAbs(transparentTiffPixel.green() - 100) <= 1 &&
+                qAbs(transparentTiffPixel.blue() - 40) <= 1 &&
+                transparentTiffBackground.alpha() == 0 &&
+                transparentTiffBackground.red() == 0 &&
+                transparentTiffBackground.green() == 0 &&
+                transparentTiffBackground.blue() == 0,
+            "TIFF Combined output must unpremultiply semitransparent RGBA64 readback and preserve transparent black pixels");
+    }
     result.blenderImageFormat = QStringLiteral("TIFF");
     result.tiffCodec = QStringLiteral("NONE");
     if (hasTiffWriter) {

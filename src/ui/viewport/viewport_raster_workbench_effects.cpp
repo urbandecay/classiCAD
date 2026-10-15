@@ -783,6 +783,9 @@ bool compositeRasterWorkbenchSurfaces(
         float red = 0.0f;
         float green = 0.0f;
         float blue = 0.0f;
+        float shadowedRed = 0.0f;
+        float shadowedGreen = 0.0f;
+        float shadowedBlue = 0.0f;
         float weight = 0.0f;
         float revealage = 1.0f;
     };
@@ -792,7 +795,8 @@ bool compositeRasterWorkbenchSurfaces(
     };
     const auto addOitFragment = [width, height](
         std::vector<WeightedOitAccumulation> &buffer,
-        const RasterWorkbenchLinearFragment &fragment) {
+        const RasterWorkbenchLinearFragment &fragment,
+        float shadowFactor = 1.0f) {
         if (fragment.x < 0 || fragment.x >= width || fragment.y < 0 ||
             fragment.y >= height || !std::isfinite(fragment.alpha) ||
             fragment.alpha <= 0.0f) {
@@ -810,12 +814,19 @@ bool compositeRasterWorkbenchSurfaces(
         accumulation.red += fragment.sceneLinearRgb[0] * weightedAlpha;
         accumulation.green += fragment.sceneLinearRgb[1] * weightedAlpha;
         accumulation.blue += fragment.sceneLinearRgb[2] * weightedAlpha;
+        accumulation.shadowedRed +=
+            fragment.sceneLinearRgb[0] * weightedAlpha * shadowFactor;
+        accumulation.shadowedGreen +=
+            fragment.sceneLinearRgb[1] * weightedAlpha * shadowFactor;
+        accumulation.shadowedBlue +=
+            fragment.sceneLinearRgb[2] * weightedAlpha * shadowFactor;
         accumulation.weight += weightedAlpha;
         accumulation.revealage *= 1.0f - fragment.alpha;
     };
     const auto resolveOit = [pixelCount](
         const std::vector<WeightedOitAccumulation> &buffer,
-        const std::vector<RasterWorkbenchLinearPixel> &base) {
+        const std::vector<RasterWorkbenchLinearPixel> &base,
+        bool useShadowedColor = false) {
         std::vector<RasterWorkbenchLinearPixel> resolved = base;
         for (int index = 0; index < pixelCount; ++index) {
             const WeightedOitAccumulation &accumulation =
@@ -825,13 +836,19 @@ bool compositeRasterWorkbenchSurfaces(
             const float transmittance = 1.0f - alpha;
             const float weight = std::clamp(
                 accumulation.weight, 1.0e-4f, 5.0e4f);
+            const float red = useShadowedColor
+                ? accumulation.shadowedRed : accumulation.red;
+            const float green = useShadowedColor
+                ? accumulation.shadowedGreen : accumulation.green;
+            const float blue = useShadowedColor
+                ? accumulation.shadowedBlue : accumulation.blue;
             RasterWorkbenchLinearPixel &pixel =
                 resolved[static_cast<std::size_t>(index)];
-            pixel.red = (accumulation.red / weight) * alpha +
+            pixel.red = (red / weight) * alpha +
                         pixel.red * transmittance;
-            pixel.green = (accumulation.green / weight) * alpha +
+            pixel.green = (green / weight) * alpha +
                           pixel.green * transmittance;
-            pixel.blue = (accumulation.blue / weight) * alpha +
+            pixel.blue = (blue / weight) * alpha +
                          pixel.blue * transmittance;
             pixel.alpha = alpha + pixel.alpha * transmittance;
         }
@@ -1015,10 +1032,9 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->sceneLinearDofPending = false;
         surfaceLayers->sceneLinearColor.clear();
         surfaceLayers->sceneLinearOpaqueColor.clear();
-        surfaceLayers->sceneLinearInFrontOpaqueColor.clear();
         surfaceLayers->sceneLinearTransparentColor.clear();
-        surfaceLayers->transparentShadowFragments.clear();
-        surfaceLayers->transparentShadowFragmentsAvailable = false;
+        surfaceLayers->sceneLinearShadowedTransparentColor.clear();
+        surfaceLayers->sceneLinearShadowedTransparentColorAvailable = false;
         surfaceLayers->sceneLinearOutlineCoverage.clear();
         surfaceLayers->sceneLinearSize = QSize();
         surfaceLayers->opaqueSceneDepth.clear();
@@ -1061,7 +1077,6 @@ bool compositeRasterWorkbenchSurfaces(
     // Bound storage independently from viewport size. If the visible layer
     // count exceeds this budget, let the caller use its existing sorted path.
     constexpr qsizetype kMaximumTransparentFragments = 4'000'000;
-    constexpr qsizetype kMaximumRetainedShadowFragments = 1'000'000;
     QVector<TransparentFragment> regularTransparentFragments;
     QVector<TransparentFragment> frontTransparentFragments;
     const qreal dpr = devicePixelRatio;
@@ -1316,15 +1331,25 @@ bool compositeRasterWorkbenchSurfaces(
     if (useWeightedOit) {
         std::vector<WeightedOitAccumulation> regularOit = makeOitBuffer();
         std::vector<WeightedOitAccumulation> frontOit = makeOitBuffer();
+        const bool accumulateShadowedTransparency =
+            surfaceLayers != nullptr && shadingSettings.shadows &&
+            !shadingSettings.xrayEnabled();
+        bool completeShadowReceiverData = accumulateShadowedTransparency;
+        QVector3D transparentLightDirection(
+            -shadingSettings.shadowDirection.x(),
+            shadingSettings.shadowDirection.z(),
+            -shadingSettings.shadowDirection.y());
+        if (transparentLightDirection.lengthSquared() < 1.0e-10f) {
+            transparentLightDirection =
+                QVector3D(-0.57735026f, 0.57735026f, -0.57735026f);
+        }
+        transparentLightDirection.normalize();
         QVector<float> nearestRegularTransparentDepth(pixelCount, noDepth);
         QVector<float> nearestFrontTransparentDepth(pixelCount, noDepth);
         QVector<float> regularTransparentOverlayDepth(pixelCount, noDepth);
         QVector<float> frontTransparentOverlayDepth(pixelCount, noDepth);
         const std::vector<RasterWorkbenchLinearPixel> emptyBase(
             static_cast<std::size_t>(pixelCount));
-        bool retainShadowFragments = shadingSettings.shadows &&
-                                     surfaceLayers != nullptr;
-        bool completeShadowReceiverData = retainShadowFragments;
         for (const ViewportRenderObject &object : objects) {
             RasterWorkbenchFragmentSink objectFragments;
             renderObject(object, &objectFragments, [&](const QImage &) {
@@ -1374,7 +1399,32 @@ bool compositeRasterWorkbenchSurfaces(
                 if (fragment.cameraDepth <= domainOpaqueDepth[index]) continue;
                 std::vector<WeightedOitAccumulation> &domainOit = inFront
                     ? frontOit : regularOit;
-                addOitFragment(domainOit, fragment);
+                float transparentShadowFactor = 1.0f;
+                if (accumulateShadowedTransparency &&
+                    completeShadowReceiverData) {
+                    if (!fragment.hasShadowReceiver) {
+                        completeShadowReceiverData = false;
+                    } else {
+                        const QVector3D normal = normalized(QVector3D(
+                            fragment.worldNormal[0], fragment.worldNormal[1],
+                            fragment.worldNormal[2]));
+                        if (normal.lengthSquared() <= 1.0e-12f) {
+                            completeShadowReceiverData = false;
+                        } else {
+                            transparentShadowFactor =
+                                rasterWorkbenchShadowFactor(
+                                normal, transparentLightDirection,
+                                static_cast<float>(
+                                    shadingSettings.shadowIntensity),
+                                static_cast<float>(
+                                    shadingSettings.shadowOffset),
+                                static_cast<float>(
+                                    shadingSettings.shadowFocus), false);
+                        }
+                    }
+                }
+                addOitFragment(domainOit, fragment,
+                               transparentShadowFactor);
                 QVector<float> &domainTransparentDepth = inFront
                     ? nearestFrontTransparentDepth
                     : nearestRegularTransparentDepth;
@@ -1387,19 +1437,6 @@ bool compositeRasterWorkbenchSurfaces(
                     : regularTransparentOverlayDepth;
                 domainOverlayDepth[index] = std::max(
                     domainOverlayDepth[index], fragment.cameraDepth);
-                if (retainShadowFragments) {
-                    if (!fragment.hasShadowReceiver ||
-                        surfaceLayers->transparentShadowFragments.size() >=
-                            static_cast<std::size_t>(
-                                kMaximumRetainedShadowFragments)) {
-                        retainShadowFragments = false;
-                        completeShadowReceiverData = false;
-                        surfaceLayers->transparentShadowFragments.clear();
-                    } else {
-                        surfaceLayers->transparentShadowFragments.push_back(
-                            {fragment, inFront});
-                    }
-                }
             }
         }
 
@@ -1506,6 +1543,11 @@ bool compositeRasterWorkbenchSurfaces(
         }
         std::vector<RasterWorkbenchLinearPixel> transparentResolved =
             resolveOit(regularOit, emptyBase);
+        std::vector<RasterWorkbenchLinearPixel> shadowedTransparentResolved;
+        if (accumulateShadowedTransparency && completeShadowReceiverData) {
+            shadowedTransparentResolved =
+                resolveOit(regularOit, emptyBase, true);
+        }
         std::vector<RasterWorkbenchLinearPixel> frontBasePixels(
             static_cast<std::size_t>(pixelCount));
         for (int index = 0; index < pixelCount; ++index) {
@@ -1534,6 +1576,11 @@ bool compositeRasterWorkbenchSurfaces(
             resolveOit(frontOit, frontBasePixels);
         const std::vector<RasterWorkbenchLinearPixel> frontTransparentResolved =
             resolveOit(frontOit, emptyBase);
+        std::vector<RasterWorkbenchLinearPixel> frontShadowedTransparentResolved;
+        if (accumulateShadowedTransparency && completeShadowReceiverData) {
+            frontShadowedTransparentResolved =
+                resolveOit(frontOit, emptyBase, true);
+        }
         resolved = std::move(frontResolved);
         for (int index = 0; index < pixelCount; ++index) {
             RasterWorkbenchLinearPixel &transparent =
@@ -1549,6 +1596,25 @@ bool compositeRasterWorkbenchSurfaces(
                 frontTransparent.green + transparent.green * remainOpaque * remainFrontTransparent,
                 frontTransparent.blue + transparent.blue * remainOpaque * remainFrontTransparent,
                 frontTransparent.alpha + transparent.alpha * remainOpaque * remainFrontTransparent};
+            if (!shadowedTransparentResolved.empty() &&
+                !frontShadowedTransparentResolved.empty()) {
+                RasterWorkbenchLinearPixel &shadowed =
+                    shadowedTransparentResolved[
+                        static_cast<std::size_t>(index)];
+                const RasterWorkbenchLinearPixel &frontShadowed =
+                    frontShadowedTransparentResolved[
+                        static_cast<std::size_t>(index)];
+                const float remainFrontShadowed =
+                    1.0f - frontShadowed.alpha;
+                shadowed = {
+                    frontShadowed.red + shadowed.red * remainOpaque *
+                                           remainFrontShadowed,
+                    frontShadowed.green + shadowed.green * remainOpaque *
+                                             remainFrontShadowed,
+                    frontShadowed.blue + shadowed.blue * remainOpaque *
+                                            remainFrontShadowed,
+                    transparent.alpha};
+            }
         }
         const bool canResolveOutlineInSceneLinear =
             surfaceLayers != nullptr && shadingSettings.outline;
@@ -1557,11 +1623,13 @@ bool compositeRasterWorkbenchSurfaces(
             surfaceLayers->sceneLinearColor = resolved;
             surfaceLayers->sceneLinearSize = QSize(width, height);
             surfaceLayers->sceneLinearOpaqueColor = opaqueScenePixels;
-            surfaceLayers->sceneLinearInFrontOpaqueColor =
-                frontOpaqueScenePixels;
             surfaceLayers->sceneLinearTransparentColor = transparentResolved;
-            surfaceLayers->transparentShadowFragmentsAvailable =
-                retainShadowFragments && completeShadowReceiverData;
+            if (!shadowedTransparentResolved.empty()) {
+                surfaceLayers->sceneLinearShadowedTransparentColor =
+                    std::move(shadowedTransparentResolved);
+                surfaceLayers->sceneLinearShadowedTransparentColorAvailable =
+                    true;
+            }
         }
         if (retainWeightedSceneLinearDof) {
             surfaceLayers->sceneLinearColor = resolved;
@@ -3624,111 +3692,20 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
             return factorSum / static_cast<float>(sampleOffsets.size());
         };
-        std::vector<RasterWorkbenchLinearPixel>
-            perFragmentShadowedTransparent;
+        const std::vector<RasterWorkbenchLinearPixel> *
+            perFragmentShadowedTransparent = nullptr;
         bool hasPerFragmentShadowResolve = false;
         if (surfaceLayers != nullptr &&
-            surfaceLayers->transparentShadowFragmentsAvailable &&
+            surfaceLayers->sceneLinearShadowedTransparentColorAvailable &&
             surfaceLayers->sceneLinearSize == QSize(width, height) &&
             outputWidth == width && outputHeight == height &&
             surfaceLayers->sceneLinearTransparentColor.size() ==
                 static_cast<std::size_t>(pixelCount) &&
-            surfaceLayers->sceneLinearInFrontOpaqueColor.size() ==
-                static_cast<std::size_t>(pixelCount) &&
-            surfaceLayers->transparentShadowFragments.size() <= 1'000'000) {
-            std::vector<RasterWorkbenchLinearFragment> regularShadowed;
-            std::vector<RasterWorkbenchLinearFragment> frontShadowed;
-            const std::size_t frontFragmentCount = static_cast<std::size_t>(
-                std::count_if(
-                    surfaceLayers->transparentShadowFragments.begin(),
-                    surfaceLayers->transparentShadowFragments.end(),
-                    [](const auto &fragment) { return fragment.inFront; }));
-            regularShadowed.reserve(
-                surfaceLayers->transparentShadowFragments.size() -
-                frontFragmentCount);
-            frontShadowed.reserve(frontFragmentCount);
-            bool validRetainedFragments = true;
-            for (const auto &retained :
-                 surfaceLayers->transparentShadowFragments) {
-                RasterWorkbenchLinearFragment fragment = retained.fragment;
-                if (!fragment.hasShadowReceiver || fragment.x < 0 ||
-                    fragment.x >= width || fragment.y < 0 ||
-                    fragment.y >= height ||
-                    !std::isfinite(fragment.cameraDepth) ||
-                    !std::isfinite(fragment.alpha)) {
-                    validRetainedFragments = false;
-                    break;
-                }
-                const QVector3D position(fragment.worldPosition[0],
-                                         fragment.worldPosition[1],
-                                         fragment.worldPosition[2]);
-                const QVector3D normal = normalized(QVector3D(
-                    fragment.worldNormal[0], fragment.worldNormal[1],
-                    fragment.worldNormal[2]));
-                if (!std::isfinite(position.x()) ||
-                    !std::isfinite(position.y()) ||
-                    !std::isfinite(position.z()) ||
-                    normal.lengthSquared() <= 1.0e-12f) {
-                    validRetainedFragments = false;
-                    break;
-                }
-                const QPointF lightPoint(
-                    (QVector3D::dotProduct(position, shadowLightRight) -
-                     shadowLightMinX) /
-                        (shadowLightMaxX - shadowLightMinX) * width,
-                    (shadowLightMaxY -
-                     QVector3D::dotProduct(position, shadowLightUp)) /
-                        (shadowLightMaxY - shadowLightMinY) * height);
-                const float receiverDepth = QVector3D::dotProduct(
-                    position, lightDirection);
-                const float factor = shadowFactorAt(
-                    QVector2D(lightPoint), receiverDepth, normal, false);
-                fragment.sceneLinearRgb[0] *= factor;
-                fragment.sceneLinearRgb[1] *= factor;
-                fragment.sceneLinearRgb[2] *= factor;
-                (retained.inFront ? frontShadowed : regularShadowed)
-                    .push_back(fragment);
-            }
-            if (validRetainedFragments) {
-                std::vector<RasterWorkbenchLinearPixel> blackBase(
-                    static_cast<std::size_t>(pixelCount));
-                std::vector<RasterWorkbenchLinearPixel> regularResolved;
-                std::vector<RasterWorkbenchLinearPixel> frontResolved;
-                validRetainedFragments =
-                    resolveRasterWorkbenchWeightedOitFragments(
-                        width, height, blackBase, regularShadowed,
-                        &regularResolved) &&
-                    resolveRasterWorkbenchWeightedOitFragments(
-                        width, height, blackBase, frontShadowed,
-                        &frontResolved);
-                if (validRetainedFragments) {
-                    perFragmentShadowedTransparent =
-                        std::move(regularResolved);
-                    for (int pixelIndex = 0; pixelIndex < pixelCount;
-                         ++pixelIndex) {
-                        const std::size_t linearIndex =
-                            static_cast<std::size_t>(pixelIndex);
-                        RasterWorkbenchLinearPixel &regular =
-                            perFragmentShadowedTransparent[linearIndex];
-                        const RasterWorkbenchLinearPixel &front =
-                            frontResolved[linearIndex];
-                        const float remainFrontOpaque = 1.0f -
-                            surfaceLayers->sceneLinearInFrontOpaqueColor[
-                                linearIndex].alpha;
-                        const float remainFrontTransparent = 1.0f - front.alpha;
-                        regular = {
-                            front.red + regular.red * remainFrontOpaque *
-                                            remainFrontTransparent,
-                            front.green + regular.green * remainFrontOpaque *
-                                              remainFrontTransparent,
-                            front.blue + regular.blue * remainFrontOpaque *
-                                             remainFrontTransparent,
-                            surfaceLayers->sceneLinearTransparentColor[
-                                linearIndex].alpha};
-                    }
-                    hasPerFragmentShadowResolve = true;
-                }
-            }
+            surfaceLayers->sceneLinearShadowedTransparentColor.size() ==
+                static_cast<std::size_t>(pixelCount)) {
+            perFragmentShadowedTransparent =
+                &surfaceLayers->sceneLinearShadowedTransparentColor;
+            hasPerFragmentShadowResolve = true;
         }
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
@@ -3773,15 +3750,15 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     : 1.0f;
                 const bool perFragmentTransparentChanged =
                     hasPerFragmentShadowResolve &&
-                    (perFragmentShadowedTransparent[
+                    ((*perFragmentShadowedTransparent)[
                          static_cast<std::size_t>(index)].red !=
                          surfaceLayers->sceneLinearTransparentColor[
                              static_cast<std::size_t>(index)].red ||
-                     perFragmentShadowedTransparent[
+                     (*perFragmentShadowedTransparent)[
                          static_cast<std::size_t>(index)].green !=
                          surfaceLayers->sceneLinearTransparentColor[
                              static_cast<std::size_t>(index)].green ||
-                     perFragmentShadowedTransparent[
+                     (*perFragmentShadowedTransparent)[
                          static_cast<std::size_t>(index)].blue !=
                          surfaceLayers->sceneLinearTransparentColor[
                          static_cast<std::size_t>(index)].blue);
@@ -3815,7 +3792,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     if (hasPerFragmentShadowResolve) {
                         if (perFragmentTransparentChanged) {
                             const RasterWorkbenchLinearPixel &shadowedTransparent =
-                                perFragmentShadowedTransparent[linearIndex];
+                                (*perFragmentShadowedTransparent)[linearIndex];
                             linear.red += shadowedTransparent.red - transparent.red;
                             linear.green += shadowedTransparent.green - transparent.green;
                             linear.blue += shadowedTransparent.blue - transparent.blue;

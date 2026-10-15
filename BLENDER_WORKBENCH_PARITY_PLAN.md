@@ -4123,17 +4123,17 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
 
 ## QPainter per-fragment transparent shadow factors (2026-10-14)
 
-- The QPainter compositor now retains each transparent receiver's scene-linear
-  color, alpha, world position, and world normal, then evaluates its software
-  shadow factor before resolving weighted transparency. Regular and
-  `showInFront` fragments keep separate resolves so their layering stays
-  consistent with the existing compositor. The final alpha is taken from the
-  unshadowed resolve, and opaque receiver shadowing remains a separate
-  contribution beneath transparency.
-- Retention is capped at 1,000,000 receiver fragments. If any fragment lacks
-  receiver metadata, dimensions do not match, or the cap is exceeded, the
-  effects pass uses its prior nearest-visible-layer fallback. Material and
-  geometry inputs remain the existing renderer contracts; retained data is an
+- The QPainter compositor now applies each transparent receiver's normal-based
+  shadow factor while accumulating scene-linear weighted transparency in
+  bounded per-pixel buffers. Regular and `showInFront` fragments keep separate
+  resolves so their layering stays consistent with the existing compositor.
+  The final alpha comes from the unshadowed resolve, and opaque receiver
+  shadowing remains a separate contribution beneath transparency. This avoids
+  retaining a scene-wide fragment list and keeps overlapping transparent
+  layers with different normals shaded independently, including dense scenes.
+- If a fragment lacks valid shadow-receiver metadata, the effects pass retains
+  its nearest-visible-layer fallback. Material and geometry inputs remain the
+  existing renderer contracts; the per-pixel shadowed resolve is an
   effects-pass adapter.
 - Blender 5.2.2's
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L478-L526)
@@ -8238,3 +8238,18 @@ resolve remain open.
   results supersede older summary text that described QPainter extension
   handling as repeat-only. Other filter settings, geometries, and views remain
   open as recorded in the individual comparison entries above.
+
+### QPainter dense transparent shadow receivers (2026-10-15)
+
+- The weighted software compositor now accumulates a second regular/in-front
+  transparency result with Blender's normal-based transparent shadow factor
+  applied per fragment. The effects pass uses that per-pixel result instead of
+  retaining up to one million fragments and applying the nearest layer's
+  factor to a dense overlapping stack. Opaque receiver shadowing and the
+  unshadowed transparent alpha remain separate. If a fragment has no valid
+  receiver normal, the existing nearest-layer approximation remains active.
+- Blender 5.2.2 applies `get_shadow` to each transparent fragment before its
+  weighted color accumulation in
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L478-L526).
+  The QPainter light-depth map and weighted rasterization remain approximate;
+  no matched Blender comparison was run.

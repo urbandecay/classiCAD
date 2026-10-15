@@ -194,17 +194,13 @@ struct RasterWorkbenchSurfaceLayers {
     // Opaque and transparent contributions used to apply the QPainter shadow
     // factor before a deferred scene-linear outline.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearOpaqueColor;
-    std::vector<RasterWorkbenchLinearPixel> sceneLinearInFrontOpaqueColor;
     std::vector<RasterWorkbenchLinearPixel> sceneLinearTransparentColor;
-    struct TransparentShadowFragment {
-        RasterWorkbenchLinearFragment fragment;
-        bool inFront = false;
-    };
-    // Bounded source fragments retained only when every transparent fragment
-    // has receiver metadata. The effects pass can then shade each layer before
-    // rerunning weighted OIT instead of applying one nearest-layer factor.
-    std::vector<TransparentShadowFragment> transparentShadowFragments;
-    bool transparentShadowFragmentsAvailable = false;
+    // Weighted transparency with Blender's per-fragment normal shadow factor
+    // already applied. Accumulated in per-pixel buffers so dense scenes do not
+    // need a scene-wide retained fragment list.
+    std::vector<RasterWorkbenchLinearPixel>
+        sceneLinearShadowedTransparentColor;
+    bool sceneLinearShadowedTransparentColorAvailable = false;
     std::vector<float> sceneLinearOutlineCoverage;
     QSize sceneLinearSize;
     // True when cavity was folded into the opaque contribution before

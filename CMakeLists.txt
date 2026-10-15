@@ -455,6 +455,7 @@ if (CLASSICAD_BUILD_TESTS)
 
     add_executable(classicad_core_contracts_test
         tests/core_contracts.cpp
+        src/app/session_serializer.cpp
         src/ui/panels/preferences_store.cpp
     )
     classicad_configure_ui_target(classicad_core_contracts_test)

@@ -3478,7 +3478,7 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 - No AA, the preference's “Single Pass Anti-Aliasing” value (Workbench one-sample TAA+SMAA), and 5/8/11/16/32-sample multisampling. Matched fixed-cube captures cover every value while idle; interruption/resume state contracts cover each 5/8/11/16/32-sample preference during navigation. A matched fixed-cube QPainter matrix now compares silhouettes and full-frame color for all seven values with Studio Default material shading and effects disabled; other color/effect combinations and navigation image comparisons remain open (see [QPainter fixed-cube AA comparison](#qpainter-fixed-cube-aa-comparison-2026-10-14)).
 - Accumulation reset after camera movement, geometry edits, selection changes, setting changes, resize, and display-scale changes. Renderer contracts now cover camera zoom, logical resize, DPR, a shading setting, and AA-mode changes, in addition to mesh/selection/material/background key checks.
 - Overlay Smooth Wires and Edit Mode Smooth Wires independently, including confirming the grid remains antialiased when overlay wire smoothing is off.
-- Save/reopen behavior for all persistent settings and any new material or color data.
+- Save/reopen behavior for all persistent settings and any new material or color data. The Workbench settings contract now round-trips every `ViewportShadingSettings` field, custom LUT bytes/metadata, and object Image Texture plus UDIM payload in one update-session file; QSettings coverage cycles all seven viewport AA modes and all four independent Overlay/Edit Mode Smooth Wires combinations. Camera preferences and the broader application settings matrix remain separate acceptance coverage.
 - GPU renderer and QPainter fallback behavior.
 
 ### QPainter fixed-cube AA comparison (2026-10-14)
@@ -5950,3 +5950,20 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   pass-ownership acceptance item.
 - Validation: `cmake --build build` passed with the 316-file dependency
   audit; the offscreen `workbench_render_pass_capture` CTest passed (1/1).
+
+### Workbench settings and material persistence matrix (2026-10-14)
+
+- Expanded `workbench_persistence_contracts` to write and reopen one update
+  session containing every `ViewportShadingSettings` field, including a
+  custom LUT's bytes, hash, and metadata, together with object Image Texture
+  data and a packed UDIM tile. The test compares the reopened values against
+  the source settings rather than only checking selected defaults.
+- The isolated QSettings contract now round-trips all seven Workbench
+  viewport AA preferences (`Off`, `Single Pass`, and 5/8/11/16/32 samples)
+  and all four Overlay/Edit Mode Smooth Wires combinations independently.
+  This closes the Workbench shading/material portion of the persistence
+  checklist; camera preferences and unrelated application settings are not
+  covered by this matrix.
+- Validation: `cmake --build build` passed with the 316-file dependency
+  audit; `ctest --test-dir build -R '^workbench_persistence_contracts$'
+  --output-on-failure` passed (1/1).

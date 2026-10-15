@@ -14,6 +14,7 @@
 #include "core/serialization/shape_json_codec.h"
 #include "ui/panels/preferences_store.h"
 #include "core/tool_id.h"
+#include "app/session_serializer.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/dimensions/dimension_association.h"
 #include "services/dimensions/dimension_font.h"
@@ -41,6 +42,7 @@
 #include "tools/tool_registry.h"
 
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -430,6 +432,153 @@ bool persistedWorkbenchSettingsContracts()
         passed &= check(false, "texture round-trip fixture object must exist");
     }
 
+    QTemporaryDir updateSessionDir;
+    passed &= check(updateSessionDir.isValid(),
+                    "Workbench update-session test must create a temporary directory");
+    if (updateSessionDir.isValid()) {
+        UpdateSessionViewState view;
+        view.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        ViewportShadingSettings &shading = view.shading;
+        shading.mode = ViewportShadingMode::Wireframe;
+        shading.lightingMode = ViewportLightingMode::MatCap;
+        shading.studioLightPreset = QStringLiteral("paint.sl");
+        shading.matcapPreset = QStringLiteral("metal_bronze");
+        shading.matcapFlipX = true;
+        shading.studioLightRotationDegrees = -37;
+        shading.worldSpaceLighting = true;
+        shading.xray = true;
+        shading.xrayWireframe = false;
+        shading.wireColorMode = ViewportWireColorMode::Random;
+        shading.colorMode = ViewportColorMode::Texture;
+        shading.backgroundMode = ViewportBackgroundMode::Custom;
+        shading.cavityType = ViewportCavityType::Both;
+        shading.customColor = QColor(13, 29, 47, 83);
+        shading.themeWireColor = QColor(23, 41, 59, 71);
+        shading.themeEditWireColor = QColor(31, 53, 79, 97);
+        shading.outlineColor = QColor(43, 67, 89, 101);
+        shading.customBackgroundColor = QColor(61, 83, 107, 113);
+        shading.shadowDirection = QVector3D(0.25f, -0.5f, 0.75f);
+        shading.backfaceCulling = true;
+        shading.outline = false;
+        shading.specularLighting = false;
+        shading.shadows = true;
+        shading.depthOfField = true;
+        shading.cavity = true;
+        shading.cavityDistance = 4.25;
+        shading.cavityAttenuation = 3.5;
+        shading.cavitySamples = 37;
+        shading.cavityRidgeFactor = 1.25;
+        shading.cavityValleyFactor = 0.75;
+        shading.curvatureRidgeFactor = 1.5;
+        shading.curvatureValleyFactor = 1.75;
+        shading.xrayAlpha = 0.375;
+        shading.shadowIntensity = 0.625;
+        shading.shadowOffset = 0.125;
+        shading.shadowFocus = 0.25;
+        shading.colorTransform = 4;
+        shading.colorLutMetadata = {
+            2, -0.5, 1.5, QStringLiteral("log2_1p"), 2.5};
+        shading.colorLutData.resize(2 * 2 * 2 * 3 * 4);
+        for (qsizetype byte = 0; byte < shading.colorLutData.size(); ++byte) {
+            shading.colorLutData.data()[byte] = static_cast<char>(byte * 17);
+        }
+        shading.colorLutId = QString::fromLatin1(
+            QCryptographicHash::hash(shading.colorLutData,
+                                     QCryptographicHash::Sha256).toHex());
+        shading.colorExposure = -1.25;
+        shading.colorGamma = 2.25;
+        shading.colorDitherIntensity = 3.5;
+
+        const QString updateSessionPath = updateSessionDir.filePath(
+            QStringLiteral("workbench-session.json"));
+        QString sessionError;
+        RestoredUpdateSession restored;
+        const bool updateSessionSaved = SessionSerializer::write(
+            updateSessionPath, textureDocument, view, &sessionError);
+        const bool updateSessionReopened = updateSessionSaved &&
+            SessionSerializer::read(updateSessionPath,
+                                    ViewportCameraPreferences{}, false,
+                                    &restored, &sessionError);
+        if (!updateSessionReopened) {
+            qCritical("Workbench session round-trip error: %s",
+                      qPrintable(sessionError));
+        }
+        if (updateSessionReopened) {
+            const ViewportShadingSettings &actual = restored.view.shading;
+            const ViewportShadingSettings &expected = view.shading;
+            const auto close = [](qreal a, qreal b) {
+                return std::abs(a - b) < 1.0e-12;
+            };
+            const bool shadingRoundTrip =
+                actual.mode == expected.mode &&
+                actual.lightingMode == expected.lightingMode &&
+                actual.studioLightPreset == expected.studioLightPreset &&
+                actual.matcapPreset == expected.matcapPreset &&
+                actual.matcapFlipX == expected.matcapFlipX &&
+                actual.studioLightRotationDegrees ==
+                    expected.studioLightRotationDegrees &&
+                actual.worldSpaceLighting == expected.worldSpaceLighting &&
+                actual.xray == expected.xray &&
+                actual.xrayWireframe == expected.xrayWireframe &&
+                actual.wireColorMode == expected.wireColorMode &&
+                actual.colorMode == expected.colorMode &&
+                actual.backgroundMode == expected.backgroundMode &&
+                actual.cavityType == expected.cavityType &&
+                actual.customColor == expected.customColor &&
+                actual.themeWireColor == expected.themeWireColor &&
+                actual.themeEditWireColor == expected.themeEditWireColor &&
+                actual.outlineColor == expected.outlineColor &&
+                actual.customBackgroundColor ==
+                    expected.customBackgroundColor &&
+                actual.shadowDirection == expected.shadowDirection &&
+                actual.backfaceCulling == expected.backfaceCulling &&
+                actual.outline == expected.outline &&
+                actual.specularLighting == expected.specularLighting &&
+                actual.shadows == expected.shadows &&
+                actual.depthOfField == expected.depthOfField &&
+                actual.cavity == expected.cavity &&
+                close(actual.cavityDistance, expected.cavityDistance) &&
+                close(actual.cavityAttenuation, expected.cavityAttenuation) &&
+                actual.cavitySamples == expected.cavitySamples &&
+                close(actual.cavityRidgeFactor, expected.cavityRidgeFactor) &&
+                close(actual.cavityValleyFactor, expected.cavityValleyFactor) &&
+                close(actual.curvatureRidgeFactor,
+                      expected.curvatureRidgeFactor) &&
+                close(actual.curvatureValleyFactor,
+                      expected.curvatureValleyFactor) &&
+                close(actual.xrayAlpha, expected.xrayAlpha) &&
+                close(actual.shadowIntensity, expected.shadowIntensity) &&
+                close(actual.shadowOffset, expected.shadowOffset) &&
+                close(actual.shadowFocus, expected.shadowFocus) &&
+                actual.colorTransform == expected.colorTransform &&
+                actual.colorLutId == expected.colorLutId &&
+                actual.colorLutData == expected.colorLutData &&
+                actual.colorLutMetadata == expected.colorLutMetadata &&
+                close(actual.colorExposure, expected.colorExposure) &&
+                close(actual.colorGamma, expected.colorGamma) &&
+                close(actual.colorDitherIntensity,
+                      expected.colorDitherIntensity);
+            const auto &reopenedTexture = restored.document.objects().first()
+                                              .workbenchMaterial;
+            const bool materialRoundTrip =
+                reopenedTexture.textureImagePath ==
+                    QStringLiteral("textures/object-color.png") &&
+                reopenedTexture.textureImagePackedDataBase64 ==
+                    packedTexturePayload &&
+                reopenedTexture.textureImageAlphaMode ==
+                    QStringLiteral("PREMUL") &&
+                reopenedTexture.textureImageTiles.size() == 1 &&
+                reopenedTexture.textureImageTiles.first().number == 1001 &&
+                reopenedTexture.textureImageTiles.first().packedDataBase64 ==
+                    packedUdimPayload;
+            passed &= check(shadingRoundTrip && materialRoundTrip,
+                            "update-session save/reopen must preserve all Workbench shading, LUT, material, and UDIM settings together");
+        } else {
+            passed &= check(false,
+                            "Workbench update-session fixture must save and reopen");
+        }
+    }
+
     QTemporaryDir settingsDir;
     passed &= check(settingsDir.isValid(),
                     "preferences test must create an isolated settings directory");
@@ -439,11 +588,27 @@ bool persistedWorkbenchSettingsContracts()
                            settingsDir.path());
         QCoreApplication::setOrganizationName(QStringLiteral("classiCAD-contract-test"));
         QCoreApplication::setApplicationName(QStringLiteral("workbench-persistence"));
-        saveSmoothWirePreferences(false, true);
-        const StoredPreferences reloaded = loadStoredPreferences();
-        passed &= check(!reloaded.dialogValues.smoothWiresOverlay &&
-                            reloaded.dialogValues.smoothWiresEditMode,
-                        "both Smooth Wires booleans must reload from QSettings independently");
+        const std::array<int, 7> viewportAaModes{0, 1, 5, 8, 11, 16, 32};
+        bool aaModesRoundTrip = true;
+        for (int mode : viewportAaModes) {
+            saveViewportAaModePreference(mode);
+            aaModesRoundTrip &=
+                loadStoredPreferences().dialogValues.viewportAaMode == mode;
+        }
+        passed &= check(aaModesRoundTrip,
+                        "all seven Workbench viewport AA preferences must reload from QSettings");
+        bool smoothWiresRoundTrip = true;
+        for (const bool overlay : {false, true}) {
+            for (const bool editMode : {false, true}) {
+                saveSmoothWirePreferences(overlay, editMode);
+                const StoredPreferences reloaded = loadStoredPreferences();
+                smoothWiresRoundTrip &=
+                    reloaded.dialogValues.smoothWiresOverlay == overlay &&
+                    reloaded.dialogValues.smoothWiresEditMode == editMode;
+            }
+        }
+        passed &= check(smoothWiresRoundTrip,
+                        "Overlay and Edit Mode Smooth Wires preferences must each reload independently from QSettings");
     }
     return passed;
 }

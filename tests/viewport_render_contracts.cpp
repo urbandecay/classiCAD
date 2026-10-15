@@ -43,6 +43,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLFunctions_3_3_Core>
+#include <QtCore/qfloat16.h>
 #include <QPainter>
 #include <QPen>
 #include <QPixmap>
@@ -135,6 +136,91 @@ int main(int argc, char *argv[])
                 }
             }
         }
+        return passed ? 0 : 1;
+    }
+
+    if (application.arguments().contains(
+            QStringLiteral("--cavity-jitter-upload-only"))) {
+        QOffscreenSurface surface;
+        QOpenGLContext context;
+        context.setFormat(format);
+        const bool contextCreated = context.create();
+        surface.setFormat(context.format());
+        surface.create();
+        const bool contextReady = contextCreated && surface.isValid() &&
+                                  context.makeCurrent(&surface);
+        passed &= check(contextReady,
+                        "Workbench cavity jitter upload contract requires an offscreen OpenGL context");
+        if (!contextReady) {
+            return 1;
+        }
+        QOpenGLFunctions_3_3_Core gl;
+        const bool functionsReady = gl.initializeOpenGLFunctions();
+        passed &= check(functionsReady,
+                        "Workbench cavity jitter upload contract requires OpenGL 3.3 functions");
+        if (!functionsReady) {
+            context.doneCurrent();
+            return 1;
+        }
+        GLuint texture = 0;
+        gl.glGenTextures(1, &texture);
+        for (const int sampleCount : {1, 16, 512}) {
+            const bool uploaded =
+                detail::uploadWorkbenchCavityJitterTexture(
+                    gl, texture, sampleCount);
+            GLint width = 0;
+            GLint height = 0;
+            GLint internalFormat = 0;
+            GLint minFilter = 0;
+            GLint magFilter = 0;
+            GLint wrapS = 0;
+            GLint wrapT = 0;
+            gl.glBindTexture(GL_TEXTURE_2D, texture);
+            gl.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,
+                                        &width);
+            gl.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT,
+                                        &height);
+            gl.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0,
+                                        GL_TEXTURE_INTERNAL_FORMAT,
+                                        &internalFormat);
+            gl.glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                   &minFilter);
+            gl.glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                   &magFilter);
+            gl.glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrapS);
+            gl.glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &wrapT);
+            passed &= check(
+                uploaded && width == 64 && height == 64 &&
+                    internalFormat == GL_RGB16F && minFilter == GL_LINEAR &&
+                    magFilter == GL_LINEAR && wrapS == GL_REPEAT &&
+                    wrapT == GL_REPEAT,
+                "Workbench cavity jitter texture must upload as 64x64 RGB16F with Blender's linear repeat sampler");
+
+            QVector<float> actual(64 * 64 * 3);
+            gl.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, GL_FLOAT,
+                             actual.data());
+            detail::WorkbenchCavityJitterPixels expected{};
+            const bool referenceReady =
+                detail::buildWorkbenchCavityJitterPixels(sampleCount,
+                                                          &expected);
+            bool texelsMatch = actual.size() ==
+                                   static_cast<qsizetype>(expected.size()) &&
+                               referenceReady;
+            for (int component = 0;
+                 texelsMatch && component < actual.size(); ++component) {
+                const float halfRounded = static_cast<float>(
+                    qfloat16(expected[static_cast<size_t>(component)]));
+                texelsMatch = std::abs(actual[component] - halfRounded) <=
+                              1.0e-7f;
+            }
+            passed &= check(
+                texelsMatch,
+                "Every uploaded Workbench cavity jitter texel must preserve row order and RGB16F conversion");
+        }
+        if (texture != 0) {
+            gl.glDeleteTextures(1, &texture);
+        }
+        context.doneCurrent();
         return passed ? 0 : 1;
     }
 

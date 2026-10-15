@@ -519,6 +519,12 @@ if (CLASSICAD_BUILD_TESTS)
     set_tests_properties(workbench_cavity_jitter_contracts PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+    add_test(NAME workbench_cavity_jitter_upload_contracts
+        COMMAND classicad_viewport_render_contracts_test
+            --cavity-jitter-upload-only)
+    set_tests_properties(workbench_cavity_jitter_upload_contracts PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
     add_test(NAME workbench_qpainter_texture_alpha_cutoff
         COMMAND classicad_viewport_render_contracts_test --texture-alpha-cutoff-only)
     set_tests_properties(workbench_qpainter_texture_alpha_cutoff PROPERTIES

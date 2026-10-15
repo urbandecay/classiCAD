@@ -5,6 +5,7 @@
 #include "viewport_cavity_blue_noise.h"
 
 #include <QByteArray>
+#include <QOpenGLFunctions_3_3_Core>
 
 #include <algorithm>
 #include <array>
@@ -66,6 +67,28 @@ inline bool buildWorkbenchCavityJitterPixels(
             std::clamp(radiusSample - 0.5f, -0.499f, 0.499f) *
             inverseSampleCount;
     }
+    return true;
+}
+
+inline bool uploadWorkbenchCavityJitterTexture(
+    QOpenGLFunctions_3_3_Core &gl, unsigned int texture, int totalSamples)
+{
+    if (texture == 0) {
+        return false;
+    }
+    WorkbenchCavityJitterPixels pixels{};
+    if (!buildWorkbenchCavityJitterPixels(totalSamples, &pixels)) {
+        return false;
+    }
+    gl.glBindTexture(GL_TEXTURE_2D, texture);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F,
+                    kWorkbenchCavityJitterTextureSize,
+                    kWorkbenchCavityJitterTextureSize, 0, GL_RGB, GL_FLOAT,
+                    pixels.data());
     return true;
 }
 

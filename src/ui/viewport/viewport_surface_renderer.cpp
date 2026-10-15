@@ -5517,11 +5517,6 @@ bool ViewportSurfaceRenderer::ensureCavityJitterTexture(int totalSamples)
         return true;
     }
 
-    detail::WorkbenchCavityJitterPixels pixels{};
-    if (!detail::buildWorkbenchCavityJitterPixels(sampleCount, &pixels)) {
-        return false;
-    }
-
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTextureBinding = 0;
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
@@ -5536,17 +5531,14 @@ bool ViewportSurfaceRenderer::ensureCavityJitterTexture(int totalSamples)
         glActiveTexture(static_cast<GLenum>(previousActiveTexture));
         return false;
     }
+    if (!detail::uploadWorkbenchCavityJitterTexture(
+            *this, cavityJitterTexture_, sampleCount)) {
+        glBindTexture(GL_TEXTURE_2D,
+                      static_cast<GLuint>(previousTextureBinding));
+        glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        return false;
+    }
 
-    glBindTexture(GL_TEXTURE_2D, cavityJitterTexture_);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F,
-                 detail::kWorkbenchCavityJitterTextureSize,
-                 detail::kWorkbenchCavityJitterTextureSize,
-                 0, GL_RGB, GL_FLOAT,
-                 pixels.data());
     glBindTexture(GL_TEXTURE_2D,
                   static_cast<GLuint>(previousTextureBinding));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));

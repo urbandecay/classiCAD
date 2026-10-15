@@ -5877,14 +5877,21 @@ resolve remain open.
   all 4,096 generated texels per channel against the pinned conversion and
   checks the full 8,192-byte LUT payload against SHA-256
   `fd9b4942a1124232212fc8226a62eb4f687532df24bcbc60db19ac9405164ec6`.
-- This validates the CPU-side pixel construction and source LUT, not a GPU
-  texture readback or cavity output parity. Blender's unused fourth texture
-  channel is omitted; the compared RGB channels and cavity sampling behavior
-  remain the relevant shared contract. The earlier controlled GPU effect
-  comparison remains the rendered-output check, with effect-mask IoU
-  `0.959067` and union signed RGB-delta MAE `0.25031/255`.
-- Validation: `cmake --build build -j4` and the focused
-  `workbench_cavity_jitter_contracts` CTest pass. No GUI was launched.
+- The upload setup is shared by `ViewportSurfaceRenderer` and a focused
+  offscreen GL contract. At sample counts 1, 16, and 512, that contract checks
+  the uploaded 64×64 RGB16F internal format, linear min/mag filtering, repeat
+  S/T wrapping, and reads every texel back as float after half-float storage.
+  All returned RGB values match the generated values after binary16 rounding.
+  Blender stores RGBA16F; its fourth channel is not consumed by the cavity
+  shader, so classiCAD keeps the compared RGB payload in RGB16F.
+- The CPU and GL contracts isolate LUT conversion and upload state. They do
+  not constitute a full cavity image-parity claim; the earlier controlled GPU
+  effect comparison remains the rendered-output check, with effect-mask IoU
+  `0.959067` and union signed-RGB-delta MAE `0.25031/255`.
+- Validation: `cmake --build build -j4`, focused
+  `workbench_cavity_jitter_contracts` and
+  `workbench_cavity_jitter_upload_contracts`, and the full offscreen
+  `viewport_render_contracts` CTest all pass. No GUI was launched.
 
 ### Matched QPainter cavity effect comparison (2026-10-14)
 

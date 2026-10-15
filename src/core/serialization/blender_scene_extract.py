@@ -771,6 +771,18 @@ def saved_viewport_shading_record(scene):
                     overlay.wireframe_opacity)
                 record["wireframe_threshold"] = finite_number(
                     overlay.wireframe_threshold)
+                themes = getattr(bpy.context.preferences, "themes", ())
+                if themes:
+                    view_theme = getattr(themes[0], "view_3d", None)
+                    if view_theme is not None:
+                        for record_key, theme_key in (
+                                ("theme_wire_color", "wire"),
+                                ("theme_wire_background_color", "background"),
+                                ("theme_active_object_color", "object_active"),
+                                ("theme_selected_object_color", "object_selected")):
+                            color = getattr(view_theme, theme_key, None)
+                            if color is not None:
+                                record[record_key] = vector_values(color)
                 return record
     return None
 

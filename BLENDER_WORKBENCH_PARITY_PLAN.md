@@ -7568,17 +7568,18 @@ resolve remain open.
   hides mesh fills while keeping the edge overlay visible in both paths.
 - Object wire colors now use the imported Standard, AgX, Filmic, Neutral, or
   custom-LUT display transform, including exposure and gamma, after Blender's
-  half-brightness adjustment. Polygon edge filtering uses Blender's face-angle
+  half-brightness adjustment. Imported Blender preferences now supply the
+  Theme wire, background, active-object, and selected-object colors. Theme
+  mesh wires and unselected Object/Random mesh wires use the view-facing endpoint
+  gradient; selected Theme wires use the active/selected rim color. These
+  theme colors come from the Blender installation used for import, not the
+  `.blend` file, so another system can render a different theme. Polygon edge filtering uses Blender's face-angle
   factor and square-root threshold conversion; boundary and nonmanifold edges
   remain visible, while `show_all_edges` bypasses the threshold. Blender's
-  selected mesh and NURBS surface wire overlays now use classiCAD's selection
-  color. Blender's active/inactive theme shades, optimal-subdivision edge flags,
-  active/inactive theme shades and optimal-subdivision edge flags are not
-  represented. Object and Random wire colors now use Blender's view-facing
-  normal gradient, with averaged imported loop normals at shared vertices and
-  the shader's 0.35 front-color mix. Theme wires and selected overlays remain
-  flat because their distinct Blender theme rim/background shades are not
-  imported; no matched Blender wire capture has been run. Loose mesh
+  selected NURBS surface wire overlays still use classiCAD's selection color.
+  Optimal-subdivision edge flags are not represented. Mesh endpoint gradients
+  use averaged imported loop normals at shared vertices and the shader's 0.35
+  front-color mix. No matched Blender wire capture has been run. Loose mesh
   edges remain represented by their existing companion curves. NURBS surfaces now hide
   their fill for Blender's WIRE display and reuse the cached surface-wire
   tessellation for global, per-object, and WIRE display overlays. Blender's

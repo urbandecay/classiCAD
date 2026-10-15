@@ -7351,6 +7351,17 @@ public:
                    &settings.wireframeOpacity);
         readNumber(QStringLiteral("wireframe_threshold"), 0.0, 1.0,
                    &settings.wireframeThreshold);
+        if (source.contains(QStringLiteral("theme_wire_color")))
+            parseColor(QStringLiteral("theme_wire_color"), &settings.themeWireColor);
+        if (source.contains(QStringLiteral("theme_wire_background_color")))
+            parseColor(QStringLiteral("theme_wire_background_color"),
+                       &settings.themeWireBackgroundColor);
+        if (source.contains(QStringLiteral("theme_active_object_color")))
+            parseColor(QStringLiteral("theme_active_object_color"),
+                       &settings.themeActiveObjectColor);
+        if (source.contains(QStringLiteral("theme_selected_object_color")))
+            parseColor(QStringLiteral("theme_selected_object_color"),
+                       &settings.themeSelectedObjectColor);
         const QString wireColorType =
             source.value(QStringLiteral("wireframe_color_type")).toString();
         if (wireColorType == QLatin1String("THEME"))
@@ -10183,7 +10194,10 @@ protected:
                             renderObject.objectId, renderObject.displayName,
                             workbenchRandomIdentityLibraryPath(renderObject));
                     }
-                    if (renderObject.selected) {
+                    const bool themeColorGradient =
+                        viewportShadingSettings_.wireColorMode ==
+                        ViewportWireColorMode::Theme;
+                    if (renderObject.selected && !themeColorGradient) {
                         wireColor = viewportSelectionColor();
                     }
                     const bool objectColorGradient = !renderObject.selected &&
@@ -10205,6 +10219,30 @@ protected:
                         float(std::clamp(wireColor.blueF() +
                                              (objectColorGradient ? 0.5 : 0.0),
                                          0.0, 1.0)));
+                    if (themeColorGradient) {
+                        if (renderObject.selected) {
+                            const QColor selectedRim =
+                                selection_.primaryObjectId() == renderObject.objectId
+                                    ? viewportShadingSettings_.themeActiveObjectColor
+                                    : viewportShadingSettings_.themeSelectedObjectColor;
+                            rimColor = QVector3D(float(selectedRim.redF()),
+                                                 float(selectedRim.greenF()),
+                                                 float(selectedRim.blueF()));
+                            frontWireColor = QVector3D(
+                                float(viewportShadingSettings_.themeWireColor.redF()),
+                                float(viewportShadingSettings_.themeWireColor.greenF()),
+                                float(viewportShadingSettings_.themeWireColor.blueF()));
+                        } else {
+                            rimColor = QVector3D(
+                                float(viewportShadingSettings_.themeWireColor.redF()),
+                                float(viewportShadingSettings_.themeWireColor.greenF()),
+                                float(viewportShadingSettings_.themeWireColor.blueF()));
+                            frontWireColor = QVector3D(
+                                float(viewportShadingSettings_.themeWireBackgroundColor.redF()),
+                                float(viewportShadingSettings_.themeWireBackgroundColor.greenF()),
+                                float(viewportShadingSettings_.themeWireBackgroundColor.blueF()));
+                        }
+                    }
                     if (objectColorGradient) {
                         QVector3D sourceColor =
                             renderObject.displayColorSceneLinear.toVector3D();

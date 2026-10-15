@@ -7678,9 +7678,12 @@ resolve remain open.
   of Workbench's Theme/Object/Random mesh-wire color mode. classiCAD bounds now
   use the imported active-object theme color for the primary selected object,
   the selected-object theme color for other selected objects, and the wire
-  theme color otherwise. This follows Blender 5.2.2's `object_wire_theme_id`
-  and `object_wire_color` path in `overlay_private.hh`. The C++ build passed;
-  matched bounds-color comparison remains open.
+  theme color otherwise. Requested Bounds display geometry now also remains
+  visible when optional wire overlays are hidden; Blender's bounds pass
+  explicitly ignores `show_extras()` for this display type so the object does
+  not disappear. This follows Blender 5.2.2's `overlay_bounds.hh` and
+  `overlay_private.hh`. The C++ build passed; matched bounds comparison
+  remains open.
 
 ### Active Blender scene and selection restore (2026-10-15)
 

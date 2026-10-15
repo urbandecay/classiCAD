@@ -9635,38 +9635,35 @@ protected:
                 continue;
             }
             if (!renderObject.displayBoundsType.isEmpty()) {
-                const bool boundsVisible =
-                    viewportShadingSettings_.mode == ViewportShadingMode::Wireframe ||
-                    viewportShadingSettings_.wireOverlaysVisible;
-                if (boundsVisible) {
-                    auto boundsGeometry = makeBoundsDisplayGeometry(renderObject);
-                    if (!boundsGeometry->lineVertices.isEmpty()) {
-                        ViewportSceneStroke boundsStroke;
-                        if (renderObject.selected) {
-                            boundsStroke.color =
-                                selection_.primaryObjectId() == objectId
-                                    ? viewportShadingSettings_.themeActiveObjectColor
-                                    : viewportShadingSettings_.themeSelectedObjectColor;
-                        } else {
-                            boundsStroke.color = viewportShadingSettings_.themeWireColor;
-                        }
-                        boundsStroke.width = 1.0f;
-                        boundsStroke.writeDepth = true;
-                        boundsStroke.blenderMeshWire = true;
-                        boundsStroke.smoothWireCategory =
-                            ViewportSmoothWireCategory::Overlay;
-                        boundsStroke.objectId = renderObject.objectId;
-                        boundsStroke.geometryRevision = renderObject.geometryRevision;
-                        boundsStroke.cacheableGeometry = renderObject.cacheable;
-                        boundsStroke.preparedDepthGeometry = std::move(boundsGeometry);
-                        boundsStroke.worldOffset =
-                            renderObject.hasDisplayBoundsData &&
-                                    !renderObject.scalePreview &&
-                                    !renderObject.rotatePreview
-                                ? Point3D{}
-                                : renderObject.preparedGeometryOffset;
-                        gpuStrokes.append(std::move(boundsStroke));
+                // Blender draws an object's requested Bounds display as its
+                // replacement geometry, even when optional extras are hidden.
+                auto boundsGeometry = makeBoundsDisplayGeometry(renderObject);
+                if (!boundsGeometry->lineVertices.isEmpty()) {
+                    ViewportSceneStroke boundsStroke;
+                    if (renderObject.selected) {
+                        boundsStroke.color =
+                            selection_.primaryObjectId() == objectId
+                                ? viewportShadingSettings_.themeActiveObjectColor
+                                : viewportShadingSettings_.themeSelectedObjectColor;
+                    } else {
+                        boundsStroke.color = viewportShadingSettings_.themeWireColor;
                     }
+                    boundsStroke.width = 1.0f;
+                    boundsStroke.writeDepth = true;
+                    boundsStroke.blenderMeshWire = true;
+                    boundsStroke.smoothWireCategory =
+                        ViewportSmoothWireCategory::Overlay;
+                    boundsStroke.objectId = renderObject.objectId;
+                    boundsStroke.geometryRevision = renderObject.geometryRevision;
+                    boundsStroke.cacheableGeometry = renderObject.cacheable;
+                    boundsStroke.preparedDepthGeometry = std::move(boundsGeometry);
+                    boundsStroke.worldOffset =
+                        renderObject.hasDisplayBoundsData &&
+                                !renderObject.scalePreview &&
+                                !renderObject.rotatePreview
+                            ? Point3D{}
+                            : renderObject.preparedGeometryOffset;
+                    gpuStrokes.append(std::move(boundsStroke));
                 }
                 continue;
             }

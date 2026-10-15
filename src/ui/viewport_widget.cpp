@@ -8932,7 +8932,8 @@ protected:
         QVector<ViewportRenderObject> visibleSurfaceShapes;
         visibleSurfaceShapes.reserve(visibleShapes.size());
         for (const ViewportRenderObject &object : visibleShapes) {
-            if (object.shape.geometryType == GeometryType::PolygonMesh &&
+            if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                object.shape.geometryType == GeometryType::PolygonMesh &&
                 object.wireDisplay) {
                 continue;
             }
@@ -10524,7 +10525,8 @@ protected:
                 }
                 continue;
             }
-            if ((geometryType == GeometryType::PolygonMesh &&
+            if ((viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                 geometryType == GeometryType::PolygonMesh &&
                  renderObject.wireDisplay) ||
                 (rasterSurfaceBatchRendered &&
                 (geometryType == GeometryType::NurbsSurface ||

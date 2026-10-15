@@ -3463,7 +3463,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 if (captureTaps)
                     cavityTapCapture->taps.push_back(tapCapture);
             }
-            if (validNeighbors == 0 && !hadBackgroundCavitySample) continue;
+            // Curvature is evaluated independently of the SSAO sample disk.
+            // Keep its response even when every World-cavity tap is outside
+            // the viewport or otherwise has no usable depth sample.
+            if (validNeighbors == 0 && !hadBackgroundCavitySample &&
+                !curvature) {
+                continue;
+            }
             cavityAmount = ssao
                 ? saturate(cavityAmount /
                            static_cast<float>(effectiveSamples) * valley)

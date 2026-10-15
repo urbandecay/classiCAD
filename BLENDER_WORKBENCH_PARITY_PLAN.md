@@ -8110,7 +8110,15 @@ resolve remain open.
   from sRGB before alpha blending. Precomposited images are skipped in the
   later scene draw to prevent a second blend. Images are composited one at a
   time in source order within a 16-million image-pixel work budget. The
-  later scene draw to prevent a second blend; selected Back images keep their
-  selection outline. The compositor's background pixels are opaque, so
-  transparent viewport film remains unsupported here; failed renderer fallback
-  and matched image comparison remain open.
+  selected Back images keep their selection outline. The compositor's
+  background pixels are opaque, so transparent viewport film remains
+  unsupported here; failed renderer fallback and matched image comparison
+  remain open.
+
+### QPainter curvature independent of World cavity taps (2026-10-15)
+
+- QPainter now preserves its Screen-curvature response when every World-cavity
+  tap is outside the viewport or has no usable depth sample. This matches
+  Blender's resolve, which computes curvature independently and multiplies it
+  with the World-cavity factor. The change affects Screen and Both cavity
+  modes; matched edge-pixel comparison remains open.

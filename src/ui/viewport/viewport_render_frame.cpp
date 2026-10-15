@@ -133,6 +133,9 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());
         entry.showInFront = sceneObject.showInFront;
+        entry.showWire = sceneObject.showWire;
+        entry.showAllEdges = sceneObject.showAllEdges;
+        entry.wireDisplay = sceneObject.wireDisplay;
         entry.reverseSurfaceOrientation =
             sceneObject.geometry.geometryType == GeometryType::NurbsSurface &&
             !sceneObject.blenderSourceVersion.isEmpty();

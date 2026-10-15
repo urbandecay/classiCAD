@@ -458,6 +458,9 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
         serializedObject.insert(QStringLiteral("hideSelect"), sceneObject.hideSelect);
         serializedObject.insert(QStringLiteral("showInFront"), sceneObject.showInFront);
+        serializedObject.insert(QStringLiteral("showWire"), sceneObject.showWire);
+        serializedObject.insert(QStringLiteral("showAllEdges"), sceneObject.showAllEdges);
+        serializedObject.insert(QStringLiteral("wireDisplay"), sceneObject.wireDisplay);
         serializedObject.insert(QStringLiteral("viewLayerHidden"), sceneObject.viewLayerHidden);
         serializedObject.insert(QStringLiteral("defaultViewLayerKey"), sceneObject.defaultViewLayerKey);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
@@ -1316,6 +1319,9 @@ bool documentFromJson(const QJsonValue &value,
             }
             sceneObject.showInFront = serializedObject.value(QStringLiteral("showInFront")).toBool();
         }
+        sceneObject.showWire = serializedObject.value(QStringLiteral("showWire")).toBool(false);
+        sceneObject.showAllEdges = serializedObject.value(QStringLiteral("showAllEdges")).toBool(false);
+        sceneObject.wireDisplay = serializedObject.value(QStringLiteral("wireDisplay")).toBool(false);
         sceneObject.viewLayerHidden = viewLayerHidden;
         sceneObject.defaultViewLayerKey = defaultViewLayerKey;
         if (version >= 7) {

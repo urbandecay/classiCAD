@@ -7344,6 +7344,26 @@ public:
         readBoolean(QStringLiteral("show_backface_culling"), &settings.backfaceCulling);
         readBoolean(QStringLiteral("show_xray"), &settings.xray);
         readBoolean(QStringLiteral("show_xray_wireframe"), &settings.xrayWireframe);
+        readBoolean(QStringLiteral("show_wireframes"), &settings.solidWireframes);
+        readNumber(QStringLiteral("wireframe_opacity"), 0.0, 1.0,
+                   &settings.wireframeOpacity);
+        readNumber(QStringLiteral("wireframe_threshold"), 0.0, 1.0,
+                   &settings.wireframeThreshold);
+        if (settings.wireframeThreshold < 1.0) {
+            unsupported.append(QStringLiteral(
+                "wireframe_threshold (edge filtering is not implemented)"));
+        }
+        const QString wireColorType =
+            source.value(QStringLiteral("wireframe_color_type")).toString();
+        if (wireColorType == QLatin1String("THEME"))
+            settings.wireColorMode = ViewportWireColorMode::Theme;
+        else if (wireColorType == QLatin1String("OBJECT"))
+            settings.wireColorMode = ViewportWireColorMode::Object;
+        else if (wireColorType == QLatin1String("RANDOM"))
+            settings.wireColorMode = ViewportWireColorMode::Random;
+        else
+            unsupported.append(QStringLiteral("wireframe_color_type (%1)")
+                                   .arg(wireColorType));
         readNumber(QStringLiteral("xray_alpha"), 0.0, 1.0, &settings.xrayAlpha);
         readBoolean(QStringLiteral("use_dof"), &settings.depthOfField);
         readNumber(QStringLiteral("shadow_shift"), 0.0, 1.0, &settings.shadowOffset);
@@ -9964,6 +9984,77 @@ protected:
             }
             ViewportSceneStroke sceneStroke;
             ViewportSceneStroke controlGuide;
+            const bool drawMeshWireOverlay =
+                viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                geometryType == GeometryType::PolygonMesh &&
+                (viewportShadingSettings_.solidWireframes ||
+                 renderObject.showWire || renderObject.wireDisplay);
+            if (drawMeshWireOverlay) {
+                const PolygonMesh3D &mesh = visibleShape.polygonMesh;
+                auto wireGeometry = QSharedPointer<ViewportDepthGeometry>::create();
+                QSet<quint64> seenEdges;
+                const auto transformedVertex = [&renderObject, &mesh](int index) {
+                    const Point3D &local = mesh.vertices[index];
+                    const auto &m = renderObject.meshObjectTransform;
+                    const qreal w = m[12] * local.x + m[13] * local.y +
+                                    m[14] * local.z + m[15];
+                    const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+                    return Point3D{
+                        (m[0] * local.x + m[1] * local.y + m[2] * local.z + m[3]) /
+                            divisor,
+                        (m[4] * local.x + m[5] * local.y + m[6] * local.z + m[7]) /
+                            divisor,
+                        (m[8] * local.x + m[9] * local.y + m[10] * local.z + m[11]) /
+                            divisor};
+                };
+                for (const QVector<int> &face : mesh.faces) {
+                    for (int corner = 0; corner < face.size(); ++corner) {
+                        const int first = face[corner];
+                        const int second = face[(corner + 1) % face.size()];
+                        if (first < 0 || second < 0 || first >= mesh.vertices.size() ||
+                            second >= mesh.vertices.size() || first == second) {
+                            continue;
+                        }
+                        const quint32 low = static_cast<quint32>(std::min(first, second));
+                        const quint32 high = static_cast<quint32>(std::max(first, second));
+                        const quint64 key = (quint64(low) << 32) | high;
+                        if (seenEdges.contains(key)) continue;
+                        seenEdges.insert(key);
+                        const Point3D a = transformedVertex(first);
+                        const Point3D b = transformedVertex(second);
+                        wireGeometry->preciseLineVertices << a << b;
+                        wireGeometry->lineVertices
+                            << QVector3D(float(a.x), float(a.y), float(a.z))
+                            << QVector3D(float(b.x), float(b.y), float(b.z));
+                    }
+                }
+                if (!wireGeometry->lineVertices.isEmpty()) {
+                    QColor wireColor = viewportShadingSettings_.themeWireColor;
+                    if (viewportShadingSettings_.wireColorMode ==
+                        ViewportWireColorMode::Object) {
+                        const QVector3D linear =
+                            renderObject.displayColorSceneLinear.toVector3D() * 0.5f;
+                        const QVector3D srgb = workbenchSceneLinearToSrgb(linear);
+                        wireColor = QColor::fromRgbF(srgb.x(), srgb.y(), srgb.z());
+                    } else if (viewportShadingSettings_.wireColorMode ==
+                               ViewportWireColorMode::Random) {
+                        wireColor = workbenchRandomColor(
+                            renderObject.objectId, renderObject.displayName,
+                            workbenchRandomIdentityLibraryPath(renderObject));
+                    }
+                    wireColor.setAlphaF(std::clamp(
+                        viewportShadingSettings_.wireframeOpacity, 0.0, 1.0));
+                    ViewportSceneStroke wireStroke;
+                    wireStroke.color = wireColor;
+                    wireStroke.width = 1.0f;
+                    wireStroke.writeDepth = true;
+                    wireStroke.objectId = renderObject.objectId;
+                    wireStroke.geometryRevision = renderObject.geometryRevision;
+                    wireStroke.preparedDepthGeometry = std::move(wireGeometry);
+                    wireStroke.worldOffset = renderObject.preparedGeometryOffset;
+                    gpuStrokes.append(std::move(wireStroke));
+                }
+            }
             const bool drawSolidEditBoundaries =
                 viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 geometryType == GeometryType::NurbsSolid;

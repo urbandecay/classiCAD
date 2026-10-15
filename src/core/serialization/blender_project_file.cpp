@@ -920,6 +920,9 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.blenderSourceVersion = blenderVersion;
     result.blenderMeshImportMode = importMode;
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
+    result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
+    result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     const QJsonArray sourceCollectionIds = item.value(QStringLiteral("collection_ids")).toArray();
     for (const QJsonValue &collectionValue : sourceCollectionIds) {
         const QString sourceId = collectionValue.toString();
@@ -1343,6 +1346,9 @@ bool parseBlenderPolyCurveItem(
     result.workbenchRandomLibraryPath =
         item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
+    result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
+    result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1583,6 +1589,9 @@ bool parseBlenderSurfaceItem(
     result.workbenchRandomLibraryPath =
         item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
+    result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
+    result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1745,6 +1754,9 @@ bool parseBlenderScalarVolumeItem(
     result.workbenchRandomLibraryPath =
         item.value(QStringLiteral("workbench_random_library_path")).toString();
     result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    result.showWire = item.value(QStringLiteral("show_wire")).toBool(false);
+    result.showAllEdges = item.value(QStringLiteral("show_all_edges")).toBool(false);
+    result.wireDisplay = item.value(QStringLiteral("wire_display")).toBool(false);
     result.hideViewport = item.value(QStringLiteral("hide_viewport")).toBool(false);
     result.hideRender = item.value(QStringLiteral("hide_render")).toBool(false);
     result.hideSelect = item.value(QStringLiteral("hide_select")).toBool(false);

@@ -605,6 +605,9 @@ def object_metadata(obj, scene):
         "collection_ids": sorted(stable_id(collection) for collection in obj.users_collection),
         "visibility": visibility_metadata(obj),
         "showInFront": bool(obj.show_in_front),
+        "show_wire": bool(getattr(obj, "show_wire", False)),
+        "show_all_edges": bool(getattr(obj, "show_all_edges", False)),
+        "wire_display": str(getattr(obj, "display_type", "")) == "WIRE",
         "display_color_linear": vector_values(obj.color),
         "classiCAD_geometry_type": obj.get("classiCAD_geometry_type", ""),
         "classiCAD_proxy_geometry": obj.get("classiCAD_proxy_geometry", ""),
@@ -757,8 +760,17 @@ def saved_viewport_shading_record(scene):
         areas = sorted(screen.areas, key=lambda area: (-area.y, area.x))
         for area in areas:
             if area.type == "VIEW_3D":
-                return workbench_shading_record(
-                    scene, area.spaces.active.shading)
+                space = area.spaces.active
+                record = workbench_shading_record(scene, space.shading)
+                overlay = space.overlay
+                record["show_wireframes"] = bool(overlay.show_wireframes)
+                record["wireframe_color_type"] = str(
+                    overlay.wireframe_color_type)
+                record["wireframe_opacity"] = finite_number(
+                    overlay.wireframe_opacity)
+                record["wireframe_threshold"] = finite_number(
+                    overlay.wireframe_threshold)
+                return record
     return None
 
 

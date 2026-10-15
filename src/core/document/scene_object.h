@@ -118,6 +118,10 @@ struct SceneObject {
     bool hideSelect = false;
     // Blender Object.show_in_front: draw this object through other geometry.
     bool showInFront = false;
+    // Blender object-level Solid wire overlays.
+    bool showWire = false;
+    bool showAllEdges = false;
+    bool wireDisplay = false;
     QJsonObject viewLayerHidden;
     QString defaultViewLayerKey;
     // Blender ID identity used by Workbench Random color. Imported linked

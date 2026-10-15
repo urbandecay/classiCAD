@@ -70,6 +70,9 @@ struct ViewportShadingSettings {
     bool xray = false;
     bool xrayWireframe = true;
     ViewportWireColorMode wireColorMode = ViewportWireColorMode::Theme;
+    bool solidWireframes = false;
+    qreal wireframeOpacity = 1.0;
+    qreal wireframeThreshold = 1.0;
     ViewportColorMode colorMode = ViewportColorMode::Material;
     ViewportBackgroundMode backgroundMode = ViewportBackgroundMode::Theme;
     ViewportCavityType cavityType = ViewportCavityType::Screen;

@@ -7546,3 +7546,19 @@ resolve remain open.
   pinned Overlay wire pass depth-tests against the scene in
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L60-L74).
   The C++ build passed; no matched Blender image comparison has been run.
+
+### Blender mesh wire-over-solid import (2026-10-15)
+
+- Blender scene extraction now saves the active 3D View's
+  `show_wireframes`, `wireframe_color_type`, `wireframe_opacity`, and
+  `wireframe_threshold` values. Imported objects also retain `show_wire`,
+  `show_all_edges`, and whether `display_type` is `WIRE`; native classiCAD
+  documents preserve those object flags. The viewport draws deduplicated
+  polygon-loop edges over Solid mesh fills when the saved global overlay or
+  an object's wire flag enables them. Theme, Object (half-brightness), and
+  Blender Random colors are supported, and strokes depth-test through the
+  existing GPU and QPainter prepared-stroke paths.
+- This is a partial port: the imported threshold does not yet filter edges,
+  and `display_type == WIRE` enables the overlay but does not hide the fill.
+  Loose mesh edges remain represented by their existing companion curves.
+  The C++ build passed; matched Blender image comparison remains open.

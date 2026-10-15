@@ -7898,3 +7898,21 @@ resolve remain open.
 - Non-image Blender Empty display icons are reported as viewport overlays with
   no matching classiCAD scene-object representation. Still Image Empties retain
   their existing Picture import path.
+
+### Blender mesh extraction payload bounds (2026-10-15)
+
+- Mesh extraction now estimates the expanded vertex, loop, polygon, and edge
+  payload before building its JSON arrays. The estimate also accounts for UV
+  layers, mesh attributes, and material slots. A mesh is capped at 32 MiB
+  estimated payload; direct meshes, generated curve/font/metaball meshes, and
+  repeated collection instances share a 128 MiB per-scene budget. Oversized
+  items are skipped with an unsupported-item reason and a scene-level summary.
+- The extractor rejects JSON handoffs over 256 MiB, and the C++ importer checks
+  the file size before reading it into memory. These bounds are transport
+  safeguards; they do not change Blender geometry or the supported mesh
+  representation. Evaluated modifiers must still produce a Blender mesh
+  before its final size can be checked, so these limits bound Python payload
+  construction and classiCAD JSON parsing, not Blender's internal evaluation
+  allocation. The byte estimate is approximate, and the final JSON cap is
+  checked after writing the temporary file. C++ build passed; Blender fixture
+  loading was not run.

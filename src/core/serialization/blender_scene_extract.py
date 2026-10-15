@@ -55,6 +55,12 @@ MAX_GREASE_PENCIL_STROKES_PER_SCENE = 10000
 MAX_GREASE_PENCIL_POINTS_PER_SCENE = 100000
 MAX_HAIR_CURVES_PER_SCENE = 10000
 MAX_HAIR_CURVE_POINTS_PER_SCENE = 100000
+# Mesh JSON expands into several parallel per-vertex/per-corner arrays. Bound
+# both a single source mesh and all emitted copies in one scene, including
+# collection instances and generated curve/font/metaball meshes.
+MAX_MESH_OBJECT_ESTIMATED_BYTES = 32 * 1024 * 1024
+MAX_MESH_SCENE_ESTIMATED_BYTES = 128 * 1024 * 1024
+MAX_EXTRACTION_JSON_BYTES = 256 * 1024 * 1024
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -922,8 +928,42 @@ def object_hidden_in_layer(obj, view_layer):
         return bool(obj.hide_get())
 
 
+def mesh_payload_estimate(mesh, material_slot_count=0):
+    vertex_count = len(mesh.vertices)
+    polygon_count = len(mesh.polygons)
+    loop_count = len(mesh.loops)
+    edge_count = len(mesh.edges)
+    uv_layer_count = len(mesh.uv_layers)
+    attribute_value_count = sum(len(attribute.data)
+                                for attribute in mesh.attributes)
+    estimated_bytes = (
+        vertex_count * 64 + loop_count * 192 + polygon_count * 80 +
+        edge_count * 24 + loop_count * uv_layer_count * 64 +
+        attribute_value_count * 128 + material_slot_count * 1024)
+    return vertex_count, polygon_count, loop_count, edge_count, estimated_bytes
+
+
+def check_mesh_payload(mesh, budget, item_id, reserve=False,
+                       material_slot_count=0):
+    counts = mesh_payload_estimate(mesh, material_slot_count)
+    estimated_bytes = counts[4]
+    if (estimated_bytes > MAX_MESH_OBJECT_ESTIMATED_BYTES or
+            (reserve and budget["estimated_bytes"] + estimated_bytes >
+             MAX_MESH_SCENE_ESTIMATED_BYTES)):
+        budget["limit_exceeded"] = True
+        raise ValueError(
+            "mesh payload limit exceeded (estimated %d bytes for this mesh; "
+            "%d of %d scene bytes already reserved)" %
+            (estimated_bytes, budget["estimated_bytes"],
+             MAX_MESH_SCENE_ESTIMATED_BYTES))
+    if reserve:
+        budget["estimated_bytes"] += estimated_bytes
+    return counts
+
+
 def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
-                        transform_override=None, evaluated_object_override=None):
+                        transform_override=None, evaluated_object_override=None,
+                        mesh_payload_budget=None):
     item_id = stable_id(obj)
     item = object_metadata(obj, scene,
                            depsgraph if mode == "evaluated" else None)
@@ -936,6 +976,12 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
         add_unsupported(unsupported, item_id, "linked_library",
                         "linked Blender library file is missing: " + item["library_path"])
     source_mesh = getattr(obj, "data", None)
+    if (obj.type == "MESH" and source_mesh is not None and
+            mesh_payload_budget is not None):
+        # Reject oversized source geometry before requesting an evaluated
+        # mesh, which may otherwise allocate substantially more data.
+        check_mesh_payload(source_mesh, mesh_payload_budget, item_id,
+                           material_slot_count=len(obj.material_slots))
     if (getattr(source_mesh, "shape_keys", None) is not None and
             len(source_mesh.shape_keys.key_blocks) > 1):
         if mode == "evaluated":
@@ -961,6 +1007,11 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
                 if mode == "evaluated" else obj.data)
         if mesh is None:
             raise ValueError("Blender did not provide mesh data")
+        source_obj = evaluated_obj if evaluated_obj is not None else obj
+        if mesh_payload_budget is not None:
+            check_mesh_payload(
+                mesh, mesh_payload_budget, item_id, reserve=True,
+                material_slot_count=len(source_obj.material_slots))
         item["transform_world"] = matrix_values(transform)
         item["mesh_name"] = mesh.name_full
         item["mesh_library_path"] = source_library_path(mesh)
@@ -1029,7 +1080,6 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported,
             ])
         item["polygon_loop_triangles"] = face_triangles
 
-        source_obj = evaluated_obj if evaluated_obj is not None else obj
         slots = []
         for slot_index, slot in enumerate(source_obj.material_slots):
             material = slot.material
@@ -1669,7 +1719,8 @@ def source_curve_features_after_surface_bake(features):
 
 def extract_curve_surface_mesh(obj, scene, source_item_id, materials,
                                unsupported, depsgraph=None,
-                               transform_override=None):
+                               transform_override=None,
+                               mesh_payload_budget=None):
     """Bake visible curve surfaces as a separate display-mesh item."""
     if not curve_has_surface_output(obj):
         return None
@@ -1680,7 +1731,8 @@ def extract_curve_surface_mesh(obj, scene, source_item_id, materials,
         item = extract_mesh_object(
             obj, scene, "evaluated", evaluated_depsgraph, materials,
             mesh_features, transform_override=transform_override,
-            evaluated_object_override=evaluated_obj)
+            evaluated_object_override=evaluated_obj,
+            mesh_payload_budget=mesh_payload_budget)
     except Exception as error:
         add_unsupported(
             unsupported, source_item_id, "curve_surface_proxy",
@@ -2101,6 +2153,7 @@ def extract_scene(input_path, mode):
         hair_curve_count = 0
         hair_curve_point_count = 0
         hair_curve_limit_exceeded = False
+        mesh_payload_budget = {"estimated_bytes": 0, "limit_exceeded": False}
         for obj in scene.objects:
             object_count += 1
             object_id = stable_id(obj)
@@ -2224,7 +2277,8 @@ def extract_scene(input_path, mode):
                     output["items"].append(item)
                     surface_item = extract_curve_surface_mesh(
                         obj, scene, item["object_id"], output["materials"],
-                        output["unsupported_features"], depsgraph)
+                        output["unsupported_features"], depsgraph,
+                        mesh_payload_budget=mesh_payload_budget)
                     if surface_item is not None:
                         surface_item["view_layer_hidden"] = item[
                             "view_layer_hidden"]
@@ -2275,7 +2329,8 @@ def extract_scene(input_path, mode):
                     evaluated_depsgraph = depsgraph or depsgraph_for_scene(scene)
                     item = extract_mesh_object(
                         obj, scene, "evaluated", evaluated_depsgraph, output["materials"],
-                        output["unsupported_features"])
+                        output["unsupported_features"],
+                        mesh_payload_budget=mesh_payload_budget)
                     item["object_type"] = "MESH"
                     item["source_object_type"] = "FONT"
                     add_unsupported(
@@ -2308,7 +2363,8 @@ def extract_scene(input_path, mode):
                     evaluated_depsgraph = depsgraph or depsgraph_for_scene(scene)
                     item = extract_mesh_object(
                         obj, scene, "evaluated", evaluated_depsgraph, output["materials"],
-                        output["unsupported_features"])
+                        output["unsupported_features"],
+                        mesh_payload_budget=mesh_payload_budget)
                     item["object_type"] = "MESH"
                     item["source_object_type"] = "META"
                     add_unsupported(
@@ -2366,7 +2422,8 @@ def extract_scene(input_path, mode):
             try:
                 item = extract_mesh_object(obj, scene, mode, depsgraph,
                                            output["materials"],
-                                           output["unsupported_features"])
+                                           output["unsupported_features"],
+                                           mesh_payload_budget=mesh_payload_budget)
                 item["view_layer_hidden"] = {
                     view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
                     for view_layer in scene.view_layers
@@ -2566,7 +2623,8 @@ def extract_scene(input_path, mode):
                             source_obj, scene, "evaluated", instance_depsgraph,
                             output["materials"], item_features,
                             transform_override=instance_transform,
-                            evaluated_object_override=evaluated_object)
+                            evaluated_object_override=evaluated_object,
+                            mesh_payload_budget=mesh_payload_budget)
                         item["object_type"] = "MESH"
                         item["source_object_type"] = source_obj.type
                         assign_instance_metadata(
@@ -2646,6 +2704,7 @@ def extract_scene(input_path, mode):
                             evaluated_object_override=(
                                 source_obj.evaluated_get(instance_depsgraph)
                                 if mode == "evaluated" else None),
+                            mesh_payload_budget=mesh_payload_budget,
                         )
                         assign_instance_metadata(
                             item, instance_id, source_obj, parent_source,
@@ -2674,7 +2733,8 @@ def extract_scene(input_path, mode):
                         surface_item = extract_curve_surface_mesh(
                             source_obj, scene, instance_id, output["materials"],
                             output["unsupported_features"], instance_depsgraph,
-                            transform_override=instance_transform)
+                            transform_override=instance_transform,
+                            mesh_payload_budget=mesh_payload_budget)
                         if surface_item is not None:
                             assign_instance_metadata(
                                 surface_item, instance_id, source_obj,
@@ -2767,6 +2827,14 @@ def extract_scene(input_path, mode):
                 (MAX_HAIR_CURVES_PER_SCENE,
                  MAX_HAIR_CURVE_POINTS_PER_SCENE),
             )
+        if mesh_payload_budget["limit_exceeded"]:
+            add_unsupported(
+                output["unsupported_features"], stable_id(scene),
+                "mesh_payload_scene_limit",
+                "mesh extraction exceeded the per-object limit of %d estimated bytes or the per-scene limit of %d estimated bytes; remaining oversized meshes and instances were skipped" %
+                (MAX_MESH_OBJECT_ESTIMATED_BYTES,
+                 MAX_MESH_SCENE_ESTIMATED_BYTES),
+            )
         output["scenes"].append(scene_record)
     output["summary"] = {
         "scene_count": len(output["scenes"]),
@@ -2792,6 +2860,10 @@ def write_json_atomic(path, document):
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(document, stream, ensure_ascii=False, allow_nan=False,
                       separators=(",", ":"))
+        if os.path.getsize(temporary_path) > MAX_EXTRACTION_JSON_BYTES:
+            raise ValueError(
+                "Blender scene extraction exceeded the %d byte JSON transport limit" %
+                MAX_EXTRACTION_JSON_BYTES)
         os.replace(temporary_path, output_path)
     except Exception:
         try:

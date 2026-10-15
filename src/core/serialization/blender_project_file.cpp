@@ -41,6 +41,7 @@ namespace {
 constexpr auto kPinnedBlenderVersion = "5.2.2";
 constexpr qint64 kBlenderTimeoutMilliseconds = 180000;
 constexpr qint64 kCopyChunkSize = 1024 * 1024;
+constexpr qint64 kBlenderExtractionJsonByteLimit = 256LL * 1024 * 1024;
 constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
 
 bool isFiniteColorLutPayload(const QByteArray &bytes, int size)
@@ -2405,6 +2406,12 @@ bool importBlenderScene(const QString &path,
     if (!extractedFile.open(QIODevice::ReadOnly)) {
         setError(errorMessage,
                  QStringLiteral("Blender did not return extracted scene data"));
+        return false;
+    }
+    if (extractedFile.size() < 0 ||
+        extractedFile.size() > kBlenderExtractionJsonByteLimit) {
+        setError(errorMessage,
+                 QStringLiteral("Blender scene extraction exceeded the 256 MiB JSON transport limit"));
         return false;
     }
     QJsonParseError parseError;

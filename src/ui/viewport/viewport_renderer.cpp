@@ -174,54 +174,113 @@ QImage pictureMipForPainter(const QImage &source, qreal lod)
 {
     if (source.format() != QImage::Format_RGBA32FPx4 ||
         (source.width() <= 1 && source.height() <= 1) ||
-        !std::isfinite(lod) || lod < 0.5) {
+        !std::isfinite(lod) || lod <= 0.0) {
         return source;
     }
-    int targetLevel = std::clamp(qRound(lod), 0, 15);
-    if (targetLevel == 0) return source;
-    QImage level = source;
-    for (int currentLevel = 0; currentLevel < targetLevel; ++currentLevel) {
-        const QSize nextSize(std::max(level.width() / 2, 1),
-                             std::max(level.height() / 2, 1));
-        if (nextSize == level.size()) break;
-        QImage next(nextSize, QImage::Format_RGBA32FPx4);
-        if (next.isNull()) return level;
-        for (int y = 0; y < next.height(); ++y) {
-            auto *destination = reinterpret_cast<float *>(next.scanLine(y));
-            const int y0 = y * level.height() / next.height();
-            const int y1 = std::max(y0 + 1,
-                (y + 1) * level.height() / next.height());
-            for (int x = 0; x < next.width(); ++x) {
-                const int x0 = x * level.width() / next.width();
-                const int x1 = std::max(x0 + 1,
-                    (x + 1) * level.width() / next.width());
-                double alphaSum = 0.0;
-                std::array<double, 3> rgbPremultiplied{};
-                int count = 0;
-                for (int sourceY = y0; sourceY < y1; ++sourceY) {
-                    const auto *row = reinterpret_cast<const float *>(
-                        level.constScanLine(std::min(sourceY, level.height() - 1)));
-                    for (int sourceX = x0; sourceX < x1; ++sourceX) {
-                        const float *pixel = row +
-                            std::min(sourceX, level.width() - 1) * 4;
-                        const double alpha = pixel[3];
-                        alphaSum += alpha;
-                        for (int channel = 0; channel < 3; ++channel)
-                            rgbPremultiplied[channel] += pixel[channel] * alpha;
-                        ++count;
+    const qreal boundedLod = std::clamp(lod, 0.0, 15.0);
+    const int lowerLevel = qFloor(boundedLod);
+    const int upperLevel = lowerLevel + 1;
+    const auto buildLevel = [&](int targetLevel) {
+        QImage level = source;
+        for (int currentLevel = 0; currentLevel < targetLevel; ++currentLevel) {
+            const QSize nextSize(std::max(level.width() / 2, 1),
+                                 std::max(level.height() / 2, 1));
+            if (nextSize == level.size()) break;
+            QImage next(nextSize, QImage::Format_RGBA32FPx4);
+            if (next.isNull()) return level;
+            for (int y = 0; y < next.height(); ++y) {
+                auto *destination = reinterpret_cast<float *>(next.scanLine(y));
+                const int y0 = y * level.height() / next.height();
+                const int y1 = std::max(y0 + 1,
+                    (y + 1) * level.height() / next.height());
+                for (int x = 0; x < next.width(); ++x) {
+                    const int x0 = x * level.width() / next.width();
+                    const int x1 = std::max(x0 + 1,
+                        (x + 1) * level.width() / next.width());
+                    double alphaSum = 0.0;
+                    std::array<double, 3> rgbPremultiplied{};
+                    int count = 0;
+                    for (int sourceY = y0; sourceY < y1; ++sourceY) {
+                        const auto *row = reinterpret_cast<const float *>(
+                            level.constScanLine(std::min(sourceY, level.height() - 1)));
+                        for (int sourceX = x0; sourceX < x1; ++sourceX) {
+                            const float *pixel = row +
+                                std::min(sourceX, level.width() - 1) * 4;
+                            const double alpha = pixel[3];
+                            alphaSum += alpha;
+                            for (int channel = 0; channel < 3; ++channel)
+                                rgbPremultiplied[channel] += pixel[channel] * alpha;
+                            ++count;
+                        }
                     }
+                    float *pixel = destination + x * 4;
+                    for (int channel = 0; channel < 3; ++channel) {
+                        pixel[channel] = alphaSum > 0.0
+                            ? float(rgbPremultiplied[channel] / alphaSum) : 0.0f;
+                    }
+                    pixel[3] = float(alphaSum / std::max(count, 1));
                 }
-                float *pixel = destination + x * 4;
-                for (int channel = 0; channel < 3; ++channel) {
-                    pixel[channel] = alphaSum > 0.0
-                        ? float(rgbPremultiplied[channel] / alphaSum) : 0.0f;
-                }
-                pixel[3] = float(alphaSum / std::max(count, 1));
+            }
+            level = std::move(next);
+        }
+        return level;
+    };
+
+    QImage lower = buildLevel(lowerLevel);
+    if (upperLevel > 15 ||
+        boundedLod - lowerLevel <= 1.0e-6) {
+        return lower;
+    }
+    QImage upper = buildLevel(upperLevel);
+    if (upper.isNull() || upper.size() == lower.size()) return lower;
+    QImage blended(lower.size(), QImage::Format_RGBA32FPx4);
+    if (blended.isNull()) return lower;
+    const float upperWeight = float(boundedLod - lowerLevel);
+    const float lowerWeight = 1.0f - upperWeight;
+    for (int y = 0; y < blended.height(); ++y) {
+        auto *destination = reinterpret_cast<float *>(blended.scanLine(y));
+        const qreal sourceY = std::clamp(
+            (qreal(y) + 0.5) * upper.height() / blended.height() - 0.5,
+            0.0, qreal(upper.height() - 1));
+        const int y0 = qFloor(sourceY);
+        const int y1 = std::min(y0 + 1, upper.height() - 1);
+        const float fy = float(sourceY - y0);
+        for (int x = 0; x < blended.width(); ++x) {
+            const qreal sourceX = std::clamp(
+                (qreal(x) + 0.5) * upper.width() / blended.width() - 0.5,
+                0.0, qreal(upper.width() - 1));
+            const int x0 = qFloor(sourceX);
+            const int x1 = std::min(x0 + 1, upper.width() - 1);
+            const float fx = float(sourceX - x0);
+            const auto sample = [&](int sx, int sy, int channel) {
+                const auto *row = reinterpret_cast<const float *>(
+                    upper.constScanLine(sy));
+                return row[sx * 4 + channel];
+            };
+            float upperPixel[4]{};
+            for (int channel = 0; channel < 4; ++channel) {
+                const float top = sample(x0, y0, channel) * (1.0f - fx) +
+                                  sample(x1, y0, channel) * fx;
+                const float bottom = sample(x0, y1, channel) * (1.0f - fx) +
+                                     sample(x1, y1, channel) * fx;
+                upperPixel[channel] = top * (1.0f - fy) + bottom * fy;
+            }
+            const auto *lowerRow = reinterpret_cast<const float *>(
+                lower.constScanLine(y));
+            const float *lowerPixel = lowerRow + x * 4;
+            float *pixel = destination + x * 4;
+            pixel[3] = lowerPixel[3] * lowerWeight +
+                       upperPixel[3] * upperWeight;
+            for (int channel = 0; channel < 3; ++channel) {
+                const float premultiplied =
+                    lowerPixel[channel] * lowerPixel[3] * lowerWeight +
+                    upperPixel[channel] * upperPixel[3] * upperWeight;
+                pixel[channel] = pixel[3] > 1.0e-8f
+                    ? premultiplied / pixel[3] : 0.0f;
             }
         }
-        level = std::move(next);
     }
-    return level;
+    return blended;
 }
 
 qreal workbenchViewDepth(const ViewportTransform &transform,

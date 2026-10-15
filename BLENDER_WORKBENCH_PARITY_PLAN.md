@@ -8171,10 +8171,11 @@ resolve remain open.
   [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L2917-L2928).
   For source images and viewports within the 16-million-pixel CPU budget, the
   QPainter path now builds scene-linear mip levels with premultiplied-alpha
-  filtering and chooses the nearest integer level from the projected quad's
-  screen footprint before Qt's final smooth transform. Blender uses implicit
-  per-fragment LOD and trilinear mip blending, while QPainter uses one bounded
-  level for the whole quad; strong perspective minification can still differ.
+  filtering and blends the two adjacent levels by the fractional part of the
+  projected quad's screen footprint before Qt's final smooth transform.
+  Blender uses implicit per-fragment LOD and trilinear mip blending, while
+  QPainter uses one bounded LOD for the whole quad; strong perspective
+  minification can still differ.
   Oversized inputs retain the existing fallback. No matched image comparison
   has been run.
 
@@ -8618,3 +8619,12 @@ resolve remain open.
   alpha fragments. The QPainter shadow caster therefore remains geometric to
   match Blender. See [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L348-L389)
   and [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L59).
+
+### QPainter Image Empty fractional mip blend (2026-10-15)
+
+- QPainter now blends the two adjacent scene-linear mip levels according to
+  the fractional quad-wide LOD, with alpha-aware premultiplied interpolation.
+  This removes whole-level jumps at fractional minification while retaining
+  the bounded whole-image footprint estimate. Blender still selects LOD per
+  fragment, so perspective-skewed quads can differ. C++ build and matched
+  image comparison remain open.

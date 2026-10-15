@@ -8294,7 +8294,10 @@ resolve remain open.
   in world space before screen projection. The closing rectangle/polygon cage
   edge also uses the retained scene-depth test used by the other cage edges;
   when QPainter has no retained depth, the documented unoccluded fallback
-  still applies. Blender's curve overlay binds the
+  still applies. The NURBS surface wireframe's direct-painter fallback and
+  legacy QPainter line, rectangle, Bezier, and NURBS fallback strokes now trim
+  crossing segments too; Bezier fallback strokes are sampled before clipping.
+  Blender's curve overlay binds the
   clipping planes in its edit-curve line and handle passes, and its screen
   projection helper clips line segments crossing near/far planes; see pinned
   [`overlay_curve.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_curve.hh#L850-L899)

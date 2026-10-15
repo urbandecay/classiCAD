@@ -1678,6 +1678,26 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     painter.setPen(layerPen);
     painter.setBrush(Qt::NoBrush);
+    const WorkPlaneFrame displayFrame = transform_.workPlaneFrame();
+    const auto drawClippedWorkPlaneSegment = [&](const QPointF &start,
+                                                  const QPointF &end) {
+        Point3D clippedStart = workPlaneFramePointToWorld(start, 0.0,
+                                                          displayFrame);
+        Point3D clippedEnd = workPlaneFramePointToWorld(end, 0.0,
+                                                        displayFrame);
+        if (!clipWorkbenchSegmentToViewDepth(transform_, viewportSize,
+                                             &clippedStart, &clippedEnd)) {
+            return;
+        }
+        QPointF screenStart;
+        QPointF screenEnd;
+        if (transform_.worldPointToScreenUnclipped(clippedStart, viewportSize,
+                                                   &screenStart) &&
+            transform_.worldPointToScreenUnclipped(clippedEnd, viewportSize,
+                                                   &screenEnd)) {
+            painter.drawLine(screenStart, screenEnd);
+        }
+    };
 
     if (shape.geometryType == GeometryType::PolygonMesh &&
         validatePolygonMesh(shape.polygonMesh)) {
@@ -3398,8 +3418,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
         } else {
             drawWithWireHint(false, [&] {
                 for (int index = 0; index + 1 < shape.points.size(); ++index) {
-                    painter.drawLine(worldToScreen(shape.points[index], viewportSize),
-                                     worldToScreen(shape.points[index + 1], viewportSize));
+                    drawClippedWorkPlaneSegment(shape.points[index],
+                                                shape.points[index + 1]);
                 }
             });
         }
@@ -3411,13 +3431,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
         drawWithWireHint(false, [&] {
             const QVector<QPointF> vertices = rectangleVertices(shape);
             if (vertices.size() >= 4) {
-                QPainterPath rectanglePath;
-                rectanglePath.moveTo(worldToScreen(vertices.first(), viewportSize));
-                for (int index = 1; index < vertices.size(); ++index) {
-                    rectanglePath.lineTo(worldToScreen(vertices[index], viewportSize));
+                for (int index = 0; index < vertices.size(); ++index) {
+                    drawClippedWorkPlaneSegment(
+                        vertices[index], vertices[(index + 1) % vertices.size()]);
                 }
-                rectanglePath.closeSubpath();
-                painter.drawPath(rectanglePath);
             }
         });
     } else if (shape.geometryType == GeometryType::Polygon) {
@@ -3476,26 +3493,33 @@ void ViewportRenderer::drawShape(QPainter &painter,
         const bool hasStoredCurve = isValidNurbsCurve(shape.nurbs);
         if (controlPoints.size() >= 2) {
             const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-            const auto projectControlPoint = [&](int index) {
+            const auto controlPointWorld = [&](int index) {
                 if (!hasStoredCurve ||
                     shape.nurbs.dimension != 3 ||
                     index >= shape.nurbs.normalCoordinates.size()) {
-                    return worldToScreen(controlPoints[index], viewportSize);
+                    return workPlaneFramePointToWorld(
+                        controlPoints[index], 0.0,
+                        transform_.workPlaneFrame());
                 }
-                const Point3D world = workPlaneFramePointToWorld(
+                return workPlaneFramePointToWorld(
                     controlPoints[index],
                     shape.nurbs.normalCoordinates[index], frame);
-                QPointF screen;
-                transform_.worldPointToScreenUnclipped(world,
-                                                       viewportSize,
-                                                       &screen);
-                return screen;
             };
             drawWithWireHint(true, [&] {
                 painter.setPen(QPen(controlColor, 1, Qt::DashLine));
                 for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-                    painter.drawLine(projectControlPoint(index),
-                                     projectControlPoint(index + 1));
+                    Point3D start = controlPointWorld(index);
+                    Point3D end = controlPointWorld(index + 1);
+                    if (!clipWorkbenchSegmentToViewDepth(
+                            transform_, viewportSize, &start, &end)) continue;
+                    QPointF screenStart;
+                    QPointF screenEnd;
+                    if (transform_.worldPointToScreenUnclipped(
+                            start, viewportSize, &screenStart) &&
+                        transform_.worldPointToScreenUnclipped(
+                            end, viewportSize, &screenEnd)) {
+                        painter.drawLine(screenStart, screenEnd);
+                    }
                 }
             });
         }
@@ -3505,18 +3529,25 @@ void ViewportRenderer::drawShape(QPainter &painter,
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else if (shape.geometryType == GeometryType::Bezier && shape.points.size() >= 4) {
             drawWithWireHint(false, [&] {
-                QPainterPath curve;
-                curve.moveTo(worldToScreen(shape.points[0], viewportSize));
-                curve.cubicTo(worldToScreen(shape.points[1], viewportSize),
-                              worldToScreen(shape.points[2], viewportSize),
-                              worldToScreen(shape.points[3], viewportSize));
-                painter.drawPath(curve);
+                constexpr int sampleCount = 96;
+                QPointF previous = shape.points[0];
+                for (int sample = 1; sample <= sampleCount; ++sample) {
+                    const qreal t = static_cast<qreal>(sample) / sampleCount;
+                    const qreal oneMinusT = 1.0 - t;
+                    const QPointF current =
+                        shape.points[0] * (oneMinusT * oneMinusT * oneMinusT) +
+                        shape.points[1] * (3.0 * oneMinusT * oneMinusT * t) +
+                        shape.points[2] * (3.0 * oneMinusT * t * t) +
+                        shape.points[3] * (t * t * t);
+                    drawClippedWorkPlaneSegment(previous, current);
+                    previous = current;
+                }
             });
         } else if (shape.geometryType == GeometryType::Nurbs) {
             drawWithWireHint(false, [&] {
                 for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-                    painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
-                                     worldToScreen(controlPoints[index + 1], viewportSize));
+                    drawClippedWorkPlaneSegment(controlPoints[index],
+                                                controlPoints[index + 1]);
                 }
             });
         }
@@ -3524,8 +3555,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
         drawWithWireHint(true, [&] {
             painter.setPen(QPen(controlColor, 1, Qt::DashLine));
             for (int index = 0; index + 1 < shape.points.size(); ++index) {
-                painter.drawLine(worldToScreen(shape.points[index], viewportSize),
-                                 worldToScreen(shape.points[index + 1], viewportSize));
+                drawClippedWorkPlaneSegment(shape.points[index],
+                                            shape.points[index + 1]);
             }
         });
     }
@@ -5436,17 +5467,23 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
     QVector<Point3D> depthWireVertices;
     const auto appendScreenLine = [&](const Point3D &start,
                                       const Point3D &end) {
+        Point3D clippedStart = start;
+        Point3D clippedEnd = end;
+        if (!clipWorkbenchSegmentToViewDepth(
+                transform_, viewportSize, &clippedStart, &clippedEnd)) {
+            return;
+        }
         QPointF screenStart;
         QPointF screenEnd;
-        if (transform_.worldPointToScreenUnclipped(start,
+        if (transform_.worldPointToScreenUnclipped(clippedStart,
                                                    viewportSize,
                                                    &screenStart) &&
-            transform_.worldPointToScreenUnclipped(end,
+            transform_.worldPointToScreenUnclipped(clippedEnd,
                                                    viewportSize,
                                                    &screenEnd)) {
             screenLines.append(QLineF(screenStart, screenEnd));
-            depthWireVertices.append(start);
-            depthWireVertices.append(end);
+            depthWireVertices.append(clippedStart);
+            depthWireVertices.append(clippedEnd);
         }
     };
 

@@ -9,6 +9,7 @@ uniform vec2 uViewportSize;
 uniform float uWidth;
 uniform float uDepthBias;
 uniform int uEditModeWire;
+uniform int uBlenderMeshWire;
 uniform int uSmoothWire;
 smooth out vec4 gEdgeColor;
 flat out float vLength;
@@ -62,6 +63,32 @@ void main()
         float halfSize = uWidth * 0.5 + (uSmoothWire != 0 ? 0.5 : 0.0);
         vec2 offset = abs(screenDelta.x) > abs(screenDelta.y)
                           ? vec2(0.0, halfSize) : vec2(halfSize, 0.0);
+        for (int endpoint = 0; endpoint < 2; ++endpoint) {
+            for (int side = 0; side < 2; ++side) {
+                float sign = side == 0 ? 1.0 : -1.0;
+                vec4 position = endpoint == 0 ? a : b;
+                vLength = lengthPixels;
+                gPatternOffsetPixels = patternOffset;
+                gStartColor = colorA;
+                gEndColor = colorB;
+                gEdgeColor = endpoint == 0 ? colorA : colorB;
+                vStrokePosition = vec2(float(endpoint) * lengthPixels,
+                                       sign * halfSize);
+                gl_Position = position + vec4(sign * offset * 2.0 /
+                                                uViewportSize * position.w, 0.0, 0.0);
+                gl_Position.z -= uDepthBias * gl_Position.w;
+                EmitVertex();
+            }
+        }
+        EndPrimitive();
+        return;
+    }
+    if (uBlenderMeshWire != 0) {
+        // Workbench mesh wires are covered by perpendicular distance only;
+        // keep their geometry flush with each endpoint instead of building
+        // the tangent extension used to form rounded CAD-curve caps.
+        float halfSize = uWidth * 0.5 + (uSmoothWire != 0 ? 1.0 : 0.0);
+        vec2 offset = normal * halfSize;
         for (int endpoint = 0; endpoint < 2; ++endpoint) {
             for (int side = 0; side < 2; ++side) {
                 float sign = side == 0 ? 1.0 : -1.0;

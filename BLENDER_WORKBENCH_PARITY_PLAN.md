@@ -8566,6 +8566,16 @@ resolve remain open.
   Blender's filtered DOF texture lookup clamps at the edge. Matched edge-bokeh
   images remain open. Blender source: `workbench_effect_dof_blur1_frag.glsl`.
 
+### Blender mesh-wire endpoint coverage (2026-10-15)
+
+- Native GPU Smooth Wires now use perpendicular-distance coverage for
+  imported Blender mesh edges and keep the expanded line quad flush with each
+  endpoint. The prior finite-segment distance created rounded caps; Blender's
+  Overlay resolve filters the stored perpendicular distance and leaves CAD
+  curve end caps on their existing path. This follows `line_coverage()` in
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L703-L727).
+  Matched crossing-wire comparisons remain open.
+
 ### GPU DOF blue-noise channel (2026-10-15)
 
 - The gather angle now reads alpha from the 64×64 blue-noise LUT, matching

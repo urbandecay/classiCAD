@@ -107,18 +107,22 @@ void main()
                                  0.0, 1.0);
             }
         } else {
-            float beyond = max(max(-vStrokePosition.x,
-                                   vStrokePosition.x - vLength), 0.0);
-            float distanceFromStroke =
-                length(vec2(beyond, vStrokePosition.y));
+            float distanceFromStroke = abs(vStrokePosition.y);
+            if (uBlenderMeshWire == 0) {
+                float beyond = max(max(-vStrokePosition.x,
+                                       vStrokePosition.x - vLength), 0.0);
+                distanceFromStroke =
+                    length(vec2(beyond, vStrokePosition.y));
+            }
             if (uSmoothWire != 0) {
-                // Overlay curves retain their rounded end coverage.
+                // Smooth Blender mesh wires use the perpendicular line
+                // distance; CAD curves retain their rounded end coverage.
                 const float inverseSqrtPi = 0.5641895835477563;
                 const float discRadius = inverseSqrtPi * 1.05;
                 const float smoothStart = 0.5 - discRadius;
                 const float smoothEnd = 0.5 + discRadius;
                 float edgeDistance = distanceFromStroke -
-                                     max(uWidth * 0.5 - 0.5, 0.0);
+                    max(uWidth * 0.5 - 0.5, 0.0);
                 coverage = 1.0 -
                            smoothstep(smoothStart, smoothEnd, edgeDistance);
             } else {

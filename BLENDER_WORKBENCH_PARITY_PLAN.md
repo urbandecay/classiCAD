@@ -7864,9 +7864,9 @@ resolve remain open.
 
 - Blender 5.2 Grease Pencil objects now import their visible, multi-point
   strokes from each layer's current frame as classiCAD POLY curves. The
-  object's evaluated transform and each unparented layer's local transform
-  are applied before import; cyclic strokes are closed. Collection instances
-  use their instance transform. Per-scene caps limit extraction to 10,000
+  evaluated object transform and each unparented layer's local transform are
+  applied before import; cyclic strokes are closed. Collection instances use
+  their instance transform. Per-scene caps limit extraction to 10,000
   strokes and 100,000 points. Stroke width, opacity, color, fills, layer
   effects, modifiers, animation, parented layers, and one-point dots remain
   unsupported and are reported. This retains line paths as ordinary curves,
@@ -7877,7 +7877,7 @@ resolve remain open.
 
 - Blender Hair Curves objects and collection instances now import their
   multi-point strand control paths as classiCAD POLY curves. Source point
-  offsets are validated, object or instance transforms are applied, and
+  offsets are validated; evaluated object and instance transforms are applied;
   per-scene limits cap extraction at 10,000 strands and 100,000 points. This
   preserves path locations, but turns curved interpolation into straight
   segments and omits strand radius, profile, color, materials, and evaluated

@@ -8536,3 +8536,12 @@ resolve remain open.
   coverage, and paired internal edges. Meshes without stored Blender
   triangulation still use classiCAD's local tessellator. C++ build passed;
   malformed-input and matched color-image comparisons remain open.
+
+### QPainter Image Empty PREMUL fallback (2026-10-15)
+
+- Image sources without the optional scene-linear float payload now still
+  honor Blender's PREMUL flag. The QPainter path decodes the source color,
+  then divides scene-linear RGB by fractional alpha before the active display
+  transform, unless Qt's source storage format already caused that
+  unpremultiplication. Alpha zero and one keep Blender's bypass behavior.
+  C++ build passed; matched PREMUL Image Empty edge comparison remains open.

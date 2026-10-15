@@ -71,6 +71,24 @@ QImage pictureImageForPainter(const Shape &picture,
         QStringLiteral("Linear"), Qt::CaseInsensitive) ||
         colorSpace.compare(QStringLiteral("Non-Color"),
                            Qt::CaseInsensitive) == 0;
+    bool qImageStorageIsPremultiplied = false;
+    switch (picture.pictureImage.format()) {
+    case QImage::Format_ARGB32_Premultiplied:
+    case QImage::Format_ARGB8565_Premultiplied:
+    case QImage::Format_ARGB6666_Premultiplied:
+    case QImage::Format_ARGB8555_Premultiplied:
+    case QImage::Format_ARGB4444_Premultiplied:
+    case QImage::Format_RGBA8888_Premultiplied:
+    case QImage::Format_A2BGR30_Premultiplied:
+    case QImage::Format_A2RGB30_Premultiplied:
+    case QImage::Format_RGBA64_Premultiplied:
+    case QImage::Format_RGBA16FPx4_Premultiplied:
+    case QImage::Format_RGBA32FPx4_Premultiplied:
+        qImageStorageIsPremultiplied = true;
+        break;
+    default:
+        break;
+    }
     const qint64 pixelCount = qint64(picture.pictureImage.width()) *
                               picture.pictureImage.height();
     if (pixelCount <= 0 || pixelCount > kMaximumPictureProcessPixels)
@@ -106,7 +124,13 @@ QImage pictureImageForPainter(const Shape &picture,
         const int encodedChannel = channel == 0 ? qRed(source)
             : channel == 1 ? qGreen(source) : qBlue(source);
         const float encoded = float(encodedChannel) / 255.0f;
-        return sourceIsLinear ? encoded : decodeSrgb(encoded);
+        float value = sourceIsLinear ? encoded : decodeSrgb(encoded);
+        const float alpha = float(qAlpha(source)) / 255.0f;
+        if (picture.picturePremultipliedAlpha &&
+            !qImageStorageIsPremultiplied && alpha > 0.0f && alpha < 1.0f) {
+            value /= alpha;
+        }
+        return value;
     };
     for (int y = 0; y < result.height(); ++y) {
         auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));

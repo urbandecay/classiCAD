@@ -6976,23 +6976,24 @@ resolve remain open.
 - Added `studio_paint_local_37` to the existing offscreen lighting capture
   matrix: Studio `Paint`, local-space lighting, 37-degree rotation, specular
   enabled, AA Off, and the controlled 640x480 cube camera. The paired Blender
-  5.2.2 fixture uses the same material color `(0.42, 0.42, 0.42)`, roughness
-  `0.25`, metallic `0`, view direction `(4, -6, 4)`, and neutral World color.
-- The Blender and classiCAD GPU scene-linear PFM files are identical across
-  the full frame (zero channel error, foreground IoU 1.0). This verifies the
+  5.2.2 fixture uses the same material color `(0.8, 0.8, 0.8)`, roughness
+  `0.4`, metallic `0`, view direction `(4, -6, 4)`, and neutral World color.
+  An initial reference with different material inputs and a shared capture path
+  was discarded; the final captures use separate renderer/reference folders.
+- All 27 GPU face-interior scene-linear and display probes match exactly.
+  Full-frame scene-linear RGB MAE is `0.000397` per channel, with maximum
+  boundary error `0.453`; the foreground mask IoU is `0.997991` (224 XOR
+  pixels). Full-frame display RGB MAE on common foreground is `0.022/255`
+  (p95 `0/255`, maximum `20/255` at boundary pixels). This validates the
   deferred Studio lighting result for this additional local-space rotation.
-  The classiCAD QPainter scene-linear probe MAE is `0.0003687` with maximum
-  `0.0007267`, while its full-frame fallback residual remains larger.
-- Display output is not accepted for this pair: classiCAD GPU common-foreground
-  RGB MAE is `31.51/255` (p95 `34/255`) and mask IoU is `0.997991` (224 XOR
-  pixels). Since the GPU scene-linear frames match bit-for-bit, this mismatch
-  occurs after the deferred Studio lighting output; the render/display capture
-  difference needs a separate investigation. This result does not close
-  general Studio display parity or QPainter parity.
+- QPainter matches the 27 display probes exactly; scene-linear probe MAE is
+  `0.0003687` with maximum `0.0007267`. Its full-frame mask IoU is `0.994440`
+  (622 XOR pixels), and full-frame scene-linear MAE is about `0.049` per
+  channel. This remains one preset, rotation, and camera and does not close
+  general Studio display parity or QPainter edge parity.
 - Validation: `cmake --build build -j4` passed with the dependency audit
   (320 source files); the offscreen `classicad_viewport_render_contracts_test`
   passed with `CLASSICAD_VIEWPORT_LIGHTING_CAPTURE_DIR` set; Blender reported
-  5.2.2 LTS; and `workbench_pfm_compare.py` confirmed exact full-frame GPU
-  scene-linear output. `workbench_display_probe_compare.py` and
-  `workbench_image_compare.py` measured the display residual above. No GUI was
-  launched.
+  5.2.2 LTS; and `workbench_display_probe_compare.py`,
+  `workbench_image_compare.py`, and `workbench_pfm_compare.py` completed on the
+  separated matching captures. No GUI was launched.

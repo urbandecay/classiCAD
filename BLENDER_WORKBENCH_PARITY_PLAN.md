@@ -7573,7 +7573,12 @@ resolve remain open.
   remain visible, while `show_all_edges` bypasses the threshold. Blender's
   selected mesh and NURBS surface wire overlays now use classiCAD's selection
   color. Blender's active/inactive theme shades, optimal-subdivision edge flags,
-  and view-facing wire color gradient are not represented. Loose mesh
+  active/inactive theme shades and optimal-subdivision edge flags are not
+  represented. Object and Random wire colors now use Blender's view-facing
+  normal gradient, with averaged imported loop normals at shared vertices and
+  the shader's 0.35 front-color mix. Theme wires and selected overlays remain
+  flat because their distinct Blender theme rim/background shades are not
+  imported; no matched Blender wire capture has been run. Loose mesh
   edges remain represented by their existing companion curves. NURBS surfaces now hide
   their fill for Blender's WIRE display and reuse the cached surface-wire
   tessellation for global, per-object, and WIRE display overlays. Blender's

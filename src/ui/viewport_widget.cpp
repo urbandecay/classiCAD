@@ -10010,7 +10010,10 @@ protected:
             if (drawMeshWireOverlay) {
                 const PolygonMesh3D &mesh = visibleShape.polygonMesh;
                 auto wireGeometry = QSharedPointer<ViewportDepthGeometry>::create();
+                QVector<int> wireVertexIndices;
                 QSet<quint64> seenEdges;
+                QVector<QVector3D> vertexNormals(mesh.vertices.size());
+                QVector<int> vertexNormalCounts(mesh.vertices.size(), 0);
                 struct MeshWireEdgeUse {
                     int faceCount = 0;
                     QVector3D firstFaceNormal;
@@ -10048,9 +10051,44 @@ protected:
                                         float(nz / length));
                     return true;
                 };
+                const auto worldNormal = [&renderObject](const QVector3D &normal) {
+                    const auto &m = renderObject.meshObjectTransform;
+                    const double a = m[0], b = m[1], c = m[2];
+                    const double d = m[4], e = m[5], f = m[6];
+                    const double g = m[8], h = m[9], i = m[10];
+                    const double determinant = a * (e * i - f * h) -
+                                               b * (d * i - f * g) +
+                                               c * (d * h - e * g);
+                    if (std::abs(determinant) <= 1.0e-12) return normal.normalized();
+                    const double x = ((e * i - f * h) * normal.x() +
+                                      (f * g - d * i) * normal.y() +
+                                      (d * h - e * g) * normal.z()) / determinant;
+                    const double y = ((c * h - b * i) * normal.x() +
+                                      (a * i - c * g) * normal.y() +
+                                      (b * g - a * h) * normal.z()) / determinant;
+                    const double z = ((b * f - c * e) * normal.x() +
+                                      (c * d - a * f) * normal.y() +
+                                      (a * e - b * d) * normal.z()) / determinant;
+                    return QVector3D(float(x), float(y), float(z)).normalized();
+                };
+                int firstCorner = 0;
                 for (const QVector<int> &face : mesh.faces) {
                     QVector3D normal;
                     const bool validNormal = faceNormal(face, &normal);
+                    for (int corner = 0; corner < face.size(); ++corner) {
+                        const int vertex = face[corner];
+                        if (vertex < 0 || vertex >= vertexNormals.size()) continue;
+                        QVector3D cornerNormal = normal;
+                        const int loop = firstCorner + corner;
+                        if (loop >= 0 && loop < mesh.cornerNormals.size()) {
+                            const Point3D &source = mesh.cornerNormals[loop];
+                            cornerNormal = QVector3D(float(source.x), float(source.y),
+                                                     float(source.z));
+                        }
+                        if (cornerNormal.lengthSquared() <= 1.0e-16f) continue;
+                        vertexNormals[vertex] += worldNormal(cornerNormal);
+                        ++vertexNormalCounts[vertex];
+                    }
                     for (int corner = 0; corner < face.size(); ++corner) {
                         const int first = face[corner];
                         const int second = face[(corner + 1) % face.size()];
@@ -10122,7 +10160,9 @@ protected:
                         wireGeometry->lineVertices
                             << QVector3D(float(a.x), float(a.y), float(a.z))
                             << QVector3D(float(b.x), float(b.y), float(b.z));
+                        wireVertexIndices << first << second;
                     }
+                    firstCorner += face.size();
                 }
                 if (!wireGeometry->lineVertices.isEmpty()) {
                     QColor wireColor = viewportShadingSettings_.themeWireColor;
@@ -10146,10 +10186,111 @@ protected:
                     if (renderObject.selected) {
                         wireColor = viewportSelectionColor();
                     }
+                    const bool objectColorGradient = !renderObject.selected &&
+                        (viewportShadingSettings_.wireColorMode ==
+                             ViewportWireColorMode::Object ||
+                         viewportShadingSettings_.wireColorMode ==
+                             ViewportWireColorMode::Random);
+                    QVector3D rimColor(
+                        float(wireColor.redF() * (objectColorGradient ? 0.5 : 1.0)),
+                        float(wireColor.greenF() * (objectColorGradient ? 0.5 : 1.0)),
+                        float(wireColor.blueF() * (objectColorGradient ? 0.5 : 1.0)));
+                    QVector3D frontWireColor(
+                        float(std::clamp(wireColor.redF() +
+                                             (objectColorGradient ? 0.5 : 0.0),
+                                         0.0, 1.0)),
+                        float(std::clamp(wireColor.greenF() +
+                                             (objectColorGradient ? 0.5 : 0.0),
+                                         0.0, 1.0)),
+                        float(std::clamp(wireColor.blueF() +
+                                             (objectColorGradient ? 0.5 : 0.0),
+                                         0.0, 1.0)));
+                    if (objectColorGradient) {
+                        QVector3D sourceColor =
+                            renderObject.displayColorSceneLinear.toVector3D();
+                        if (viewportShadingSettings_.wireColorMode ==
+                            ViewportWireColorMode::Random) {
+                            const QColor random = workbenchRandomColor(
+                                renderObject.objectId, renderObject.displayName,
+                                workbenchRandomIdentityLibraryPath(renderObject));
+                            sourceColor = workbenchRec709ToSceneLinear(
+                                QVector3D(random.redF(), random.greenF(),
+                                          random.blueF()));
+                        }
+                        const auto toWireDisplay = [this](const QVector3D &linear) {
+                            return workbenchSceneLinearToDisplaySrgb(
+                                linear, viewportShadingSettings_.colorTransform,
+                                viewportShadingSettings_.colorExposure,
+                                viewportShadingSettings_.colorGamma,
+                                viewportShadingSettings_.colorLutData,
+                                viewportShadingSettings_.colorLutMetadata);
+                        };
+                        const QVector3D adjustedRim = toWireDisplay(
+                            sourceColor * 0.25f);
+                        const QVector3D adjustedWire = toWireDisplay(
+                            sourceColor * 0.5f + QVector3D(0.5f, 0.5f, 0.5f));
+                        rimColor = adjustedRim;
+                        frontWireColor = adjustedWire;
+                    }
+                    const Point3D camera = viewportTransform_.cameraPosition(size());
+                    const Point3D view = viewportTransform_.viewDirection();
+                    QVector<QVector4D> endpointColors;
+                    endpointColors.reserve(wireVertexIndices.size());
+                    for (int endpoint = 0; endpoint < wireVertexIndices.size();
+                         ++endpoint) {
+                        const int vertex = wireVertexIndices[endpoint];
+                        QVector3D facingNormal;
+                        if (vertex >= 0 && vertex < vertexNormals.size() &&
+                            vertexNormalCounts[vertex] > 0) {
+                            facingNormal = vertexNormals[vertex].normalized();
+                        }
+                        float facing = 0.5f;
+                        if (facingNormal.lengthSquared() > 1.0e-16f) {
+                            Point3D world = transformedVertex(vertex);
+                            world.x += renderObject.preparedGeometryOffset.x;
+                            world.y += renderObject.preparedGeometryOffset.y;
+                            world.z += renderObject.preparedGeometryOffset.z;
+                            QVector3D towardView(float(view.x), float(view.y),
+                                                 float(view.z));
+                            if (viewportTransform_.isPerspectiveEnabled()) {
+                                towardView = QVector3D(
+                                    float(camera.x - world.x),
+                                    float(camera.y - world.y),
+                                    float(camera.z - world.z));
+                            }
+                            if (towardView.lengthSquared() > 1.0e-16f) {
+                                facing = std::clamp(std::abs(
+                                    QVector3D::dotProduct(
+                                        facingNormal, towardView.normalized())),
+                                    0.0f, 1.0f);
+                            }
+                        }
+                        const auto gamma = [](float channel) {
+                            return std::pow(std::clamp(channel, 0.0f, 1.0f),
+                                            1.0f / 2.2f);
+                        };
+                        const QVector3D rimGamma(gamma(rimColor.x()),
+                                                 gamma(rimColor.y()),
+                                                 gamma(rimColor.z()));
+                        const QVector3D wireGamma(gamma(frontWireColor.x()),
+                                                  gamma(frontWireColor.y()),
+                                                  gamma(frontWireColor.z()));
+                        const QVector3D front = rimGamma * 0.65f +
+                                                wireGamma * 0.35f;
+                        const QVector3D mixed = rimGamma * (1.0f - facing) +
+                                                front * facing;
+                        endpointColors.append(QVector4D(
+                            std::pow(std::clamp(mixed.x(), 0.0f, 1.0f), 2.2f),
+                            std::pow(std::clamp(mixed.y(), 0.0f, 1.0f), 2.2f),
+                            std::pow(std::clamp(mixed.z(), 0.0f, 1.0f), 2.2f),
+                            1.0f));
+                    }
+                    wireColor = Qt::white;
                     wireColor.setAlphaF(std::clamp(
                         viewportShadingSettings_.wireframeOpacity, 0.0, 1.0));
                     ViewportSceneStroke wireStroke;
                     wireStroke.color = wireColor;
+                    wireStroke.lineVertexColors = std::move(endpointColors);
                     wireStroke.width = 1.0f;
                     wireStroke.writeDepth = true;
                     wireStroke.blenderMeshWire = true;

@@ -3267,6 +3267,23 @@ bool ViewportSurfaceRenderer::ensureSelectedOutlineFramebuffers(
     GLint previousTexture = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    const auto discardSelectedOutlineFramebuffers = [&]() {
+        if (selectedOutlineFramebuffer_ != 0)
+            glDeleteFramebuffers(1, &selectedOutlineFramebuffer_);
+        if (selectedOutlineIdTexture_ != 0)
+            glDeleteTextures(1, &selectedOutlineIdTexture_);
+        if (selectedOutlineDepthTexture_ != 0)
+            glDeleteTextures(1, &selectedOutlineDepthTexture_);
+        if (outlineSceneDepthFramebuffer_ != 0)
+            glDeleteFramebuffers(1, &outlineSceneDepthFramebuffer_);
+        if (outlineSceneDepthTexture_ != 0)
+            glDeleteTextures(1, &outlineSceneDepthTexture_);
+        selectedOutlineFramebuffer_ = 0;
+        selectedOutlineIdTexture_ = 0;
+        selectedOutlineDepthTexture_ = 0;
+        outlineSceneDepthFramebuffer_ = 0;
+        outlineSceneDepthTexture_ = 0;
+    };
     if (selectedOutlineIdTexture_ == 0) {
         glGenTextures(1, &selectedOutlineIdTexture_);
         glBindTexture(GL_TEXTURE_2D, selectedOutlineIdTexture_);
@@ -3296,6 +3313,7 @@ bool ViewportSurfaceRenderer::ensureSelectedOutlineFramebuffers(
         glDrawBuffers(1, &colorAttachment);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
             GL_FRAMEBUFFER_COMPLETE) {
+            discardSelectedOutlineFramebuffers();
             glBindFramebuffer(GL_FRAMEBUFFER,
                               static_cast<GLuint>(previousFramebuffer));
             glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
@@ -3321,6 +3339,7 @@ bool ViewportSurfaceRenderer::ensureSelectedOutlineFramebuffers(
         glReadBuffer(GL_NONE);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
             GL_FRAMEBUFFER_COMPLETE) {
+            discardSelectedOutlineFramebuffers();
             glBindFramebuffer(GL_FRAMEBUFFER,
                               static_cast<GLuint>(previousFramebuffer));
             glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));

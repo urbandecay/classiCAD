@@ -45,7 +45,8 @@ public:
               bool selectionOverlay = false,
               const ViewportRenderTargets *sharedTargets = nullptr,
               ViewportRenderPassReport *passReport = nullptr,
-              bool sceneLinearOutput = false);
+              bool sceneLinearOutput = false,
+              bool smoothWiresOverlay = true);
 
 private:
     struct SurfaceVertex {

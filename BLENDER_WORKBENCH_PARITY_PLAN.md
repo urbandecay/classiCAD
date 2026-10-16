@@ -9505,3 +9505,24 @@ moves them after scene effects and depth-tests them against the retained scene.
   non-X-Ray selected geometry; selected `showInFront` depth-domain behavior,
   X-Ray hidden contours, the GPU stroke-failure fallback, and matched captures
   remain open. Build passed.
+
+### GPU selected-outline smoothing and high-DPI width (2026-10-16)
+
+- The selected-object outline resolve now follows classiCAD's Overlay Smooth
+  Wires preference: enabled outlines keep fractional edge coverage, while
+  disabled outlines use a hard full-coverage edge. At UI scales above one, the
+  resolve checks the wider two-step footprint Blender enables for thick
+  outlines. X-Ray selected-mesh silhouettes also suppress expansion on the
+  negative screen axes, following Blender's X-Ray wire rule. The setting is
+  passed from the live viewport preference and is not stored as imported scene
+  data.
+- Blender 5.2.2 chooses smooth selection-outline AA from
+  `USER_GPU_FLAG_OVERLAY_SMOOTH_WIRE`, expands the resolve for UI scale above
+  one or theme outline width above two, and suppresses X-Ray wire expansion on
+  the negative axes in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913)
+  and
+  [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1327).
+  classiCAD does not yet carry Blender's theme outline-width preference, so
+  only the UI-scale expansion trigger is matched. Build passed; matched outline
+  captures remain open.

@@ -7330,7 +7330,8 @@ public:
                 const ViewportWorkbenchSceneColorPassResult sceneColorPass =
                     ViewportWorkbenchScenePassCoordinator::renderFrameSceneColor(
                         surface, renderFrame, renderFrame.objects,
-                        aa.sampleCamera(), 1.0, settings, &aa.targets(), true);
+                        aa.sampleCamera(), 1.0, settings, &aa.targets(), true,
+                        smoothWiresOverlay_);
                 if (sceneColorPass.rendered) {
                     aa.markCurrentSampleAttachmentsValid(
                         sceneColorPass.report.populatedAttachments);
@@ -13088,7 +13089,7 @@ protected:
                             renderShadingSettings,
                             aaRenderer != nullptr ? &aaRenderer->targets()
                                                   : nullptr,
-                            aaSceneSampleActive);
+                            aaSceneSampleActive, smoothWiresOverlay_);
                 }
                 surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {

@@ -14,11 +14,12 @@ ViewportWorkbenchScenePassPacket::fromFrame(
     qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets *sharedTargets,
-    bool sceneLinearOutput)
+    bool sceneLinearOutput,
+    bool smoothWiresOverlay)
 {
     return fromScene(drawObjects, sampleCamera, frame.viewportSize,
                      devicePixelRatio, settings, sharedTargets,
-                     sceneLinearOutput);
+                     sceneLinearOutput, smoothWiresOverlay);
 }
 
 ViewportWorkbenchScenePassPacket
@@ -29,7 +30,8 @@ ViewportWorkbenchScenePassPacket::fromScene(
     qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets *sharedTargets,
-    bool sceneLinearOutput)
+    bool sceneLinearOutput,
+    bool smoothWiresOverlay)
 {
     ViewportWorkbenchScenePassPacket packet;
     packet.objects = objects;
@@ -39,6 +41,7 @@ ViewportWorkbenchScenePassPacket::fromScene(
     packet.settings = settings;
     packet.sharedTargets = sharedTargets;
     packet.sceneLinearOutput = sceneLinearOutput;
+    packet.smoothWiresOverlay = smoothWiresOverlay;
     return packet;
 }
 
@@ -67,7 +70,7 @@ ViewportWorkbenchScenePassCoordinator::renderSceneColor(
         packet.objects, packet.camera, packet.viewportSize,
         packet.devicePixelRatio, packet.settings,
         false, true, false, packet.sharedTargets, &result.report,
-        packet.sceneLinearOutput);
+        packet.sceneLinearOutput, packet.smoothWiresOverlay);
     return result;
 }
 
@@ -80,12 +83,13 @@ ViewportWorkbenchScenePassCoordinator::renderFrameSceneColor(
     qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets *sharedTargets,
-    bool sceneLinearOutput)
+    bool sceneLinearOutput,
+    bool smoothWiresOverlay)
 {
     const ViewportWorkbenchScenePassPacket packet =
         ViewportWorkbenchScenePassPacket::fromFrame(
             frame, drawObjects, sampleCamera, devicePixelRatio, settings,
-            sharedTargets, sceneLinearOutput);
+            sharedTargets, sceneLinearOutput, smoothWiresOverlay);
     return renderSceneColor(surfaceRenderer, packet);
 }
 

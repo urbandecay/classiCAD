@@ -20,6 +20,7 @@ struct ViewportWorkbenchScenePassPacket {
     ViewportShadingSettings settings;
     const ViewportRenderTargets *sharedTargets = nullptr;
     bool sceneLinearOutput = false;
+    bool smoothWiresOverlay = true;
 
     static ViewportWorkbenchScenePassPacket fromFrame(
         const ViewportRenderFrame &frame,
@@ -28,7 +29,8 @@ struct ViewportWorkbenchScenePassPacket {
         qreal devicePixelRatio,
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets *sharedTargets,
-        bool sceneLinearOutput);
+        bool sceneLinearOutput,
+        bool smoothWiresOverlay = true);
 
     static ViewportWorkbenchScenePassPacket fromScene(
         const QVector<ViewportRenderObject> &objects,
@@ -37,7 +39,8 @@ struct ViewportWorkbenchScenePassPacket {
         qreal devicePixelRatio,
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets *sharedTargets,
-        bool sceneLinearOutput);
+        bool sceneLinearOutput,
+        bool smoothWiresOverlay = true);
 
     bool isValid() const noexcept;
 };
@@ -65,7 +68,8 @@ public:
         qreal devicePixelRatio,
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets *sharedTargets,
-        bool sceneLinearOutput);
+        bool sceneLinearOutput,
+        bool smoothWiresOverlay = true);
 
     static ViewportWorkbenchSceneColorPassResult renderSceneColor(
         ViewportSurfaceRenderer &surfaceRenderer,

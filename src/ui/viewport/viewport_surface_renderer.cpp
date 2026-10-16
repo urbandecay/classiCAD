@@ -2472,7 +2472,17 @@ bool ViewportSurfaceRenderer::initialize()
         uniform float uUiScale;
         uniform bool uSelectionOutlineOnly;
         uniform bool uHiddenSelectionOutlineOnly;
+        uniform bool uSmoothSelectionOutline;
+        uniform bool uThickSelectionOutline;
+        uniform bool uXRayWireSelectionOutline;
         layout(location = 0) out vec4 fragmentColor;
+        bool selectedOutlineBoundary(uint centerId, uint neighborId)
+        {
+            bool centerSelected = (centerId & 0x80000000u) != 0u;
+            bool neighborSelected = (neighborId & 0x80000000u) != 0u;
+            return centerSelected != neighborSelected ||
+                (centerSelected && neighborSelected && centerId != neighborId);
+        }
         void main()
         {
             ivec2 size = textureSize(uObjectIdBuffer, 0);
@@ -2514,27 +2524,37 @@ bool ViewportSurfaceRenderer::initialize()
                 return;
             }
             if (uSelectionOutlineOnly) {
-                bool centerSelected = (centerId & 0x80000000u) != 0u;
-                bvec4 neighborSelected = bvec4(
-                    (cardinalIds.x & 0x80000000u) != 0u,
-                    (cardinalIds.y & 0x80000000u) != 0u,
-                    (cardinalIds.z & 0x80000000u) != 0u,
-                    (cardinalIds.w & 0x80000000u) != 0u);
-                bvec4 differentObject = bvec4(
-                    centerId != cardinalIds.x,
-                    centerId != cardinalIds.y,
-                    centerId != cardinalIds.z,
-                    centerId != cardinalIds.w);
                 bvec4 objectBoundary = bvec4(
-                    centerSelected != neighborSelected.x ||
-                        (centerSelected && neighborSelected.x && differentObject.x),
-                    centerSelected != neighborSelected.y ||
-                        (centerSelected && neighborSelected.y && differentObject.y),
-                    centerSelected != neighborSelected.z ||
-                        (centerSelected && neighborSelected.z && differentObject.z),
-                    centerSelected != neighborSelected.w ||
-                        (centerSelected && neighborSelected.w && differentObject.w));
-                float selectionOpacity = dot(vec4(objectBoundary), vec4(0.25));
+                    selectedOutlineBoundary(centerId, cardinalIds.x),
+                    selectedOutlineBoundary(centerId, cardinalIds.y),
+                    selectedOutlineBoundary(centerId, cardinalIds.z),
+                    selectedOutlineBoundary(centerId, cardinalIds.w));
+                if (uXRayWireSelectionOutline) {
+                    objectBoundary.y = false;
+                    objectBoundary.w = false;
+                }
+                float selectionOpacity = uSmoothSelectionOutline
+                    ? dot(vec4(objectBoundary), vec4(0.25))
+                    : (any(objectBoundary) ? 1.0 : 0.0);
+                if (selectionOpacity <= 0.0 && uThickSelectionOutline) {
+                    uvec4 outerIds = uvec4(
+                        texture(uObjectIdBuffer, uv + 2.0 * dx).r,
+                        texture(uObjectIdBuffer, uv - 2.0 * dx).r,
+                        texture(uObjectIdBuffer, uv + 2.0 * dy).r,
+                        texture(uObjectIdBuffer, uv - 2.0 * dy).r);
+                    bvec4 outerBoundary = bvec4(
+                        selectedOutlineBoundary(centerId, outerIds.x),
+                        selectedOutlineBoundary(centerId, outerIds.y),
+                        selectedOutlineBoundary(centerId, outerIds.z),
+                        selectedOutlineBoundary(centerId, outerIds.w));
+                    if (uXRayWireSelectionOutline) {
+                        outerBoundary.y = false;
+                        outerBoundary.w = false;
+                    }
+                    selectionOpacity = uSmoothSelectionOutline
+                        ? (any(outerBoundary) ? 0.25 : 0.0)
+                        : (any(outerBoundary) ? 1.0 : 0.0);
+                }
                 if (selectionOpacity <= 0.0) discard;
                 fragmentColor = vec4(uOutlineColor.rgb,
                                      uOutlineColor.a * selectionOpacity);
@@ -5967,7 +5987,8 @@ bool ViewportSurfaceRenderer::draw(
     bool selectionOverlay,
     const ViewportRenderTargets *sharedTargets,
     ViewportRenderPassReport *passReport,
-    bool sceneLinearOutput)
+    bool sceneLinearOutput,
+    bool smoothWiresOverlay)
 {
     if (passReport != nullptr) *passReport = {};
     if (QOpenGLContext::currentContext() == nullptr || viewportSize.isEmpty() ||
@@ -8616,7 +8637,8 @@ bool ViewportSurfaceRenderer::draw(
                 static_cast<float>(workbenchEffectUiScale(dpr)));
             const auto drawOutlineColor = [&](const QColor &sourceColor,
                                               bool selectionOnly,
-                                              bool hiddenOnly = false) {
+                                              bool hiddenOnly = false,
+                                              bool xrayWireSelection = false) {
                 QVector3D color(sourceColor.redF(), sourceColor.greenF(),
                                 sourceColor.blueF());
                 if (sceneLinearOutput) {
@@ -8628,6 +8650,15 @@ bool ViewportSurfaceRenderer::draw(
                                                 selectionOnly);
                 outlineProgram_.setUniformValue(
                     "uHiddenSelectionOutlineOnly", hiddenOnly);
+                outlineProgram_.setUniformValue(
+                    "uSmoothSelectionOutline",
+                    selectionOnly && smoothWiresOverlay);
+                outlineProgram_.setUniformValue(
+                    "uThickSelectionOutline",
+                    selectionOnly && workbenchEffectUiScale(dpr) > 1);
+                outlineProgram_.setUniformValue(
+                    "uXRayWireSelectionOutline",
+                    selectionOnly && xrayWireSelection);
                 glDrawArrays(GL_TRIANGLES, 0, 3);
             };
             outlineVertexArray_.bind();
@@ -8639,7 +8670,8 @@ bool ViewportSurfaceRenderer::draw(
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, selectedOutlineIdTexture_);
                 }
-                drawOutlineColor(settings.themeActiveObjectColor, true);
+                drawOutlineColor(settings.themeActiveObjectColor, true,
+                                 false, xraySelectedOutlineReady);
                 if (xraySelectedOutlineReady) {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D,

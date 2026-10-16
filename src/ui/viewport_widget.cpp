@@ -13881,6 +13881,18 @@ protected:
                         const int subdivisions = std::max(
                             1, qCeil(screenLength *
                                      std::max(depthScaleX, depthScaleY)));
+                        qreal firstCameraDepth = 0.0;
+                        qreal secondCameraDepth = 0.0;
+                        if (viewportTransform_.isPerspectiveEnabled()) {
+                            firstCameraDepth = -rasterWorkbenchCameraDepth(
+                                QVector3D(float(first.x), float(first.y),
+                                          float(first.z)),
+                                cameraPosition, viewDirection);
+                            secondCameraDepth = -rasterWorkbenchCameraDepth(
+                                QVector3D(float(second.x), float(second.y),
+                                          float(second.z)),
+                                cameraPosition, viewDirection);
+                        }
                         for (int sample = 0; sample < subdivisions; ++sample) {
                             const qreal t0 = qreal(sample) / subdivisions;
                             const qreal t1 = qreal(sample + 1) / subdivisions;
@@ -13889,10 +13901,23 @@ protected:
                                 (secondScreen - firstScreen) * t0;
                             const QPointF b = firstScreen +
                                 (secondScreen - firstScreen) * t1;
+                            qreal worldFraction = tm;
+                            if (viewportTransform_.isPerspectiveEnabled() &&
+                                firstCameraDepth > 1.0e-9 &&
+                                secondCameraDepth > 1.0e-9) {
+                                const qreal reciprocalDepth =
+                                    (1.0 - tm) / firstCameraDepth +
+                                    tm / secondCameraDepth;
+                                if (reciprocalDepth > 1.0e-12) {
+                                    worldFraction =
+                                        (tm / secondCameraDepth) /
+                                        reciprocalDepth;
+                                }
+                            }
                             const Point3D midpoint{
-                                first.x + (second.x - first.x) * tm,
-                                first.y + (second.y - first.y) * tm,
-                                first.z + (second.z - first.z) * tm};
+                                first.x + (second.x - first.x) * worldFraction,
+                                first.y + (second.y - first.y) * worldFraction,
+                                first.z + (second.z - first.z) * worldFraction};
                             const std::optional<qreal> opacity = lineOpacityAt(
                                 a + (b - a) * 0.5, midpoint,
                                 renderObject.showInFront);

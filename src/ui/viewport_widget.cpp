@@ -7295,10 +7295,10 @@ public:
                         // the camera projection's normalized shift units.
                         const qreal viewFactor = std::max<qreal>(
                             1.0, std::max(width(), height()));
-                        projection.shiftX -=
+                        projection.shiftX +=
                             storedView.cameraOffsetX * frameZoom *
                             width() / viewFactor;
-                        projection.shiftY -=
+                        projection.shiftY +=
                             storedView.cameraOffsetY * frameZoom *
                             height() / viewFactor;
                         viewportTransform_.setRenderCameraProjection(projection);

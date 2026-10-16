@@ -726,15 +726,27 @@ QSize rasterWorkbenchShadowMapSize(const QSize &viewportSize) noexcept
         return {};
 
     constexpr qint64 maximumShadowMapPixels = 16 * 1024 * 1024;
-    const qint64 doubledWidth = qint64(viewportSize.width()) * 2;
-    const qint64 doubledHeight = qint64(viewportSize.height()) * 2;
-    if (doubledWidth <= std::numeric_limits<int>::max() &&
-        doubledHeight <= std::numeric_limits<int>::max() &&
-        doubledHeight > 0 &&
-        doubledWidth <= maximumShadowMapPixels / doubledHeight) {
-        return QSize(static_cast<int>(doubledWidth),
-                     static_cast<int>(doubledHeight));
-    }
+    const auto scaledSizeWithinBudget = [&](qint64 scale) {
+        const qint64 width = viewportSize.width();
+        const qint64 height = viewportSize.height();
+        if (width <= 0 || height <= 0 ||
+            width > std::numeric_limits<int>::max() / scale ||
+            height > std::numeric_limits<int>::max() / scale) {
+            return QSize{};
+        }
+        const qint64 scaledWidth = width * scale;
+        const qint64 scaledHeight = height * scale;
+        if (scaledHeight > 0 &&
+            scaledWidth <= maximumShadowMapPixels / scaledHeight) {
+            return QSize(static_cast<int>(scaledWidth),
+                         static_cast<int>(scaledHeight));
+        }
+        return QSize{};
+    };
+    const QSize fourTimesSize = scaledSizeWithinBudget(4);
+    if (!fourTimesSize.isEmpty()) return fourTimesSize;
+    const QSize twiceSize = scaledSizeWithinBudget(2);
+    if (!twiceSize.isEmpty()) return twiceSize;
     return viewportSize;
 }
 

@@ -1716,14 +1716,14 @@ int main(int argc, char *argv[])
                 std::numeric_limits<float>::quiet_NaN(), 1.0f) == 0.0f,
         "QPainter shadow comparison tolerance must scale with light-depth range and reject non-finite bounds");
     passed &= check(
-        rasterWorkbenchShadowMapSize(QSize(640, 480)) == QSize(1280, 960) &&
+        rasterWorkbenchShadowMapSize(QSize(640, 480)) == QSize(2560, 1920) &&
             rasterWorkbenchShadowMapSize(QSize(2048, 2048)) ==
                 QSize(4096, 4096) &&
             rasterWorkbenchShadowMapSize(QSize(2049, 2048)) ==
                 QSize(2049, 2048) &&
             rasterWorkbenchShadowMapSize(QSize(0, 480)).isEmpty() &&
             rasterWorkbenchShadowMapSize(QSize(640, -1)).isEmpty(),
-        "QPainter shadow map must supersample 2x per axis within the 16M-pixel budget and retain the viewport-resolution fallback above it");
+        "QPainter shadow map must use 4x resolution when it fits the 16M-pixel budget, then 2x, and retain the viewport-resolution fallback above it");
     ViewportShadingSettings highShadowFocusSettings = shadowSettings;
     highShadowFocusSettings.shadowFocus = 0.0;
     const QImage highShadowFocusImage = renderCpuShadow(

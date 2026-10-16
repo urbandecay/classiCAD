@@ -1960,10 +1960,8 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
     const BlenderGridFrame gridFrame = resolveBlenderGridFrame(transform,
                                                                viewportSize);
     const bool perspective = transform.isPerspectiveEnabled();
-    const bool floorVisible =
-        perspective || !gridFrame.fixedAxisOrthographic
-            ? appearance.showFloor
-            : appearance.showOrthographicGrid;
+    const bool floorVisible = perspective ? appearance.showFloor
+                                          : appearance.showOrthographicGrid;
     const int gridLineCount = !floorVisible
         ? 0
         : perspective ? kPerspectiveGridLineCount

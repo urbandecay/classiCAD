@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 22
+BRIDGE_FORMAT_VERSION = 23
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -794,6 +794,190 @@ def extract_image_empty(obj, scene, packed_payload_budget,
             getattr(evaluated, "empty_image_side", "DOUBLE_SIDED")),
     })
     return item, ""
+
+
+def extract_camera_background_images(scene, packed_payload_budget,
+                                     unsupported_features):
+    """Import still images displayed over the active scene camera frame."""
+    camera = scene.camera
+    if camera is None or not bool(getattr(camera.data,
+                                           "show_background_images", False)):
+        return []
+    evaluated = camera.evaluated_get(depsgraph_for_scene(scene))
+    try:
+        from mathutils import Matrix, Vector
+        frame = evaluated.data.view_frame(scene=scene)
+    except Exception as error:
+        add_unsupported(unsupported_features, stable_id(camera),
+                        "camera_background_images",
+                        "camera frame could not be evaluated: " + str(error))
+        return []
+    if len(frame) != 4:
+        return []
+    min_x = min(float(point.x) for point in frame)
+    max_x = max(float(point.x) for point in frame)
+    min_y = min(float(point.y) for point in frame)
+    max_y = max(float(point.y) for point in frame)
+    frame_width = max_x - min_x
+    frame_height = max_y - min_y
+    if (not math.isfinite(frame_width) or not math.isfinite(frame_height) or
+            frame_width <= 0.0 or frame_height <= 0.0):
+        return []
+    frame_center_x = (min_x + max_x) * 0.5
+    frame_center_y = (min_y + max_y) * 0.5
+    records = []
+    camera_id = stable_id(camera)
+    view_layer_hidden = {
+        view_layer_key(scene, view_layer): False
+        for view_layer in scene.view_layers
+    }
+    default_layer_key = (view_layer_key(scene, scene.view_layers[0])
+                         if len(scene.view_layers) else "")
+    for index, background in enumerate(camera.data.background_images):
+        if not bool(getattr(background, "show_background_image", True)):
+            continue
+        image = getattr(background, "image", None)
+        if image is None:
+            add_unsupported(
+                unsupported_features, camera_id,
+                "camera_background_image",
+                "camera background image %d has no image data" % (index + 1))
+            continue
+        image_size = getattr(image, "size", (0, 0))
+        if len(image_size) < 2 or int(image_size[0]) <= 0 or int(image_size[1]) <= 0:
+            add_unsupported(
+                unsupported_features, camera_id,
+                "camera_background_image",
+                "camera background image %d is not loaded" % (index + 1))
+            continue
+        display_aspect = getattr(image, "display_aspect", (1.0, 1.0))
+        image_width = float(image_size[0]) * max(1.0e-12, float(display_aspect[0]))
+        image_height = float(image_size[1]) * max(1.0e-12, float(display_aspect[1]))
+        image_aspect = image_width / image_height
+        frame_method = str(getattr(background, "frame_method", "FIT"))
+        if frame_method == "STRETCH":
+            display_width, display_height = frame_width, frame_height
+        elif frame_method == "CROP":
+            if image_aspect >= frame_width / frame_height:
+                display_height = frame_height
+                display_width = display_height * image_aspect
+            else:
+                display_width = frame_width
+                display_height = display_width / image_aspect
+        else:
+            if image_aspect >= frame_width / frame_height:
+                display_width = frame_width
+                display_height = display_width / image_aspect
+            else:
+                display_height = frame_height
+                display_width = display_height * image_aspect
+        scale = max(0.0, float(getattr(background, "scale", 1.0)))
+        display_width *= scale
+        display_height *= scale
+        rotation = float(getattr(background, "rotation", 0.0))
+        if not math.isfinite(rotation):
+            rotation = 0.0
+        # Blender's camera background matrix keeps the camera frame depth,
+        # uses the stored offset directly, and applies aspect corrections
+        # after the orthographic scale adjustment.
+        offset = getattr(background, "offset", (0.0, 0.0))
+        camera_aspect = frame_width / frame_height
+        offset_x = float(offset[0])
+        offset_y = float(offset[1])
+        if str(getattr(evaluated.data, "type", "PERSP")) == "ORTHO":
+            ortho_scale = float(getattr(evaluated.data, "ortho_scale", 1.0))
+            offset_x *= ortho_scale
+            offset_y *= ortho_scale
+        offset_x *= min(1.0, camera_aspect)
+        offset_y /= (max(1.0, camera_aspect) *
+                     (image_aspect / camera_aspect))
+        center_x = frame_center_x + offset_x
+        center_y = frame_center_y + offset_y
+        frame_depth = max(1.0e-9, abs(float(frame[0].z)))
+        clip_start = max(0.0, float(getattr(evaluated.data,
+                                             "clip_start", 0.1)))
+        clip_end = float(getattr(evaluated.data, "clip_end", 1000.0))
+        camera_depth = frame_depth
+        if (math.isfinite(clip_end) and clip_end * 0.999 >
+                clip_start * 1.001):
+            camera_depth = max(frame_depth, clip_end * 0.999)
+        perspective = str(getattr(evaluated.data, "type", "PERSP")) != "ORTHO"
+        camera_frame_scale = camera_depth / frame_depth if perspective else 1.0
+        display_width *= camera_frame_scale
+        display_height *= camera_frame_scale
+        center_x *= camera_frame_scale
+        center_y *= camera_frame_scale
+        cosine = math.cos(rotation)
+        sine = math.sin(rotation)
+        half_width = display_width * 0.5
+        half_height = display_height * 0.5
+        local_corners = [(-half_width, half_height),
+                         (half_width, half_height),
+                         (half_width, -half_height),
+                         (-half_width, -half_height)]
+        # Keep perspective framing while moving the image card near the far
+        # clip plane, so the depth-tested BACK variant stays behind visible
+        # geometry in classiCAD's scene compositor.
+        camera_matrix = evaluated.matrix_world @ Matrix.Translation(
+            Vector((0.0, 0.0, -camera_depth)))
+        corners_world = []
+        for x, y in local_corners:
+            # Blender rotates by -rotation around camera local Z.
+            rotated_x = x * cosine + y * sine + center_x
+            rotated_y = -x * sine + y * cosine + center_y
+            corners_world.append(camera_matrix @ Vector((rotated_x,
+                                                          rotated_y,
+                                                          0.0)))
+        proxy_name = "%s Camera Background %d" % (camera.name_full, index + 1)
+        proxy = bpy.data.objects.new(proxy_name, None)
+        try:
+            proxy.empty_display_type = "IMAGE"
+            proxy.data = image
+            proxy.empty_display_size = 1.0
+            proxy.empty_image_offset = (0.0, 0.0)
+            proxy.matrix_world = camera_matrix
+            alpha = min(1.0, max(0.0, float(
+                getattr(background, "alpha", 1.0))))
+            proxy.color = (1.0, 1.0, 1.0, alpha)
+            proxy.use_empty_image_alpha = True
+            display_depth = str(getattr(background, "display_depth", "BACK"))
+            # A depth-tested image at the camera frame models Blender's BACK
+            # overlay against scene depth. FRONT remains an in-front overlay.
+            picture_depth = "DEFAULT" if display_depth == "BACK" else "FRONT"
+            proxy.empty_image_depth = picture_depth
+            proxy.show_empty_image_perspective = True
+            proxy.show_empty_image_orthographic = False
+            proxy.show_empty_image_only_axis_aligned = False
+            item, image_error = extract_image_empty(
+                proxy, scene, packed_payload_budget)
+        finally:
+            bpy.data.objects.remove(proxy, do_unlink=True)
+        if item is None:
+            add_unsupported(
+                unsupported_features, camera_id,
+                "camera_background_image",
+                "camera background image %d could not be imported: %s" %
+                (index + 1, image_error or "unsupported image"))
+            continue
+        derived_id = hashlib.sha256(
+            (camera_id + "::camera-background::" + str(index)).encode("utf-8")
+        ).hexdigest()
+        item["object_id"] = "classiCAD::camera-background::" + derived_id
+        item["source_object_id"] = camera_id
+        item["source_object_name"] = camera.name_full
+        item["name"] = proxy_name
+        item["parent_id"] = camera_id
+        item["collection_ids"] = [stable_id(collection)
+                                  for collection in camera.users_collection]
+        item["picture_corners_world"] = [vector_values(point)
+                                          for point in corners_world]
+        item["picture_camera_view_only"] = True
+        item["picture_use_alpha_blend"] = True
+        item["empty_image_depth"] = picture_depth
+        item["view_layer_hidden"] = view_layer_hidden
+        item["default_view_layer_key"] = default_layer_key
+        records.append(item)
+    return records
 
 
 def loose_edge_curve_item(obj, scene, source_item, edges_world, edge_indices):
@@ -3222,6 +3406,11 @@ def extract_scene(input_path, mode):
                 (MAX_LOOSE_VERTICES_PER_OBJECT,
                  MAX_LOOSE_VERTEX_POINTS_PER_SCENE),
             )
+        for camera_background in extract_camera_background_images(
+                scene, packed_empty_image_payload_budget,
+                output["unsupported_features"]):
+            output["items"].append(camera_background)
+            scene_record["object_ids"].append(camera_background["object_id"])
         output["scenes"].append(scene_record)
     output["summary"] = {
         "scene_count": len(output["scenes"]),

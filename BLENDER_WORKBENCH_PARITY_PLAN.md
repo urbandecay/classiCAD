@@ -9064,3 +9064,15 @@ resolve remain open.
   viewport keeps its Solid fallback. Older extraction records without the
   field continue to default to Solid. The scene extractor bridge is version
   22. C++ build passed; matched mode captures have not been run.
+
+### Imported scene-camera background images (2026-10-15)
+
+- Still images enabled in the active scene camera's viewport background list
+  now import through the existing Picture geometry and image-payload path.
+  Fit, crop, and stretch sizing, camera-frame depth, rotation, opacity, and
+  offset follow Blender 5.2's camera background transform. BACK images use a
+  far camera-frame plane with scene depth testing to keep them behind visible
+  geometry; FRONT images stay in the in-front image pass. These synthetic
+  picture shapes draw only in camera view. Animated or unavailable images use
+  the importer's unsupported-feature report. The scene extractor record is
+  version 23. Matched camera background captures have not been run.

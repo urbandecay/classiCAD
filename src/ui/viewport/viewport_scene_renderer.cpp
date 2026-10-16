@@ -2520,6 +2520,10 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         bool displayReferredOverlay)
 {
     if (picture.geometryType != GeometryType::Picture) return false;
+    if (picture.pictureCameraViewOnly &&
+        !transform.cameraState().cameraView) {
+        return true;
+    }
     if (!viewportPictureFrameVisibleInView(picture, transform))
         return true;
     if (!viewportPictureImageVisibleInView(picture, transform, viewportSize))

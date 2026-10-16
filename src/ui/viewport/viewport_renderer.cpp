@@ -3389,6 +3389,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
     }
 
     if (shape.geometryType == GeometryType::Picture) {
+        if (shape.pictureCameraViewOnly &&
+            !transform_.cameraState().cameraView) {
+            return;
+        }
         const QVector<QPointF> corners = pictureFrameCorners(shape);
         if (corners.size() != 4 ||
             !viewportPictureFrameVisibleInView(shape, transform_)) {

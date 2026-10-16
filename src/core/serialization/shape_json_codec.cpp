@@ -964,6 +964,8 @@ QJsonObject shapeToJson(const Shape &shape)
                       ? QStringLiteral("BACK")
                       : QStringLiteral("DEFAULT");
         object.insert(QStringLiteral("pictureImageDepth"), pictureDepth);
+        object.insert(QStringLiteral("pictureCameraViewOnly"),
+                      shape.pictureCameraViewOnly);
         object.insert(QStringLiteral("pictureColorSceneLinear"),
                       QJsonArray{shape.pictureColorSceneLinear.x(),
                                  shape.pictureColorSceneLinear.y(),
@@ -1147,6 +1149,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     bool pictureShowPerspective = true;
     bool pictureShowOrthographic = true;
     bool pictureOnlyAxisAligned = false;
+    bool pictureCameraViewOnly = false;
     PictureImageSide pictureImageSide = PictureImageSide::Both;
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
     QVector4D pictureColorSceneLinear(1.0f, 1.0f, 1.0f, 1.0f);
@@ -1174,7 +1177,9 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             !readBoolean(QStringLiteral("pictureShowOrthographic"), true,
                          &pictureShowOrthographic) ||
             !readBoolean(QStringLiteral("pictureOnlyAxisAligned"), false,
-                         &pictureOnlyAxisAligned)) {
+                         &pictureOnlyAxisAligned) ||
+            !readBoolean(QStringLiteral("pictureCameraViewOnly"), false,
+                         &pictureCameraViewOnly)) {
             return false;
         }
         const QJsonValue pictureColorValue =
@@ -1551,6 +1556,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureShowPerspective = pictureShowPerspective;
     shape->pictureShowOrthographic = pictureShowOrthographic;
     shape->pictureOnlyAxisAligned = pictureOnlyAxisAligned;
+    shape->pictureCameraViewOnly = pictureCameraViewOnly;
     shape->pictureImageSide = pictureImageSide;
     shape->pictureImageDepth = pictureImageDepth;
     shape->pictureColorSceneLinear = pictureColorSceneLinear;

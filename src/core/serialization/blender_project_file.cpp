@@ -2147,6 +2147,8 @@ bool parseBlenderPictureItem(
         QStringLiteral("show_empty_image_orthographic")).toBool(true);
     result.geometry.pictureOnlyAxisAligned = item.value(
         QStringLiteral("show_empty_image_only_axis_aligned")).toBool(false);
+    result.geometry.pictureCameraViewOnly = item.value(
+        QStringLiteral("picture_camera_view_only")).toBool(false);
     const QString imageSide = item.value(
         QStringLiteral("empty_image_side")).toString(
             QStringLiteral("DOUBLE_SIDED"));
@@ -2752,7 +2754,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
          bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18 &&
          bridgeVersion != 19 && bridgeVersion != 20 && bridgeVersion != 21 &&
-         bridgeVersion != 22)) {
+         bridgeVersion != 22 && bridgeVersion != 23)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

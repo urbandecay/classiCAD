@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 19
+BRIDGE_FORMAT_VERSION = 20
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1008,6 +1008,42 @@ def saved_viewport_shading_record(scene):
                             if color is not None:
                                 record[record_key] = vector_values(color)
                 return record
+    return None
+
+
+def saved_viewport_view_record():
+    """Return a saved free VIEW_3D view, when the file contains one.
+
+    Camera-locked views need a separate camera-view contract and are skipped.
+    """
+    screens = [screen for screen in bpy.data.screens
+               if not bool(getattr(screen, "is_temporary", False))]
+    screens.sort(key=lambda screen: screen.name_full)
+    window = getattr(bpy.context, "window", None)
+    active_screen = getattr(window, "screen", None)
+    if active_screen in screens:
+        screens.remove(active_screen)
+        screens.insert(0, active_screen)
+    for screen in screens:
+        areas = sorted(screen.areas, key=lambda area: (-area.y, area.x))
+        for area in areas:
+            if area.type != "VIEW_3D":
+                continue
+            region = area.spaces.active.region_3d
+            perspective = str(region.view_perspective)
+            if perspective not in {"PERSP", "ORTHO"}:
+                continue
+            rotation = region.view_rotation
+            location = region.view_location
+            return {
+                "view_perspective": perspective,
+                "view_location": vector_values(location),
+                "view_rotation_wxyz": [
+                    finite_number(rotation.w), finite_number(rotation.x),
+                    finite_number(rotation.y), finite_number(rotation.z),
+                ],
+                "view_distance": finite_number(region.view_distance),
+            }
     return None
 
 
@@ -2204,6 +2240,7 @@ def extract_scene(input_path, mode):
             view_layer_key(active_scene, active_view_layer)
             if active_scene is not None and active_view_layer is not None else ""
         ),
+        "saved_viewport_view": saved_viewport_view_record(),
         "scenes": [],
         "collections": [],
         "items": [],

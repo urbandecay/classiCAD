@@ -2625,7 +2625,10 @@ bool loadVignolaDocument(const QString &path,
         snapshot.settings.activeViewLayerKey = importReport.activeViewLayerKey;
         restored.restoreSnapshot(snapshot);
         *document = std::move(restored);
-        if (cameraSettings != nullptr) *cameraSettings = ProjectViewportCameraSettings{};
+        if (cameraSettings != nullptr) {
+            *cameraSettings = ProjectViewportCameraSettings{};
+            cameraSettings->view = importReport.initialViewportView;
+        }
         if (ordinaryImportReport != nullptr)
             *ordinaryImportReport = std::move(importReport);
         if (errorMessage != nullptr) errorMessage->clear();
@@ -2721,7 +2724,7 @@ bool importBlenderScene(const QString &path,
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
          bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18 &&
-         bridgeVersion != 19)) {
+         bridgeVersion != 19 && bridgeVersion != 20)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -2730,6 +2733,71 @@ bool importBlenderScene(const QString &path,
     QString activeSceneId = root.value(QStringLiteral("active_scene_id")).toString();
     QString activeViewLayerKey = root.value(
         QStringLiteral("active_view_layer_key")).toString();
+    ProjectViewportViewState initialViewportView;
+    const QJsonObject savedView = root.value(
+        QStringLiteral("saved_viewport_view")).toObject();
+    const QString savedPerspective = savedView.value(
+        QStringLiteral("view_perspective")).toString();
+    const QJsonArray savedLocation = savedView.value(
+        QStringLiteral("view_location")).toArray();
+    const QJsonArray savedRotation = savedView.value(
+        QStringLiteral("view_rotation_wxyz")).toArray();
+    const QJsonValue savedDistance = savedView.value(
+        QStringLiteral("view_distance"));
+    if ((savedPerspective == QLatin1String("PERSP") ||
+         savedPerspective == QLatin1String("ORTHO")) &&
+        savedLocation.size() == 3 && savedRotation.size() == 4 &&
+        savedDistance.isDouble() && savedDistance.toDouble() > 0.0) {
+        double location[3] = {};
+        double rotation[4] = {};
+        bool validSavedView = std::isfinite(savedDistance.toDouble());
+        for (int i = 0; i < 3; ++i) {
+            validSavedView = validSavedView && savedLocation[i].isDouble() &&
+                             std::isfinite(savedLocation[i].toDouble());
+            if (savedLocation[i].isDouble())
+                location[i] = savedLocation[i].toDouble();
+        }
+        for (int i = 0; i < 4; ++i) {
+            validSavedView = validSavedView && savedRotation[i].isDouble() &&
+                             std::isfinite(savedRotation[i].toDouble());
+            if (savedRotation[i].isDouble())
+                rotation[i] = savedRotation[i].toDouble();
+        }
+        const double rotationLengthSquared =
+            rotation[0] * rotation[0] + rotation[1] * rotation[1] +
+            rotation[2] * rotation[2] + rotation[3] * rotation[3];
+        validSavedView = validSavedView &&
+                         std::isfinite(rotationLengthSquared) &&
+                         rotationLengthSquared > 1.0e-12;
+        if (validSavedView) {
+            const double distance = savedDistance.toDouble();
+            const double zoom = 60.0 / distance;
+            validSavedView = std::isfinite(zoom) && zoom > 0.0 &&
+                             zoom <= 1.0e12;
+        }
+        if (validSavedView) {
+            const double distance = savedDistance.toDouble();
+            initialViewportView.zoom = 60.0 / distance;
+            initialViewportView.orbitPivotX = location[0];
+            initialViewportView.orbitPivotY = location[1];
+            initialViewportView.orbitPivotZ = location[2];
+            initialViewportView.gridViewDistance = distance;
+            initialViewportView.orientationW = rotation[0];
+            initialViewportView.orientationX = rotation[1];
+            initialViewportView.orientationY = rotation[2];
+            initialViewportView.orientationZ = rotation[3];
+            initialViewportView.hasOrientation = true;
+            initialViewportView.perspective =
+                savedPerspective == QLatin1String("PERSP");
+            initialViewportView.preset = initialViewportView.perspective ? 4 : 5;
+            initialViewportView.targetX = location[0];
+            initialViewportView.targetY = location[1];
+            initialViewportView.targetZ = location[2];
+            initialViewportView.storedInProject = true;
+        }
+    }
+    if (report != nullptr)
+        report->initialViewportView = initialViewportView;
     const QString sourceVersion =
         source.value(QStringLiteral("blender_version")).toString();
     const QJsonArray version =

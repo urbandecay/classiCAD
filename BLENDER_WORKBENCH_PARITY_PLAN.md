@@ -8834,3 +8834,16 @@ resolve remain open.
   and creates extruded frustum corners with `corner - light_direction * 1e4`
   at lines 1356-1361. C++ build passed; matched GPU shadow comparisons remain
   open. The QPainter depth-map fallback remains a separate approximation.
+
+### Blender saved viewport view on Open (2026-10-15)
+
+- Ordinary `.blend` Open now reads a saved free `VIEW_3D` region's focus point,
+  orientation, distance, and perspective/orthographic mode and applies them to
+  classiCAD's initial viewport. It uses the same deterministic screen and area
+  selection policy as the saved viewport shading import. Blender camera-locked
+  views are skipped because they need the separate viewport-camera framing
+  contract; if no saved free 3D view is available, classiCAD keeps its default
+  view. Blender stores these values on `SpaceView3D.region_3d`; see
+  [`RegionView3D`](https://docs.blender.org/api/5.2/bpy.types.RegionView3D.html).
+  The scene render camera remains a separate record for Workbench render
+  results. C++ build passed; a matched saved-view comparison has not been run.

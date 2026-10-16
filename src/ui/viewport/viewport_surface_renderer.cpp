@@ -2195,11 +2195,15 @@ bool ViewportSurfaceRenderer::initialize()
         void main()
         {
             float depth = texture(uFrontDepth, vUv).r;
+        uint frontObjectId = texelFetch(
+            uFrontObjectId, ivec2(gl_FragCoord.xy), 0).r;
             if (uCaptureOpaqueCoverage) {
-                opaqueFrontMask = depth < 1.0 ? 1.0 : 0.0;
+            // A valid surface may land exactly on the far plane (depth 1).
+            // Object ID, unlike depth, distinguishes it from cleared pixels.
+            opaqueFrontMask = frontObjectId != 0u ? 1.0 : 0.0;
                 return;
             }
-            if (depth >= 1.0) discard;
+        if (frontObjectId == 0u) discard;
             // Workbench first merges the actual front-domain depth so later
             // transparent, volume, outline, and DOF passes see scene depth.
             // Its separate overlay-depth pass applies the near-plane override

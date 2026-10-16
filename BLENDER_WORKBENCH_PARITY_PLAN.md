@@ -9845,3 +9845,14 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L22-L39)
   and stores them in its half-float normal attachment in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L138-L143).
+
+### Scalar-volume isotropic scattering coefficient (2026-10-16)
+
+- GPU and QPainter scalar-volume slice and ray-march paths now use Blender's
+  isotropic phase coefficient `1/(4π)` for scattering. They previously used
+  `0.25`, making volume color about π times brighter for matching density and
+  ray steps; extinction, transmittance, and opacity are unchanged.
+- Blender 5.2.2 defines the coefficient and applies it in
+  [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L142-L145)
+  and its shared volume-step integration at [#L244-L251](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L244-L251).
+  Build passed; matched volume images remain open.

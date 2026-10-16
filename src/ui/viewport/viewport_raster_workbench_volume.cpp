@@ -20,6 +20,7 @@ namespace {
 constexpr std::uint64_t kMaxDenseVoxels = 16ull * 1024ull * 1024ull;
 constexpr qsizetype kMaxSamples = 1'000'000;
 constexpr std::size_t kMaxSliceCandidateTests = 8'000'000;
+constexpr float kIsotropicPhaseFunction = 1.0f / (4.0f * 3.14159265358979323846f);
 const std::array<QPointF, 4> kSliceSubpixelOffsets{{
     QPointF(0.25, 0.25), QPointF(0.75, 0.25),
     QPointF(0.25, 0.75), QPointF(0.75, 0.75)}};
@@ -591,7 +592,7 @@ bool rasterWorkbenchVolumeRaySamples(
                 const float stepOpacity = 1.0f - stepTransmittance;
                 const float scatteringScale = density / extinction;
                 const float scattering = transmittance * stepOpacity *
-                                         scatteringScale * 0.25f;
+                                         scatteringScale * kIsotropicPhaseFunction;
                 radiance += QVector3D(scattering, scattering, scattering);
                 transmittance *= stepTransmittance;
                 // Blender treats the volume as fully opaque once only one

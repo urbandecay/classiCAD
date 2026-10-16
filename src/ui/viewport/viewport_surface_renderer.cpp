@@ -1972,6 +1972,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform vec3 uBoundsMin;
         uniform vec3 uGridSize;
         uniform vec3 uBaseColor;
+        const float kIsotropicPhaseFunction = 0.07957747154594767;
         uniform float uDensityScale;
         uniform bool uUseSlice;
         uniform int uSliceAxis;
@@ -2120,7 +2121,8 @@ bool ViewportSurfaceRenderer::initialize()
                 float opacity = 1.0 - exp(-extinction * uSliceStepWorld);
                 float scatteringScale = density / extinction;
                 fragmentColor = resolveVolumeColor(
-                    uBaseColor * (opacity * scatteringScale * 0.25), opacity);
+                    uBaseColor * (opacity * scatteringScale *
+                                  kIsotropicPhaseFunction), opacity);
                 return;
             }
             float nearT, farT;
@@ -2151,7 +2153,8 @@ bool ViewportSurfaceRenderer::initialize()
                 float stepOpacity = 1.0 - stepTransmittance;
                 float scatteringScale = density / extinction;
                 radiance += transmittance * uBaseColor *
-                            (stepOpacity * scatteringScale * 0.25);
+                            (stepOpacity * scatteringScale *
+                             kIsotropicPhaseFunction);
                 transmittance *= stepTransmittance;
                 // Blender clamps the remaining transmittance to zero once
                 // only one percent of the ray remains, making that volume

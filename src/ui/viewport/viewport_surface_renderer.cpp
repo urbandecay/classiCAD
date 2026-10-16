@@ -4934,12 +4934,13 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
                 QVector3D::dotProduct(normal, lightDirection) < 0.0f;
             facingLight.append(faceLit);
 
-            if (faceLit) {
+            if (faceLit || !range.shadowVolumeClosed) {
                 const QVector3D farA = extrudeToFarPlane(a);
                 const QVector3D farB = extrudeToFarPlane(b);
                 const QVector3D farC = extrudeToFarPlane(c);
-                // Only light-facing faces cap the volume; their exposed
-                // boundary is closed by the silhouette side quads.
+                // Closed manifolds need only their light-facing caps. Blender
+                // uses the double-manifold cap path for open casters, which
+                // submits both caps for every face before depth-fail counting.
                 appendTriangle(&volumeVertices, a, b, c);
                 appendTriangle(&volumeVertices, farC, farB, farA);
             }

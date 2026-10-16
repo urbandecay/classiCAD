@@ -75,7 +75,7 @@ void appendPictureDepthSurface(const Shape &shape,
         const int maskRow = rowIndex * maskHeight / image.height();
         for (int column = 0; column < image.width(); ++column) {
             if (pixels[column * 4 + 3] <
-                qRound(kWorkbenchImageAlphaCutoff * 255.0f)) {
+                qRound(kWorkbenchImageEmptyAlphaCutoff * 255.0f)) {
                 const int maskColumn = column * maskWidth / image.width();
                 alphaPassingCells[maskRow * maskWidth + maskColumn] = 0;
             }

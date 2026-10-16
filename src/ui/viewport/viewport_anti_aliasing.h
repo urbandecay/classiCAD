@@ -40,8 +40,8 @@ constexpr int normalizedViewportAntiAliasingMode(int value) noexcept
 }
 
 // Blender stores render AA as enum identifiers rather than sample counts.
-// Return -1 for an absent or unknown identifier so imported scenes without a
-// supported render override continue to use the viewport preference.
+// Viewport AA currently uses the same enum identifiers. Return -1 for an
+// absent or unknown identifier so callers can preserve their current setting.
 inline int blenderRenderAntiAliasingMode(const QString &identifier) noexcept
 {
     if (identifier == QLatin1String("OFF")) {

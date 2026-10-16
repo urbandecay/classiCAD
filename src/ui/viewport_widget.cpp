@@ -7741,6 +7741,21 @@ public:
         if (applyToViewport) {
             viewportShadingSettings_ = settings;
             viewportRenderer_.setShadingSettings(viewportShadingSettings_);
+            if (source.contains(QStringLiteral("viewport_aa"))) {
+                const QJsonValue viewportAaValue = source.value(
+                    QStringLiteral("viewport_aa"));
+                const int viewportAaMode = viewportAaValue.isString()
+                    ? blenderRenderAntiAliasingMode(viewportAaValue.toString())
+                    : -1;
+                if (viewportAaMode >= 0) {
+                    setViewportAntiAliasingMode(viewportAaMode);
+                } else {
+                    unsupported.append(QStringLiteral(
+                        "viewport_aa (invalid or unsupported value)"));
+                    if (unsupportedOutput != nullptr)
+                        *unsupportedOutput = unsupported;
+                }
+            }
             refreshShadingPopover();
             notifyViewStateChanged();
             update();

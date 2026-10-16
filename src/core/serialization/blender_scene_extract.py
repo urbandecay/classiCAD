@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 28
+BRIDGE_FORMAT_VERSION = 29
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1102,6 +1102,10 @@ def workbench_shading_record(scene, shading=None):
         world_space_lighting = not bool(shading.use_studiolight_view_rotation)
     selected_studio_light = getattr(shading, "selected_studio_light", None)
     record = {
+        # Blender stores viewport AA separately from render AA. Keep it with
+        # the imported viewport shading record so opening a .blend selects
+        # the saved viewport quality rather than classiCAD's local preference.
+        "viewport_aa": str(scene.display.viewport_aa),
         "light": str(shading.light),
         "studio_light": str(getattr(shading, "studio_light", "")),
         "selected_studio_light": str(getattr(selected_studio_light, "name", "")),

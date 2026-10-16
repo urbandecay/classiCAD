@@ -18508,7 +18508,11 @@ protected:
             (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
             selectionShortcutsAvailable() &&
             !selectedShapeIndices_.isEmpty()) {
-            deleteSelectedShapes();
+            if (shouldOfferSurfaceDeleteMenu()) {
+                showSurfaceDeleteMenu();
+            } else {
+                deleteSelectedShapes();
+            }
             return;
         }
 
@@ -19686,6 +19690,411 @@ private:
 
         shape->nurbsSurface = std::move(rebuilt);
         return true;
+    }
+
+    bool splitNurbsSurfaceAtSelectedControlNetLanes(
+        const NurbsSurface3D &surface,
+        const QSet<int> &selectedEdges,
+        QVector<NurbsSurface3D> *patches,
+        QVector<QVector<int>> *patchSourceIndices,
+        QString *error) const
+    {
+        const auto fail = [error](const QString &message) {
+            if (error != nullptr) {
+                *error = message;
+            }
+            return false;
+        };
+        if (patches == nullptr || patchSourceIndices == nullptr ||
+            !validateNurbsSurface(surface) ||
+            !surface.trimLoops.isEmpty() || selectedEdges.isEmpty()) {
+            return fail(QStringLiteral(
+                "Delete Segments supports selected edges on untrimmed NURBS surfaces"));
+        }
+
+        const int countU = surface.controlVertexCountU;
+        const int countV = surface.controlVertexCountV;
+        const QVector<QPair<int, int>> edges =
+            nurbsSurfaceControlNetEdgeVertexIndices(surface);
+        QVector<char> selectedULanes(countU, 0);
+        QVector<char> selectedVLanes(countV, 0);
+        QVector<int> selectedUEdgeCounts(countU, 0);
+        QVector<int> selectedVEdgeCounts(countV, 0);
+        bool hasULane = false;
+        bool hasVLane = false;
+        for (int edgeIndex : selectedEdges) {
+            if (edgeIndex < 0 || edgeIndex >= edges.size()) {
+                return fail(QStringLiteral(
+                    "Delete Segments found an invalid surface edge selection"));
+            }
+            const int first = edges[edgeIndex].first;
+            const int second = edges[edgeIndex].second;
+            const int firstU = first / countV;
+            const int firstV = first % countV;
+            const int secondU = second / countV;
+            const int secondV = second % countV;
+            if (firstU == secondU && std::abs(firstV - secondV) == 1) {
+                hasULane = true;
+                selectedULanes[firstU] = 1;
+                ++selectedUEdgeCounts[firstU];
+            } else if (firstV == secondV && std::abs(firstU - secondU) == 1) {
+                hasVLane = true;
+                selectedVLanes[firstV] = 1;
+                ++selectedVEdgeCounts[firstV];
+            } else {
+                return fail(QStringLiteral(
+                    "Delete Segments requires complete straight control-net lines"));
+            }
+        }
+        if (hasULane == hasVLane) {
+            return fail(QStringLiteral(
+                "Delete Segments requires lines in one control-net direction"));
+        }
+
+        QVector<char> selectedLanes = hasULane ? selectedULanes : selectedVLanes;
+        const QVector<int> &selectedEdgeCounts =
+            hasULane ? selectedUEdgeCounts : selectedVEdgeCounts;
+        const int laneLength = hasULane ? countV - 1 : countU - 1;
+        for (int lane = 0; lane < selectedLanes.size(); ++lane) {
+            if (selectedLanes[lane] != 0 &&
+                selectedEdgeCounts[lane] != laneLength) {
+                return fail(QStringLiteral(
+                    "Delete Segments requires every edge along each selected control-net line"));
+            }
+        }
+
+        // Blender treats a run of two or more selected parallel CV lines as a
+        // segment to remove. An isolated line is not a deletable span.
+        QVector<char> cutLanes(selectedLanes.size(), 0);
+        bool hasCutBand = false;
+        for (int lane = 0; lane < selectedLanes.size();) {
+            if (selectedLanes[lane] == 0) {
+                ++lane;
+                continue;
+            }
+            const int runStart = lane;
+            while (lane + 1 < selectedLanes.size() &&
+                   selectedLanes[lane + 1] != 0) {
+                ++lane;
+            }
+            const int runEnd = lane;
+            if (runEnd > runStart) {
+                hasCutBand = true;
+                for (int cutLane = runStart; cutLane <= runEnd; ++cutLane) {
+                    cutLanes[cutLane] = 1;
+                }
+            }
+            ++lane;
+        }
+        if (!hasCutBand) {
+            return fail(QStringLiteral(
+                "Delete Segments needs at least two adjacent complete control-net lines"));
+        }
+
+        QVector<QPair<int, int>> laneRanges;
+        for (int lane = 0; lane < cutLanes.size();) {
+            if (cutLanes[lane] != 0) {
+                ++lane;
+                continue;
+            }
+            const int unselectedStart = lane;
+            while (lane + 1 < cutLanes.size() && cutLanes[lane + 1] == 0) {
+                ++lane;
+            }
+            const int unselectedEnd = lane;
+            const int patchStart = unselectedStart > 0 &&
+                                           cutLanes[unselectedStart - 1] != 0
+                                       ? unselectedStart - 1
+                                       : unselectedStart;
+            const int patchEnd = unselectedEnd + 1 < cutLanes.size() &&
+                                         cutLanes[unselectedEnd + 1] != 0
+                                     ? unselectedEnd + 1
+                                     : unselectedEnd;
+            if (patchEnd - patchStart + 1 >= 2) {
+                laneRanges.append({patchStart, patchEnd});
+            }
+            ++lane;
+        }
+
+        patches->clear();
+        patchSourceIndices->clear();
+        const QVector<double> fullKnots = expandedNurbsSurfaceKnotVector(
+            hasULane ? surface.knotsU : surface.knotsV);
+        const int originalDegree = hasULane ? surface.degreeU : surface.degreeV;
+        const int originalLaneCount = hasULane ? countU : countV;
+        if (fullKnots.size() != originalLaneCount + originalDegree + 1) {
+            return fail(QStringLiteral(
+                "Delete Segments found an invalid surface knot vector"));
+        }
+        for (const QPair<int, int> &laneRange : laneRanges) {
+            const int patchLaneCount = laneRange.second - laneRange.first + 1;
+            const int domainStartIndex = std::clamp(
+                originalDegree + laneRange.first,
+                originalDegree, originalLaneCount);
+            const int domainEndIndex = std::clamp(
+                originalDegree + laneRange.second + 1,
+                originalDegree, originalLaneCount);
+            int adjustedStartIndex = domainStartIndex;
+            int adjustedEndIndex = domainEndIndex;
+            while (adjustedEndIndex < originalLaneCount &&
+                   fullKnots[adjustedEndIndex] <=
+                       fullKnots[adjustedStartIndex]) {
+                ++adjustedEndIndex;
+            }
+            while (adjustedStartIndex > originalDegree &&
+                   fullKnots[adjustedEndIndex] <=
+                       fullKnots[adjustedStartIndex]) {
+                --adjustedStartIndex;
+            }
+            double domainStart = fullKnots[adjustedStartIndex];
+            double domainEnd = fullKnots[adjustedEndIndex];
+            if (domainEnd <= domainStart) {
+                // Repeated boundary knots can collapse a local range after
+                // degree reduction. The valid original domain is the safe
+                // Blender-style recalculation range for that patch.
+                domainStart = fullKnots[originalDegree];
+                domainEnd = fullKnots[originalLaneCount];
+            }
+            if (!std::isfinite(domainStart) || !std::isfinite(domainEnd) ||
+                domainEnd <= domainStart) {
+                return fail(QStringLiteral(
+                    "Delete Segments cannot preserve a nondegenerate parameter range for this patch"));
+            }
+
+            NurbsSurface3D patch = surface;
+            if (hasULane) {
+                patch.controlVertexCountU = patchLaneCount;
+                patch.degreeU = std::min(surface.degreeU, patchLaneCount - 1);
+                patch.orderU = patch.degreeU + 1;
+            } else {
+                patch.controlVertexCountV = patchLaneCount;
+                patch.degreeV = std::min(surface.degreeV, patchLaneCount - 1);
+                patch.orderV = patch.degreeV + 1;
+            }
+            patch.controlPoints.clear();
+            patch.weights.clear();
+            patch.controlPoints.reserve(patch.controlVertexCountU *
+                                        patch.controlVertexCountV);
+            patch.weights.reserve(patch.controlVertexCountU *
+                                  patch.controlVertexCountV);
+            QVector<int> sourceIndices;
+            sourceIndices.reserve(patch.controlVertexCountU *
+                                  patch.controlVertexCountV);
+            for (int u = 0; u < countU; ++u) {
+                if (hasULane &&
+                    (u < laneRange.first || u > laneRange.second)) {
+                    continue;
+                }
+                for (int v = 0; v < countV; ++v) {
+                    if (!hasULane &&
+                        (v < laneRange.first || v > laneRange.second)) {
+                        continue;
+                    }
+                    const int sourceIndex = u * countV + v;
+                    patch.controlPoints.append(surface.controlPoints[sourceIndex]);
+                    patch.weights.append(surface.weights[sourceIndex]);
+                    sourceIndices.append(sourceIndex);
+                }
+            }
+
+            const int patchDegree = hasULane ? patch.degreeU : patch.degreeV;
+            const int interiorCount = patchLaneCount - patchDegree - 1;
+            QVector<double> fullPatchKnots;
+            fullPatchKnots.reserve(patchLaneCount + patchDegree + 1);
+            for (int index = 0; index <= patchDegree; ++index) {
+                fullPatchKnots.append(domainStart);
+            }
+            for (int index = 1; index <= interiorCount; ++index) {
+                const double t = static_cast<double>(index) /
+                                 static_cast<double>(interiorCount + 1);
+                fullPatchKnots.append(domainStart +
+                                      (domainEnd - domainStart) * t);
+            }
+            for (int index = 0; index <= patchDegree; ++index) {
+                fullPatchKnots.append(domainEnd);
+            }
+            if (hasULane) {
+                patch.knotsU = fullPatchKnots.mid(1,
+                                                  fullPatchKnots.size() - 2);
+            } else {
+                patch.knotsV = fullPatchKnots.mid(1,
+                                                  fullPatchKnots.size() - 2);
+            }
+            if (!validateNurbsSurface(patch)) {
+                return fail(QStringLiteral(
+                    "Delete Segments would create an invalid NURBS surface patch"));
+            }
+            patches->append(std::move(patch));
+            patchSourceIndices->append(std::move(sourceIndices));
+        }
+        return true;
+    }
+
+    bool deleteSelectedSurfaceSegments()
+    {
+        if (interactionMode_ != ViewportInteractionMode::Edit ||
+            componentSelectionMode_ != ComponentSelectionMode::Edge ||
+            !controlPointsVisible_) {
+            return false;
+        }
+        const auto &selected = componentSelections_[
+            static_cast<int>(ComponentSelectionMode::Edge)];
+        if (selected.isEmpty()) {
+            return false;
+        }
+
+        DocumentTransaction transaction = session_.beginTransaction();
+        const auto reject = [this, &transaction](const QString &message) {
+            transaction.rollback();
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(message);
+            }
+            DebugLog::instance().write(message);
+            return false;
+        };
+        int editedSurfaceCount = 0;
+        int addedPatchCount = 0;
+        for (auto selection = selected.cbegin(); selection != selected.cend();
+             ++selection) {
+            const ObjectId objectId = ObjectId::fromValue(selection.key());
+            const SceneObject *sourceObject = document_.object(objectId);
+            if (!isEditObject(objectId) || sourceObject == nullptr ||
+                sourceObject->geometry.geometryType != GeometryType::NurbsSurface ||
+                !document_.isObjectVisible(objectId) ||
+                !document_.isObjectEditable(objectId)) {
+                return reject(QStringLiteral(
+                    "Delete Segments only supports selected untrimmed NURBS surfaces"));
+            }
+            const SceneObject sourceSceneObject = *sourceObject;
+            const Shape sourceShape = sourceSceneObject.geometry;
+            QVector<NurbsSurface3D> patches;
+            QVector<QVector<int>> patchSourceIndices;
+            QString error;
+            if (!splitNurbsSurfaceAtSelectedControlNetLanes(
+                    sourceShape.nurbsSurface, selection.value(), &patches,
+                    &patchSourceIndices, &error)) {
+                return reject(error);
+            }
+
+            if (patches.isEmpty()) {
+                if (!transaction.removeObject(objectId)) {
+                    return reject(QStringLiteral(
+                        "Delete Segments could not remove the selected surface"));
+                }
+                ++editedSurfaceCount;
+                continue;
+            }
+
+            QVector<QVector<quint64>> patchWeldGroups(patches.size());
+            if (!sourceShape.controlPointWeldGroups.isEmpty()) {
+                QSet<int> alreadyMappedSourceIndices;
+                for (int patchIndex = 0; patchIndex < patches.size();
+                     ++patchIndex) {
+                    const QVector<int> &sourceIndices =
+                        patchSourceIndices[patchIndex];
+                    QVector<quint64> &weldGroups =
+                        patchWeldGroups[patchIndex];
+                    weldGroups.reserve(sourceIndices.size());
+                    for (int sourceIndex : sourceIndices) {
+                        quint64 group = sourceIndex >= 0 &&
+                                                sourceIndex < sourceShape
+                                                    .controlPointWeldGroups.size()
+                                            ? sourceShape.controlPointWeldGroups[
+                                                  sourceIndex]
+                                            : 0;
+                        if (alreadyMappedSourceIndices.contains(sourceIndex)) {
+                            group = 0;
+                        } else if (group != 0) {
+                            alreadyMappedSourceIndices.insert(sourceIndex);
+                        }
+                        weldGroups.append(group);
+                    }
+                }
+            }
+
+            Shape *editedShape = transaction.editGeometry(objectId);
+            if (editedShape == nullptr) {
+                return reject(QStringLiteral(
+                    "Delete Segments could not update the selected surface"));
+            }
+            editedShape->nurbsSurface = patches.first();
+            editedShape->controlPointWeldGroups = patchWeldGroups.first();
+            ++editedSurfaceCount;
+
+            for (int patchIndex = 1; patchIndex < patches.size(); ++patchIndex) {
+                SceneObject patchObject = sourceSceneObject;
+                patchObject.id = ObjectId::invalid();
+                patchObject.geometry = sourceShape;
+                patchObject.geometry.nurbsSurface = patches[patchIndex];
+                patchObject.geometry.controlPointWeldGroups =
+                    patchWeldGroups[patchIndex];
+                patchObject.blenderSurfaceWireVerticesWorld.clear();
+                patchObject.blenderSurfaceWireGeometryFingerprint.clear();
+                if (!transaction.insertObject(document_.size(), patchObject)
+                         .isValid()) {
+                    return reject(QStringLiteral(
+                        "Delete Segments could not add a resulting surface patch"));
+                }
+                ++addedPatchCount;
+            }
+        }
+        if (editedSurfaceCount == 0 || !session_.commitTransaction(transaction)) {
+            return false;
+        }
+
+        clearSelection();
+        clearComponentSelections();
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        update();
+        DebugLog::instance().write(
+            QStringLiteral("delete surface segments surfaces=%1 addedPatches=%2")
+                .arg(editedSurfaceCount)
+                .arg(addedPatchCount));
+        return true;
+    }
+
+    bool shouldOfferSurfaceDeleteMenu() const
+    {
+        if (interactionMode_ != ViewportInteractionMode::Edit ||
+            componentSelectionMode_ != ComponentSelectionMode::Edge ||
+            !controlPointsVisible_) {
+            return false;
+        }
+        const auto &selected = componentSelections_[
+            static_cast<int>(ComponentSelectionMode::Edge)];
+        if (selected.isEmpty()) {
+            return false;
+        }
+        for (auto selection = selected.cbegin(); selection != selected.cend();
+             ++selection) {
+            const ObjectId objectId = ObjectId::fromValue(selection.key());
+            const Shape *shape = document_.shape(objectId);
+            if (!isEditObject(objectId) || shape == nullptr ||
+                shape->geometryType != GeometryType::NurbsSurface ||
+                !shape->nurbsSurface.trimLoops.isEmpty() ||
+                !document_.isObjectVisible(objectId) ||
+                !document_.isObjectEditable(objectId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void showSurfaceDeleteMenu()
+    {
+        auto *menu = new QMenu(this);
+        QAction *verticesAction = menu->addAction(QStringLiteral("Vertices"));
+        QAction *segmentsAction = menu->addAction(QStringLiteral("Segments"));
+        connect(verticesAction, &QAction::triggered, this,
+                [this] { deleteSelectedShapes(); });
+        connect(segmentsAction, &QAction::triggered, this,
+                [this] { deleteSelectedSurfaceSegments(); });
+        connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
+        menu->popup(QCursor::pos());
     }
 
     bool deleteSelectedControlPoints(

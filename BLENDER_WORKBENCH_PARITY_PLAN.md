@@ -3958,6 +3958,27 @@ mapping; Blender's native NURBS modes do not have classiCAD's edge and face
 modes. References: [Blender 5.2 curve selection](https://docs.blender.org/manual/en/5.2/modeling/curves/selecting.html)
 and [surface selection](https://docs.blender.org/manual/en/5.2/modeling/surfaces/selecting.html).
 
+In Edge mode, Delete on selected untrimmed NURBS surface control-net edges opens
+Blender's **Vertices / Segments** choice when the control net is visible.
+Vertices uses the existing complete-row/column removal path. Segments consumes
+the selected edge IDs directly and accepts only complete parallel edge chains
+in one control-net direction; at least two adjacent chains are required to
+identify a removable span. It removes the selected band and creates separate
+surface patches from the remaining runs, retaining neighboring selected CV
+lines as patch boundaries. Each patch keeps the original XYZ CVs and weights,
+retains the untouched knot vector, and receives clamped knots over the source
+knot interval in the cut direction. Because the current shape model stores one
+surface per scene object, additional patches become new objects carrying the
+source collections, placement, and Workbench appearance; stale evaluated
+surface-wire caches are cleared on added objects and rejected by geometry
+fingerprint on the source object. Existing weld groups are remapped from
+surviving CVs; a duplicated boundary CV keeps its weld link on its first patch
+only so the split patches remain independent. Partial edge chains, mixed
+directions, trimmed surfaces, and
+degenerate patches are rejected. Cyclic surface nets are not represented in
+classiCAD. Exact Blender-equivalent results for imported nonuniform knots have
+not been visually compared.
+
 The user explicitly deferred polygon-mesh component work for now; this slice
 maps NURBS control points to vertices, curve splines to edges, and NURBS
 surface patches to faces. Edit Mode Extrude now uses the active component
@@ -3988,8 +4009,8 @@ but does not yet provide Blender's transform-orientation toggle, middle-mouse
 interactive axis choice, or alternate pivot modes. The shortcut is limited to
 Edit Mode's Select tool and the supported NURBS point/curve/surface targets.
 NURBS solid component mirroring remains unsupported because its faces are
-derived from the exact base surface and extrusion vector. Trimmed-surface and
-surface-segment deletion, exact post-delete results for imported nonuniform
+derived from the exact base surface and extrusion vector. Trimmed-surface
+deletion, exact post-delete results for imported nonuniform
 knots, individual solid-face deletion, exact active/selected outlines, other
 mode-specific overlay details, Blender's Shift-digit simultaneous selection
 modes, and matched GPU/QPainter captures remain open. Ctrl+1/2/3 now

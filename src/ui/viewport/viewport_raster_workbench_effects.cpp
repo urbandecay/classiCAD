@@ -2349,7 +2349,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
 
     const int outputWidth = colorImage->width();
     const int outputHeight = colorImage->height();
-    const qreal colorDpr = std::max<qreal>(colorImage->devicePixelRatio(), 1.0);
+    const qreal colorDpr = std::max<qreal>(colorImage->devicePixelRatio(), 1.0e-6);
     const bool hasDeferredSceneLinearOutline = surfaceLayers != nullptr &&
         surfaceLayers->sceneLinearOutlinePending &&
         surfaceLayers->sceneLinearSize == QSize(outputWidth, outputHeight) &&

@@ -9343,14 +9343,26 @@ protected:
             const qreal devicePixelRatio =
                 std::max<qreal>(devicePixelRatioF(), 1.0);
             // The QPainter fallback cannot accumulate temporal Workbench
-            // samples. Render its committed scene into a supersampled target
-            // instead so the available AA choices retain increasing quality.
+            // samples. Supersample its committed scene when the selected AA
+            // mode allows, while keeping the bounded surface compositor's
+            // physical target within its one-million-pixel working budget.
             const int rasterAaScale = viewportAaMode_ >= 32 ? 6
                                       : viewportAaMode_ >= 16 ? 4
                                       : viewportAaMode_ >= 8 ? 3
                                       : viewportAaMode_ > 0 ? 2 : 1;
-            const qreal rasterDevicePixelRatio =
+            const qreal requestedRasterDevicePixelRatio =
                 devicePixelRatio * rasterAaScale;
+            constexpr qint64 maximumRasterScenePixels = 1'000'000;
+            const qint64 logicalPixelCount =
+                qint64(renderFrame.viewportSize.width()) *
+                renderFrame.viewportSize.height();
+            const qreal maximumRasterDevicePixelRatio = logicalPixelCount > 0
+                ? std::sqrt(static_cast<qreal>(maximumRasterScenePixels - 1024) /
+                            static_cast<qreal>(logicalPixelCount))
+                : requestedRasterDevicePixelRatio;
+            const qreal rasterDevicePixelRatio = std::max<qreal>(
+                0.01, std::min(requestedRasterDevicePixelRatio,
+                               maximumRasterDevicePixelRatio));
             const QSize scenePixelSize(
                 qRound(renderFrame.viewportSize.width() * rasterDevicePixelRatio),
                 qRound(renderFrame.viewportSize.height() * rasterDevicePixelRatio));
@@ -13283,6 +13295,8 @@ protected:
                     committedSceneLayer.devicePixelRatioF());
                 displayOutputLayer.fill(Qt::transparent);
                 QPainter displayOutputPainter(&displayOutputLayer);
+                displayOutputPainter.setRenderHint(
+                    QPainter::SmoothPixmapTransform, true);
                 fillViewportBackground(
                     displayOutputPainter, rect(), viewportShadingSettings_,
                     viewportWorldColorSceneLinear, themeBackground_);
@@ -13339,7 +13353,10 @@ protected:
                     overlayPainter.drawImage(
                         QPoint(0, 0), committedSceneLayer);
                 }
+                painter.save();
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                 painter.drawImage(QPoint(0, 0), displayOutputLayer);
+                painter.restore();
             } else {
                 fillViewportBackground(
                     painter, rect(), viewportShadingSettings_,
@@ -13348,6 +13365,8 @@ protected:
                     drawGrid(painter);
                     drawOrigin(painter);
                 }
+                painter.save();
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                 painter.drawImage(QPoint(0, 0), effectTarget);
                 if (rasterWorkbenchEffectsLayered) {
                     painter.drawImage(QPoint(0, 0), committedSceneLayer);
@@ -13355,6 +13374,7 @@ protected:
                 if (!gpuViewportBackground.isNull()) {
                     painter.drawImage(QPoint(0, 0), gpuViewportBackground);
                 }
+                painter.restore();
             }
 
             // The ordinary QPainter scene path does not replay all GPU scene

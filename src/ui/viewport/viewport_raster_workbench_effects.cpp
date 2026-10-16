@@ -4641,6 +4641,29 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
                 return depth;
             };
+            const auto visibleSceneDepthAt = [&](int x, int y) {
+                const int depthX = std::clamp(
+                    static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                    0, width - 1);
+                const int depthY = std::clamp(
+                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                    0, height - 1);
+                const int depthIndex = depthY * width + depthX;
+                const float inFrontCurveDepth =
+                    visibleCurveDepthAt(x, y, true);
+                if (std::isfinite(inFrontCurveDepth)) {
+                    return inFrontCurveDepth;
+                }
+                if (inFrontSamples[depthIndex].objectId != 0) {
+                    return inFrontSamples[depthIndex].depth;
+                }
+                const float regularCurveDepth =
+                    visibleCurveDepthAt(x, y, false);
+                if (std::isfinite(regularCurveDepth)) {
+                    return regularCurveDepth;
+                }
+                return regularDofDepth[depthIndex];
+            };
             for (int y = 0; y < outputHeight; ++y) {
                 const int depthY = std::clamp(
                     static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
@@ -4740,19 +4763,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     decodeDisplayChannel(qBlue(pixel)) * alpha, alpha};
             };
             const auto sourceCocAtPixel = [&](int x, int y) {
-                const int depthX = std::clamp(
-                    static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
-                    0, width - 1);
-                const int depthY = std::clamp(
-                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
-                    0, height - 1);
-                const float curveDepth = visibleCurveDepthAt(x, y, false);
-                const float regularSurfaceDepth =
-                    regularDofDepth[depthY * width + depthX];
-                const qreal z = std::isfinite(curveDepth)
-                    ? curveDepth
-                    : std::isfinite(regularSurfaceDepth)
-                        ? regularSurfaceDepth : cameraOptics.clipEnd;
+                const float visibleDepth = visibleSceneDepthAt(x, y);
+                const qreal z = std::isfinite(visibleDepth)
+                    ? visibleDepth : cameraOptics.clipEnd;
                 if (!std::isfinite(z) || z <= 0.0) return 0.0f;
                 const qreal coc = 0.5 *
                     (focal * focal /
@@ -4963,21 +4976,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
 
             for (int y = 0; y < outputHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(gatheredResult.scanLine(y));
-                const int depthY = std::clamp(
-                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
-                    0, height - 1);
                 for (int x = 0; x < outputWidth; ++x) {
-                    const int depthX = std::clamp(
-                        static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
-                        0, width - 1);
-                    const qreal centerCurveDepth =
-                        visibleCurveDepthAt(x, y, false);
-                    const float regularSurfaceDepth =
-                        regularDofDepth[depthY * width + depthX];
-                    const bool hasRegularCenter =
-                        std::isfinite(centerCurveDepth) ||
-                        std::isfinite(regularSurfaceDepth);
-                    const bool backgroundCenter = !hasRegularCenter;
+                    const float visibleDepth = visibleSceneDepthAt(x, y);
+                    const bool backgroundCenter =
+                        !std::isfinite(visibleDepth);
                     const qsizetype pixelIndex =
                         qsizetype(y) * outputWidth + x;
                     if (backgroundCenter && dofCoverage[pixelIndex] == 0)
@@ -4986,10 +4988,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     // depth sample represents the far plane, allowing a
                     // nearby out-of-focus foreground surface to contribute
                     // blur beyond its silhouette.
-                    const qreal z = std::isfinite(centerCurveDepth)
-                        ? centerCurveDepth
-                        : backgroundCenter
-                            ? cameraOptics.clipEnd : regularSurfaceDepth;
+                    const qreal z = backgroundCenter
+                        ? cameraOptics.clipEnd : visibleDepth;
                     if (!std::isfinite(z) || z <= 0.0) continue;
                     // Blender's aperture radius is 0.5 * focal / f-stop;
                     // multiplying by focal / focus-distance produces this

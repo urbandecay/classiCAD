@@ -69,6 +69,7 @@ struct ViewportRenderCameraProjection {
     qreal shiftX = 0.0;
     qreal shiftY = 0.0;
     qreal orthographicScale = 10.0;
+    qreal cameraViewZoom = 1.0;
 };
 
 struct ViewportNavigationPreferences {
@@ -205,6 +206,7 @@ public:
     // Off-axis camera-frustum offset in render pixels. Positive values follow
     // Blender's camera shift convention (the image content moves left/down).
     void setProjectionShiftPixels(const QPointF &shift);
+    QPointF projectionShiftPixels() const noexcept;
     void setRenderCameraProjection(
         const ViewportRenderCameraProjection &projection);
     bool hasRenderCameraProjection() const noexcept;

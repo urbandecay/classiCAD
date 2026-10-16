@@ -254,6 +254,14 @@ bool isValidProjectViewportCameraSettings(
     }
 
     const classiCAD::ProjectViewportViewState &view = settings.view;
+    if (view.cameraView &&
+        (!std::isfinite(view.cameraZoom) || view.cameraZoom < -30.0 ||
+         view.cameraZoom > 600.0 || !std::isfinite(view.cameraOffsetX) ||
+         view.cameraOffsetX < -1.0 || view.cameraOffsetX > 1.0 ||
+         !std::isfinite(view.cameraOffsetY) || view.cameraOffsetY < -1.0 ||
+         view.cameraOffsetY > 1.0)) {
+        return false;
+    }
     const double orientationLengthSquared =
         view.orientationW * view.orientationW +
         view.orientationX * view.orientationX +
@@ -297,6 +305,10 @@ QJsonObject projectViewportCameraSettingsToJson(
     if (settings.view.storedInProject) {
         const classiCAD::ProjectViewportViewState &view = settings.view;
         QJsonObject viewState;
+        viewState.insert(QStringLiteral("cameraView"), view.cameraView);
+        viewState.insert(QStringLiteral("cameraZoom"), view.cameraZoom);
+        viewState.insert(QStringLiteral("cameraOffsetX"), view.cameraOffsetX);
+        viewState.insert(QStringLiteral("cameraOffsetY"), view.cameraOffsetY);
         viewState.insert(QStringLiteral("zoom"), view.zoom);
         viewState.insert(QStringLiteral("panX"), view.panX);
         viewState.insert(QStringLiteral("panY"), view.panY);
@@ -390,6 +402,21 @@ bool projectViewportCameraSettingsFromJson(
         const QJsonValue perspective = view.value(QStringLiteral("perspective"));
         const QJsonValue preset = view.value(QStringLiteral("preset"));
         const QJsonValue hasOrientation = view.value(QStringLiteral("hasOrientation"));
+        const QJsonValue cameraView = view.value(QStringLiteral("cameraView"));
+        if ((!cameraView.isUndefined() && !cameraView.isBool()) ||
+            (!view.value(QStringLiteral("cameraZoom")).isUndefined() &&
+             !readNumber(QStringLiteral("cameraZoom"),
+                         &restoredView.cameraZoom)) ||
+            (!view.value(QStringLiteral("cameraOffsetX")).isUndefined() &&
+             !readNumber(QStringLiteral("cameraOffsetX"),
+                         &restoredView.cameraOffsetX)) ||
+            (!view.value(QStringLiteral("cameraOffsetY")).isUndefined() &&
+             !readNumber(QStringLiteral("cameraOffsetY"),
+                         &restoredView.cameraOffsetY))) {
+            setError(errorMessage, QStringLiteral("Project camera view state is incomplete"));
+            return false;
+        }
+        restoredView.cameraView = cameraView.toBool(false);
         if (!readNumber(QStringLiteral("zoom"), &restoredView.zoom) ||
             !readNumber(QStringLiteral("panX"), &restoredView.panX) ||
             !readNumber(QStringLiteral("panY"), &restoredView.panY) ||
@@ -2724,7 +2751,7 @@ bool importBlenderScene(const QString &path,
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
          bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18 &&
-         bridgeVersion != 19 && bridgeVersion != 20)) {
+         bridgeVersion != 19 && bridgeVersion != 20 && bridgeVersion != 21)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -2744,7 +2771,32 @@ bool importBlenderScene(const QString &path,
         QStringLiteral("view_rotation_wxyz")).toArray();
     const QJsonValue savedDistance = savedView.value(
         QStringLiteral("view_distance"));
-    if ((savedPerspective == QLatin1String("PERSP") ||
+    const QJsonValue savedCameraZoom = savedView.value(
+        QStringLiteral("camera_zoom"));
+    const QJsonValue savedCameraOffsetX = savedView.value(
+        QStringLiteral("camera_offset_x"));
+    const QJsonValue savedCameraOffsetY = savedView.value(
+        QStringLiteral("camera_offset_y"));
+    if (savedPerspective == QLatin1String("CAMERA") &&
+        savedCameraZoom.isDouble() && savedCameraOffsetX.isDouble() &&
+        savedCameraOffsetY.isDouble() &&
+        std::isfinite(savedCameraZoom.toDouble()) &&
+        savedCameraZoom.toDouble() >= -30.0 &&
+        savedCameraZoom.toDouble() <= 600.0 &&
+        std::isfinite(savedCameraOffsetX.toDouble()) &&
+        savedCameraOffsetX.toDouble() >= -1.0 &&
+        savedCameraOffsetX.toDouble() <= 1.0 &&
+        std::isfinite(savedCameraOffsetY.toDouble()) &&
+        savedCameraOffsetY.toDouble() >= -1.0 &&
+        savedCameraOffsetY.toDouble() <= 1.0) {
+        initialViewportView.cameraView = true;
+        initialViewportView.cameraZoom = savedCameraZoom.toDouble();
+        initialViewportView.cameraOffsetX = savedCameraOffsetX.toDouble();
+        initialViewportView.cameraOffsetY = savedCameraOffsetY.toDouble();
+        initialViewportView.perspective = true;
+        initialViewportView.preset = 4;
+        initialViewportView.storedInProject = true;
+    } else if ((savedPerspective == QLatin1String("PERSP") ||
          savedPerspective == QLatin1String("ORTHO")) &&
         savedLocation.size() == 3 && savedRotation.size() == 4 &&
         savedDistance.isDouble() && savedDistance.toDouble() > 0.0) {

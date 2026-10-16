@@ -16,6 +16,10 @@ namespace classiCAD {
 class Document;
 
 struct ProjectViewportViewState {
+    bool cameraView = false;
+    double cameraZoom = 0.0;
+    double cameraOffsetX = 0.0;
+    double cameraOffsetY = 0.0;
     double zoom = 1.0;
     double panX = 0.0;
     double panY = 0.0;

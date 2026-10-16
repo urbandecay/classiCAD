@@ -811,6 +811,11 @@ void ViewportTransform::setProjectionShiftPixels(const QPointF &shift)
     projectionShiftPixels_ = shift;
 }
 
+QPointF ViewportTransform::projectionShiftPixels() const noexcept
+{
+    return projectionShiftPixels_;
+}
+
 void ViewportTransform::setRenderCameraProjection(
     const ViewportRenderCameraProjection &projection)
 {

@@ -8933,14 +8933,16 @@ resolve remain open.
   orientation, distance, and perspective/orthographic mode and applies them to
   classiCAD's initial viewport. It uses the same deterministic screen and area
   selection policy as the saved viewport shading import. Blender camera-locked
-  views are skipped because they need the separate viewport-camera framing
-  contract; if no saved free 3D view is available, classiCAD keeps its default
-  view. Blender stores these values on `SpaceView3D.region_3d`; see
+  views that use the active scene camera now restore that camera pose along
+  with Blender's saved camera zoom and framing offset. Camera views that use a
+  different per-space camera remain unsupported. If neither supported view is
+  available, classiCAD keeps its default view. Blender stores free-view values
+  on `SpaceView3D.region_3d`; see
   [`RegionView3D`](https://docs.blender.org/api/5.2/bpy.types.RegionView3D.html).
   The scene render camera remains a separate record for Workbench render
-  results. The scene extractor record is now version 20, and the reader accepts
-  versions 10 through 20. C++ build passed; a matched saved-view comparison
-  has not been run.
+  results. The scene extractor record is now version 21, and the reader accepts
+  versions 10 through 21. C++ build passed; matched free-view and camera-view
+  comparisons have not been run.
 
 ### QPainter cavity near-plane receivers (2026-10-15)
 

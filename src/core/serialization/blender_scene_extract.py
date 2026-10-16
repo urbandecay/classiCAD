@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 20
+BRIDGE_FORMAT_VERSION = 21
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1011,11 +1011,10 @@ def saved_viewport_shading_record(scene):
     return None
 
 
-def saved_viewport_view_record():
-    """Return a saved free VIEW_3D view, when the file contains one.
-
-    Camera-locked views need a separate camera-view contract and are skipped.
-    """
+def saved_viewport_view_record(scene):
+    """Return the first saved free or scene-camera VIEW_3D view."""
+    if scene is None:
+        return None
     screens = [screen for screen in bpy.data.screens
                if not bool(getattr(screen, "is_temporary", False))]
     screens.sort(key=lambda screen: screen.name_full)
@@ -1029,8 +1028,36 @@ def saved_viewport_view_record():
         for area in areas:
             if area.type != "VIEW_3D":
                 continue
-            region = area.spaces.active.region_3d
+            space = area.spaces.active
+            region = space.region_3d
             perspective = str(region.view_perspective)
+            if perspective == "CAMERA":
+                # This first camera-view port uses the scene camera record
+                # already transported by the importer. A space-specific
+                # camera needs its own camera-data record and is left for a
+                # later extension.
+                camera = getattr(space, "camera", None) or scene.camera
+                if camera is None or camera != scene.camera:
+                    continue
+                offset = getattr(region, "view_camera_offset", (0.0, 0.0))
+                try:
+                    offset_x, offset_y = float(offset[0]), float(offset[1])
+                    camera_zoom = float(region.view_camera_zoom)
+                except (TypeError, ValueError, IndexError, AttributeError):
+                    continue
+                if (not math.isfinite(camera_zoom) or
+                        not -30.0 <= camera_zoom <= 600.0 or
+                        not math.isfinite(offset_x) or
+                        not math.isfinite(offset_y) or
+                        not -1.0 <= offset_x <= 1.0 or
+                        not -1.0 <= offset_y <= 1.0):
+                    continue
+                return {
+                    "view_perspective": "CAMERA",
+                    "camera_zoom": camera_zoom,
+                    "camera_offset_x": offset_x,
+                    "camera_offset_y": offset_y,
+                }
             if perspective not in {"PERSP", "ORTHO"}:
                 continue
             rotation = region.view_rotation
@@ -2240,7 +2267,7 @@ def extract_scene(input_path, mode):
             view_layer_key(active_scene, active_view_layer)
             if active_scene is not None and active_view_layer is not None else ""
         ),
-        "saved_viewport_view": saved_viewport_view_record(),
+        "saved_viewport_view": saved_viewport_view_record(active_scene),
         "scenes": [],
         "collections": [],
         "items": [],

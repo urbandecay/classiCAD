@@ -7269,6 +7269,54 @@ public:
         }
         if (cameraSettings.view.storedInProject) {
             const ProjectViewportViewState &storedView = cameraSettings.view;
+            if (storedView.cameraView) {
+                if (importedSceneCameraTransform(
+                        document_, size(), &viewportTransform_, nullptr)) {
+                    const qreal cameraZoom =
+                        (std::sqrt(2.0) + storedView.cameraZoom / 50.0);
+                    const qreal frameZoom = cameraZoom * cameraZoom / 2.0;
+                    if (std::isfinite(frameZoom) && frameZoom > 0.0) {
+                        ViewportCameraState cameraState =
+                            viewportTransform_.cameraState();
+                        if (cameraState.perspective) {
+                            ViewportCameraPreferences preferences =
+                                viewportTransform_.cameraPreferences();
+                            preferences.sensorWidthMillimeters /= frameZoom;
+                            viewportTransform_.setCameraPreferences(preferences);
+                        } else {
+                            cameraState.zoom *= frameZoom;
+                            viewportTransform_.setCameraState(cameraState);
+                        }
+                        ViewportRenderCameraProjection projection =
+                            viewportTransform_.renderCameraProjection();
+                        projection.cameraViewZoom = frameZoom;
+                        // Blender's camera-view offsets move the camera frame
+                        // in proportion to its zoom. Express that motion in
+                        // the camera projection's normalized shift units.
+                        const qreal viewFactor = std::max<qreal>(
+                            1.0, std::max(width(), height()));
+                        projection.shiftX -=
+                            storedView.cameraOffsetX * frameZoom *
+                            width() / viewFactor;
+                        projection.shiftY -=
+                            storedView.cameraOffsetY * frameZoom *
+                            height() / viewFactor;
+                        viewportTransform_.setRenderCameraProjection(projection);
+
+                        const QPointF oldShift =
+                            viewportTransform_.projectionShiftPixels();
+                        viewportTransform_.setProjectionShiftPixels(
+                            oldShift + QPointF(
+                                storedView.cameraOffsetX * frameZoom * width(),
+                                storedView.cameraOffsetY * frameZoom * height()));
+                    }
+                    notifyViewStateChanged();
+                    setCursor(Qt::ArrowCursor);
+                    update();
+                    emitCoordinateUpdate();
+                    return;
+                }
+            }
             ViewportCameraState viewState;
             viewState.zoom = storedView.zoom;
             viewState.pan = QPointF(storedView.panX, storedView.panY);

@@ -200,15 +200,20 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
             renderCamera.sensorFit == ViewportCameraSensorFit::Vertical
                 ? renderCamera.sensorHeightMillimeters
                 : renderCamera.sensorWidthMillimeters;
+        const qreal cameraViewZoom =
+            std::isfinite(renderCamera.cameraViewZoom) &&
+                    renderCamera.cameraViewZoom > 0.0
+                ? renderCamera.cameraViewZoom : 1.0;
         const qreal pixelSize = camera.perspective
             ? sensorSize * clipRange.nearPlane /
                   (cameraPreferences.focalLengthMillimeters * viewFactor)
             : renderCamera.orthographicScale / viewFactor;
-        const qreal halfWidth = viewportSize.width() * pixelSize * 0.5;
+        const qreal zoomedPixelSize = pixelSize / cameraViewZoom;
+        const qreal halfWidth = viewportSize.width() * zoomedPixelSize * 0.5;
         const qreal halfHeight = viewportSize.height() * pixelAspectRatio *
-                                 pixelSize * 0.5;
-        const qreal shiftX = renderCamera.shiftX * viewFactor * pixelSize;
-        const qreal shiftY = renderCamera.shiftY * viewFactor * pixelSize;
+                                 zoomedPixelSize * 0.5;
+        const qreal shiftX = renderCamera.shiftX * viewFactor * zoomedPixelSize;
+        const qreal shiftY = renderCamera.shiftY * viewFactor * zoomedPixelSize;
         if (camera.perspective) {
             projection.frustum(float(shiftX - halfWidth),
                                float(shiftX + halfWidth),

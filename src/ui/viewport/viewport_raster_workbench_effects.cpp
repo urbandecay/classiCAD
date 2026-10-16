@@ -3946,7 +3946,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const qsizetype outputPixelCount =
             qsizetype(outputWidth) * outputHeight;
         QVector<float> dofMixes(outputPixelCount, 0.0f);
-        QVector<float> medianRadii(outputPixelCount, 0.0f);
         const auto dofKernel = rasterWorkbenchDofKernel(
             cameraOptics.apertureBlades,
             cameraOptics.apertureRotationRadians,
@@ -4317,8 +4316,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         static_cast<float>(radius / colorDpr));
                     if (mix <= 0.0) continue;
                     dofMixes[pixelIndex] = static_cast<float>(mix);
-                    medianRadii[pixelIndex] = static_cast<float>(
-                        std::clamp(radius / colorDpr - 9.0, 0.0, 1.0));
                     const QPointF gatherOriginOffset =
                         rasterWorkbenchDofGatherOriginOffset(
                             x, y, outputHeight, static_cast<float>(radius));
@@ -4376,6 +4373,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             // sample it during the full-resolution resolve.
             const int medianWidth = std::max(outputWidth / 2, 1);
             const int medianHeight = std::max(outputHeight / 2, 1);
+            const auto medianCocRadiusAt = [&](int x, int y) {
+                const FilteredDofPixel &coc = dofMips[0].pixels[
+                    static_cast<std::size_t>(y) * dofMips[0].width + x];
+                return std::clamp(
+                    std::max(coc.nearCoc, coc.farCoc) - 9.0f, 0.0f, 1.0f);
+            };
             QImage filteredGather(medianWidth, medianHeight,
                                   QImage::Format_ARGB32);
             filteredGather.fill(Qt::transparent);
@@ -4412,15 +4415,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             for (int y = 0; y < medianHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(filteredGather.scanLine(y));
                 const qreal centerY = (y + 0.5) * medianScaleY - 0.5;
-                const int sourceY = std::clamp(qRound(centerY), 0,
-                                               outputHeight - 1);
                 for (int x = 0; x < medianWidth; ++x) {
                     const qreal centerX = (x + 0.5) * medianScaleX - 0.5;
-                    const int sourceX = std::clamp(qRound(centerX), 0,
-                                                   outputWidth - 1);
-                    const qsizetype pixelIndex =
-                        qsizetype(sourceY) * outputWidth + sourceX;
-                    const float cocRadius = medianRadii[pixelIndex];
+                    const float cocRadius = medianCocRadiusAt(x, y);
                     if (cocRadius <= 0.0f) {
                         out[x] = sampleGatherLinear(centerX, centerY);
                         continue;
@@ -4487,18 +4484,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 };
                 for (int y = 0; y < medianHeight; ++y) {
                     const qreal centerY = (y + 0.5) * medianScaleY - 0.5;
-                    const int sourceY = std::clamp(qRound(centerY), 0,
-                                                   outputHeight - 1);
                     for (int x = 0; x < medianWidth; ++x) {
                         const qreal centerX =
                             (x + 0.5) * medianScaleX - 0.5;
-                        const int sourceX = std::clamp(qRound(centerX), 0,
-                                                       outputWidth - 1);
-                        const std::size_t pixelIndex =
-                            static_cast<std::size_t>(sourceY) * outputWidth +
-                            sourceX;
-                        const float cocRadius = medianRadii[
-                            static_cast<qsizetype>(pixelIndex)];
+                        const float cocRadius = medianCocRadiusAt(x, y);
                         const std::size_t targetIndex =
                             static_cast<std::size_t>(y) * medianWidth + x;
                         if (cocRadius <= 0.0f) {

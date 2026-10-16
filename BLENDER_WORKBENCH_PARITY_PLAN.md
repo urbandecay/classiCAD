@@ -7477,6 +7477,14 @@ resolve remain open.
   [`workbench_effect_dof_downsample_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_downsample_frag.glsl#L22-L53)
   sampling pattern. QPainter's tap budget, already-composited transparency,
   and lack of temporal accumulation remain documented approximations.
+- The QPainter half-resolution median cleanup now gets its radius from the
+  corresponding half-resolution near/far CoC values, taking the larger value
+  and applying Blender's `clamp(CoC - 9, 0, 1)`. It previously used one
+  full-resolution center-depth sample, which could miss blur from another
+  sample in the same 2x2 block. This follows Blender's pinned
+  [`workbench_effect_dof_blur2_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur2_frag.glsl#L430-L443)
+  and half-resolution CoC preparation. C++ build passed; no matched DOF image
+  comparison has been run for this correction.
 - Validation for this audit was source inspection only; no matched image
   comparison or GUI run is claimed.
 

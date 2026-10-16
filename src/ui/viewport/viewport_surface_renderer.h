@@ -90,6 +90,14 @@ private:
         QVector<std::array<int, 3>> shadowTriangles;
     };
 
+    struct XRaySelectedEdgeRange {
+        int first = 0;
+        int count = 0;
+        Point3D offset;
+        quint32 effectObjectId = 0;
+        bool showInFront = false;
+    };
+
     bool initialize();
     void prepareGeometry(const QVector<ViewportRenderObject> &objects);
     bool renderShadowMap(const ViewportTransform &transform,
@@ -182,8 +190,10 @@ private:
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject outlineVertexArray_;
     QOpenGLVertexArrayObject shadowVolumeVertexArray_;
+    QOpenGLVertexArrayObject xraySelectedEdgeVertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer shadowVolumeVertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer xraySelectedEdgeVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     GLuint objectIdFramebuffer_ = 0;
     GLuint objectIdTexture_ = 0;
     GLuint objectIdDepthStencil_ = 0;

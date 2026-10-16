@@ -9468,18 +9468,26 @@ moves them after scene effects and depth-tests them against the retained scene.
 
 ### QPainter X-Ray selected mesh edges (2026-10-16)
 
-- In X-Ray, selected polygon meshes now build the selected-outline mask from
-  deduplicated polygon-loop boundary edges instead of filled triangle coverage.
-  Edges are transformed with the mesh object matrix and prepared world offset,
-  clipped to the raster target, and passed through the existing four-neighbor
-  outline resolve. Regular Solid selection outlines and non-mesh selected
-  objects retain their filled-surface mask. Loose mesh edges and matched
-  captures remain open.
-- Blender 5.2.2 uses its mesh edge-detection pass for selected meshes in
-  X-Ray and makes occluded outlines fully opaque in that mode, in
-  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L898-L920)
-  and [#L982-L1008](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L982-L1008).
-  Build passed; line smoothing and visual parity remain unverified.
+- X-Ray selected polygon meshes now form the selected-outline mask from
+  view-facing silhouette edges. Shared edges between faces facing the same way
+  are skipped; boundary edges and shared edges whose neighboring faces face
+  opposite ways are retained. The QPainter and GPU paths use transformed mesh
+  vertices and account for perspective versus orthographic views. The GPU path
+  keeps general object outlines on the existing triangle ID buffer and
+  resolves selected silhouettes from a dedicated edge ID/depth target, with
+  separate regular and `showInFront` depth domains. GPU edge resolution is
+  currently used when the selected surface set consists only of polygon
+  meshes; mixed mesh/NURBS selections retain the existing surface-mask path.
+  Loose edges and matched captures remain open.
+- Blender 5.2.2 requests edge-detection geometry for selected meshes in X-Ray
+  and resolves it through the overlay wire prepass. The wire geometry shader
+  drops shared edges whose adjacent faces face the same direction and applies
+  a small depth bias. See
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L156-L170)
+  and
+  [`overlay_outline_prepass_wire_vert.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_prepass_wire_vert.glsl#L597-L668).
+  Build passed; exact edge expansion, smoothing, depth bias, and visual parity
+  remain unverified.
 
 ### GPU hidden selected-object contours (2026-10-16)
 

@@ -2743,7 +2743,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 firstCorner += face.size();
             }
             if (rasterizeSelectedMeshEdges) {
-                QSet<quint64> visitedEdges;
+                QHash<quint64, QVector<QVector3D>> edgeFaceNormals;
                 const quint64 objectId = object.objectId.value() |
                                          0x80000000ull;
                 const QVector3D offset(
@@ -2756,13 +2756,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         second >= mesh.vertices.size() || first == second) {
                         return;
                     }
-                    const quint32 low = static_cast<quint32>(
-                        std::min(first, second));
-                    const quint32 high = static_cast<quint32>(
-                        std::max(first, second));
-                    const quint64 key = (quint64(low) << 32) | high;
-                    if (visitedEdges.contains(key)) return;
-                    visitedEdges.insert(key);
                     QVector3D worldFirst = worldPoint(mesh.vertices[first]) + offset;
                     QVector3D worldSecond = worldPoint(mesh.vertices[second]) + offset;
                     QPointF screenFirst;
@@ -2833,9 +2826,78 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 };
                 for (const QVector<int> &face : mesh.faces) {
                     if (face.size() < 2) continue;
+                    QVector<QVector3D> worldFace;
+                    worldFace.reserve(face.size());
+                    for (int index : face) {
+                        if (index < 0 || index >= mesh.vertices.size()) {
+                            worldFace.clear();
+                            break;
+                        }
+                        worldFace.append(worldPoint(mesh.vertices[index]));
+                    }
+                    if (worldFace.size() < 3) continue;
+                    QVector3D faceNormal;
+                    for (int corner = 0; corner < worldFace.size(); ++corner) {
+                        const QVector3D &a = worldFace[corner];
+                        const QVector3D &b = worldFace[(corner + 1) % worldFace.size()];
+                        faceNormal += QVector3D(
+                            (a.y() - b.y()) * (a.z() + b.z()),
+                            (a.z() - b.z()) * (a.x() + b.x()),
+                            (a.x() - b.x()) * (a.y() + b.y()));
+                    }
+                    if (faceNormal.lengthSquared() <= 1.0e-16f) continue;
+                    faceNormal.normalize();
                     for (int corner = 0; corner < face.size(); ++corner) {
-                        rasterizeEdge(face[corner],
-                                      face[(corner + 1) % face.size()]);
+                        const int first = face[corner];
+                        const int second = face[(corner + 1) % face.size()];
+                        if (first < 0 || second < 0 || first == second ||
+                            first >= mesh.vertices.size() ||
+                            second >= mesh.vertices.size()) {
+                            continue;
+                        }
+                        const quint32 low = static_cast<quint32>(
+                            std::min(first, second));
+                        const quint32 high = static_cast<quint32>(
+                            std::max(first, second));
+                        edgeFaceNormals[(quint64(low) << 32) | high]
+                            .append(faceNormal);
+                    }
+                }
+                for (auto edge = edgeFaceNormals.cbegin();
+                     edge != edgeFaceNormals.cend(); ++edge) {
+                    const QVector<QVector3D> &normals = edge.value();
+                    bool draw = normals.size() == 1;
+                    if (!draw && normals.size() > 1) {
+                        const int first = static_cast<int>(edge.key() >> 32);
+                        const int second = static_cast<int>(edge.key() & 0xffffffffu);
+                        const QVector3D midpoint =
+                            (worldPoint(mesh.vertices[first]) +
+                             worldPoint(mesh.vertices[second])) * 0.5f + offset;
+                        QVector3D cameraDirection = perspective
+                            ? QVector3D(float(camera.x), float(camera.y),
+                                        float(camera.z)) - midpoint
+                            : QVector3D(float(towardCamera.x),
+                                        float(towardCamera.y),
+                                        float(towardCamera.z));
+                        if (cameraDirection.lengthSquared() > 1.0e-16f) {
+                            cameraDirection.normalize();
+                            bool frontFacing = false;
+                            bool backFacing = false;
+                            bool edgeOn = false;
+                            for (const QVector3D &normal : normals) {
+                                const float facing = QVector3D::dotProduct(
+                                    normal, cameraDirection);
+                                frontFacing |= facing > 1.0e-5f;
+                                backFacing |= facing < -1.0e-5f;
+                                edgeOn |= std::abs(facing) <= 1.0e-5f;
+                            }
+                            draw = (frontFacing && backFacing) ||
+                                   (edgeOn && (frontFacing || backFacing));
+                        }
+                    }
+                    if (draw) {
+                        rasterizeEdge(static_cast<int>(edge.key() >> 32),
+                                      static_cast<int>(edge.key() & 0xffffffffu));
                     }
                 }
             }

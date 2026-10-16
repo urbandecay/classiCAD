@@ -1362,9 +1362,16 @@ bool compositeRasterWorkbenchSurfaces(
         QVector<float> nearestFrontTransparentDepth(pixelCount, noDepth);
         QVector<float> regularTransparentOverlayDepth(pixelCount, noDepth);
         QVector<float> frontTransparentOverlayDepth(pixelCount, noDepth);
+        QVector<float> regularTransparentOutlineDepth(pixelCount, noDepth);
+        QVector<float> frontTransparentOutlineDepth(pixelCount, noDepth);
+        std::vector<quint64> regularTransparentOutlineIds(
+            static_cast<std::size_t>(pixelCount), 0);
+        std::vector<quint64> frontTransparentOutlineIds(
+            static_cast<std::size_t>(pixelCount), 0);
         const std::vector<RasterWorkbenchLinearPixel> emptyBase(
             static_cast<std::size_t>(pixelCount));
-        for (const ViewportRenderObject &object : objects) {
+        for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+            const ViewportRenderObject &object = objects[objectIndex];
             RasterWorkbenchFragmentSink objectFragments;
             renderObject(object, &objectFragments, [&](const QImage &) {
             });
@@ -1445,6 +1452,18 @@ bool compositeRasterWorkbenchSurfaces(
                 if (domainTransparentDepth[index] == noDepth ||
                     fragment.cameraDepth < domainTransparentDepth[index]) {
                     domainTransparentDepth[index] = fragment.cameraDepth;
+                }
+                QVector<float> &outlineDepth = inFront
+                    ? frontTransparentOutlineDepth
+                    : regularTransparentOutlineDepth;
+                std::vector<quint64> &outlineIds = inFront
+                    ? frontTransparentOutlineIds
+                    : regularTransparentOutlineIds;
+                if (outlineDepth[index] == noDepth ||
+                    fragment.cameraDepth > outlineDepth[index]) {
+                    outlineDepth[index] = fragment.cameraDepth;
+                    outlineIds[static_cast<std::size_t>(index)] =
+                        object.objectId.value();
                 }
                 QVector<float> &domainOverlayDepth = inFront
                     ? frontTransparentOverlayDepth
@@ -1665,6 +1684,18 @@ bool compositeRasterWorkbenchSurfaces(
                 if (frontIndex >= 0 && frontIndex < objects.size()) {
                     frontObjectIds[static_cast<std::size_t>(index)] =
                         objects[frontIndex].objectId.value();
+                }
+                if (regularTransparentOutlineIds[
+                        static_cast<std::size_t>(index)] != 0) {
+                    regularObjectIds[static_cast<std::size_t>(index)] =
+                        regularTransparentOutlineIds[
+                            static_cast<std::size_t>(index)];
+                }
+                if (frontTransparentOutlineIds[
+                        static_cast<std::size_t>(index)] != 0) {
+                    frontObjectIds[static_cast<std::size_t>(index)] =
+                        frontTransparentOutlineIds[
+                            static_cast<std::size_t>(index)];
                 }
             }
             std::vector<quint64> visibleObjectIds(
@@ -1893,6 +1924,12 @@ bool compositeRasterWorkbenchSurfaces(
     // The sorted fallback retains its per-pixel far-to-near order, but now
     // composites the captured Workbench fragments in scene-linear color.
     bool transparentFragmentBudgetExceeded = false;
+    QVector<float> regularTransparentOutlineDepth(pixelCount, noDepth);
+    QVector<float> frontTransparentOutlineDepth(pixelCount, noDepth);
+    std::vector<quint64> regularTransparentOutlineIds(
+        static_cast<std::size_t>(pixelCount), 0);
+    std::vector<quint64> frontTransparentOutlineIds(
+        static_cast<std::size_t>(pixelCount), 0);
     for (int objectOrder = 0; objectOrder < objects.size(); ++objectOrder) {
         const ViewportRenderObject &object = objects[objectOrder];
         RasterWorkbenchFragmentSink objectFragments;
@@ -1940,6 +1977,18 @@ bool compositeRasterWorkbenchSurfaces(
             // scene depth, but still remain hidden by nearer in-front opaque
             // geometry.
             if (fragment.cameraDepth <= domainOpaqueDepth[index]) continue;
+            QVector<float> &outlineDepth = object.showInFront
+                ? frontTransparentOutlineDepth
+                : regularTransparentOutlineDepth;
+            std::vector<quint64> &outlineIds = object.showInFront
+                ? frontTransparentOutlineIds
+                : regularTransparentOutlineIds;
+            if (outlineDepth[index] == noDepth ||
+                fragment.cameraDepth > outlineDepth[index]) {
+                outlineDepth[index] = fragment.cameraDepth;
+                outlineIds[static_cast<std::size_t>(index)] =
+                    object.objectId.value();
+            }
             if (regularTransparentFragments.size() +
                     frontTransparentFragments.size() >=
                 kMaximumTransparentFragments) {
@@ -2115,6 +2164,18 @@ bool compositeRasterWorkbenchSurfaces(
             if (frontIndex >= 0 && frontIndex < objects.size()) {
                 frontObjectIds[static_cast<std::size_t>(index)] =
                     objects[frontIndex].objectId.value();
+            }
+            if (regularTransparentOutlineIds[
+                    static_cast<std::size_t>(index)] != 0) {
+                regularObjectIds[static_cast<std::size_t>(index)] =
+                    regularTransparentOutlineIds[
+                        static_cast<std::size_t>(index)];
+            }
+            if (frontTransparentOutlineIds[
+                    static_cast<std::size_t>(index)] != 0) {
+                frontObjectIds[static_cast<std::size_t>(index)] =
+                    frontTransparentOutlineIds[
+                        static_cast<std::size_t>(index)];
             }
         }
         sortedVisibleObjectIds.resize(static_cast<std::size_t>(pixelCount));
@@ -2935,7 +2996,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     writeNearest(sample);
                     const float sourceAlpha = triangleSourceAlpha;
                     if (rasterWorkbenchOutlineEnabled &&
-                        isOpaqueWorkbenchAlpha(sourceAlpha)) {
+                        sourceAlpha > 0.0f) {
                         QVector<RasterOutlineSample> &domainOutlineSamples =
                             object.showInFront ? inFrontOutlineSamples
                                                : outlineSamples;

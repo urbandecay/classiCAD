@@ -8333,16 +8333,19 @@ resolve remain open.
 ### QPainter Workbench outlines use opaque surface IDs (2026-10-15)
 
 - The software Workbench outline now reads a separate object-ID/depth buffer
-  populated only by Blender-opaque surface fragments, with `showInFront`
-  fragments retaining their separate precedence. Semi-transparent surfaces
-  still contribute to visible color and selection contours, but no longer
-  replace the IDs that define Workbench silhouettes. The bounded weighted and
-  sorted scene-linear compositors now derive Workbench outlines from their
-  opaque object buffers too. Blender 5.2.2 attaches
-  the object-ID target to its opaque pass, renders transparent passes
-  separately, then runs the outline pass over that target in
+  populated by visible surface fragments after texture cutout, with
+  `showInFront` fragments retaining their separate precedence. The weighted
+  and sorted scene-linear compositors combine opaque IDs with the nearest
+  visible transparent ID per pixel and depth domain. The ordinary QPainter
+  raster path also records positive-alpha transparent fragments in its
+  separate outline depth buffer; fully transparent and texture-cutout
+  fragments remain excluded. Blender 5.2.2 attaches the object-ID target to
+  its opaque pass, then writes visible transparent depth and object ID before
+  running the outline pass in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2603-L2645)
-  and [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L367).
+  and [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1438-L1533),
+  then consumes IDs in
+  [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L329-L367).
   C++ build passed; matched outline comparison remains open.
 
 ### QPainter deferred outline fallback ownership (2026-10-15)

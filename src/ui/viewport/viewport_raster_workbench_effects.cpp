@@ -2419,7 +2419,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  RasterWorkbenchCavityTapCapture *cavityTapCapture,
                                  const QVector<float> *committedCurveDepth,
                                  const QVector<float> *committedInFrontCurveDepth,
-                                 const QSize &committedCurveDepthSize)
+                                 const QSize &committedCurveDepthSize,
+                                 qreal cameraFrameSensorScale)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     if (colorImage == nullptr || colorImage->isNull() ||
@@ -4137,8 +4138,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const qreal focal = cameraOptics.focalLengthMillimeters * 0.001;
         const qreal focus = cameraOptics.focusDistance;
         const qreal fStop = cameraOptics.fStop;
-        const qreal sensorWidth =
-            cameraOptics.opticalSensorSizeMillimeters * 0.001;
+        const qreal sensorScale =
+            std::isfinite(cameraFrameSensorScale) &&
+                    cameraFrameSensorScale > 0.0
+                ? cameraFrameSensorScale : 1.0;
+        const qreal sensorWidth = cameraOptics.opticalSensorSizeMillimeters *
+                                  sensorScale * 0.001;
         if (std::isfinite(focal) && focal > 0.0 && std::isfinite(focus) &&
             focus > 0.0 && std::isfinite(fStop) && fStop > 0.0 &&
             std::isfinite(sensorWidth) && sensorWidth > 0.0 &&

@@ -9385,6 +9385,18 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L39-L54).
   Build passed; matched DOF captures remain open.
 
+### Camera-frame zoom in Workbench DOF (2026-10-16)
+
+- Interactive GPU and QPainter DOF now scale the optical sensor by the active
+  camera-frame width ratio. Blender sets this ratio to viewport width divided
+  by camera-border width in
+  [`view3d_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_view3d/view3d_draw.cc#L130-L141)
+  and applies it to the sensor used by Workbench DOF in
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L122-L127).
+  classiCAD now uses the same factor, including camera-frame zoom and viewport
+  aspect fit; offscreen rendering outside an interactive camera view keeps a
+  factor of one. Matched camera-view DOF captures remain open.
+
 ### GPU X-Ray outline equal-depth ownership (2026-10-16)
 
 - The private GPU outline-ID pass now uses `LEQUAL` when X-Ray is enabled, so

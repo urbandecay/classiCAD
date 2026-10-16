@@ -1203,6 +1203,71 @@ bool importedSceneCameraTransform(const Document &document,
     return true;
 }
 
+qreal importedCameraFrameTextureScale(const Document &document,
+                                      const ViewportTransform &transform,
+                                      const QSize &viewportSize)
+{
+    const ViewportCameraState cameraState = transform.cameraState();
+    if (!cameraState.cameraView || viewportSize.isEmpty()) return 1.0;
+
+    const QString activeLayer = document.settings().activeViewLayerKey;
+    QJsonObject renderOutput;
+    for (const QJsonValue &sceneValue :
+         document.settings().importedBlenderScenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = activeLayer.isEmpty();
+        if (!activeLayer.isEmpty()) {
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")) ==
+                    activeLayer) {
+                    matchesActiveLayer = true;
+                    break;
+                }
+            }
+        }
+        if (!matchesActiveLayer) continue;
+        renderOutput = scene.value(QStringLiteral("render_output")).toObject();
+        break;
+    }
+
+    const qreal resolutionX = renderOutput.value(
+        QStringLiteral("resolution_x")).toDouble(1920.0);
+    const qreal resolutionY = renderOutput.value(
+        QStringLiteral("resolution_y")).toDouble(1080.0);
+    const qreal pixelAspectX = renderOutput.value(
+        QStringLiteral("pixel_aspect_x")).toDouble(1.0);
+    const qreal pixelAspectY = renderOutput.value(
+        QStringLiteral("pixel_aspect_y")).toDouble(1.0);
+    if (!std::isfinite(resolutionX) || resolutionX <= 0.0 ||
+        !std::isfinite(resolutionY) || resolutionY <= 0.0 ||
+        !std::isfinite(pixelAspectX) || pixelAspectX <= 0.0 ||
+        !std::isfinite(pixelAspectY) || pixelAspectY <= 0.0) {
+        return 1.0;
+    }
+    const qreal cameraAspect = resolutionX * pixelAspectX /
+                               (resolutionY * pixelAspectY);
+    const qreal viewportAspect = qreal(viewportSize.width()) /
+                                 viewportSize.height();
+    const qreal zoomBase = std::sqrt(2.0) + cameraState.cameraZoom / 50.0;
+    const qreal frameZoom = zoomBase * zoomBase / 2.0;
+    if (!std::isfinite(cameraAspect) || cameraAspect <= 0.0 ||
+        !std::isfinite(viewportAspect) || viewportAspect <= 0.0 ||
+        !std::isfinite(frameZoom) || frameZoom <= 0.0) {
+        return 1.0;
+    }
+
+    qreal frameWidth = viewportSize.width();
+    if (viewportAspect > cameraAspect) {
+        frameWidth = viewportSize.height() * cameraAspect;
+    }
+    frameWidth *= frameZoom;
+    if (!std::isfinite(frameWidth) || frameWidth <= 0.0) return 1.0;
+    // Blender stores region width / camera-border width in
+    // RegionView3D::viewcamtexcofac[0] and applies it to the DOF sensor.
+    return qreal(viewportSize.width()) / frameWidth;
+}
+
 bool applyImportedCameraViewFraming(ViewportTransform *transform,
                                     const QSize &viewportSize,
                                     qreal cameraZoom,
@@ -12964,7 +13029,10 @@ protected:
                     renderFrame.camera.cameraPreferences(),
                     renderFrame.camera.isPerspectiveEnabled(),
                     projectionClipRange.nearPlane,
-                    projectionClipRange.farPlane);
+                    projectionClipRange.farPlane,
+                    importedCameraFrameTextureScale(
+                        document_, renderFrame.camera,
+                        renderFrame.viewportSize));
                 aaRenderer->setDisplayTransform(renderShadingSettings, true);
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),
@@ -13867,7 +13935,10 @@ protected:
                 committedCurveDepth.isEmpty() ? nullptr : &committedCurveDepth,
                 committedInFrontCurveDepth.isEmpty()
                     ? nullptr : &committedInFrontCurveDepth,
-                committedCurveDepthSize);
+                committedCurveDepthSize,
+                importedCameraFrameTextureScale(
+                    document_, renderFrame.camera,
+                    renderFrame.viewportSize));
             const qint64 sceneLinearTargetPixels =
                 qint64(committedSceneLayer.width()) *
                 committedSceneLayer.height();

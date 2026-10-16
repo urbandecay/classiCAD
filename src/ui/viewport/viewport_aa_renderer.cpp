@@ -339,9 +339,15 @@ void ViewportAaRenderer::setDepthOfField(
     const ViewportCameraPreferences &optics,
     bool perspectiveView,
     qreal projectionClipStart,
-    qreal projectionClipEnd)
+    qreal projectionClipEnd,
+    qreal cameraFrameSensorScale)
 {
     depthOfFieldOptics_ = optics;
+    if (std::isfinite(cameraFrameSensorScale) &&
+        cameraFrameSensorScale > 0.0) {
+        depthOfFieldOptics_.opticalSensorSizeMillimeters *=
+            cameraFrameSensorScale;
+    }
     // Depth-buffer values are encoded with the projection clip range. Use
     // that same range when reconstructing view depth for CoC, even when a
     // free perspective viewport has tightened its far plane for precision.

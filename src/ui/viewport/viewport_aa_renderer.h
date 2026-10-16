@@ -40,7 +40,8 @@ public:
                          const ViewportCameraPreferences &optics,
                          bool perspectiveView,
                          qreal projectionClipStart,
-                         qreal projectionClipEnd);
+                         qreal projectionClipEnd,
+                         qreal cameraFrameSensorScale = 1.0);
     void setDisplayTransform(const ViewportShadingSettings &settings,
                              bool sourceIsSceneLinear,
                              bool sourceHasPremultipliedAlpha = false);

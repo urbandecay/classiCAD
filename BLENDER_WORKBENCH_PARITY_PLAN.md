@@ -9918,6 +9918,19 @@ scene depth.
   in [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L129-L145).
   Build passed; runtime GPU and matched wire images remain open.
 
+### GPU Smooth Wires candidate coverage (2026-10-16)
+
+- Recorded smooth-wire fragments now survive their raster pixel even when
+  their local coverage evaluates to zero. The fullscreen resolve computes
+  coverage again at each center or neighboring destination pixel, as Blender
+  does; direct-render and hard-wire paths still discard zero-coverage pixels.
+  Dash/style discards and scene-depth visibility checks are unchanged.
+- Blender records the wire candidate before AA coverage is evaluated in
+  [`overlay_wireframe_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_wireframe_frag.glsl#L379-L405),
+  and computes center and neighbor coverage in
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L141-L165).
+  Build passed; matched GPU wire captures remain open.
+
 ### QPainter NURBS lighting values across color modes (2026-10-16)
 
 - QPainter NURBS surfaces and solids now retain their assigned material

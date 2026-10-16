@@ -138,7 +138,8 @@ void main()
             discard;
         }
     }
-    if (coverage <= 0.0) {
+    if (coverage <= 0.0 &&
+        !(uRecordLine != 0 && uSmoothWire != 0)) {
         discard;
     }
     if (uSmoothWire == 0) {

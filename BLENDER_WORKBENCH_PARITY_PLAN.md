@@ -9612,3 +9612,15 @@ moves them after scene effects and depth-tests them against the retained scene.
   fragment capture; this fix only restores front-only pixels to the bounded
   DOF candidate mask. Build passed; matched `showInFront` DOF captures remain
   open.
+
+### QPainter selected-outline boundary depth pairing (2026-10-16)
+
+- Selected-outline occlusion now compares the selected side's depth with
+  scene depth sampled from that same pixel. At an outline boundary where the
+  center pixel is empty and a selected neighbor supplies the contour, the
+  previous code paired the neighbor's selected depth with the empty center's
+  scene depth, which could dim an otherwise visible line incorrectly.
+- Blender 5.2.2 tracks the reference ID and its depth coordinate together in
+  [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L976-L990)
+  and compares outline and scene depth at that coordinate in [#L1357-L1365](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1357-L1365).
+  Build passed; matched selected-outline captures remain open.

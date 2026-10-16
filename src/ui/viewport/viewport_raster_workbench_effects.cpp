@@ -3555,7 +3555,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             selectionObjectId != 0
                                 ? selectedOutlineSamples[sampleIndex]
                                 : selectedOutlineSamples[neighborIndex];
-                        const RasterSample &sceneSample = samples[sampleIndex];
+                        const int selectedSideIndex = selectionObjectId != 0
+                            ? sampleIndex : neighborIndex;
+                        const RasterSample &sceneSample =
+                            samples[selectedSideIndex];
                         const bool occluded = !xrayEnabled &&
                             sceneSample.objectId != 0 &&
                             selectedSide.depth >

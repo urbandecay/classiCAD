@@ -3903,22 +3903,30 @@ to affect object transforms, point extrusion, or object duplication.
 For this porting slice, use classiCAD's existing geometry as the component
 model: curve control points map to vertices, curve splines map to edges, and
 NURBS surface or solid patches map to faces. The 1/2/3 keys switch among modes
-supported by the active geometry. Component selection carries between modes:
-curve spline selection expands to its control points, fully selected curve
-control nets map back to their splines, and surface control-net selections map
-to NURBS faces. Grab, rotate, and scale now pass selected NURBS control-point
-targets to their existing geometry transforms. Surface CV propagation stays
-inside the selected surface or solid; matching coordinates on another object
-do not connect it. Curve control points propagate across objects only through
-the existing explicit weld groups. Component duplication uses the existing
-curve/surface component paths. Curve and point component deletion use their
-existing geometry operations. A NURBS surface or solid can only be deleted as
-a whole through component deletion; deleting an individual closed-solid face
-is rejected because it would break the stored solid topology. Multi-object
-Edit Mode remains limited to the active geometry family.
+supported by the active geometry. The matching toolbar buttons are enabled
+only for component types supported by the active object. Component selection
+carries between modes: curve spline selection expands to its control points,
+fully selected curve control nets map back to their splines, and surface
+control-net selections map to NURBS faces. `A` and `Alt+A` select and deselect
+all components in the current Edit Mode selection domain without leaving Edit
+Mode. Grab, rotate, and scale transform curve and NURBS surface control points
+through their existing geometry paths. NURBS solid component transforms are
+suppressed because solid faces are derived from the exact base surface and
+extrusion vector; whole-object solid transforms remain supported. Surface CV
+propagation stays inside the selected surface or solid; matching coordinates
+on another object do not connect it. Curve control points propagate across
+objects only through the existing explicit weld groups. Component duplication
+uses the existing curve/surface component paths. Curve and point component
+deletion use their existing geometry operations. A NURBS surface or solid can
+only be deleted as a whole through component deletion; deleting an individual
+closed-solid face is rejected because it would break the stored solid
+topology. Multi-object Edit Mode remains limited to the active geometry
+family.
 
 The user explicitly deferred polygon-mesh component work for now; this slice
 maps the existing NURBS control geometry to Blender's component concepts.
+Edit Mode Extrude still needs to honor the current component selection and
+must not fall back to whole-object extrusion when no component is selected.
 Edit Mode's custom Mirror command is unavailable because it currently only
 mirrors whole objects. Partial surface CV deletion, individual solid-face
 deletion, exact active/selected outlines, mode-specific overlay visibility,

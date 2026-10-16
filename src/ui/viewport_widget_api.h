@@ -73,6 +73,7 @@ public:
     virtual bool lineAutoWeldEnabled() const = 0;
     virtual void setComponentSelectionMode(int mode) = 0;
     virtual int componentSelectionMode() const = 0;
+    virtual bool supportsComponentSelectionMode(int mode) const = 0;
     virtual bool setInteractionMode(int mode) = 0;
     virtual int interactionMode() const = 0;
     virtual void activateViewportShadingControl(int control) = 0;

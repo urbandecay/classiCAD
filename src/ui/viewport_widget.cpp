@@ -2602,6 +2602,15 @@ public:
         return static_cast<int>(componentSelectionMode_);
     }
 
+    bool supportsComponentSelectionMode(int mode) const override
+    {
+        if (mode < static_cast<int>(ComponentSelectionMode::Vertex) ||
+            mode > static_cast<int>(ComponentSelectionMode::Face)) {
+            return false;
+        }
+        return supportsComponentSelectionShortcut(Qt::Key_1 + mode);
+    }
+
     bool setInteractionMode(int mode) override
     {
         if (mode < static_cast<int>(ViewportInteractionMode::Object) ||
@@ -2682,38 +2691,16 @@ public:
                     shape->geometryType == GeometryType::PolygonMesh) {
                     continue;
                 }
-                int componentCount = 0;
-                if (shape->geometryType == GeometryType::NurbsSurface ||
-                    shape->geometryType == GeometryType::NurbsSolid) {
-                    if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                        componentCount = selectedSurfaceControlNet(*shape)
-                                             .precisePointVertices.size();
-                    } else if (componentSelectionMode_ ==
-                               ComponentSelectionMode::Edge) {
-                        componentCount = surfaceComponentEdgeVertices(
-                            *shape, controlPointsVisible_).size();
-                    } else {
-                        componentCount = shapeSurfaceFaces(*shape).size();
-                    }
-                } else if (componentSelectionMode_ ==
-                           ComponentSelectionMode::Vertex) {
-                    componentCount = shape->geometryType == GeometryType::Point
-                        ? (shape->points.isEmpty() ? 0 : 1)
-                        : curveControlPointVertices(*shape, {}).size();
-                } else if (componentSelectionMode_ ==
-                           ComponentSelectionMode::Edge) {
-                    componentCount = curveSampler_.curvesForShape(*shape).size();
-                }
-                QSet<int> allComponents;
-                for (int component = 0; component < componentCount; ++component) {
-                    allComponents.insert(component);
-                }
+                QSet<int> allComponents = editComponentIndicesForShape(
+                    *shape, componentSelectionMode_);
                 if (!allComponents.isEmpty()) {
+                    const int lastComponent = *std::max_element(
+                        allComponents.cbegin(), allComponents.cend());
                     activeSelections.insert(objectValue, std::move(allComponents));
                     if (ObjectId::fromValue(objectValue) ==
                         selection_.primaryObjectId()) {
                         activeComponentIndices_[static_cast<int>(
-                            componentSelectionMode_)] = componentCount - 1;
+                            componentSelectionMode_)] = lastComponent;
                     }
                 }
             }
@@ -2782,6 +2769,91 @@ public:
         default:
             return false;
         }
+    }
+
+    bool viewportModeShortcutAvailable() const
+    {
+        return activeTool_ == Tool::Select && !grabTool_.isActive() &&
+               !duplicateTool_.isActive() && !selectionBoxOverlayActive() &&
+               !objectSelectionDragActive() &&
+               !controlPointSelectionDragActive();
+    }
+
+    QSet<int> editComponentIndicesForShape(
+        const Shape &shape, ComponentSelectionMode mode) const
+    {
+        QSet<int> components;
+        if (shape.geometryType == GeometryType::PolygonMesh) {
+            return components;
+        }
+        if (shape.geometryType == GeometryType::NurbsSurface ||
+            shape.geometryType == GeometryType::NurbsSolid) {
+            if (mode == ComponentSelectionMode::Vertex) {
+                const int count = selectedSurfaceControlNet(shape)
+                                      .precisePointVertices.size();
+                for (int index = 0; index < count; ++index) {
+                    components.insert(index);
+                }
+            } else if (mode == ComponentSelectionMode::Edge) {
+                const QVector<QPair<int, int>> edges =
+                    surfaceComponentEdgeVertices(shape,
+                                                 controlPointsVisible_);
+                for (int index = 0; index < edges.size(); ++index) {
+                    if (edges[index].first >= 0 && edges[index].second >= 0) {
+                        components.insert(index);
+                    }
+                }
+            } else {
+                const int count = shapeSurfaceFaces(shape).size();
+                for (int index = 0; index < count; ++index) {
+                    components.insert(index);
+                }
+            }
+            return components;
+        }
+
+        int count = 0;
+        if (mode == ComponentSelectionMode::Vertex) {
+            count = shape.geometryType == GeometryType::Point
+                        ? (shape.points.isEmpty() ? 0 : 1)
+                        : curveControlPointVertices(shape, {}).size();
+        } else if (mode == ComponentSelectionMode::Edge &&
+                   shape.geometryType != GeometryType::Point) {
+            count = curveSampler_.curvesForShape(shape).size();
+        }
+        for (int index = 0; index < count; ++index) {
+            components.insert(index);
+        }
+        return components;
+    }
+
+    void setAllEditComponentsSelected(bool selectAll)
+    {
+        if (interactionMode_ != ViewportInteractionMode::Edit) {
+            return;
+        }
+        const int modeIndex = static_cast<int>(componentSelectionMode_);
+        auto &selections = componentSelections_[modeIndex];
+        for (quint64 objectValue : editObjectIds_) {
+            const ObjectId objectId = ObjectId::fromValue(objectValue);
+            const Shape *shape = document_.shape(objectId);
+            if (shape == nullptr) {
+                continue;
+            }
+            const QSet<int> components = selectAll
+                ? editComponentIndicesForShape(*shape,
+                                               componentSelectionMode_)
+                : QSet<int>{};
+            selections.insert(objectValue, components);
+            if (objectId == selection_.primaryObjectId()) {
+                activeComponentIndices_[modeIndex] = components.isEmpty()
+                    ? -1
+                    : *std::max_element(components.cbegin(), components.cend());
+            }
+        }
+        componentSelectionObject_ = selection_.primaryObjectId();
+        update();
+        emitCoordinateUpdate();
     }
 
     void activateViewportShadingControl(int control) override
@@ -4915,6 +4987,23 @@ public:
         return targets;
     }
 
+    QHash<quint64, QSet<int>> selectedTransformControlPointTargets() const
+    {
+        QHash<quint64, QSet<int>> targets =
+            selectedEditableControlPointTargets();
+        for (auto target = targets.begin(); target != targets.end();) {
+            const Shape *shape =
+                document_.shape(ObjectId::fromValue(target.key()));
+            if (shape == nullptr ||
+                shape->geometryType == GeometryType::NurbsSolid) {
+                target = targets.erase(target);
+            } else {
+                ++target;
+            }
+        }
+        return targets;
+    }
+
     QVector<ObjectId> controlPointTargetObjectIds(
         const QHash<quint64, QSet<int>> &targets) const
     {
@@ -4931,7 +5020,7 @@ public:
     bool beginRotate()
     {
         const QHash<quint64, QSet<int>> controlPointTargets =
-            selectedEditableControlPointTargets();
+            selectedTransformControlPointTargets();
         if (interactionMode_ == ViewportInteractionMode::Edit &&
             controlPointTargets.isEmpty()) {
             return false;
@@ -4983,7 +5072,7 @@ public:
     bool beginScale(ScaleMode mode)
     {
         const QHash<quint64, QSet<int>> controlPointTargets =
-            selectedEditableControlPointTargets();
+            selectedTransformControlPointTargets();
         if (interactionMode_ == ViewportInteractionMode::Edit &&
             controlPointTargets.isEmpty()) {
             return false;
@@ -5435,6 +5524,12 @@ public:
                     !document_.isObjectEditable(objectId)) {
                     continue;
                 }
+                if (shape->geometryType == GeometryType::NurbsSolid) {
+                    // Solid faces are derived from baseSurface plus the
+                    // extrusion vector. Component transforms would edit a
+                    // materialized boundary and violate that representation.
+                    continue;
+                }
                 const Point3D offset = object->placementTranslation;
                 if (shape->geometryType != GeometryType::NurbsSurface &&
                     shape->geometryType != GeometryType::NurbsSolid) {
@@ -5639,7 +5734,8 @@ public:
                 }
             }
         }
-        if (!hasSelectedSurfaceComponents && selectedCurveObjects.isEmpty()) {
+        if (interactionMode_ == ViewportInteractionMode::Object &&
+            !hasSelectedSurfaceComponents && selectedCurveObjects.isEmpty()) {
             for (const ObjectId objectId : selected) {
                 if (document_.isObjectEditable(objectId) &&
                     !validSelection.contains(objectId)) validSelection.append(objectId);
@@ -15859,6 +15955,7 @@ protected:
                     activeComponentIndices_[vertexModeIndex] =
                         handleControlPointIndex;
                 }
+                notifyViewportControlsChanged();
                 rawCursorWorld_ = rawWorldPosition;
                 cursorWorld_ = worldPosition;
                 lastWorldPosition_ = worldPosition;
@@ -15989,6 +16086,7 @@ protected:
                         .arg(additive)
                         .arg(selectedIndices.join(QStringLiteral(","))));
                 update();
+                notifyViewportControlsChanged();
                 event->accept();
                 return;
             }
@@ -17207,7 +17305,17 @@ protected:
             event->accept();
             return;
         }
-        if (activeTool_ == Tool::Select && !event->isAutoRepeat() &&
+        if (viewportModeShortcutAvailable() &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            !event->isAutoRepeat() && event->key() == Qt::Key_A &&
+            (event->modifiers() == Qt::NoModifier ||
+             event->modifiers() == Qt::AltModifier)) {
+            setAllEditComponentsSelected(
+                event->modifiers() == Qt::NoModifier);
+            event->accept();
+            return;
+        }
+        if (viewportModeShortcutAvailable() && !event->isAutoRepeat() &&
             event->modifiers() == Qt::NoModifier &&
             supportsComponentSelectionShortcut(event->key()) &&
             (event->key() == Qt::Key_1 || event->key() == Qt::Key_2 ||
@@ -17217,7 +17325,7 @@ protected:
             event->accept();
             return;
         }
-        if (activeTool_ == Tool::Select && !event->isAutoRepeat() &&
+        if (viewportModeShortcutAvailable() && !event->isAutoRepeat() &&
             event->key() == Qt::Key_Tab &&
             event->modifiers() == Qt::NoModifier &&
             !grabTool_.isActive() && !duplicateTool_.isActive() &&
@@ -17604,8 +17712,22 @@ protected:
 
         const bool viewportHasKeyboardContext =
             targetWidget == this || isAncestorOf(targetWidget);
-        if (!viewportHasKeyboardContext || activeTool_ != Tool::Select ||
-            keyEvent->isAutoRepeat() ||
+        if (!viewportHasKeyboardContext || keyEvent->isAutoRepeat()) {
+            return false;
+        }
+
+        if (viewportModeShortcutAvailable() &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            keyEvent->key() == Qt::Key_A &&
+            (keyEvent->modifiers() == Qt::NoModifier ||
+             keyEvent->modifiers() == Qt::AltModifier)) {
+            setAllEditComponentsSelected(
+                keyEvent->modifiers() == Qt::NoModifier);
+            keyEvent->accept();
+            return true;
+        }
+
+        if (!viewportModeShortcutAvailable() ||
             keyEvent->modifiers() != Qt::NoModifier) {
             return false;
         }
@@ -18888,6 +19010,7 @@ private:
                         }()));
                 update();
                 emitCoordinateUpdate();
+                notifyViewportControlsChanged();
                 return;
             }
             if (!moved && componentBoxStartedOnBlank_ && !additive) {
@@ -19643,6 +19766,7 @@ private:
             }
             update();
             emitCoordinateUpdate();
+            notifyViewportControlsChanged();
             return;
         }
         if (!moved && interactionMode_ == ViewportInteractionMode::Object) {

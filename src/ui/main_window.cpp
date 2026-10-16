@@ -1584,6 +1584,10 @@ private:
                     for (QAbstractButton *button :
                          componentModeButtonGroup_->buttons()) {
                         button->setVisible(interactionMode == 1);
+                        button->setEnabled(
+                            interactionMode == 1 && viewport_ != nullptr &&
+                            viewport_->supportsComponentSelectionMode(
+                                componentModeButtonGroup_->id(button)));
                     }
                 }
                 if (controlPointsButton_ != nullptr) {

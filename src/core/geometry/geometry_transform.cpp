@@ -618,6 +618,12 @@ bool transformShapeControlPoints(
     if (shape == nullptr || controlPointIndices.isEmpty() || !transform) {
         return false;
     }
+    if (shape->geometryType == GeometryType::NurbsSolid) {
+        // NurbsExtrusionSolid3D is authoritative as baseSurface plus a sweep
+        // vector. Its faces are derived; control-point transforms must not
+        // turn those derived faces into editable boundary topology.
+        return false;
+    }
 
     const auto close = [](const Point3D &first, const Point3D &second) {
         const qreal dx = first.x - second.x;
@@ -689,57 +695,6 @@ bool transformShapeControlPoints(
             changed = true;
         }
         return changed && validateNurbsSurface(shape->nurbsSurface);
-    }
-
-    if (shape->geometryType == GeometryType::NurbsSolid) {
-        const QVector<NurbsSurface3D> visibleFaces = shapeSurfaceFaces(*shape);
-        QVector<Point3D> selectedPositions;
-        QVector<Point3D> uniquePositions;
-        for (const NurbsSurface3D &face : visibleFaces) {
-            for (const Point3D &point : face.controlPoints) {
-                int pointIndex = -1;
-                for (int index = 0; index < uniquePositions.size(); ++index) {
-                    if (close(uniquePositions[index], point)) {
-                        pointIndex = index;
-                        break;
-                    }
-                }
-                if (pointIndex < 0) {
-                    pointIndex = uniquePositions.size();
-                    uniquePositions.append(point);
-                }
-                if (controlPointIndices.contains(pointIndex) &&
-                    !std::any_of(selectedPositions.cbegin(),
-                                 selectedPositions.cend(),
-                                 [&point, &close](const Point3D &existing) {
-                                     return close(existing, point);
-                                 })) {
-                    selectedPositions.append(point);
-                }
-            }
-        }
-        if (selectedPositions.isEmpty() ||
-            !materializeNurbsSolidBoundary(&shape->nurbsSolid)) {
-            return false;
-        }
-        for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
-            for (Point3D &point : face.controlPoints) {
-                const bool selected = std::any_of(
-                    selectedPositions.cbegin(), selectedPositions.cend(),
-                    [&point, &close](const Point3D &candidate) {
-                        return close(point, candidate);
-                    });
-                if (!selected) {
-                    continue;
-                }
-                const Point3D moved = transform(point);
-                if (!finite(moved)) {
-                    return false;
-                }
-                point = moved;
-            }
-        }
-        return validateNurbsSolid(shape->nurbsSolid);
     }
 
     QSet<int> indicesToTransform = controlPointIndices;

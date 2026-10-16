@@ -3892,28 +3892,38 @@ Status: in progress; the implementation and source reviews found the blockers li
 
 ## Object Mode and Edit Mode interaction
 
-Status: first interaction slice implemented on 2026-10-16. classiCAD now starts
-in Object Mode, has an Object/Edit selector and a Tab toggle from the Select
-tool, routes ordinary clicks and box selection to whole objects in Object
-Mode, and exposes component selection controls and handles only in Edit Mode.
-Object selection remains the transform target in Object Mode. Entering Edit
-Mode requires at least one selected editable object; switching modes preserves
-the object selection and cached component selections. Existing component
-selection and curve control-point editing paths are reused in Edit Mode. Edit
-picking is limited to the selected objects compatible with the active object's
-geometry family (curves, NURBS surfaces/solids, or polygon meshes); selecting a
-component updates the active object while retaining the edit set.
-Tab and the 1/2/3 component-mode keys are routed through the application's
-viewport event filter so Qt focus traversal cannot consume them. The existing
-three-point tangent-circle Tab cycling retains priority.
+Status: the NURBS-based interaction slice was extended on 2026-10-16. classiCAD
+starts in Object Mode, has an Object/Edit selector and Tab toggle from the
+Select tool, selects whole objects in Object Mode, and selects components in
+Edit Mode. Entering Edit Mode requires a selected editable object and selects
+its existing control geometry when it has no retained component selection.
+Returning to Object Mode preserves the component caches without allowing them
+to affect object transforms, point extrusion, or object duplication.
 
-Still open: matched behavior for active versus selected object outlines,
-Blender's exact component selection defaults/conversion semantics, unsupported
-object-type handling, and mode-specific wire/overlay visibility across GPU and
-QPainter paths. Add offscreen contracts for mode switches,
-supported/unsupported selections, selection retention, and Object/Edit
-rendering and transform behavior before calling this category complete. Do not
-infer full Blender parity from the current mode switch alone.
+For this porting slice, use classiCAD's existing geometry as the component
+model: curve control points map to vertices, curve splines map to edges, and
+NURBS surface or solid patches map to faces. The 1/2/3 keys switch among modes
+supported by the active geometry. Component selection carries between modes:
+curve spline selection expands to its control points, fully selected curve
+control nets map back to their splines, and surface control-net selections map
+to NURBS faces. Grab, rotate, and scale now pass selected NURBS control-point
+targets to their existing geometry transforms. Surface CV propagation stays
+inside the selected surface or solid; matching coordinates on another object
+do not connect it. Curve control points propagate across objects only through
+the existing explicit weld groups. Component duplication uses the existing
+curve/surface component paths. Curve and point component deletion use their
+existing geometry operations. A NURBS surface or solid can only be deleted as
+a whole through component deletion; deleting an individual closed-solid face
+is rejected because it would break the stored solid topology. Multi-object
+Edit Mode remains limited to the active geometry family.
+
+The user explicitly deferred polygon-mesh component work for now; this slice
+maps the existing NURBS control geometry to Blender's component concepts.
+Edit Mode's custom Mirror command is unavailable because it currently only
+mirrors whole objects. Partial surface CV deletion, individual solid-face
+deletion, exact active/selected outlines, mode-specific overlay visibility,
+Blender's Shift/Ctrl digit selection extensions, and matched GPU/QPainter
+captures remain open. The mode port is not signed off as full Blender parity.
 
 Port Blender 5.2.2's interaction behavior into the existing scene and geometry
 model, without importing Blender's architecture:

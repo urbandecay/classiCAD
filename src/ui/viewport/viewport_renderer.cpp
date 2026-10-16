@@ -5970,7 +5970,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
     if (!screenLines.isEmpty()) {
         painter.save();
         if (!preview) {
-            painter.setRenderHint(QPainter::Antialiasing, smoothWiresOverlay_);
+            painter.setRenderHint(QPainter::Antialiasing,
+                                  smoothWiresEditMode_);
         }
         if (!preview && opaqueSceneDepth != nullptr &&
             opaqueSceneDepthSize.width() > 0 &&
@@ -5989,7 +5990,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             painter.save();
             if (!preview) {
                 painter.setRenderHint(QPainter::Antialiasing,
-                                      smoothWiresOverlay_);
+                                      smoothWiresEditMode_);
             }
         }
         painter.drawLines(screenLines.constData(), screenLines.size());

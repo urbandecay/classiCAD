@@ -10223,16 +10223,3 @@ scene depth.
   one-million-pixel and 100,000-triangle limits still select the older fallback
   above budget. This addresses internal tessellation coverage only; projected
   self-overlap and matched Blender images remain open. Build passed.
-
-### QPainter legacy cavity color space (2026-10-16)
-
-- In the legacy display-image cavity fallback, Standard color management now
-  decodes the sRGB image channels, reverses the configured display gamma and
-  exposure, applies the cavity factor in scene-linear RGB, and transforms the
-  result for display again. The same correction applies to the retained opaque
-  contribution under a transparent layer. This matches Blender's cavity-before-
-  display-transform order for this Standard path. When only display pixels are
-  available, AgX, PBR Neutral, Filmic, and imported LUT paths still use the
-  existing approximation because their source scene-linear colors cannot be
-  recovered reliably. The normal bounded scene-linear compositor is unchanged;
-  matched fallback captures remain open. Build passed.

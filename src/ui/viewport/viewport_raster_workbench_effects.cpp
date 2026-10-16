@@ -4292,32 +4292,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
 
     QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
     QImage result = source.copy();
-    const float cavityExposureScale = std::exp2(
-        static_cast<float>(settings.colorExposure));
-    const bool standardLinearCavityBlend = settings.colorTransform == 1 &&
-        settings.colorGamma > workbenchGammaEpsilon &&
-        std::isfinite(settings.colorGamma) &&
-        std::isfinite(cavityExposureScale) && cavityExposureScale > 0.0f;
-    const auto decodeStandardDisplayColor = [&](QRgb pixel) {
-        const float gamma = static_cast<float>(settings.colorGamma);
-        const QVector3D encoded(
-            std::pow(qRed(pixel) / 255.0f, gamma),
-            std::pow(qGreen(pixel) / 255.0f, gamma),
-            std::pow(qBlue(pixel) / 255.0f, gamma));
-        return workbenchSrgbToSceneLinear(encoded) / cavityExposureScale;
-    };
-    const auto encodeCavityColor = [&](const QVector3D &sceneLinear) {
-        return workbenchSceneLinearToDisplaySrgb(
-            sceneLinear, settings.colorTransform, settings.colorExposure,
-            settings.colorGamma, settings.colorLutData,
-            settings.colorLutMetadata);
-    };
-    const auto packCavityColor = [](const QVector3D &display, int alpha) {
-        return qRgba(
-            std::clamp(qRound(display.x() * 255.0f), 0, 255),
-            std::clamp(qRound(display.y() * 255.0f), 0, 255),
-            std::clamp(qRound(display.z() * 255.0f), 0, 255), alpha);
-    };
     for (int y = 0; y < outputHeight; ++y) {
         QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
         const int depthY = std::clamp(
@@ -4359,15 +4333,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const QRgb opaque = surfaceLayers->opaqueColor.pixel(layerX, layerY);
                 const QRgb transparent = surfaceLayers->transparentColor.pixel(layerX, layerY);
                 const float remain = 1.0f - qAlpha(transparent) / 255.0f;
-                if (standardLinearCavityBlend) {
-                    const QVector3D sceneLinear =
-                        decodeStandardDisplayColor(pixel) +
-                        decodeStandardDisplayColor(opaque) *
-                            ((factor - 1.0f) * remain);
-                    out[x] = packCavityColor(encodeCavityColor(sceneLinear),
-                                             qAlpha(pixel));
-                    continue;
-                }
                 const auto applyUnderlyingCavity = [&](int channel, int opaqueChannel) {
                     const int delta = qRound(opaqueChannel * (factor - 1.0f) * remain);
                     return std::clamp(channel + delta, 0, 255);
@@ -4376,12 +4341,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     applyUnderlyingCavity(qRed(pixel), qRed(opaque)),
                     applyUnderlyingCavity(qGreen(pixel), qGreen(opaque)),
                     applyUnderlyingCavity(qBlue(pixel), qBlue(opaque)),
-                    qAlpha(pixel));
-                continue;
-            }
-            if (standardLinearCavityBlend) {
-                out[x] = packCavityColor(
-                    encodeCavityColor(decodeStandardDisplayColor(pixel) * factor),
                     qAlpha(pixel));
                 continue;
             }

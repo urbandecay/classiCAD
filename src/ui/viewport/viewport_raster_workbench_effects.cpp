@@ -4461,6 +4461,29 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
              surfaceLayers->outlineAppliedBeforeDisplay);
         const QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage gatheredResult = source.copy();
+        const auto decodeDisplayChannel = [](int channel) {
+            return workbenchSrgbToSceneLinear(
+                       static_cast<float>(channel) / 255.0f) * 255.0f;
+        };
+        if (!sceneLinearDofActive) {
+            // The low-memory fallback no longer has the pre-display scene
+            // values. Decode the sRGB display channels before its blur so
+            // filtering does not darken edges by averaging encoded bytes.
+            for (int y = 0; y < outputHeight; ++y) {
+                QRgb *out = reinterpret_cast<QRgb *>(
+                    gatheredResult.scanLine(y));
+                const auto *in = reinterpret_cast<const QRgb *>(
+                    source.constScanLine(y));
+                for (int x = 0; x < outputWidth; ++x) {
+                    const float alpha = qAlpha(in[x]) / 255.0f;
+                    out[x] = qRgba(
+                        qRound(decodeDisplayChannel(qRed(in[x])) * alpha),
+                        qRound(decodeDisplayChannel(qGreen(in[x])) * alpha),
+                        qRound(decodeDisplayChannel(qBlue(in[x])) * alpha),
+                        qAlpha(in[x]));
+                }
+            }
+        }
         std::vector<LinearGatherPixel> gatheredLinear;
         if (sceneLinearDofActive) {
             gatheredLinear.resize(
@@ -4631,9 +4654,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         pixel.red, pixel.green, pixel.blue, pixel.alpha};
                 }
                 const QRgb pixel = source.pixel(x, y);
+                const float alpha = qAlpha(pixel) / 255.0f;
                 return LinearGatherPixel{
-                    float(qRed(pixel)), float(qGreen(pixel)),
-                    float(qBlue(pixel)), float(qAlpha(pixel)) / 255.0f};
+                    decodeDisplayChannel(qRed(pixel)) * alpha,
+                    decodeDisplayChannel(qGreen(pixel)) * alpha,
+                    decodeDisplayChannel(qBlue(pixel)) * alpha, alpha};
             };
             const auto sourceCocAtPixel = [&](int x, int y) {
                 const int depthX = std::clamp(
@@ -5214,15 +5239,31 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                     const QRgb original = source.pixel(x, y);
                     const QRgb blurred = sampleFilteredGather(x, y);
+                    const float originalAlpha = qAlpha(original) / 255.0f;
+                    const float blurredAlpha = qAlpha(blurred) / 255.0f;
+                    const float outputAlpha = originalAlpha * (1.0f - mix) +
+                                              blurredAlpha * mix;
+                    const auto resolveChannel = [&](int originalChannel,
+                                                    int blurredPremultiplied) {
+                        const float originalPremultiplied =
+                            decodeDisplayChannel(originalChannel) / 255.0f *
+                            originalAlpha;
+                        const float blurredLinear =
+                            blurredPremultiplied / 255.0f;
+                        const float outputPremultiplied =
+                            originalPremultiplied * (1.0f - mix) +
+                            blurredLinear * mix;
+                        const float outputLinear = outputAlpha > 1.0e-6f
+                            ? outputPremultiplied / outputAlpha : 0.0f;
+                        return std::clamp(qRound(
+                            workbenchSceneLinearToSrgb(outputLinear) * 255.0f),
+                            0, 255);
+                    };
                     out[x] = qRgba(
-                        qRound(qRed(original) * (1.0f - mix) +
-                               qRed(blurred) * mix),
-                        qRound(qGreen(original) * (1.0f - mix) +
-                               qGreen(blurred) * mix),
-                        qRound(qBlue(original) * (1.0f - mix) +
-                               qBlue(blurred) * mix),
-                        qRound(qAlpha(original) * (1.0f - mix) +
-                               qAlpha(blurred) * mix));
+                        resolveChannel(qRed(original), qRed(blurred)),
+                        resolveChannel(qGreen(original), qGreen(blurred)),
+                        resolveChannel(qBlue(original), qBlue(blurred)),
+                        qRound(outputAlpha * 255.0f));
                 }
             }
             if (!sceneLinearDofActive)

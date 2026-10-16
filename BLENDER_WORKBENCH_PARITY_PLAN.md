@@ -9656,6 +9656,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   DOF candidate mask. Build passed; matched `showInFront` DOF captures remain
   open.
 
+### QPainter DOF fallback filters display light (2026-10-16)
+
+- When the software path cannot retain pre-display scene-linear color, its DOF
+  gather now decodes the displayed sRGB channels before filtering and encodes
+  the result afterward. The full retained scene-linear path is unchanged. This
+  removes encoded-byte averaging from the fallback, but cannot reverse AgX or
+  custom display transforms, so it remains an approximation rather than
+  Blender-equivalent scene-linear filtering. Build passed; matched captures
+  remain open.
+
 ### QPainter selected-outline boundary depth pairing (2026-10-16)
 
 - Selected-outline occlusion now compares the selected side's depth with

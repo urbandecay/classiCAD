@@ -152,8 +152,8 @@ void main()
 
     // Blender first folds the four neighboring line samples into the center
     // overlay sample, then applies its dense one-pixel-wire correction to
-    // that overlay color. The gate uses the original scene alpha before any
-    // line coverage or neighbor blending.
+    // that overlay color. The gate uses the original center wire alpha before
+    // any line coverage or neighbor blending.
     if (centerRecord.w != 0.0) {
         int validNeighborCount = 0;
         for (int index = 0; index < 4; ++index) {
@@ -164,7 +164,7 @@ void main()
             }
         }
         float lineKernelSize = abs(centerRecord.w) * 0.5 - 0.5;
-        if (baseColor.a >= 1.0 &&
+        if (centerRasterColor.a >= 1.0 &&
             resolvedLineColor.a > 0.0 && lineKernelSize < 0.45 &&
             validNeighborCount > 2) {
             float blend = clamp(float(validNeighborCount) * 0.5 - 1.0,

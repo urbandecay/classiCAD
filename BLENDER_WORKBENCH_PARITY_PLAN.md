@@ -8464,12 +8464,12 @@ resolve remain open.
 ### GPU smooth-wire dense-scene alpha gate (2026-10-15)
 
 - The fullscreen wire resolve now gates Blender's dense one-pixel-line
-  correction on the original rasterized center wire's alpha. It previously
-  checked the scene pixel alpha; Blender's `color_tx` is its transparent
-  overlay-color target, separate from the scene, so this was the wrong input.
-  The check now matches `original_center_has_alpha` in pinned
-  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L140-L193).
-  Build and matched wire-image comparisons remain open.
+  correction on the original rasterized center wire's alpha from the separate
+  transparent overlay-color target. A later audit corrected an intermediate
+  change that checked the opaque scene pixel alpha instead. The check matches
+  `original_center_has_alpha` in pinned
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L819-L899).
+  C++ build and matched wire-image comparisons remain open.
 
 ### GPU smooth-wire depth-ordered overlay resolve (2026-10-15)
 

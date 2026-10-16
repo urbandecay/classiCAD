@@ -9226,6 +9226,15 @@ pixel background target; other Image Empties and Front images keep the deferred
 overlay path. Build passed; matched Blender comparison and the allocation
 fallback path remain unverified.
 
+### QPainter Image Empty transparent-surface occlusion (2026-10-16)
+
+- Default-depth QPainter Image Empties now test against the retained regular
+  scene depth, which includes visible transparent surface fragments, rather
+  than opaque surfaces alone. This lets a transparent surface in front of an
+  image occlude it as Blender's depth-tested image pass does. In-Front and
+  camera Front/Back images keep their existing pass rules. Build passed;
+  matched transparent-surface image captures remain open.
+
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 
 - When an imported document has no active view-layer key, Workbench render

@@ -13961,6 +13961,14 @@ protected:
                         !object->showInFront &&
                         object->shape.pictureImageDepth ==
                             PictureImageDepth::Default;
+                    const QVector<float> *pictureSceneDepth =
+                        pictureDepthTested
+                            ? &rasterSurfaceLayers.regularSceneDepth
+                            : nullptr;
+                    const QSize pictureSceneDepthSize =
+                        pictureDepthTested
+                            ? rasterSurfaceLayers.regularSceneDepthSize
+                            : QSize();
                     drawShape(
                         picturePainter, object->shape, false,
                         object->selected, false, object->layerColor,
@@ -13973,12 +13981,7 @@ protected:
                         workbenchRandomIdentityLibraryPath(*object),
                         object->meshObjectTransform, object->meshMaterials,
                         nullptr, object->nurbsSolidFaceMaterials,
-                        pictureDepthTested
-                            ? &rasterSurfaceLayers.opaqueSceneDepth
-                            : nullptr,
-                        pictureDepthTested
-                            ? rasterSurfaceLayers.opaqueSceneDepthSize
-                            : QSize());
+                        pictureSceneDepth, pictureSceneDepthSize);
                     picturePainter.end();
                     compositeDisplayImageLinear(
                         &displayOutputLayer, pictureLayer);

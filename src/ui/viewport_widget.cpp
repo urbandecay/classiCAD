@@ -2644,7 +2644,10 @@ public:
                 case GeometryType::NurbsSolid:
                     return 2;
                 case GeometryType::PolygonMesh:
-                    return 3;
+                    // Mesh component editing is intentionally deferred. Do
+                    // not enter an Edit Mode that cannot select or edit any
+                    // mesh components yet.
+                    return 0;
                 default:
                     return 0;
                 }

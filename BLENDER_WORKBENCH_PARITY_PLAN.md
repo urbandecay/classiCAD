@@ -3936,7 +3936,9 @@ solid cap can continue its extrusion. Selecting multiple solid faces, a wall
 face, a nonplanar or higher-order surface patch, or a trimmed surface boundary
 does not start the corresponding face/edge Extrude. An empty or unsupported
 component selection never falls back to extruding the whole object.
-Polygon-mesh component work remains deferred.
+Polygon-mesh component work remains deferred, and Tab now refuses to enter
+Edit Mode for a polygon mesh until that component editing exists; mesh objects
+remain selectable and transformable in Object Mode.
 Edit Mode Mirror now reflects only the selected NURBS control-point targets in
 place. Vertex selections mirror their CVs, curve Edge selections mirror the
 selected spline's CVs, and a selected NURBS surface patch mirrors its CV net.
@@ -3948,7 +3950,11 @@ ported. NURBS solid component mirroring remains unsupported because its faces
 are derived from the exact base surface and extrusion vector. Partial surface
 CV deletion, individual solid-face deletion, exact active/selected outlines,
 other mode-specific overlay details, Blender's Shift/Ctrl digit selection
-extensions, and matched GPU/QPainter captures remain open. Control-point
+extensions, and matched GPU/QPainter captures remain open. Blender 5.2.2 binds
+Shift/Ctrl digit mode variants to mesh selection operators; its curve Edit
+Mode keymap has no corresponding 1/2/3 selection modes. Ctrl expand/contract
+also depends on mesh adjacency, so those variants are not silently assigned
+new meanings for the NURBS mapping. Control-point
 visibility now defaults on in Edit Mode, while a saved preference to hide it
 is preserved. Edit-only control cages, component highlights, and solid face
 boundaries are gated from Object Mode. Object Mode NURBS surface wires now use

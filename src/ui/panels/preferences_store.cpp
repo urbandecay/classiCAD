@@ -238,7 +238,7 @@ StoredPreferences loadStoredPreferences()
     stored.controlPointSnapEnabled =
         settings.value(QStringLiteral("osnap/controlPoint"), false).toBool();
     stored.controlPointsVisible =
-        settings.value(QStringLiteral("view/controlPoints"), false).toBool();
+        settings.value(QStringLiteral("view/controlPoints"), true).toBool();
     stored.lineAutoWeldEnabled =
         settings.value(QStringLiteral("modeling/lineAutoWeldEnabled"), true).toBool();
     return stored;

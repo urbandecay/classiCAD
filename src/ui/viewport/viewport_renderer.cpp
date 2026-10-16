@@ -4526,6 +4526,9 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                                          ObjectId selectedObjectId,
                                          bool draggingControlPoint,
                                          int activeControlPointIndex,
+                                         const QSet<int> &selectedControlPointIndices,
+                                         int activeSelectedControlPointIndex,
+                                         bool selectAllControlPoints,
                                          bool drawMarkers,
                                          const QVector<float> *regularSceneDepth,
                                          const QSize &regularDepthSize,
@@ -4673,12 +4676,25 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
             if (!drawMarkers) {
                 continue;
             }
+            const int componentIndex = globalControlPointIndex + index;
+            const bool selected = selectAllControlPoints ||
+                selectedControlPointIndices.contains(componentIndex);
+            const bool activeSelected = selected &&
+                componentIndex == activeSelectedControlPointIndex;
             const bool active = draggingControlPoint &&
                                 shapeObjectId == selectedObjectId &&
-                                activeControlPointIndex == globalControlPointIndex + index;
-            painter.setPen(QPen(active ? QColor(QStringLiteral("#f0a45a")) : handleColor,
+                                activeControlPointIndex == componentIndex;
+            const QColor markerColor = active
+                ? QColor(QStringLiteral("#f0a45a"))
+                : activeSelected
+                    ? QColor(Qt::white)
+                    : selected
+                        ? QColor(QStringLiteral("#ff7a00"))
+                        : handleFill;
+            painter.setPen(QPen(active || activeSelected || selected
+                                    ? markerColor : handleColor,
                                 1.5));
-            painter.setBrush(active ? QColor(QStringLiteral("#f0a45a")) : handleFill);
+            painter.setBrush(markerColor);
             const QPointF screenPoint = screenPosition(index);
             painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
                                     screenPoint + QPointF(4.0, 4.0)));

@@ -18,7 +18,7 @@ struct StoredPreferences {
     bool tangentSnapEnabled = false;
     bool nearSnapEnabled = false;
     bool controlPointSnapEnabled = false;
-    bool controlPointsVisible = false;
+    bool controlPointsVisible = true;
     bool lineAutoWeldEnabled = true;
 };
 

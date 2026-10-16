@@ -145,6 +145,7 @@ public:
         }
 
         if (controlPointsButton_ != nullptr) {
+            const QSignalBlocker blocker(controlPointsButton_);
             controlPointsButton_->setChecked(viewport_->controlPointsVisible());
         }
         if (hasWindowState) {
@@ -1592,6 +1593,7 @@ private:
                 }
                 if (controlPointsButton_ != nullptr) {
                     controlPointsButton_->setEnabled(interactionMode == 1);
+                    const QSignalBlocker blocker(controlPointsButton_);
                     controlPointsButton_->setChecked(
                         interactionMode == 1 &&
                         viewport_->controlPointsVisible());
@@ -2440,6 +2442,8 @@ private:
         const StoredPreferences stored = loadStoredPreferences();
         const PreferencesDialogValues &preferences = stored.dialogValues;
 
+        viewport_->setControlPointsVisible(stored.controlPointsVisible);
+
         applyPanButton(preferences.panButton, false);
         viewport_->setSnapLabelsVisible(preferences.snapLabelsVisible);
         viewport_->setSmoothCurveDisplay(preferences.smoothCurveDisplay);
@@ -2475,6 +2479,7 @@ private:
             osnapAction_->setChecked(stored.osnapEnabled);
         }
         if (controlPointsButton_ != nullptr) {
+            const QSignalBlocker blocker(controlPointsButton_);
             controlPointsButton_->setChecked(stored.controlPointsVisible);
         }
         if (lineAutoWeldCheckBox_ != nullptr) {

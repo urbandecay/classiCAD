@@ -3947,9 +3947,18 @@ Blender's transform-orientation, pivot, and axis-key interaction is not yet
 ported. NURBS solid component mirroring remains unsupported because its faces
 are derived from the exact base surface and extrusion vector. Partial surface
 CV deletion, individual solid-face deletion, exact active/selected outlines,
-mode-specific overlay visibility, Blender's Shift/Ctrl digit selection
-extensions, and matched GPU/QPainter captures remain open. The mode port is
-not signed off as full Blender parity.
+other mode-specific overlay details, Blender's Shift/Ctrl digit selection
+extensions, and matched GPU/QPainter captures remain open. Control-point
+visibility now defaults on in Edit Mode, while a saved preference to hide it
+is preserved. Edit-only control cages, component highlights, and solid face
+boundaries are gated from Object Mode. Object Mode NURBS surface wires now use
+the explicit Solid wire-overlay settings; solid evaluated strokes are shown
+only when a wire overlay is requested, and other shading modes retain their
+evaluated strokes. The QPainter fallback draws surface CV dots with depth
+checks and the same selected/active colors as the GPU path. Curve control-point
+markers also use selected and active component colors in both render paths.
+This category has passed the C++ build, but its visual match is unverified.
+The mode port is not signed off as full Blender parity.
 
 Port Blender 5.2.2's interaction behavior into the existing scene and geometry
 model, without importing Blender's architecture:

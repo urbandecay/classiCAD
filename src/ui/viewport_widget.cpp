@@ -1977,7 +1977,8 @@ public:
             });
         toolContext_.setSelectionInteractionCallbacks(
             [this](const QPointF &screenPosition, bool includeControlPoint) {
-                if (includeControlPoint &&
+                if (interactionMode_ == ViewportInteractionMode::Edit &&
+                    includeControlPoint &&
                     (controlPointsVisible_ ||
                      componentSelectionMode_ == ComponentSelectionMode::Vertex)) {
                     int shapeIndex = -1;
@@ -2705,10 +2706,6 @@ public:
                 }
             }
             componentSelectionObject_ = selection_.primaryObjectId();
-        }
-        if (interactionMode_ == ViewportInteractionMode::Object &&
-            controlPointsVisible_) {
-            setControlPointsVisible(false);
         }
         componentBoxSelectionActive_ = false;
         pendingComponentClickShapeIndex_ = -1;
@@ -10431,8 +10428,27 @@ protected:
                         handle.outlineWidthPixels = 0.0f;
                         handle.shape = ViewportControlPointShape::Circle;
                     } else {
-                        handle.fillColor = active ? activeHandle : handleFill;
-                        handle.outlineColor = active ? activeHandle : handleOutline;
+                        const bool vertexSelectionMode =
+                            componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex;
+                        const bool selected = vertexSelectionMode &&
+                            (effectiveEndpointSelection.contains(componentIndex) ||
+                             (renderObject->selected &&
+                              effectiveEndpointSelection.isEmpty()));
+                        const bool activeVertex = selected &&
+                            componentSelectionObject_ == objectId &&
+                            activeComponentIndices_[static_cast<int>(
+                                ComponentSelectionMode::Vertex)] == componentIndex;
+                        const QColor vertexColor = active
+                            ? activeHandle
+                            : activeVertex
+                                  ? QColor(Qt::white)
+                                  : selected
+                                        ? QColor(QStringLiteral("#ff7a00"))
+                                        : handleFill;
+                        handle.fillColor = vertexColor;
+                        handle.outlineColor = active || activeVertex || selected
+                            ? vertexColor : handleOutline;
                         // The old QPainter square is 8 logical pixels with a
                         // 1.5-pixel outline straddling its edges.
                         handle.diameterPixels = static_cast<float>(
@@ -11190,7 +11206,8 @@ protected:
                         outlineObject.selected = renderObject.selected &&
                             viewportShadingSettings_.selectedObjectOutlineVisible &&
                             viewportShadingSettings_.wireOverlaysVisible;
-                        if (!objectComponentSelection.isEmpty()) {
+                        if (interactionMode_ == ViewportInteractionMode::Edit &&
+                            !objectComponentSelection.isEmpty()) {
                             // Component selection colors the selected control
                             // elements; the surface perimeter keeps its normal
                             // object-outline color, like the surface ID pass.
@@ -11211,7 +11228,8 @@ protected:
                                 objectId.value());
                         }
                     }
-                    if (selected &&
+                    if (interactionMode_ == ViewportInteractionMode::Edit &&
+                        selected &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                          componentSelectionMode_ == ComponentSelectionMode::Edge) &&
                         !objectComponentSelection.isEmpty()) {
@@ -11481,7 +11499,8 @@ protected:
                     // Surface CV cages are an explicit display overlay. The
                     // solid surface remains visible without it; show the net
                     // only when the Control Points toggle is enabled.
-                    if (controlPointsVisible_) {
+                    if (interactionMode_ == ViewportInteractionMode::Edit &&
+                        controlPointsVisible_) {
                         gpuStrokes.append(std::move(edgeCage));
                     }
                     ViewportSceneStroke vertexCage;
@@ -11502,7 +11521,8 @@ protected:
                     vertexCage.cacheableGeometry = renderObject.cacheable;
                     vertexCage.worldOffset = renderObject.placementTranslation;
                     vertexCage.preparedDepthGeometry = cage;
-                    if (controlPointsVisible_ &&
+                    if (interactionMode_ == ViewportInteractionMode::Edit &&
+                        controlPointsVisible_ &&
                         vertexCage.pointDiameter > 0.0f) {
                         gpuStrokes.append(std::move(vertexCage));
                     }
@@ -11510,7 +11530,8 @@ protected:
                     // Component highlights remain visible independently from
                     // the optional base control cage. This preserves the
                     // faded links for explicitly selected surface vertices.
-                    if (selected && !objectComponentSelection.isEmpty()) {
+                    if (interactionMode_ == ViewportInteractionMode::Edit &&
+                        selected && !objectComponentSelection.isEmpty()) {
                         const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,
                                                                const QColor &color,
                                                                float width,
@@ -12310,8 +12331,23 @@ protected:
                 gpuStrokes.append(std::move(wireStroke));
             }
             const bool drawSolidEditBoundaries =
+                interactionMode_ == ViewportInteractionMode::Edit &&
                 viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 geometryType == GeometryType::NurbsSolid;
+            const bool surfaceGeometry =
+                geometryType == GeometryType::NurbsSurface ||
+                geometryType == GeometryType::NurbsSolid;
+            const bool solidObjectWireOverlayRequested =
+                viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                viewportShadingSettings_.wireOverlaysVisible &&
+                (viewportShadingSettings_.solidWireframes ||
+                 renderObject.showWire || renderObject.wireDisplay);
+            const bool drawGenericSurfaceStrokes =
+                interactionMode_ == ViewportInteractionMode::Edit ||
+                !surfaceGeometry ||
+                viewportShadingSettings_.mode != ViewportShadingMode::Solid ||
+                (geometryType == GeometryType::NurbsSolid &&
+                 solidObjectWireOverlayRequested);
             if (drawSolidEditBoundaries && sceneRenderer != nullptr) {
                 auto boundaryGeometry =
                     QSharedPointer<ViewportDepthGeometry>::create(
@@ -12336,7 +12372,7 @@ protected:
                     gpuStrokes.append(std::move(boundaryStroke));
                 }
             }
-            if (!drawSolidEditBoundaries &&
+            if (!drawSolidEditBoundaries && drawGenericSurfaceStrokes &&
                 makeViewportSceneStrokes(renderObject,
                                          sceneRenderer != nullptr,
                                          &sceneStroke,
@@ -12349,6 +12385,7 @@ protected:
                         ViewportSmoothWireCategory::Overlay;
                 }
                 const bool selectedCurveComponents =
+                    interactionMode_ == ViewportInteractionMode::Edit &&
                     (selected ||
                      renderObject.blenderLooseMeshEdgeSourceSelected) &&
                     componentSelectionMode_ ==
@@ -12363,6 +12400,15 @@ protected:
                                             ? displayColor
                                             : QColor(QStringLiteral("#000000"));
                     sceneStroke.width = 1.0f;
+                }
+                if (geometryType == GeometryType::NurbsSurface ||
+                    geometryType == GeometryType::NurbsSolid) {
+                    const bool editModeWire =
+                        interactionMode_ == ViewportInteractionMode::Edit;
+                    sceneStroke.editModeWire = editModeWire;
+                    sceneStroke.smoothWireCategory = editModeWire
+                        ? ViewportSmoothWireCategory::EditMode
+                        : ViewportSmoothWireCategory::Overlay;
                 }
                 const bool selectedCurveVertexOverlay =
                     showCurveEndpointVertices &&
@@ -12811,7 +12857,8 @@ protected:
                     isViewportCurveStrokeType(visibleShape.geometryType) &&
                     !scalePreview && !rotatePreview &&
                     sceneStroke.pointDiameter <= 0.0f;
-                if (controlPointsVisible_ && controlGuide.shape != nullptr) {
+                if (interactionMode_ == ViewportInteractionMode::Edit &&
+                    controlPointsVisible_ && controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
                 }
                 gpuStrokes.append(sceneStroke);
@@ -13083,7 +13130,8 @@ protected:
                         preview.geometryType == GeometryType::NurbsSolid ||
                             preview.geometryType == GeometryType::NurbsSurface,
                         true);
-                    if ((controlPointsVisible_ || showCurveEndpointVertices) &&
+                    if (interactionMode_ == ViewportInteractionMode::Edit &&
+                        (controlPointsVisible_ || showCurveEndpointVertices) &&
                         preview.geometryType != GeometryType::NurbsSolid &&
                         preview.geometryType != GeometryType::NurbsSurface) {
                         const auto vertices = showCurveEndpointVertices
@@ -13103,7 +13151,8 @@ protected:
                             gpuControlPointHandles.append(handle);
                         }
                     }
-                    if (componentSelectionMode_ ==
+                    if (interactionMode_ == ViewportInteractionMode::Edit &&
+                        componentSelectionMode_ ==
                             ComponentSelectionMode::Vertex &&
                         (preview.geometryType == GeometryType::NurbsSurface ||
                          preview.geometryType == GeometryType::NurbsSolid)) {
@@ -13522,6 +13571,7 @@ protected:
                 surfacePreviewStrokes.append(std::move(previewCage));
                 if (componentSelectionMode_ ==
                         ComponentSelectionMode::Vertex &&
+                    interactionMode_ == ViewportInteractionMode::Edit &&
                     controlPointsVisible_) {
                     ViewportDepthGeometry markerGeometry =
                         selectedSurfaceControlNet(preview.shape);
@@ -13540,6 +13590,7 @@ protected:
                     surfacePreviewStrokes.append(std::move(previewVertices));
                 } else if (componentSelectionMode_ ==
                                ComponentSelectionMode::Vertex &&
+                           interactionMode_ == ViewportInteractionMode::Edit &&
                            !controlPointsVisible_ &&
                            preview.shape.geometryType ==
                                GeometryType::NurbsSurface) {
@@ -14197,7 +14248,8 @@ protected:
                     devicePixelRatioF(),
                     true) || gpuPreviewRendered;
             }
-            if ((controlPointsVisible_ || showCurveEndpointVertices) &&
+            if (interactionMode_ == ViewportInteractionMode::Edit &&
+                (controlPointsVisible_ || showCurveEndpointVertices) &&
                 controlPointRenderer != nullptr) {
                 gpuControlPointsDrawn = controlPointRenderer->draw(
                     gpuControlPointHandles, overlayCamera,
@@ -14296,10 +14348,16 @@ protected:
                      fallbackDpr, fallbackSceneDepthAvailable,
                      &overlayCamera, &renderFrame](
                         const ViewportSceneStroke &stroke) {
-                    if (!stroke.preparedDepthGeometry ||
-                        stroke.preparedDepthGeometry->preciseLineVertices.isEmpty()) {
+                    if (!stroke.preparedDepthGeometry) {
                         return false;
                     }
+                    const QVector<Point3D> &segments =
+                        stroke.preparedDepthGeometry->preciseLineVertices;
+                    const QVector<QVector3D> &points =
+                        stroke.preparedDepthGeometry->pointVertices;
+                    const bool drawPoints = stroke.pointDiameter > 0.0f &&
+                                            !points.isEmpty();
+                    if (segments.isEmpty() && !drawPoints) return false;
                     painter.save();
                     painter.setRenderHint(
                         QPainter::Antialiasing,
@@ -14307,8 +14365,6 @@ protected:
                                 ViewportSmoothWireCategory::EditMode
                             ? smoothWiresEditMode_
                             : smoothWiresOverlay_);
-                    const QVector<Point3D> &segments =
-                        stroke.preparedDepthGeometry->preciseLineVertices;
                     const QVector<QVector4D> &colors = stroke.lineVertexColors;
                     const ViewportSceneStrokePattern pattern =
                         viewportSceneStrokePattern(stroke,
@@ -14567,6 +14623,33 @@ protected:
                             pen.setJoinStyle(Qt::RoundJoin);
                             painter.setPen(pen);
                             painter.drawPath(continuousPath);
+                        }
+                        if (drawPoints) {
+                            QColor pointColor = stroke.color;
+                            pointColor.setAlphaF(std::clamp<qreal>(
+                                pointColor.alphaF() * fade, 0.0, 1.0));
+                            if (stroke.pointOutline) {
+                                painter.setPen(QPen(pointColor, 1.0));
+                                painter.setBrush(Qt::NoBrush);
+                            } else {
+                                painter.setPen(Qt::NoPen);
+                                painter.setBrush(pointColor);
+                            }
+                            const qreal radius = std::max<qreal>(
+                                0.5, qreal(stroke.pointDiameter) * 0.5);
+                            for (const QVector3D &point : points) {
+                                const Point3D world{
+                                    point.x() + stroke.worldOffset.x,
+                                    point.y() + stroke.worldOffset.y,
+                                    point.z() + stroke.worldOffset.z};
+                                QPointF screen;
+                                if (!viewportTransform_.worldPointToScreen(
+                                        world, size(), &screen) ||
+                                    !depthVisible(world, screen, frontPass)) {
+                                    continue;
+                                }
+                                painter.drawEllipse(screen, radius, radius);
+                            }
                         }
                     };
                     if (viewportShadingSettings_.xrayEnabled()) {
@@ -15211,6 +15294,9 @@ protected:
                 painter.setRenderHint(QPainter::Antialiasing,
                                       smoothWiresEditMode_);
                 for (const ViewportRenderObject &renderObject : visibleShapes) {
+                    if (interactionMode_ != ViewportInteractionMode::Edit) {
+                        continue;
+                    }
                     if (renderObject.shape.geometryType !=
                             GeometryType::NurbsSurface &&
                         renderObject.shape.geometryType !=
@@ -15439,15 +15525,38 @@ protected:
                                   true);
         }
 
-        if (controlPointsVisible_) {
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            controlPointsVisible_) {
             for (const int shapeIndex : curveDisplayShapeIndices()) {
                 if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
                     const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
                     const ViewportRenderObject *renderObject =
                         renderFrame.find(objectId);
                     if (renderObject != nullptr) {
+                        QSet<int> selectedControlPointIndices;
+                        int activeSelectedControlPointIndex = -1;
+                        if (componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex) {
+                            selectedControlPointIndices =
+                                componentSelectionForObject(objectId);
+                            selectedControlPointIndices.unite(
+                                weldedVertexSelections.value(objectId.value()));
+                            if (componentSelectionObject_ == objectId) {
+                                activeSelectedControlPointIndex =
+                                    activeComponentIndices_[static_cast<int>(
+                                        ComponentSelectionMode::Vertex)];
+                            }
+                        }
+                        const bool selectAllControlPoints =
+                            componentSelectionMode_ ==
+                                ComponentSelectionMode::Vertex &&
+                            renderObject->selected &&
+                            selectedControlPointIndices.isEmpty();
                         drawControlPoints(painter,
                                           *renderObject,
+                                          selectedControlPointIndices,
+                                          activeSelectedControlPointIndex,
+                                          selectAllControlPoints,
                                           !gpuControlPointsDrawn,
                                           &rasterSurfaceLayers);
                     }
@@ -26345,7 +26454,9 @@ private:
         request.activeTool = activeTool_;
         request.drawingShape = drawingShape;
         request.selectingObject = selectingObject;
-        request.controlPointsVisible = controlPointsVisible_;
+        request.controlPointsVisible =
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            controlPointsVisible_;
         request.perspectiveEnabled = viewportTransform_.isPerspectiveEnabled();
         request.viewPreset = viewportTransform_.viewPreset();
         request.viewDirection = viewportTransform_.viewDirection();
@@ -27119,6 +27230,9 @@ private:
 
     void drawControlPoints(QPainter &painter,
                            const ViewportRenderObject &renderObject,
+                           const QSet<int> &selectedControlPointIndices,
+                           int activeSelectedControlPointIndex,
+                           bool selectAllControlPoints,
                            bool drawMarkers = true,
                            const RasterWorkbenchSurfaceLayers *depthLayers = nullptr)
     {
@@ -27153,6 +27267,9 @@ private:
                                            selectedShapeIndex_,
                                            controlPointSelectionDragActive(),
                                            controlPointIndex_,
+                                           selectedControlPointIndices,
+                                           activeSelectedControlPointIndex,
+                                           selectAllControlPoints,
                                            drawMarkers,
                                            depthLayers != nullptr
                                                ? &depthLayers->regularSceneDepth
@@ -27215,18 +27332,23 @@ private:
         };
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
             const QSet<int> &selectedControlPoints =
-                componentSelectionForObject(renderObject.objectId);
+                selectedControlPointIndices;
             if (!selectedControlPoints.isEmpty()) {
                 painter.save();
                 painter.setRenderHint(QPainter::Antialiasing, true);
-                painter.setPen(QPen(QColor(QStringLiteral("#f0a45a")), 1.5));
-                painter.setBrush(QColor(QStringLiteral("#f0a45a")));
                 for (const auto &controlPoint : curveControlPointVertices(
                          renderObject.shape,
                          renderObject.placementTranslation)) {
                     if (!selectedControlPoints.contains(controlPoint.first)) {
                         continue;
                     }
+                    const bool active =
+                        controlPoint.first == activeSelectedControlPointIndex;
+                    const QColor selectionColor = active
+                        ? QColor(Qt::white)
+                        : QColor(QStringLiteral("#ff7a00"));
+                    painter.setPen(QPen(selectionColor, 1.5));
+                    painter.setBrush(selectionColor);
                     QPointF screenPoint;
                     if (!viewportTransform_.worldPointToScreenUnclipped(
                             controlPoint.second, size(), &screenPoint)) {
@@ -27663,7 +27785,7 @@ private:
     bool rightButtonSelectionGestureActive_ = false;
     bool syntheticSelectionInput_ = false;
     bool leftSelectionBoxStartedOnObject_ = false;
-    bool controlPointsVisible_ = false;
+    bool controlPointsVisible_ = true;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
     bool viewportPlaybackActive_ = false;

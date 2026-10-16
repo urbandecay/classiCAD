@@ -13570,8 +13570,10 @@ protected:
                             }
                             const float tolerance = std::max(
                                 5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
-                            visible = !std::isfinite(surfaceDepth) ||
-                                strokeDepth >= surfaceDepth - tolerance;
+                            if (!viewportShadingSettings_.xrayEnabled()) {
+                                visible = !std::isfinite(surfaceDepth) ||
+                                    strokeDepth >= surfaceDepth - tolerance;
+                            }
                             if (visible && !renderObject->showInFront &&
                                 hasFrontDepth && pixel <
                                     rasterSurfaceLayers.inFrontSceneDepth.size()) {

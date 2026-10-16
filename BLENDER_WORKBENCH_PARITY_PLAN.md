@@ -8955,3 +8955,14 @@ resolve remain open.
   result into the scene-linear buffer or display-referred image as appropriate
   before the existing sharp/blur resolve. C++ build passed; no matched
   zero-weight gather comparison has been run.
+
+### QPainter imported mesh-wire X-Ray visibility (2026-10-15)
+
+- Imported mesh wires drawn by the QPainter fallback now bypass regular and
+  in-front surface-depth culling when Solid X-Ray is active, so hidden wires
+  remain visible. Ordinary wires still respect the later `showInFront` layer
+  ordering, and `showInFront` wires retain their separate layer behavior.
+  Blender 5.2.2 selects the scene depth only outside X-Ray for the wireframe
+  overlay in
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L59-L74).
+  C++ build passed; no matched X-Ray wire comparison has been run.

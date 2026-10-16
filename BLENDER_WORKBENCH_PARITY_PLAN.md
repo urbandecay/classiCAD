@@ -10108,3 +10108,14 @@ scene depth.
   source and silently kept regular-only depth beside merged normals. A failed
   snapshot now disables the affected shared prepass instead of marking stale
   depth ready. Build passed; matched in-front cavity captures remain open.
+
+### QPainter selection preserves Workbench mesh colors (2026-10-16)
+
+- Selected polygon meshes now keep the active Solid shading input in the
+  QPainter path, including Attribute vertex colors, Texture, Object, Random,
+  and Custom colors. The prior selection branch replaced their fill with a
+  flat selection color. QPainter now applies Blender's 51/255 orange selection
+  mix to the shaded scene-linear color, matching the GPU selection tint path.
+  Blender keeps Attribute shading on selected objects in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2045).
+  Build passed; matched selected-Attribute Blender captures remain open.

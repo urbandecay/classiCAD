@@ -1273,30 +1273,24 @@ bool compositeRasterWorkbenchSurfaces(
         ViewportShadingSettings cavityOnly = shadingSettings;
         cavityOnly.outline = false;
         cavityOnly.depthOfField = false;
-        QVector<ViewportRenderObject> regularObjects;
-        QVector<ViewportRenderObject> inFrontObjects;
-        regularObjects.reserve(objects.size());
-        inFrontObjects.reserve(objects.size());
-        for (const ViewportRenderObject &object : objects) {
-            (object.showInFront ? inFrontObjects : regularObjects)
-                .append(object);
-        }
         const auto computeCavityFactors = [&](
-            const QVector<ViewportRenderObject> &domainObjects,
             std::vector<float> *factors,
             RasterWorkbenchCavityTapCapture *tapCapture) {
-            if (domainObjects.isEmpty()) return;
+            if (objects.isEmpty()) return;
             QImage cavityProbe(colorImage->size(),
                                QImage::Format_ARGB32_Premultiplied);
             cavityProbe.setDevicePixelRatio(colorImage->devicePixelRatioF());
             cavityProbe.fill(Qt::white);
             (void)applyRasterWorkbenchEffects(
-                &cavityProbe, domainObjects, transform, viewportSize,
+                &cavityProbe, objects, transform, viewportSize,
                 devicePixelRatio, cavityOnly, nullptr, factors, tapCapture);
         };
-        computeCavityFactors(regularObjects, &regularCavityFactors,
-                             cavityTapCapture);
-        computeCavityFactors(inFrontObjects, &inFrontCavityFactors, nullptr);
+        computeCavityFactors(&regularCavityFactors, cavityTapCapture);
+        // Blender builds cavity from the combined opaque depth and normal
+        // inputs, with visible in-front samples taking ownership at covered
+        // pixels. Apply those same factors to whichever opaque layer is
+        // composited at each pixel.
+        inFrontCavityFactors = regularCavityFactors;
     }
     if (cavityFactorCapture != nullptr)
         *cavityFactorCapture = regularCavityFactors;

@@ -1780,7 +1780,7 @@ Status: partially implemented. GPU cavity/curvature and several existing effects
 - GPU `NurbsSolid` stencil casters now aggregate effective alpha across all per-face material ranges and force the shared caster range onto depth-fail whenever any face is transparent. Previously only the first face's alpha reached stencil-method selection, although Blender's `workbench_shadow.cc` forces depth-fail for an object with a transparent material. Polygon-mesh objects already made this object-wide check. Build passed; matched mixed-alpha solid shadow captures remain open.
 - The GPU volume ray marcher now sets remaining transmittance to zero once it reaches Blender's 1% early-termination threshold, matching the already-correct QPainter path and preventing a faint background leak through dense volumes. The pinned behavior is in [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh). Build passed; matched GPU volume captures remain open.
 - In-front GPU coverage now uses the front object-ID attachment instead of treating depth values below 1.0 as the only covered pixels. This preserves valid `showInFront` fragments exactly at the far clip plane through opaque coverage capture and front-depth merging; Blender tracks front ownership independently of depth in its transparent-depth pass. Build passed; matched far-plane captures remain open.
-- Keep GPU cavity/curvature behavior aligned with Blender's composition; its parameter controls, sample scheduling, and blue-noise-derived jitter texture are wired. In mixed-alpha scenes the effect prepass and shader apply cavity only to opaque ranges. The QPainter fallback uses separate visible and opaque-only samples: transparent surfaces do not occlude cavity samples or receive cavity shading, and post-composite cavity is skipped where a translucent surface is visible above an opaque receiver. Its cavity pass on NURBS and imported polygon meshes remains approximate and needs visual comparison.
+- Keep GPU cavity/curvature behavior aligned with Blender's composition; its parameter controls, sample scheduling, and blue-noise-derived jitter texture are wired. In mixed-alpha scenes the effect prepass and shader apply cavity only to opaque ranges. The QPainter fallback uses a combined opaque-only depth/normal field, with visible in-front samples replacing regular samples where covered; transparent surfaces do not occlude cavity samples or receive cavity shading. Post-composite cavity is skipped where a translucent surface is visible above an opaque receiver. Its cavity pass on NURBS and imported polygon meshes remains approximate and needs visual comparison.
 - QPainter's 32M sample-work cap now derives its sample count from the full bounded raster target, not the number of covered opaque pixels. This keeps the chosen count stable when geometry enters or leaves the view at a fixed target size; large targets can still use fewer samples than requested to bound CPU work. Blender's per-pixel sample distribution remains different, and cavity image comparison is open.
 - Derive all surface display data from the authoritative NURBS geometry. Do not convert committed surfaces into authoritative meshes.
 
@@ -10071,3 +10071,12 @@ scene depth.
   pass. Both the gather's source CoC and the center-pixel blur amount now use
   the same visible-depth selection. Build passed; matched in-front DOF captures
   remain open.
+
+### QPainter cavity uses combined in-front depth (2026-10-16)
+
+- The software cavity resolve now builds its opaque depth/normal samples from
+  regular and in-front objects together. Visible in-front opaque samples
+  replace regular samples at covered pixels, and the shared cavity factor is
+  applied to the visible opaque layer. This follows Blender's shared opaque
+  cavity attachments while keeping transparent surfaces out of cavity input.
+  Build passed; matched in-front cavity captures remain open.

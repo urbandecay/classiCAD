@@ -104,6 +104,7 @@ private:
                              const QVector<int> &opaqueRangeIndices);
     bool ensureShadowMap();
     bool ensureObjectIdFramebuffer(const QSize &pixelSize);
+    bool ensureSelectedOutlineFramebuffers(const QSize &pixelSize);
     bool ensureWorkbenchEffectFramebuffers(
         const QSize &pixelSize,
         const ViewportRenderTargets &targets);
@@ -188,6 +189,12 @@ private:
     GLuint objectIdDepthStencil_ = 0;
     QSize objectIdFramebufferSize_;
     bool objectIdFramebufferAttempted_ = false;
+    GLuint selectedOutlineFramebuffer_ = 0;
+    GLuint selectedOutlineIdTexture_ = 0;
+    GLuint selectedOutlineDepthTexture_ = 0;
+    GLuint outlineSceneDepthFramebuffer_ = 0;
+    GLuint outlineSceneDepthTexture_ = 0;
+    QSize selectedOutlineFramebufferSize_;
     bool cavityDiagnosticOutput_ = false;
     int cavityDiagnosticTap_ = -1;
     GLuint workbenchEffectFramebuffer_ = 0;

@@ -590,6 +590,26 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteTextures(1, &objectIdTexture_);
         objectIdTexture_ = 0;
     }
+    if (selectedOutlineFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &selectedOutlineFramebuffer_);
+        selectedOutlineFramebuffer_ = 0;
+    }
+    if (selectedOutlineIdTexture_ != 0) {
+        glDeleteTextures(1, &selectedOutlineIdTexture_);
+        selectedOutlineIdTexture_ = 0;
+    }
+    if (selectedOutlineDepthTexture_ != 0) {
+        glDeleteTextures(1, &selectedOutlineDepthTexture_);
+        selectedOutlineDepthTexture_ = 0;
+    }
+    if (outlineSceneDepthFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &outlineSceneDepthFramebuffer_);
+        outlineSceneDepthFramebuffer_ = 0;
+    }
+    if (outlineSceneDepthTexture_ != 0) {
+        glDeleteTextures(1, &outlineSceneDepthTexture_);
+        outlineSceneDepthTexture_ = 0;
+    }
     if (workbenchEffectFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &workbenchEffectFramebuffer_);
         workbenchEffectFramebuffer_ = 0;
@@ -2440,9 +2460,12 @@ bool ViewportSurfaceRenderer::initialize()
     static constexpr const char *outlineFragmentShader = R"glsl(
         #version 330 core
         uniform usampler2D uObjectIdBuffer;
+        uniform sampler2D uSelectedDepth;
+        uniform sampler2D uSceneDepth;
         uniform vec4 uOutlineColor;
         uniform float uUiScale;
         uniform bool uSelectionOutlineOnly;
+        uniform bool uHiddenSelectionOutlineOnly;
         layout(location = 0) out vec4 fragmentColor;
         void main()
         {
@@ -2458,6 +2481,32 @@ bool ViewportSurfaceRenderer::initialize()
                 texture(uObjectIdBuffer, uv - dx).r,
                 texture(uObjectIdBuffer, uv + dy).r,
                 texture(uObjectIdBuffer, uv - dy).r);
+            if (uHiddenSelectionOutlineOnly) {
+                ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
+                                             ivec2(0, 1), ivec2(0, -1));
+                uint ids[4] = uint[4](cardinalIds.x, cardinalIds.y,
+                                      cardinalIds.z, cardinalIds.w);
+                bool centerSelected = (centerId & 0x80000000u) != 0u;
+                float hiddenCoverage = 0.0;
+                for (int i = 0; i < 4; ++i) {
+                    bool neighborSelected = (ids[i] & 0x80000000u) != 0u;
+                    bool objectBoundary = centerSelected != neighborSelected ||
+                        (centerSelected && neighborSelected && centerId != ids[i]);
+                    if (!objectBoundary) continue;
+                    ivec2 selectedPixel = centerSelected
+                        ? pixel : clamp(pixel + offsets[i], ivec2(0), size - 1);
+                    float selectedDepth = texelFetch(
+                        uSelectedDepth, selectedPixel, 0).r;
+                    float sceneDepth = texelFetch(uSceneDepth, selectedPixel, 0).r;
+                    if (selectedDepth > sceneDepth + 1.0e-6) {
+                        hiddenCoverage += 0.25;
+                    }
+                }
+                if (hiddenCoverage <= 0.0) discard;
+                fragmentColor = vec4(uOutlineColor.rgb,
+                    uOutlineColor.a * hiddenCoverage * 0.35);
+                return;
+            }
             if (uSelectionOutlineOnly) {
                 bool centerSelected = (centerId & 0x80000000u) != 0u;
                 bvec4 neighborSelected = bvec4(
@@ -3189,6 +3238,98 @@ bool ViewportSurfaceRenderer::ensureObjectIdFramebuffer(
         return false;
     }
     return true;
+}
+
+bool ViewportSurfaceRenderer::ensureSelectedOutlineFramebuffers(
+    const QSize &pixelSize)
+{
+    if (pixelSize.isEmpty()) return false;
+    if (selectedOutlineFramebufferSize_ != pixelSize) {
+        if (selectedOutlineFramebuffer_ != 0)
+            glDeleteFramebuffers(1, &selectedOutlineFramebuffer_);
+        if (selectedOutlineIdTexture_ != 0)
+            glDeleteTextures(1, &selectedOutlineIdTexture_);
+        if (selectedOutlineDepthTexture_ != 0)
+            glDeleteTextures(1, &selectedOutlineDepthTexture_);
+        if (outlineSceneDepthFramebuffer_ != 0)
+            glDeleteFramebuffers(1, &outlineSceneDepthFramebuffer_);
+        if (outlineSceneDepthTexture_ != 0)
+            glDeleteTextures(1, &outlineSceneDepthTexture_);
+        selectedOutlineFramebuffer_ = 0;
+        selectedOutlineIdTexture_ = 0;
+        selectedOutlineDepthTexture_ = 0;
+        outlineSceneDepthFramebuffer_ = 0;
+        outlineSceneDepthTexture_ = 0;
+        selectedOutlineFramebufferSize_ = pixelSize;
+    }
+
+    GLint previousFramebuffer = 0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    if (selectedOutlineIdTexture_ == 0) {
+        glGenTextures(1, &selectedOutlineIdTexture_);
+        glBindTexture(GL_TEXTURE_2D, selectedOutlineIdTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenTextures(1, &selectedOutlineDepthTexture_);
+        glBindTexture(GL_TEXTURE_2D, selectedOutlineDepthTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &selectedOutlineFramebuffer_);
+        glBindFramebuffer(GL_FRAMEBUFFER, selectedOutlineFramebuffer_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, selectedOutlineIdTexture_, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, selectedOutlineDepthTexture_, 0);
+        const GLenum colorAttachment = GL_COLOR_ATTACHMENT0;
+        glDrawBuffers(1, &colorAttachment);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+            GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_FRAMEBUFFER,
+                              static_cast<GLuint>(previousFramebuffer));
+            glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+            return false;
+        }
+    }
+    if (outlineSceneDepthTexture_ == 0) {
+        glGenTextures(1, &outlineSceneDepthTexture_);
+        glBindTexture(GL_TEXTURE_2D, outlineSceneDepthTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &outlineSceneDepthFramebuffer_);
+        glBindFramebuffer(GL_FRAMEBUFFER, outlineSceneDepthFramebuffer_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                               GL_TEXTURE_2D, outlineSceneDepthTexture_, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+            GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_FRAMEBUFFER,
+                              static_cast<GLuint>(previousFramebuffer));
+            glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+            return false;
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    return selectedOutlineFramebuffer_ != 0 &&
+           outlineSceneDepthFramebuffer_ != 0;
 }
 
 bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
@@ -8033,6 +8174,176 @@ bool ViewportSurfaceRenderer::draw(
                 glViewport(previousViewport[0], previousViewport[1],
                            previousViewport[2], previousViewport[3]);
             }
+
+            bool hiddenSelectedOutlineReady = false;
+            if (selectedOutlineRequested && !settings.xrayEnabled() &&
+                sharedTargets != nullptr &&
+                sharedTargets->depthTexture != 0 &&
+                ensureSelectedOutlineFramebuffers(pixelSize)) {
+                GLint previousReadFramebuffer = 0;
+                GLint previousDrawFramebuffer = 0;
+                glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                              &previousReadFramebuffer);
+                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,
+                              &previousDrawFramebuffer);
+                GLuint sourceDepthFramebuffer = 0;
+                glGenFramebuffers(1, &sourceDepthFramebuffer);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  sourceDepthFramebuffer);
+                glFramebufferTexture2D(GL_READ_FRAMEBUFFER,
+                                      GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                                      sharedTargets->depthTexture, 0);
+                glReadBuffer(GL_NONE);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  outlineSceneDepthFramebuffer_);
+                glDrawBuffer(GL_NONE);
+                if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) ==
+                        GL_FRAMEBUFFER_COMPLETE &&
+                    glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) ==
+                        GL_FRAMEBUFFER_COMPLETE) {
+                    glBlitFramebuffer(
+                        0, 0, pixelSize.width(), pixelSize.height(),
+                        0, 0, pixelSize.width(), pixelSize.height(),
+                        GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+                    glBindFramebuffer(GL_FRAMEBUFFER,
+                                      selectedOutlineFramebuffer_);
+                    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glDepthMask(GL_TRUE);
+                    glEnable(GL_DEPTH_TEST);
+                    glDepthFunc(GL_LESS);
+                    glDisable(GL_BLEND);
+                    if (settings.backfaceCulling) {
+                        glEnable(GL_CULL_FACE);
+                        glCullFace(GL_BACK);
+                    } else {
+                        glDisable(GL_CULL_FACE);
+                    }
+                    const GLuint emptyId = 0;
+                    glClearBufferuiv(GL_COLOR, 0, &emptyId);
+                    glClearDepth(1.0);
+                    glClear(GL_DEPTH_BUFFER_BIT);
+                    objectIdProgram_.bind();
+                    objectIdProgram_.setUniformValue(
+                        "uWorkbenchImage", 0);
+                    objectIdProgram_.setUniformValue(
+                        "uWorkbenchUdimImage", 1);
+                    objectIdProgram_.setUniformValue(
+                        "uWorkbenchUdimLookup", 2);
+                    objectIdProgram_.setUniformValue(
+                        "uViewProjection",
+                        viewportViewProjection(transform, viewportSize));
+                    const GLint objectIdLocation =
+                        objectIdProgram_.uniformLocation("uObjectId");
+                    vertexArray_.bind();
+                    vertexBuffer_.bind();
+                    GLint savedTexture0 = 0;
+                    GLint savedTexture1 = 0;
+                    GLint savedTexture2 = 0;
+                    glActiveTexture(GL_TEXTURE0);
+                    glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture0);
+                    glActiveTexture(GL_TEXTURE1);
+                    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &savedTexture1);
+                    glActiveTexture(GL_TEXTURE2);
+                    glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture2);
+                    for (const DrawRange &range : ranges_) {
+                        if (range.count <= 0 || !range.selected ||
+                            range.showInFront ||
+                            range.outlineHandledBySceneStroke) {
+                            continue;
+                        }
+                        const QString alphaMode =
+                            range.workbenchMaterial.textureImageAlphaMode;
+                        const bool ignoreTextureAlpha =
+                            alphaMode.compare(QStringLiteral("NONE"),
+                                              Qt::CaseInsensitive) == 0 ||
+                            alphaMode.compare(QStringLiteral("IGNORE"),
+                                              Qt::CaseInsensitive) == 0 ||
+                            alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                                              Qt::CaseInsensitive) == 0;
+                        const bool textureColorEnabled =
+                            settings.colorMode == ViewportColorMode::Texture &&
+                            range.useTextureColor;
+                        const GLuint imageTexture = textureColorEnabled
+                            ? ensureImageTexture(
+                                  range.textureImagePath,
+                                  range.workbenchMaterial
+                                      .textureImagePackedDataBase64,
+                                  range.textureImageSrgb,
+                                  range.workbenchMaterial
+                                      .textureImageSceneLinearFloatDataBase64,
+                                  range.workbenchMaterial
+                                      .textureImageSceneLinearFloatWidth,
+                                  range.workbenchMaterial
+                                      .textureImageSceneLinearFloatHeight)
+                            : 0;
+                        const UdimTextureSet udimTexture = textureColorEnabled
+                            ? ensureUdimTexture(range.textureImageTiles,
+                                                range.textureImageSrgb)
+                            : UdimTextureSet{};
+                        objectIdProgram_.setUniformValue(
+                            "uUseTextureAlphaMask",
+                            imageTexture != 0 || udimTexture.imageArray != 0);
+                        objectIdProgram_.setUniformValue(
+                            "uTextureAlphaCutoff", !ignoreTextureAlpha);
+                        objectIdProgram_.setUniformValue(
+                            "uUseUdimImage", udimTexture.imageArray != 0);
+                        objectIdProgram_.setUniformValue(
+                            "uTextureInterpolation",
+                            workbenchTextureInterpolation(
+                                range.workbenchMaterial
+                                    .textureImageInterpolation));
+                        objectIdProgram_.setUniformValue(
+                            "uTextureExtension",
+                            workbenchTextureExtension(
+                                range.workbenchMaterial
+                                    .textureImageExtension));
+                        configureWorkbenchImageTexture(
+                            imageTexture, range.workbenchMaterial);
+                        glActiveTexture(GL_TEXTURE0);
+                        glBindTexture(GL_TEXTURE_2D, imageTexture);
+                        configureWorkbenchUdimTexture(
+                            udimTexture.imageArray, range.workbenchMaterial);
+                        glActiveTexture(GL_TEXTURE1);
+                        glBindTexture(GL_TEXTURE_2D_ARRAY,
+                                      udimTexture.imageArray);
+                        glActiveTexture(GL_TEXTURE2);
+                        glBindTexture(GL_TEXTURE_2D,
+                                      udimTexture.tileLookup);
+                        glActiveTexture(GL_TEXTURE0);
+                        glUniform1ui(objectIdLocation,
+                                     range.effectObjectId | 0x80000000u);
+                        objectIdProgram_.setUniformValue(
+                            "uWorldOffset",
+                            QVector3D(static_cast<float>(range.offset.x),
+                                      static_cast<float>(range.offset.y),
+                                      static_cast<float>(range.offset.z)));
+                        glDrawArrays(GL_TRIANGLES, range.first, range.count);
+                    }
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  static_cast<GLuint>(savedTexture0));
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D_ARRAY,
+                                  static_cast<GLuint>(savedTexture1));
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  static_cast<GLuint>(savedTexture2));
+                    glActiveTexture(GL_TEXTURE0);
+                    vertexBuffer_.release();
+                    vertexArray_.release();
+                    objectIdProgram_.release();
+                    hiddenSelectedOutlineReady = true;
+                }
+                glDeleteFramebuffers(1, &sourceDepthFramebuffer);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  static_cast<GLuint>(previousReadFramebuffer));
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  static_cast<GLuint>(previousDrawFramebuffer));
+                glViewport(previousViewport[0], previousViewport[1],
+                           previousViewport[2], previousViewport[3]);
+            }
             glDisable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
             glDisable(GL_CULL_FACE);
@@ -8042,6 +8353,15 @@ bool ViewportSurfaceRenderer::draw(
 
             glActiveTexture(GL_TEXTURE0);
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding);
+            GLint previousSelectedDepthBinding = 0;
+            GLint previousSceneDepthBinding = 0;
+            glActiveTexture(GL_TEXTURE1);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                          &previousSelectedDepthBinding);
+            glActiveTexture(GL_TEXTURE2);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                          &previousSceneDepthBinding);
+            glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D,
                           useSharedOutlineIds
                               ? workbenchOutlineIdTexture_
@@ -8049,11 +8369,14 @@ bool ViewportSurfaceRenderer::draw(
 
             outlineProgram_.bind();
             outlineProgram_.setUniformValue("uObjectIdBuffer", 0);
+            outlineProgram_.setUniformValue("uSelectedDepth", 1);
+            outlineProgram_.setUniformValue("uSceneDepth", 2);
             outlineProgram_.setUniformValue(
                 "uUiScale",
                 static_cast<float>(workbenchEffectUiScale(dpr)));
             const auto drawOutlineColor = [&](const QColor &sourceColor,
-                                              bool selectionOnly) {
+                                              bool selectionOnly,
+                                              bool hiddenOnly = false) {
                 QVector3D color(sourceColor.redF(), sourceColor.greenF(),
                                 sourceColor.blueF());
                 if (sceneLinearOutput) {
@@ -8063,6 +8386,8 @@ bool ViewportSurfaceRenderer::draw(
                     "uOutlineColor", QVector4D(color, sourceColor.alphaF()));
                 outlineProgram_.setUniformValue("uSelectionOutlineOnly",
                                                 selectionOnly);
+                outlineProgram_.setUniformValue(
+                    "uHiddenSelectionOutlineOnly", hiddenOnly);
                 glDrawArrays(GL_TRIANGLES, 0, 3);
             };
             outlineVertexArray_.bind();
@@ -8072,10 +8397,27 @@ bool ViewportSurfaceRenderer::draw(
             if (selectedOutlineRequested) {
                 drawOutlineColor(settings.themeActiveObjectColor, true);
             }
+            if (hiddenSelectedOutlineReady) {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, selectedOutlineIdTexture_);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D,
+                              selectedOutlineDepthTexture_);
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, outlineSceneDepthTexture_);
+                glActiveTexture(GL_TEXTURE0);
+                drawOutlineColor(settings.themeActiveObjectColor, false, true);
+            }
             outlineVertexArray_.release();
             outlineProgram_.release();
             glBindTexture(GL_TEXTURE_2D,
                           static_cast<GLuint>(previousTextureBinding));
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D,
+                          static_cast<GLuint>(previousSelectedDepthBinding));
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D,
+                          static_cast<GLuint>(previousSceneDepthBinding));
             glActiveTexture(static_cast<GLenum>(previousActiveTexture));
         }
     }

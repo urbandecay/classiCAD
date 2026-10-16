@@ -9295,6 +9295,7 @@ protected:
         viewportRenderer_.setGridAppearance(renderGridAppearance);
         viewportRenderer_.setSmoothWirePreferences(
             smoothWiresOverlay_, smoothWiresEditMode_);
+        viewportRenderer_.beginPreparedCurveSegmentResolve();
         // The CPU Workbench fallback uses one pixel-center coverage sample
         // for AA Off and its bounded 4x4 estimate for every enabled AA mode.
         // Keep the scene rasterizer in step with the viewport preference on
@@ -13171,6 +13172,18 @@ protected:
                 // of the fallback surfaces.
                 painter.endNativePainting();
                 drawNativeSurfaceFailureFallback();
+                viewportRenderer_.flushPreparedCurveSegmentResolve(
+                    painter, renderFrame.viewportSize,
+                    &rasterSurfaceLayers.regularSceneDepth,
+                    rasterSurfaceLayers.regularSceneDepthSize);
+                viewportRenderer_.flushPreparedCurveSegmentResolve(
+                    painter, renderFrame.viewportSize,
+                    &rasterSurfaceLayers.inFrontSceneDepth,
+                    rasterSurfaceLayers.inFrontSceneDepthSize);
+                viewportRenderer_.flushPreparedCurveSegmentResolve(
+                    painter, renderFrame.viewportSize,
+                    &rasterSurfaceLayers.opaqueSceneDepth,
+                    rasterSurfaceLayers.opaqueSceneDepthSize);
                 painter.beginNativePainting();
                 surfacesDrawn = true;
                 sceneDrawn = false;
@@ -13772,6 +13785,29 @@ protected:
                 }
             }
         } else {
+            const auto flushSmoothWires = [&](QPainter &targetPainter) {
+                viewportRenderer_.flushPreparedCurveSegmentResolve(
+                    targetPainter, renderFrame.viewportSize,
+                    &rasterSurfaceLayers.regularSceneDepth,
+                    rasterSurfaceLayers.regularSceneDepthSize);
+                viewportRenderer_.flushPreparedCurveSegmentResolve(
+                    targetPainter, renderFrame.viewportSize,
+                    &rasterSurfaceLayers.inFrontSceneDepth,
+                    rasterSurfaceLayers.inFrontSceneDepthSize);
+                viewportRenderer_.flushPreparedCurveSegmentResolve(
+                    targetPainter, renderFrame.viewportSize,
+                    &rasterSurfaceLayers.opaqueSceneDepth,
+                    rasterSurfaceLayers.opaqueSceneDepthSize);
+            };
+            if (rasterScenePainter.isActive()) {
+                flushSmoothWires(rasterScenePainter);
+            }
+            if (rasterWorkbenchEffectPainter.isActive()) {
+                flushSmoothWires(rasterWorkbenchEffectPainter);
+            }
+            if (painter.isActive()) {
+                flushSmoothWires(painter);
+            }
             rasterScenePainter.end();
             if (rasterWorkbenchEffectPainter.isActive()) {
                 rasterWorkbenchEffectPainter.end();

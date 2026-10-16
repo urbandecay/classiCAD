@@ -11,7 +11,11 @@
 #include "viewport_raster_workbench_linear.h"
 
 #include <QPainter>
+#include <QPainterPath>
+#include <QPen>
 #include <QColor>
+#include <QHash>
+#include <QSet>
 #include <QSize>
 
 #include <optional>
@@ -36,6 +40,12 @@ public:
     void setShadingSettings(const ViewportShadingSettings &settings);
     void setWorkbenchRasterAntialiasingEnabled(bool enabled);
     void setSmoothWirePreferences(bool overlay, bool editMode);
+    void beginPreparedCurveSegmentResolve() const;
+    void flushPreparedCurveSegmentResolve(
+        QPainter &painter,
+        const QSize &viewportSize,
+        const QVector<float> *opaqueSceneDepth,
+        const QSize &opaqueSceneDepthSize) const;
     void setGridBaseStep(qreal baseGridStep);
     void drawShape(QPainter &painter,
                    const Shape &shape,
@@ -128,6 +138,34 @@ public:
                                 const QSize &viewportSize) const;
 
 private:
+    struct SmoothWireRecord {
+        float normalX = 0.0f;
+        float normalY = 0.0f;
+        float distance = 0.0f;
+        float depth = 0.0f;
+        QColor color;
+        qreal alpha = 1.0;
+        qreal width = 1.0;
+        bool valid = false;
+    };
+
+    struct SmoothWireBatch {
+        struct FallbackPath {
+            QPainterPath path;
+            QPen pen;
+            qreal opacity = 1.0;
+        };
+
+        const QPaintDevice *device = nullptr;
+        const QVector<float> *opaqueSceneDepth = nullptr;
+        QSize viewportSize;
+        QSize depthSize;
+        QHash<int, SmoothWireRecord> records;
+        QVector<int> resolvePixels;
+        QSet<int> resolvePixelSet;
+        QVector<FallbackPath> fallbackPaths;
+    };
+
     QPointF worldToScreen(const QPointF &world,
                           const QSize &viewportSize) const;
     QPointF screenToWorld(const QPointF &screen,
@@ -160,6 +198,7 @@ private:
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
     bool architecturalDimensionFont_ = false;
+    mutable QVector<SmoothWireBatch> smoothWireBatches_;
     BlenderGridAppearance gridAppearance_;
     ViewportShadingSettings shadingSettings_;
     qreal gridBaseStep_ = 1.0;

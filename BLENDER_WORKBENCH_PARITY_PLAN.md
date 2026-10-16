@@ -9245,6 +9245,20 @@ fallback path remain unverified.
   to the deferred image path when its linear layer cannot be created. Matched
   FRONT-image captures remain open.
 
+### QPainter shared Smooth Wires candidate resolve (2026-10-16)
+
+- Bounded smooth, solid QPainter wire calls now share per-pixel candidates
+  when they draw to the same target and depth domain. The resolve considers
+  center and cardinal-neighbor samples together and selects neighboring color
+  contributions by depth, so a later farther wire cannot simply cover a nearer
+  wire's fringe by draw order. Equal-depth samples follow later-draw order.
+  Styled wires, missing-depth paths, and targets above one million pixels keep
+  the Qt line fallback. Blender's shared resolve is in
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh)
+  and
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
+  Build passed; matched crossing-wire images remain open.
+
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 
 - When an imported document has no active view-layer key, Workbench render

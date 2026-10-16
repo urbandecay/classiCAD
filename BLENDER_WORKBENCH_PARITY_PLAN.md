@@ -9076,3 +9076,12 @@ resolve remain open.
   picture shapes draw only in camera view. Animated or unavailable images use
   the importer's unsupported-feature report. The scene extractor record is
   version 23. Matched camera background captures have not been run.
+
+### Camera background image flips (2026-10-15)
+
+- The scene-camera background importer now applies Blender's horizontal and
+  vertical image flip flags when building the camera-frame quad. Movie and
+  camera-clip sources remain unsupported and are reported by the importer.
+  Blender's flags are applied to the image-plane scale in
+  [`overlay_camera.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_camera.hh#L616-L624).
+  Matched flipped-image captures have not been run.

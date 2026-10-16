@@ -915,6 +915,8 @@ def extract_camera_background_images(scene, packed_payload_budget,
                          (half_width, half_height),
                          (half_width, -half_height),
                          (-half_width, -half_height)]
+        flip_x = bool(getattr(background, "use_flip_x", False))
+        flip_y = bool(getattr(background, "use_flip_y", False))
         # Keep perspective framing while moving the image card near the far
         # clip plane, so the depth-tested BACK variant stays behind visible
         # geometry in classiCAD's scene compositor.
@@ -922,6 +924,10 @@ def extract_camera_background_images(scene, packed_payload_budget,
             Vector((0.0, 0.0, -camera_depth)))
         corners_world = []
         for x, y in local_corners:
+            if flip_x:
+                x = -x
+            if flip_y:
+                y = -y
             # Blender rotates by -rotation around camera local Z.
             rotated_x = x * cosine + y * sine + center_x
             rotated_y = -x * sine + y * cosine + center_y

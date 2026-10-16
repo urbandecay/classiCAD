@@ -3969,8 +3969,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 }
                             }
                             if (canUseSceneDepthRaster &&
-                                shape.pictureImageDepth ==
-                                    PictureImageDepth::Default) {
+                                shape.pictureImageDepth !=
+                                    PictureImageDepth::Front) {
                                 const int depthIndex =
                                     y * opaqueSceneDepthSize.width() + x;
                                 const float sceneDepth =

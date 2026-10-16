@@ -9210,21 +9210,14 @@ layers after the scene's DOF and AA resolve. Back images are masked by resolved
 scene depth; Front images composite after Back. The presentation shader blends
 both layers before applying the Workbench display transform, and the layers
 stay outside cached AA history so they are rebuilt on each viewport redraw.
-The QPainter fallback now precomposes bounded camera-only BACK images with
-View as Render before its scene pass; Front and other Image Empties retain the
-deferred display-referred path. Transparent scene/image interaction remains
-approximate. Build passed; runtime GPU and matched Blender comparisons remain
-unverified.
+Transparent scene/image interaction remains approximate. Build passed;
+runtime GPU and matched Blender comparisons remain unverified.
 
 **QPainter camera BACK Image Empty composition (2026-10-16):** Camera-view-only
-BACK images with View as Render enabled now enter the existing bounded
-scene-linear background buffer before QPainter surface composition. Their
-alpha and tint are composited in linear space, so scene surfaces draw over
-them and the existing depth-of-field/display-transform stage includes them.
-This path is limited to the retained surface compositor and its one-million
-pixel background target; other Image Empties and Front images keep the deferred
-overlay path. Build passed; matched Blender comparison and the allocation
-fallback path remain unverified.
+BACK images with View as Render enabled initially entered the bounded
+scene-linear background before surface composition, which incorrectly exposed
+them to scene DOF and AA. The later QPainter camera image pass correction below
+moves them after scene effects and depth-tests them against the retained scene.
 
 ### QPainter Image Empty transparent-surface occlusion (2026-10-16)
 
@@ -9244,6 +9237,18 @@ fallback path remain unverified.
   path is limited to the compositor's one-million-pixel target and falls back
   to the deferred image path when its linear layer cannot be created. Matched
   FRONT-image captures remain open.
+
+### QPainter camera BACK Image Empty effect ordering (2026-10-16)
+
+- Camera-only BACK images with View as Render now join the bounded scene-linear
+  image layer after QPainter DOF and scene AA, matching Blender's overlay pass
+  ordering and classiCAD's GPU path. The image layer tests against retained
+  regular scene depth before compositing; Front camera images remain later in
+  the same layer, and the active display transform still runs once. The prior
+  QPainter path incorrectly inserted these images into the scene background,
+  allowing DOF and scene AA to affect them. Other Image Empties keep their
+  existing overlay path. Build passed; matched camera-background captures
+  remain open.
 
 ### QPainter shared Smooth Wires candidate resolve (2026-10-16)
 

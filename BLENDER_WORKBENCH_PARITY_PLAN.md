@@ -9362,8 +9362,11 @@ moves them after scene effects and depth-tests them against the retained scene.
   check. This prevents a visible sample beside a foreground silhouette from
   painting its antialiasing fringe over that foreground object. X-Ray keeps its
   separate hidden-wire fade behavior, and depth-tested candidate ordering
-  behind a center wire remains intact. Blender resolves neighbor coverage
-  against the shared scene color and depth in
+  behind a center wire remains intact. Blender blends each neighbor against
+  the accumulated center color/depth, using alpha-under for a farther sample;
+  classiCAD keeps its wire color separate from scene color, so this opaque-depth
+  guard reproduces the hidden-behind-opaque result. Transparent scene pixels
+  and multisample frames remain approximate. Blender's resolve is in
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
   The C++ build passed; matched silhouette-wire captures remain open.
 

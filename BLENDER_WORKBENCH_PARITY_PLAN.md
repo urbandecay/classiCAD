@@ -713,7 +713,9 @@ in ordinary free views or orthographic views is superseded by this correction.
   cavity/outline/DOF object IDs follow the same image cutout and alpha-mode
   bypass rules. The offscreen contract compares a transparent solid face with
   a receiver-only scene and checks that `NONE` bypasses the cutout. This is
-  effect-mask coverage only; the QPainter fallback still has no shadow pass.
+  effect-mask coverage only; the QPainter fallback has an approximate
+  software shadow pass for supported triangulated geometry. Its remaining
+  shadow differences are tracked in the shadow parity entries below.
 
 ### GPU Workbench curvature sample spacing (2026-10-12)
 

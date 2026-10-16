@@ -9087,3 +9087,14 @@ resolve remain open.
   Blender's flags are applied to the image-plane scale in
   [`overlay_camera.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_camera.hh#L616-L624).
   Matched flipped-image captures have not been run.
+
+### GPU scene curves in Workbench Depth of Field (2026-10-15)
+
+- Committed CAD curve strokes that write scene depth now render into the
+  jittered GPU scene sample before Workbench Depth of Field and accumulation.
+  They are omitted from the later sharp overlay pass, including when presenting
+  cached scene history. Selection cages, component highlights, control points,
+  and other editor overlays stay after the effect. QPainter still lacks a
+  matching curve-depth input, and no matched curve-blur captures have been run.
+  Blender routes curves through its mesh passes before DOF in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L429-L446).

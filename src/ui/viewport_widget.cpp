@@ -12735,6 +12735,7 @@ protected:
             bool aaSceneSampleActive = false;
             bool cachedScenePresented = false;
             bool aaNeedsAnotherSample = false;
+            bool dofCurveStrokesDrawn = false;
             bool sceneDrawn = true;
             bool surfacesDrawn = true;
             if (aaRenderer != nullptr) {
@@ -12834,6 +12835,34 @@ protected:
                 surfacesDrawn = true;
             }
             const bool nativeSurfacePassFailed = !surfacesDrawn;
+
+            const bool workbenchDofActive =
+                viewportShadingSettings_.depthOfField &&
+                !viewportShadingSettings_.xrayEnabled() &&
+                sceneCamera.cameraPreferences().sceneCameraEnabled;
+            const auto isDofCurveStroke = [](
+                const ViewportSceneStroke &stroke) {
+                return stroke.shape != nullptr &&
+                       isViewportCurveStrokeType(
+                           stroke.shape->geometryType) &&
+                       stroke.writeDepth && !stroke.editModeWire &&
+                       stroke.pointDiameter <= 0.0f;
+            };
+            if (workbenchDofActive && aaSceneSampleActive &&
+                !nativeSurfacePassFailed && sceneRenderer != nullptr) {
+                QVector<ViewportSceneStroke> dofCurveStrokes;
+                for (const ViewportSceneStroke &stroke : gpuStrokes) {
+                    if (isDofCurveStroke(stroke)) {
+                        dofCurveStrokes.append(stroke);
+                    }
+                }
+                if (!dofCurveStrokes.isEmpty()) {
+                    dofCurveStrokesDrawn = sceneRenderer->draw(
+                        dofCurveStrokes, sceneCamera,
+                        renderFrame.viewportSize, devicePixelRatioF(), true,
+                        1.0, smoothWiresOverlay_, smoothWiresEditMode_, true);
+                }
+            }
 
             if (aaSceneSampleActive) {
                 aaNeedsAnotherSample = aaRenderer->finishSceneSample();
@@ -12955,6 +12984,20 @@ protected:
             // from cached AA history. They depth-test against the regenerated
             // unjittered surface depth but never write into it.
             if (sceneRenderer != nullptr) {
+                const bool dofCurveStrokesAlreadyInScene =
+                    workbenchDofActive &&
+                    (dofCurveStrokesDrawn || cachedScenePresented);
+                QVector<ViewportSceneStroke> overlayStrokes;
+                const QVector<ViewportSceneStroke> *strokesToDraw = &gpuStrokes;
+                if (dofCurveStrokesAlreadyInScene) {
+                    overlayStrokes.reserve(gpuStrokes.size());
+                    for (const ViewportSceneStroke &stroke : gpuStrokes) {
+                        if (!isDofCurveStroke(stroke)) {
+                            overlayStrokes.append(stroke);
+                        }
+                    }
+                    strokesToDraw = &overlayStrokes;
+                }
                 const bool xrayEnabled =
                     viewportShadingSettings_.xrayEnabledForMode();
                 if (xrayEnabled) {
@@ -12962,13 +13005,13 @@ protected:
                     // occlude farther wires, without letting scene surfaces
                     // hide them. Wire opacity is independent of surface X-Ray.
                     sceneDrawn = sceneRenderer->draw(
-                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        *strokesToDraw, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_, false,
                         nullptr, true);
                 } else {
                     sceneDrawn = sceneRenderer->draw(
-                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        *strokesToDraw, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_);
                 }

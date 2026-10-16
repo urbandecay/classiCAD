@@ -470,17 +470,9 @@ QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
     viewNormal.normalize();
     if (!frontFacing) viewNormal = -viewNormal;
 
-    // workbench_common.bsl.hh normal_encode(), with RG16F render-target
-    // precision applied before the matching normal_decode().
-    const float p = std::sqrt(std::max(0.0f, viewNormal.z() * 8.0f + 8.0f));
-    if (p <= 1.0e-10f) return {};
-    const float encodedX = float(qfloat16(viewNormal.x() / p + 0.5f));
-    const float encodedY = float(qfloat16(viewNormal.y() / p + 0.5f));
-    const float fx = encodedX * 4.0f - 2.0f;
-    const float fy = encodedY * 4.0f - 2.0f;
-    const float f = fx * fx + fy * fy;
-    const float g = std::sqrt(std::max(0.0f, 1.0f - f / 4.0f));
-    const QVector3D decodedView(fx * g, fy * g, 1.0f - f / 2.0f);
+    // workbench_common.bsl.hh normal_encode()/normal_decode(), including
+    // RG16F render-target precision.
+    const QVector3D decodedView = workbenchNormalEncodeDecode(viewNormal);
     return viewRight * decodedView.x() + viewUp * decodedView.y() +
            viewFacing * decodedView.z();
 }

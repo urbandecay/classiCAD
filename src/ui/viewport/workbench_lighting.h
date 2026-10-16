@@ -798,6 +798,20 @@ inline QVector3D workbenchNormalize(const QVector3D &value,
     return value / std::sqrt(lengthSquared);
 }
 
+inline QVector3D workbenchNormalEncodeDecode(const QVector3D &normal)
+{
+    const QVector3D unitNormal = workbenchNormalize(normal);
+    const float p = std::sqrt(std::max(0.0f, unitNormal.z() * 8.0f + 8.0f));
+    if (p <= 1.0e-10f) return {};
+    const float encodedX = float(qfloat16(unitNormal.x() / p + 0.5f));
+    const float encodedY = float(qfloat16(unitNormal.y() / p + 0.5f));
+    const float fx = encodedX * 4.0f - 2.0f;
+    const float fy = encodedY * 4.0f - 2.0f;
+    const float f = fx * fx + fy * fy;
+    const float g = std::sqrt(std::max(0.0f, 1.0f - f / 4.0f));
+    return {fx * g, fy * g, 1.0f - f / 2.0f};
+}
+
 inline float workbenchFastReciprocal(float value)
 {
     // Preserve Workbench's fast reciprocal approximation used by wrapped

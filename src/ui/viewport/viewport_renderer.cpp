@@ -3364,6 +3364,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         !shadingSettings_.xrayEnabled() && !frontFacing) {
                         normalView = -normalView;
                     }
+                    if (alpha >= 1.0 &&
+                        !shadingSettings_.xrayEnabled() &&
+                        (shadingSettings_.lightingMode ==
+                             ViewportLightingMode::Studio ||
+                         shadingSettings_.lightingMode ==
+                             ViewportLightingMode::MatCap)) {
+                        normalView = workbenchNormalEncodeDecode(normalView);
+                    }
                     QVector3D incidentView = triangle.incidentView;
                     if (transform_.isPerspectiveEnabled()) {
                         // Workbench derives its incident vector per fragment.
@@ -5302,10 +5310,15 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             if (alpha >= 1.0 && !frontFacing) {
                 normalWorld = -normalWorld;
             }
-            const QVector3D normalView(
+            QVector3D normalView(
                 QVector3D::dotProduct(normalWorld, worldRight),
                 QVector3D::dotProduct(normalWorld, worldUp),
                 QVector3D::dotProduct(normalWorld, worldFacing));
+            if (alpha >= 1.0 &&
+                (shadingSettings_.lightingMode == ViewportLightingMode::Studio ||
+                 shadingSettings_.lightingMode == ViewportLightingMode::MatCap)) {
+                normalView = workbenchNormalEncodeDecode(normalView);
+            }
             QVector3D incidentView(0.0f, 0.0f, 1.0f);
             if (transform_.isPerspectiveEnabled()) {
                 const QVector3D position(

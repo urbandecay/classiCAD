@@ -9755,3 +9755,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   surface passes in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L98-L112)
   and [#L210-L225](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L210-L225).
+
+### QPainter opaque normal precision for Studio and MatCap (2026-10-16)
+
+- QPainter now applies Blender's sphere-map normal encode/decode round trip,
+  including half-float storage precision, before shading opaque Studio and
+  MatCap mesh and NURBS fragments. Transparent and X-Ray fragments keep their
+  unquantized interpolated normals, as they bypass Blender's opaque normal
+  buffer. The same shared helper now serves QPainter cavity/curvature inputs.
+  Build passed; matched Studio/MatCap captures remain open.
+- Blender's opaque prepass encodes normals in
+  [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L22-L39)
+  and stores them in its half-float normal attachment in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L138-L143).

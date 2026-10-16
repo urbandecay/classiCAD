@@ -362,11 +362,13 @@ void ViewportAaRenderer::setDepthOfField(
 void ViewportAaRenderer::setDisplayTransform(
     const ViewportShadingSettings &settings,
     bool sourceIsSceneLinear,
-    bool sourceHasPremultipliedAlpha)
+    bool sourceHasPremultipliedAlpha,
+    bool preserveThemeBackground)
 {
     displaySettings_ = settings;
     sourceIsSceneLinear_ = sourceIsSceneLinear;
     sourceHasPremultipliedAlpha_ = sourceHasPremultipliedAlpha;
+    preserveThemeBackground_ = preserveThemeBackground;
     if (sceneSampleActive_) {
         targets_.sceneLinearColorTexture = sourceIsSceneLinear
             ? sceneColorTexture_ : 0;
@@ -537,6 +539,7 @@ bool ViewportAaRenderer::initialize()
         uniform bool uEncodeDisplay;
         uniform bool uApplyViewTransform;
         uniform bool uPremultipliedAlpha;
+        uniform bool uPreserveThemeBackground;
         uniform sampler3D uDisplayLut;
         uniform bool uDisplayLutAvailable;
         uniform int uColorTransform;
@@ -730,14 +733,16 @@ bool ViewportAaRenderer::initialize()
                 }
             }
             vec3 outputColor = source.rgb;
+            bool preserveThemeBackground = uPreserveThemeBackground &&
+                texture(uDepth, vUv).r >= 1.0 - 1.0e-7;
             bool predivide = uPremultipliedAlpha && uApplyViewTransform;
             if (predivide) {
                 outputColor = source.a > 0.0
                     ? outputColor / source.a : vec3(0.0);
             }
-            if (uApplyViewTransform) {
+            if (uApplyViewTransform && !preserveThemeBackground) {
                 outputColor = transformColor(outputColor);
-            } else if (uEncodeDisplay) {
+            } else if (uEncodeDisplay && !preserveThemeBackground) {
                 outputColor = linearToSrgb(outputColor);
             }
             // Blender 5.2.2 applies render dither after the display transform
@@ -2553,6 +2558,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     presentProgram_.setUniformValue("uApplyViewTransform", sourceIsSceneLinear_);
     presentProgram_.setUniformValue("uPremultipliedAlpha",
                                     sourceHasPremultipliedAlpha_);
+    presentProgram_.setUniformValue("uPreserveThemeBackground",
+                                    preserveThemeBackground_);
     presentProgram_.setUniformValue("uDisplayLutAvailable", transformAvailable);
     presentProgram_.setUniformValue("uColorTransform",
                                     displaySettings_.colorTransform);
@@ -2970,7 +2977,9 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
            << shading.shadowIntensity
            << shading.shadowOffset << shading.shadowFocus;
     const bool usesThemeBackground =
-        shading.backgroundMode == ViewportBackgroundMode::Theme;
+        shading.backgroundMode == ViewportBackgroundMode::Theme ||
+        (shading.backgroundMode == ViewportBackgroundMode::World &&
+         !worldColorSceneLinear.has_value());
     stream << usesThemeBackground;
     if (usesThemeBackground) {
         stream << quint8(themeBackground.style)

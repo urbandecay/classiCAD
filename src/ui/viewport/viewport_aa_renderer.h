@@ -45,7 +45,8 @@ public:
                          bool sceneCameraView = true);
     void setDisplayTransform(const ViewportShadingSettings &settings,
                              bool sourceIsSceneLinear,
-                             bool sourceHasPremultipliedAlpha = false);
+                             bool sourceHasPremultipliedAlpha = false,
+                             bool preserveThemeBackground = false);
 
     // Returns true after binding a single-sample scene target. The supplied
     // history key must change whenever pixels in the Workbench scene change.
@@ -182,6 +183,7 @@ private:
     ViewportShadingSettings displaySettings_;
     bool sourceIsSceneLinear_ = false;
     bool sourceHasPremultipliedAlpha_ = false;
+    bool preserveThemeBackground_ = false;
     bool displayTransformTextureAvailable_ = false;
     int displayTransformTextureMode_ = -1;
     QString displayTransformTextureLutId_;

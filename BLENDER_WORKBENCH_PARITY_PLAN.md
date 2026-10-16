@@ -10283,3 +10283,15 @@ scene depth.
   [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L247-L276)
   and
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L401-L422).
+
+### Keep the GPU Theme background out of the scene view transform (2026-10-16)
+
+- The temporal/single-pass AA presenter previously applied the scene display
+  transform to every pixel, including the Blender UI Theme background. This
+  made the configured dark gray appear much lighter than Blender when AA was
+  enabled. Presentation now bypasses the scene transform for depth-clear
+  pixels when the active background is Theme (including World mode without an
+  imported World), while continuing to transform scene pixels. The AA history
+  key now also tracks theme colors for the World-without-World fallback. C++
+  build passed; matched GPU captures across transforms and background modes
+  remain open.

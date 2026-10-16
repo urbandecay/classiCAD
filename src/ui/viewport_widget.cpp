@@ -13119,7 +13119,15 @@ protected:
                         document_, renderFrame.camera,
                         renderFrame.viewportSize),
                     renderFrame.camera.cameraState().cameraView);
-                aaRenderer->setDisplayTransform(renderShadingSettings, true);
+                const bool themeBackgroundActive =
+                    viewportShadingSettings_.backgroundMode ==
+                        ViewportBackgroundMode::Theme ||
+                    (viewportShadingSettings_.backgroundMode ==
+                         ViewportBackgroundMode::World &&
+                     !viewportWorldColorSceneLinear.has_value());
+                aaRenderer->setDisplayTransform(
+                    renderShadingSettings, true, false,
+                    themeBackgroundActive);
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),
                     renderFrame.camera, historyKey,

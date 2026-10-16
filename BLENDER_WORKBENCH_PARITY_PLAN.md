@@ -9210,10 +9210,9 @@ resolve remain open.
 - Still images enabled in the active scene camera's viewport background list
   now import through the existing Picture geometry and image-payload path.
   Fit, crop, and stretch sizing, camera-frame depth, rotation, opacity, and
-  offset follow Blender 5.2's camera background transform. BACK images use a
-  far camera-frame plane with scene depth testing to approximate Blender's
-  under-scene compositing; antialiased edges and transparent surfaces can
-  differ from Blender's dedicated alpha-under pass. FRONT images stay in the
+  offset follow Blender 5.2's camera background transform. BACK images use
+  alpha-under composition after scene effects so uncovered and transparent
+  scene pixels reveal the image. FRONT images stay in the
   in-front image pass. These synthetic picture shapes draw only in camera
   view, including when the active camera is orthographic. Movie/clip or
   unavailable images use the importer's unsupported-feature report. The scene
@@ -9283,18 +9282,18 @@ resolve remain open.
 
 **GPU camera-image scene-linear composition (2026-10-16):** Camera-only image
 shapes with View as Render enabled now draw into separate transparent linear
-layers after the scene's DOF and AA resolve. Back images are masked by resolved
-scene depth; Front images composite after Back. The presentation shader blends
-both layers before applying the Workbench display transform, and the layers
-stay outside cached AA history so they are rebuilt on each viewport redraw.
-Transparent scene/image interaction remains approximate. Build passed;
-runtime GPU and matched Blender comparisons remain unverified.
+layers after the scene's DOF and AA resolve. Back images use alpha-under with
+the resolved scene; Front images composite after Back. The
+presentation shader blends both layers before applying the Workbench display
+transform, and the layers stay outside cached AA history so they are rebuilt
+on each viewport redraw. Runtime GPU and matched Blender comparisons remain
+unverified.
 
 **QPainter camera BACK Image Empty composition (2026-10-16):** Camera-view-only
 BACK images with View as Render enabled initially entered the bounded
 scene-linear background before surface composition, which incorrectly exposed
 them to scene DOF and AA. The later QPainter camera image pass correction below
-moves them after scene effects and depth-tests them against the retained scene.
+moves them after scene effects and composites them under scene alpha.
 
 ### QPainter Image Empty transparent-surface occlusion (2026-10-16)
 
@@ -9319,9 +9318,9 @@ moves them after scene effects and depth-tests them against the retained scene.
 
 - Camera-only BACK images with View as Render now join the bounded scene-linear
   image layer after QPainter DOF and scene AA, matching Blender's overlay pass
-  ordering and classiCAD's GPU path. The image layer tests against retained
-  regular scene depth before compositing; Front camera images remain later in
-  the same layer, and the active display transform still runs once. The prior
+  ordering. BACK images now alpha-under the completed scene, allowing
+  antialiased and transparent pixels to show the image through; FRONT images
+  remain alpha-over. The active display transform still runs once. The prior
   QPainter path incorrectly inserted these images into the scene background,
   allowing DOF and scene AA to affect them. Other Image Empties keep their
   existing overlay path. Build passed; matched camera-background captures

@@ -13783,15 +13783,25 @@ protected:
                     committedSceneLayer.size() &&
                 rasterSurfaceLayers.sceneLinearColor.size() ==
                     static_cast<std::size_t>(sceneLinearTargetPixels)) {
-                QImage cameraViewLayer(
+                QImage cameraBackLayer(
                     committedSceneLayer.size(),
                     QImage::Format_RGBA32FPx4_Premultiplied);
-                if (!cameraViewLayer.isNull()) {
-                    cameraViewLayer.setDevicePixelRatio(
+                QImage cameraFrontLayer(
+                    committedSceneLayer.size(),
+                    QImage::Format_RGBA32FPx4_Premultiplied);
+                if (!cameraBackLayer.isNull() &&
+                    !cameraFrontLayer.isNull()) {
+                    cameraBackLayer.setDevicePixelRatio(
                         committedSceneLayer.devicePixelRatioF());
-                    cameraViewLayer.fill(Qt::transparent);
-                    QPainter cameraViewPainter(&cameraViewLayer);
-                    cameraViewPainter.setRenderHint(
+                    cameraFrontLayer.setDevicePixelRatio(
+                        committedSceneLayer.devicePixelRatioF());
+                    cameraBackLayer.fill(Qt::transparent);
+                    cameraFrontLayer.fill(Qt::transparent);
+                    QPainter cameraBackPainter(&cameraBackLayer);
+                    QPainter cameraFrontPainter(&cameraFrontLayer);
+                    cameraBackPainter.setRenderHint(
+                        QPainter::SmoothPixmapTransform, true);
+                    cameraFrontPainter.setRenderHint(
                         QPainter::SmoothPixmapTransform, true);
                     for (const ViewportRenderObject *object :
                          rasterDeferredPictures) {
@@ -13805,10 +13815,10 @@ protected:
                             object->shape.pictureImage.isNull()) {
                             continue;
                         }
-                        const bool depthTestPicture =
+                        QPainter &cameraViewPainter =
                             object->shape.pictureImageDepth ==
-                                PictureImageDepth::Back &&
-                            !object->showInFront;
+                                    PictureImageDepth::Back
+                                ? cameraBackPainter : cameraFrontPainter;
                         bool sceneLinearPicturePrepared = false;
                         drawShape(
                             cameraViewPainter, object->shape, false, false,
@@ -13822,12 +13832,7 @@ protected:
                             workbenchRandomIdentityLibraryPath(*object),
                             object->meshObjectTransform, object->meshMaterials,
                             nullptr, object->nurbsSolidFaceMaterials,
-                            depthTestPicture
-                                ? &rasterSurfaceLayers.regularSceneDepth
-                                : nullptr,
-                            depthTestPicture
-                                ? rasterSurfaceLayers.regularSceneDepthSize
-                                : QSize(),
+                            nullptr, QSize(),
                             nullptr, true,
                             &sceneLinearPicturePrepared);
                         if (sceneLinearPicturePrepared) {
@@ -13835,34 +13840,50 @@ protected:
                                 object->objectId.value());
                         }
                     }
-                    cameraViewPainter.end();
+                    cameraBackPainter.end();
+                    cameraFrontPainter.end();
                     if (!rasterCameraViewPrecomposedPictureObjectIds.isEmpty()) {
-                        for (int y = 0; y < cameraViewLayer.height(); ++y) {
-                            const auto *sourceRow =
-                                reinterpret_cast<const float *>(
-                                    cameraViewLayer.constScanLine(y));
-                            const std::size_t rowOffset =
-                                static_cast<std::size_t>(y) *
-                                cameraViewLayer.width();
-                            for (int x = 0; x < cameraViewLayer.width(); ++x) {
-                                const float *source = sourceRow + x * 4;
-                                const float alpha =
-                                    std::clamp(source[3], 0.0f, 1.0f);
-                                if (alpha <= 0.0f) continue;
-                                RasterWorkbenchLinearPixel &destination =
-                                    rasterSurfaceLayers.sceneLinearColor[
-                                        rowOffset + static_cast<std::size_t>(x)];
-                                const float remain = 1.0f - alpha;
-                                destination.red =
-                                    source[0] + destination.red * remain;
-                                destination.green =
-                                    source[1] + destination.green * remain;
-                                destination.blue =
-                                    source[2] + destination.blue * remain;
-                                destination.alpha =
-                                    alpha + destination.alpha * remain;
-                            }
-                        }
+                        const auto compositeCameraLayer =
+                            [&](const QImage &layer, bool alphaUnder) {
+                                for (int y = 0; y < layer.height(); ++y) {
+                                    const auto *sourceRow =
+                                        reinterpret_cast<const float *>(
+                                            layer.constScanLine(y));
+                                    const std::size_t rowOffset =
+                                        static_cast<std::size_t>(y) *
+                                        layer.width();
+                                    for (int x = 0; x < layer.width(); ++x) {
+                                        const float *source = sourceRow + x * 4;
+                                        const float alpha =
+                                            std::clamp(source[3], 0.0f, 1.0f);
+                                        if (alpha <= 0.0f) continue;
+                                        RasterWorkbenchLinearPixel &destination =
+                                            rasterSurfaceLayers.sceneLinearColor[
+                                                rowOffset + static_cast<std::size_t>(x)];
+                                        if (alphaUnder) {
+                                            const float remain =
+                                                1.0f - std::clamp(
+                                                    destination.alpha, 0.0f, 1.0f);
+                                            destination.red += source[0] * remain;
+                                            destination.green += source[1] * remain;
+                                            destination.blue += source[2] * remain;
+                                            destination.alpha += alpha * remain;
+                                        } else {
+                                            const float remain = 1.0f - alpha;
+                                            destination.red = source[0] +
+                                                destination.red * remain;
+                                            destination.green = source[1] +
+                                                destination.green * remain;
+                                            destination.blue = source[2] +
+                                                destination.blue * remain;
+                                            destination.alpha = alpha +
+                                                destination.alpha * remain;
+                                        }
+                                    }
+                                }
+                            };
+                        compositeCameraLayer(cameraBackLayer, true);
+                        compositeCameraLayer(cameraFrontLayer, false);
                         for (int y = 0; y < effectTarget.height(); ++y) {
                             auto *destinationRow =
                                 reinterpret_cast<QRgb *>(

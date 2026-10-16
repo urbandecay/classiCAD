@@ -702,17 +702,25 @@ bool ViewportAaRenderer::initialize()
         {
             vec4 source = uUseDepthOfField ? dofGather(vUv) : texture(uSource, vUv);
             if (uUseCameraBack || uUseCameraFront) {
-                // Camera BACK images use a scene-depth-tested layer. This
-                // places them over the viewport background while leaving
-                // covered scene pixels in front. FRONT images then blend
-                // over the completed scene, matching Blender's pass order.
+                // Camera BACK images use alpha-under composition. This
+                // places them under the scene while allowing transparent
+                // and antialiased scene pixels to reveal the image. FRONT
+                // images then blend over the completed scene.
                 if (uUseCameraBack) {
                     vec4 backImage = texture(uCameraBack, vUv);
-                    float sceneDepth = texture(uDepth, vUv).r;
-                    if (sceneDepth < 0.999999) {
-                        backImage = vec4(0.0);
-                    }
-                    source = sourceOverScene(source, backImage);
+                    vec3 scenePremultiplied = uPremultipliedAlpha
+                        ? source.rgb : source.rgb * source.a;
+                    float remainingScene = 1.0 - source.a;
+                    vec3 resultPremultiplied = scenePremultiplied +
+                        backImage.rgb * remainingScene;
+                    float resultAlpha = source.a +
+                        backImage.a * remainingScene;
+                    source = uPremultipliedAlpha
+                        ? vec4(resultPremultiplied, resultAlpha)
+                        : vec4(resultAlpha > 1.0e-8
+                                   ? resultPremultiplied / resultAlpha
+                                   : vec3(0.0),
+                               resultAlpha);
                 }
                 if (uUseCameraFront) {
                     vec4 frontImage = texture(uCameraFront, vUv);

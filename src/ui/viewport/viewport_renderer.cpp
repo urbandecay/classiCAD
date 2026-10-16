@@ -2151,7 +2151,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials,
                                  const QVector<float> *opaqueSceneDepth,
                                  const QSize &opaqueSceneDepthSize,
-                                 const QVector<Point3D> *blenderSurfaceWireVerticesWorld) const
+                                 const QVector<Point3D> *blenderSurfaceWireVerticesWorld,
+                                 bool preserveSceneLinearPictureOutput,
+                                 bool *sceneLinearPictureOutputPrepared) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -3694,6 +3696,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             return;
         }
         const auto drawPictureFrame = [&] {
+            if (preserveSceneLinearPictureOutput) return;
             QPolygonF frame;
             for (const QPointF &corner : corners)
                 frame.append(worldToScreen(corner, viewportSize));
@@ -3790,6 +3793,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 qreal(shape.pictureImage.width()) / painterImage.width(),
                 qreal(shape.pictureImage.height()) / painterImage.height());
         }
+        bool sceneLinearPictureOutputDrawn = false;
         QTransform imageTransform;
         if (QTransform::quadToQuad(sourceCorners, screenCorners, imageTransform)) {
             const QTransform mipImageTransform =
@@ -3939,7 +3943,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         for (int x = left; x < right; ++x) {
                             float *pixel = imageRow + x * 4;
                             const float alpha = pixel[3];
-                            if (alpha <= 1.0e-8f || !sceneLinearRasterPicture)
+                            if (alpha <= 1.0e-8f || !sceneLinearRasterPicture ||
+                                preserveSceneLinearPictureOutput)
                                 continue;
                             const float inverseAlpha = 1.0f / alpha;
                             const QVector3D linearColor(
@@ -3980,6 +3985,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     painter.drawImage(
                         baseLogicalFromDevice.map(QPointF(0.0, 0.0)),
                         depthMaskedImage);
+                    sceneLinearPictureOutputDrawn =
+                        preserveSceneLinearPictureOutput &&
+                        sceneLinearRasterPicture;
                 }
             } else if (imageVisible) {
                 const QImage fallbackImage = sceneLinearRasterPicture
@@ -3995,6 +4003,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 painter.drawImage(QPointF(0.0, 0.0), fallbackImage);
             }
             painter.restore();
+        }
+
+        if (sceneLinearPictureOutputPrepared != nullptr) {
+            *sceneLinearPictureOutputPrepared =
+                sceneLinearPictureOutputDrawn;
         }
 
         drawPictureFrame();

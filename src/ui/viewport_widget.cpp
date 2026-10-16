@@ -9637,6 +9637,7 @@ protected:
         QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
         QSet<quint64> surfaceOutlineStrokeObjectIds;
         QSet<quint64> rasterDeferredPictureObjectIds;
+        QSet<quint64> rasterCameraBackPrecomposedPictureObjectIds;
         QVector<const ViewportRenderObject *> rasterDeferredPictures;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
@@ -9817,6 +9818,90 @@ protected:
                         deferredPictures.clear();
                         for (const auto &entry : depthSortedPictures) {
                             deferredPictures.append(entry.second);
+                        }
+                    }
+                    // Blender's camera BACK images with View as Render are
+                    // part of the scene-linear background. Put the bounded
+                    // QPainter subset into the existing background buffer so
+                    // surfaces and depth of field composite over them before
+                    // the display transform.
+                    if (rasterThemeBackgroundPixels.size() ==
+                        static_cast<std::size_t>(rasterPixelCount)) {
+                        QImage cameraBackLayer(
+                            committedSceneLayer.size(),
+                            QImage::Format_RGBA32FPx4_Premultiplied);
+                        if (!cameraBackLayer.isNull()) {
+                            cameraBackLayer.setDevicePixelRatio(
+                                committedSceneLayer.devicePixelRatioF());
+                            cameraBackLayer.fill(Qt::transparent);
+                            QPainter cameraBackPainter(&cameraBackLayer);
+                            cameraBackPainter.setRenderHint(
+                                QPainter::SmoothPixmapTransform, true);
+                            for (const ViewportRenderObject *object :
+                                 deferredPictures) {
+                                if (object == nullptr ||
+                                    !object->shape.pictureCameraViewOnly ||
+                                    object->shape.pictureImageDepth !=
+                                        PictureImageDepth::Back ||
+                                    !object->shape.pictureUseViewTransform ||
+                                    object->shape.pictureImage.isNull()) {
+                                    continue;
+                                }
+                                bool sceneLinearPicturePrepared = false;
+                                drawShape(
+                                    cameraBackPainter, object->shape, false,
+                                    false, false, object->layerColor,
+                                    object->layerLineType,
+                                    object->layerLineWeightMm,
+                                    object->objectId,
+                                    object->geometryRevision,
+                                    object->preparedDepthGeometry.data(),
+                                    object->preparedGeometryOffset,
+                                    object->displayColorSceneLinear,
+                                    object->workbenchMaterial,
+                                    object->displayName,
+                                    workbenchRandomIdentityLibraryPath(*object),
+                                    object->meshObjectTransform,
+                                    object->meshMaterials, nullptr,
+                                    object->nurbsSolidFaceMaterials,
+                                    nullptr, {}, nullptr, true,
+                                    &sceneLinearPicturePrepared);
+                                if (sceneLinearPicturePrepared) {
+                                    rasterCameraBackPrecomposedPictureObjectIds.insert(
+                                        object->objectId.value());
+                                }
+                            }
+                            cameraBackPainter.end();
+                            if (!rasterCameraBackPrecomposedPictureObjectIds
+                                     .isEmpty()) {
+                                for (int y = 0; y < cameraBackLayer.height(); ++y) {
+                                    const auto *sourceRow =
+                                        reinterpret_cast<const float *>(
+                                            cameraBackLayer.constScanLine(y));
+                                    const std::size_t rowOffset =
+                                        static_cast<std::size_t>(y) *
+                                        cameraBackLayer.width();
+                                    for (int x = 0;
+                                         x < cameraBackLayer.width(); ++x) {
+                                        const float *source =
+                                            sourceRow + x * 4;
+                                        const float alpha =
+                                            std::clamp(source[3], 0.0f, 1.0f);
+                                        if (alpha <= 0.0f) continue;
+                                        QVector3D &destination =
+                                            rasterThemeBackgroundPixels[
+                                                rowOffset +
+                                                static_cast<std::size_t>(x)];
+                                        const float remain = 1.0f - alpha;
+                                        destination = QVector3D(
+                                            source[0] + destination.x() * remain,
+                                            source[1] + destination.y() * remain,
+                                            source[2] + destination.z() * remain);
+                                    }
+                                }
+                            }
+                        } else {
+                            rasterCameraBackPrecomposedPictureObjectIds.clear();
                         }
                     }
                     // Keep the deferred overlay work bounded just like the
@@ -13858,6 +13943,11 @@ protected:
                 for (const ViewportRenderObject *object :
                      rasterDeferredPictures) {
                     if (object == nullptr) continue;
+                    if (rasterSurfaceBatchRendered &&
+                        rasterCameraBackPrecomposedPictureObjectIds.contains(
+                            object->objectId.value())) {
+                        continue;
+                    }
                     QImage pictureLayer(
                         committedSceneLayer.size(),
                         QImage::Format_ARGB32_Premultiplied);
@@ -26393,7 +26483,9 @@ private:
                    const QVector<float> *opaqueSceneDepth = nullptr,
                    const QSize &opaqueSceneDepthSize = {},
                    const QVector<Point3D> *blenderSurfaceWireVerticesWorld =
-                       nullptr)
+                       nullptr,
+                   bool preserveSceneLinearPictureOutput = false,
+                   bool *sceneLinearPictureOutputPrepared = nullptr)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -26419,7 +26511,9 @@ private:
                                     nurbsSolidFaceMaterials,
                                     opaqueSceneDepth,
                                     opaqueSceneDepthSize,
-                                    blenderSurfaceWireVerticesWorld); // stable solid-face material lookup
+                                    blenderSurfaceWireVerticesWorld,
+                                    preserveSceneLinearPictureOutput,
+                                    sceneLinearPictureOutputPrepared); // stable solid-face material lookup
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

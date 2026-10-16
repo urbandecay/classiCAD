@@ -63,7 +63,9 @@ public:
                    const QVector<float> *opaqueSceneDepth = nullptr,
                    const QSize &opaqueSceneDepthSize = {},
                    const QVector<Point3D> *blenderSurfaceWireVerticesWorld =
-                       nullptr) const;
+                       nullptr,
+                   bool preserveSceneLinearPictureOutput = false,
+                   bool *sceneLinearPictureOutputPrepared = nullptr) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,

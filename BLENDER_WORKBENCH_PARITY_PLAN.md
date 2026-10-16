@@ -9214,6 +9214,16 @@ The QPainter fallback still uses its display-referred image path, and
 transparent scene/image interaction remains approximate. Build passed; runtime
 GPU and matched Blender comparisons remain unverified.
 
+**QPainter camera BACK Image Empty composition (2026-10-16):** Camera-view-only
+BACK images with View as Render enabled now enter the existing bounded
+scene-linear background buffer before QPainter surface composition. Their
+alpha and tint are composited in linear space, so scene surfaces draw over
+them and the existing depth-of-field/display-transform stage includes them.
+This path is limited to the retained surface compositor and its one-million
+pixel background target; other Image Empties and Front images keep the deferred
+overlay path. Build passed; matched Blender comparison and the allocation
+fallback path remain unverified.
+
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 
 - When an imported document has no active view-layer key, Workbench render

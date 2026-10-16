@@ -1132,7 +1132,7 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
                    batch.viewportSize == viewportSize &&
                    batch.depthSize == opaqueSceneDepthSize &&
                    batch.ignoreSceneDepth ==
-                       shadingSettings_.xrayEnabledForMode();
+                       shadingSettings_.xrayEnabled();
         });
     if (batchIt == smoothWireBatches_.end() || batchIt->records.isEmpty()) {
         return;
@@ -1814,7 +1814,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             smoothWirePixelCount > 0 &&
             smoothWirePixelCount <= maximumSmoothWirePixels &&
             painter.device() != nullptr;
-        const bool ignoreSceneDepth = shadingSettings_.xrayEnabledForMode();
+        const bool ignoreSceneDepth = shadingSettings_.xrayEnabled();
         SmoothWireBatch *smoothWireBatch = nullptr;
         bool smoothWireSubmitted = false;
         qreal smoothWireBaseWidth = 1.0;
@@ -2115,7 +2115,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     hiddenRun = false;
                 } else {
                     visibleRun = false;
-                    if (!shadingSettings_.xrayEnabledForMode()) {
+                    if (!shadingSettings_.xrayEnabled()) {
                         hiddenRun = false;
                         continue;
                     }
@@ -2128,7 +2128,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 }
             }
         }
-        if (shadingSettings_.xrayEnabledForMode() &&
+        if (shadingSettings_.xrayEnabled() &&
             !smoothWireSubmitted && !hiddenPath.isEmpty()) {
             painter.save();
             painter.setOpacity(painter.opacity() * (1.0 - std::clamp<qreal>(

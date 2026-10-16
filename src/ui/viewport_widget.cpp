@@ -13257,7 +13257,7 @@ protected:
             // unjittered surface depth but never write into it.
             if (sceneRenderer != nullptr) {
                 const bool xrayEnabled =
-                    viewportShadingSettings_.xrayEnabledForMode();
+                    viewportShadingSettings_.xrayEnabled();
                 if (xrayEnabled) {
                     // Clear only the stroke depth domain so wires still
                     // occlude farther wires, without letting scene surfaces
@@ -14190,7 +14190,7 @@ protected:
                             }
                             const float tolerance = std::max(
                                 5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
-                            if (!viewportShadingSettings_.xrayEnabledForMode()) {
+                            if (!viewportShadingSettings_.xrayEnabled()) {
                                 visible = !std::isfinite(surfaceDepth) ||
                                     strokeDepth >= surfaceDepth - tolerance;
                             }
@@ -14495,7 +14495,7 @@ protected:
                             if (opacity.has_value()) {
                                 QColor segmentColor = baseColor;
                                 const qreal xrayWireOpacity =
-                                    viewportShadingSettings_.xrayEnabledForMode()
+                                    viewportShadingSettings_.xrayEnabled()
                                         ? 0.5 : 1.0;
                                 segmentColor.setAlphaF(baseColor.alphaF() *
                                     xrayWireOpacity * *opacity);

@@ -317,6 +317,14 @@ comparison remains open.
   Blender image comparison and a direct CAD-stroke-through-cutout image check
   remain open.
 
+**Opacity-one overlay gate correction (2026-10-16):** Rendered overlay paths
+now use the effective X-Ray state, which is false for Solid X-Ray at opacity
+`1.0`. The checkbox can retain its saved toggle state, but wires, selected
+edges, and depth handling no longer behave as transparent X-Ray at full
+opacity. Blender resolves X-Ray alpha to `1.0` and disables `xray_mode` in
+[`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L141-L156).
+Build passed; matched opacity-one overlay captures remain open.
+
 ### GPU Workbench display-transform captures (2026-10-14)
 
 - Added optional matched 640×480 polygon-cube captures for AgX at default

@@ -1833,6 +1833,17 @@ edge path. Build passed; matched outline images remain open.
   [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh).
   Build passed; matched translucent-wire images remain open.
 
+### GPU smooth-wire resolve preserves scene depth (2026-10-16)
+
+- The single-sample fullscreen wire resolve now writes color only. Candidate
+  wires still use their private depth attachment to order crossings, while the
+  Workbench scene depth remains unchanged by the post-process. Blender's
+  overlay AA pass uses `WRITE_COLOR` without `WRITE_DEPTH` in
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh),
+  and the shader outputs only color in
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
+  Build passed; GPU runtime and matched depth/wire comparisons remain open.
+
 GPU and QPainter NURBS Texture mapping follows exact parameter domains and
 keeps endpoint UVs at 0/1 with repeat wrapping. `NurbsSurface3D` has no
 cyclic-direction flags, so Blender's cyclic seam-corner rewrite is not

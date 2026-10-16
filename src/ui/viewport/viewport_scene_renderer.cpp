@@ -1797,7 +1797,9 @@ bool ViewportSceneRenderer::draw(
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_ALWAYS);
-        glDepthMask(GL_TRUE);
+        // The AA pass only composites wire color. Keep the scene's depth
+        // attachment unchanged, as Blender's overlay resolve does.
+        glDepthMask(GL_FALSE);
         if (framebufferColorEncoding == GL_SRGB) {
             glEnable(GL_FRAMEBUFFER_SRGB);
         } else {

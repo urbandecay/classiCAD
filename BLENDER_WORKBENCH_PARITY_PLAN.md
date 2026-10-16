@@ -9680,8 +9680,8 @@ scene depth.
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913)
   and
   [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1327).
-  classiCAD does not yet carry Blender's theme outline-width preference, so
-  only the UI-scale expansion trigger is matched. Build passed; matched outline
+  classiCAD stores this value as an app preference and uses the same above-two
+  expansion threshold in both outline paths. Build passed; matched outline
   captures remain open.
 
 ### QPainter selected-outline smoothing preference (2026-10-16)
@@ -9705,9 +9705,9 @@ scene depth.
   retaining Blender's 35% opacity for hidden contours. In X-Ray, selected
   polygon-mesh outlines skip expansion toward screen-left and screen-down,
   matching Blender's negative-axis rule after accounting for QImage's
-  downward Y axis. This is still a cardinal-sample approximation; Blender
-  also checks diagonal taps, and classiCAD does not carry Blender's theme
-  outline-width setting.
+  downward Y axis. The wider footprint now also activates when the saved
+  selected-outline width preference is above two. The fallback checks
+  diagonals after cardinal samples, but its coverage remains approximate.
 - Blender 5.2.2 enables the wider outline footprint above UI scale one and
   checks the second ring only when the first ring finds no edge in
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913)

@@ -10155,13 +10155,12 @@ scene depth.
 ### GPU open-surface shadow caps (2026-10-16)
 
 - The stencil shadow path now submits source and far caps for every triangle
-  of an open caster, including faces turned away from the light. Blender uses
-  its double-manifold cap path with forced depth-fail counting for
-  non-manifold geometry; classiCAD previously emitted only light-facing caps
-  for open `NurbsSurface` casters. Closed manifold solids retain the
-  light-facing cap rule. Boundary side quads and the near-plane safety gate
-  are unchanged. Build passed; matched open-surface shadow captures remain
-  open. Blender references:
+  of an open caster, including faces turned away from the light. Back-facing
+  faces reverse the source cap winding and retain the input winding on the far
+  cap, matching Blender's double-manifold cap shader. Closed manifold solids
+  retain the light-facing cap rule. Boundary side quads and the near-plane
+  safety gate are unchanged. Build passed; matched open-surface shadow
+  captures remain open. Blender references:
   [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L247-L276)
   and
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L401-L422).

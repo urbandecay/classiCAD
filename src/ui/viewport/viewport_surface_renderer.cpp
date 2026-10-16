@@ -4941,8 +4941,16 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
                 // Closed manifolds need only their light-facing caps. Blender
                 // uses the double-manifold cap path for open casters, which
                 // submits both caps for every face before depth-fail counting.
-                appendTriangle(&volumeVertices, a, b, c);
-                appendTriangle(&volumeVertices, farC, farB, farA);
+                if (faceLit) {
+                    appendTriangle(&volumeVertices, a, b, c);
+                    appendTriangle(&volumeVertices, farC, farB, farA);
+                } else {
+                    // Blender's double-manifold cap path reverses the
+                    // source winding for a back-facing face and keeps the
+                    // extruded cap's winding in that case.
+                    appendTriangle(&volumeVertices, a, c, b);
+                    appendTriangle(&volumeVertices, farA, farB, farC);
+                }
             }
 
             const int directedEdges[][2] = {

@@ -1262,6 +1262,7 @@ void drawImportedCameraPassepartout(const Document &document,
 
     const QString activeLayer = document.settings().activeViewLayerKey;
     QJsonObject camera;
+    QJsonObject viewportShading;
     QJsonObject renderOutput;
     for (const QJsonValue &sceneValue :
          document.settings().importedBlenderScenes) {
@@ -1279,11 +1280,18 @@ void drawImportedCameraPassepartout(const Document &document,
         }
         if (!matchesActiveLayer) continue;
         camera = scene.value(QStringLiteral("active_camera")).toObject();
+        viewportShading = scene.value(
+            QStringLiteral("workbench_viewport_shading")).toObject();
         renderOutput = scene.value(QStringLiteral("render_output")).toObject();
         break;
     }
     if (!camera.value(QStringLiteral("show_passepartout")).toBool(false))
         return;
+    if (viewportShading.contains(QStringLiteral("show_camera_passepartout")) &&
+        !viewportShading.value(
+             QStringLiteral("show_camera_passepartout")).toBool(true)) {
+        return;
+    }
     const qreal alpha = camera.value(QStringLiteral("passepartout_alpha"))
                             .toDouble(0.5);
     if (!std::isfinite(alpha) || alpha <= 0.0) return;

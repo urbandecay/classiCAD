@@ -1557,6 +1557,45 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             ? std::abs(viewportBlenderMeshWireNdcOffsetFactor(
                   transform_, viewportSize))
             : 0.0;
+        struct SmoothWireRecord {
+            float normalX = 0.0f;
+            float normalY = 0.0f;
+            float distance = 0.0f;
+            float depth = 0.0f;
+            bool valid = false;
+        };
+        const QPen wirePen = painter.pen();
+        constexpr qint64 maximumSmoothWirePixels = 1'000'000;
+        const qint64 smoothWirePixelCount =
+            qint64(opaqueSceneDepthSize.width()) *
+            opaqueSceneDepthSize.height();
+        const bool smoothWireResolveEnabled =
+            painter.testRenderHint(QPainter::Antialiasing) &&
+            wirePen.style() == Qt::SolidLine &&
+            wirePen.brush().style() == Qt::SolidPattern &&
+            smoothWirePixelCount > 0 &&
+            smoothWirePixelCount <= maximumSmoothWirePixels &&
+            painter.device() != nullptr;
+        QHash<int, SmoothWireRecord> smoothWireRecords;
+        QVector<int> smoothWireResolvePixels;
+        QSet<int> smoothWireResolvePixelSet;
+        qreal smoothWireWidth = 1.0;
+        QColor smoothWireColor;
+        if (smoothWireResolveEnabled) {
+            // Curves are resolved independently. Start small so short curves
+            // do not reserve a viewport-sized hash table on every draw.
+            smoothWireRecords.reserve(4096);
+            smoothWireResolvePixels.reserve(8192);
+            smoothWireResolvePixelSet.reserve(8192);
+            smoothWireColor = wirePen.color();
+            const qreal deviceScale = std::sqrt(std::abs(
+                deviceTransform.m11() * deviceTransform.m22()));
+            smoothWireWidth = wirePen.widthF() <= 0.0
+                ? 1.0
+                : wirePen.widthF() * (wirePen.isCosmetic() ? 1.0
+                                                            : deviceScale);
+            smoothWireWidth = std::max<qreal>(smoothWireWidth, 0.01);
+        }
         const auto cameraDepth = [&](const Point3D &point) {
             if (transform_.isPerspectiveEnabled()) {
                 return (point.x - cameraPosition.x) * viewDirection.x +
@@ -1721,6 +1760,70 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                         1.0e-4, std::abs(curveDepth) * 1.0e-6);
                     visible = !std::isfinite(surfaceDepth) ||
                               surfaceDepth <= curveDepth + depthTolerance;
+                    if (visible && smoothWireResolveEnabled) {
+                        const qreal scaleX =
+                            opaqueSceneDepthSize.width() / targetDeviceWidth;
+                        const qreal scaleY =
+                            opaqueSceneDepthSize.height() / targetDeviceHeight;
+                        const QPointF resolveStart(deviceStart.x() * scaleX,
+                                                   deviceStart.y() * scaleY);
+                        const QPointF resolveEnd(deviceEnd.x() * scaleX,
+                                                 deviceEnd.y() * scaleY);
+                        const QPointF resolveDelta = resolveEnd - resolveStart;
+                        const qreal resolveLength = std::hypot(
+                            resolveDelta.x(), resolveDelta.y());
+                        if (resolveLength > 1.0e-8) {
+                            const QPointF normal(resolveDelta.y() / resolveLength,
+                                                 -resolveDelta.x() / resolveLength);
+                            const QPointF resolvePoint(
+                                devicePoint.x() * scaleX,
+                                devicePoint.y() * scaleY);
+                            const QPointF fromLine(
+                                x + 0.5 - resolvePoint.x(),
+                                y + 0.5 - resolvePoint.y());
+                            const int pixelIndex =
+                                y * opaqueSceneDepthSize.width() + x;
+                            auto recordIt = smoothWireRecords.find(pixelIndex);
+                            if (recordIt == smoothWireRecords.end()) {
+                                recordIt = smoothWireRecords.insert(
+                                    pixelIndex, SmoothWireRecord{});
+                                const std::array<QPoint, 5> touchedOffsets{
+                                    QPoint(0, 0), QPoint(1, 0),
+                                    QPoint(-1, 0), QPoint(0, 1),
+                                    QPoint(0, -1)};
+                                for (const QPoint &offset : touchedOffsets) {
+                                    const int touchedX = x + offset.x();
+                                    const int touchedY = y + offset.y();
+                                    if (touchedX < 0 || touchedY < 0 ||
+                                        touchedX >=
+                                            opaqueSceneDepthSize.width() ||
+                                        touchedY >=
+                                            opaqueSceneDepthSize.height()) {
+                                        continue;
+                                    }
+                                    const int touchedIndex =
+                                        touchedY * opaqueSceneDepthSize.width() +
+                                        touchedX;
+                                    if (!smoothWireResolvePixelSet.contains(
+                                            touchedIndex)) {
+                                        smoothWireResolvePixelSet.insert(
+                                            touchedIndex);
+                                        smoothWireResolvePixels.append(
+                                            touchedIndex);
+                                    }
+                                }
+                            }
+                            SmoothWireRecord &record = recordIt.value();
+                            if (!record.valid || curveDepth < record.depth) {
+                                record.normalX = static_cast<float>(normal.x());
+                                record.normalY = static_cast<float>(normal.y());
+                                record.distance = static_cast<float>(
+                                    QPointF::dotProduct(fromLine, normal));
+                                record.depth = static_cast<float>(curveDepth);
+                                record.valid = true;
+                            }
+                        }
+                    }
                 }
                 const QPointF screenPoint = screenStart +
                     (screenEnd - screenStart) * fraction;
@@ -1750,7 +1853,161 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         if (shadingSettings_.xrayEnabledForMode() && !hiddenPath.isEmpty()) {
             painter.drawPath(hiddenPath);
         }
-        if (!visiblePath.isEmpty()) {
+        bool smoothWireResolved = false;
+        if (!visiblePath.isEmpty() && smoothWireResolveEnabled &&
+            !smoothWireColor.isValid()) {
+            smoothWireRecords.clear();
+        }
+        if (!visiblePath.isEmpty() && smoothWireResolveEnabled &&
+            !smoothWireRecords.empty()) {
+            QImage resolvedWires(opaqueSceneDepthSize,
+                                 QImage::Format_ARGB32_Premultiplied);
+            if (!resolvedWires.isNull()) {
+                resolvedWires.fill(Qt::transparent);
+                const qreal sourceAlpha = std::clamp<qreal>(
+                    smoothWireColor.alphaF() * painter.opacity(), 0.0, 1.0);
+                const QVector3D sourceRgb(
+                    smoothWireColor.redF(), smoothWireColor.greenF(),
+                    smoothWireColor.blueF());
+                const auto lineCoverage = [&](qreal distance) {
+                    constexpr qreal discRadius =
+                        0.5641895835477563 * 1.05;
+                    constexpr qreal smoothStart = 0.5 - discRadius;
+                    constexpr qreal smoothEnd = 0.5 + discRadius;
+                    const qreal halfCoverageWidth = std::max<qreal>(
+                        std::abs(smoothWireWidth) * 0.5 - 0.5, 0.0);
+                    const qreal distanceFromCore =
+                        std::abs(distance) - halfCoverageWidth;
+                    const qreal t = std::clamp(
+                        (distanceFromCore - smoothStart) /
+                            (smoothEnd - smoothStart),
+                        0.0, 1.0);
+                    return 1.0 - t * t * (3.0 - 2.0 * t);
+                };
+                const std::array<QPoint, 4> offsets{
+                    QPoint(1, 0), QPoint(-1, 0),
+                    QPoint(0, 1), QPoint(0, -1)};
+                for (const int pixelIndex : smoothWireResolvePixels) {
+                    const int y = pixelIndex / opaqueSceneDepthSize.width();
+                    const int x = pixelIndex % opaqueSceneDepthSize.width();
+                    auto *row = reinterpret_cast<QRgb *>(
+                        resolvedWires.scanLine(y));
+                    const SmoothWireRecord center =
+                        smoothWireRecords.value(pixelIndex);
+                    QVector3D premultipliedColor;
+                    qreal alpha = 0.0;
+                    qreal resolvedDepth = (*opaqueSceneDepth)[pixelIndex];
+                    if (!std::isfinite(resolvedDepth)) {
+                        resolvedDepth =
+                            std::numeric_limits<qreal>::infinity();
+                    }
+                    if (center.valid) {
+                        const qreal coverage = lineCoverage(center.distance);
+                        alpha = sourceAlpha * coverage;
+                        premultipliedColor = sourceRgb *
+                            static_cast<float>(alpha);
+                        resolvedDepth = center.depth;
+                    }
+                    for (const QPoint &offset : offsets) {
+                        const int neighborX = x + offset.x();
+                        const int neighborY = y + offset.y();
+                        if (neighborX < 0 || neighborY < 0 ||
+                            neighborX >= opaqueSceneDepthSize.width() ||
+                            neighborY >= opaqueSceneDepthSize.height()) {
+                            continue;
+                        }
+                        const SmoothWireRecord neighbor =
+                            smoothWireRecords.value(
+                                neighborY * opaqueSceneDepthSize.width() +
+                                neighborX);
+                        if (!neighbor.valid) continue;
+                        const bool horizontalWire =
+                            std::abs(neighbor.normalX) >
+                            std::abs(neighbor.normalY);
+                        if (horizontalWire != (offset.x() != 0)) continue;
+                        const qreal distance = neighbor.distance +
+                            offset.x() * neighbor.normalX +
+                            offset.y() * neighbor.normalY;
+                        const qreal coverage = lineCoverage(distance);
+                        const qreal candidateAlpha = sourceAlpha * coverage;
+                        const QVector3D candidateColor = sourceRgb *
+                            static_cast<float>(candidateAlpha);
+                        if (coverage > 0.0 &&
+                            neighbor.depth < resolvedDepth) {
+                            premultipliedColor = candidateColor +
+                                premultipliedColor *
+                                    static_cast<float>(1.0 - candidateAlpha);
+                            alpha = candidateAlpha + alpha *
+                                (1.0 - candidateAlpha);
+                            resolvedDepth = neighbor.depth;
+                        } else {
+                            premultipliedColor += candidateColor *
+                                static_cast<float>(1.0 - alpha);
+                            alpha += candidateAlpha * (1.0 - alpha);
+                        }
+                    }
+                    if (center.valid && sourceAlpha >= 1.0 && alpha > 0.0) {
+                        int validNeighborCount = 0;
+                        for (const QPoint &offset : offsets) {
+                            const int neighborX = x + offset.x();
+                            const int neighborY = y + offset.y();
+                            if (neighborX < 0 || neighborY < 0 ||
+                                neighborX >= opaqueSceneDepthSize.width() ||
+                                neighborY >= opaqueSceneDepthSize.height()) {
+                                continue;
+                            }
+                            if (smoothWireRecords.value(
+                                    neighborY * opaqueSceneDepthSize.width() +
+                                    neighborX).valid) {
+                                ++validNeighborCount;
+                            }
+                        }
+                        const qreal kernelSize =
+                            std::abs(smoothWireWidth) * 0.5 - 0.5;
+                        if (kernelSize < 0.45 && validNeighborCount > 2) {
+                            const qreal blend = std::clamp(
+                                validNeighborCount * 0.5 - 1.0, 0.0, 1.0);
+                            premultipliedColor =
+                                premultipliedColor *
+                                    static_cast<float>(1.0 - blend) +
+                                (alpha > 0.0
+                                     ? premultipliedColor /
+                                           static_cast<float>(alpha) *
+                                           static_cast<float>(blend)
+                                     : QVector3D{});
+                            alpha = alpha * (1.0 - blend) + blend;
+                        }
+                    }
+                    if (alpha > 0.0) {
+                        row[x] = qRgba(
+                            qRound(std::clamp<qreal>(
+                                       premultipliedColor.x(), 0.0, 1.0) *
+                                   255.0),
+                            qRound(std::clamp<qreal>(
+                                       premultipliedColor.y(), 0.0, 1.0) *
+                                   255.0),
+                            qRound(std::clamp<qreal>(
+                                       premultipliedColor.z(), 0.0, 1.0) *
+                                   255.0),
+                            qRound(std::clamp<qreal>(alpha, 0.0, 1.0) *
+                                   255.0));
+                    }
+                }
+                resolvedWires.setDevicePixelRatio(
+                    painter.device()->devicePixelRatioF());
+                painter.save();
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+                painter.setOpacity(1.0);
+                painter.setWorldTransform(QTransform());
+                painter.drawImage(
+                    QRectF(0.0, 0.0, viewportSize.width(),
+                           viewportSize.height()),
+                    resolvedWires);
+                smoothWireResolved = true;
+                painter.restore();
+            }
+        }
+        if (!visiblePath.isEmpty() && !smoothWireResolved) {
             painter.drawPath(visiblePath);
         }
         if (visiblePath.isEmpty() && hiddenPath.isEmpty()) {

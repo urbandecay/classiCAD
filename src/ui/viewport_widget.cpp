@@ -25412,24 +25412,8 @@ private:
                                            renderObject.showInFront);
         const auto controlPointDepthVisible = [&](const QPointF &screenPoint,
                                                    const Point3D &worldPoint) {
-            if (depthLayers == nullptr ||
-                viewportShadingSettings_.xrayEnabled()) return true;
-            const bool inFront = renderObject.showInFront;
-            const QSize depthSize = inFront
-                ? depthLayers->inFrontSceneDepthSize
-                : depthLayers->regularSceneDepthSize;
-            const QVector<float> &domainDepth = inFront
-                ? depthLayers->inFrontSceneDepth
-                : depthLayers->regularSceneDepth;
-            if (depthSize.width() <= 0 || depthSize.height() <= 0 ||
-                domainDepth.size() != depthSize.width() * depthSize.height() ||
-                size().width() <= 0 || size().height() <= 0) return true;
-            const int x = qFloor(screenPoint.x() * depthSize.width() /
-                                 qreal(size().width()));
-            const int y = qFloor(screenPoint.y() * depthSize.height() /
-                                 qreal(size().height()));
-            if (x < 0 || x >= depthSize.width() ||
-                y < 0 || y >= depthSize.height()) return true;
+            if (depthLayers == nullptr || size().width() <= 0 ||
+                size().height() <= 0) return true;
             const Point3D cameraPosition =
                 viewportTransform_.cameraPosition(size());
             const Point3D viewDirection = viewportTransform_.viewDirection();
@@ -25440,17 +25424,35 @@ private:
                 : viewportTransform_.worldDirectionToView(worldPoint).towardCamera;
             const qreal tolerance = std::max<qreal>(1.0e-4,
                                                     std::abs(depth) * 1.0e-6);
-            const int pixelIndex = y * depthSize.width() + x;
-            const float surfaceDepth = domainDepth[pixelIndex];
-            if (std::isfinite(surfaceDepth) &&
-                surfaceDepth > depth + tolerance) return false;
-            if (!inFront &&
-                depthLayers->inFrontSceneDepthSize == depthSize &&
-                pixelIndex < depthLayers->inFrontSceneDepth.size()) {
-                const float inFrontDepth =
-                    depthLayers->inFrontSceneDepth[pixelIndex];
-                if (std::isfinite(inFrontDepth) &&
-                    inFrontDepth > depth + tolerance) return false;
+            const auto visibleInDepth = [&](const QVector<float> &sceneDepth,
+                                            const QSize &depthSize) {
+                if (depthSize.width() <= 0 || depthSize.height() <= 0 ||
+                    sceneDepth.size() != depthSize.width() *
+                                             depthSize.height()) return true;
+                const int x = qFloor(screenPoint.x() * depthSize.width() /
+                                     qreal(size().width()));
+                const int y = qFloor(screenPoint.y() * depthSize.height() /
+                                     qreal(size().height()));
+                if (x < 0 || x >= depthSize.width() ||
+                    y < 0 || y >= depthSize.height()) return true;
+                const float surfaceDepth = sceneDepth[
+                    y * depthSize.width() + x];
+                return !std::isfinite(surfaceDepth) ||
+                       surfaceDepth <= depth + tolerance;
+            };
+            const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
+            if (renderObject.showInFront) {
+                return visibleInDepth(depthLayers->inFrontSceneDepth,
+                                      depthLayers->inFrontSceneDepthSize);
+            }
+            if (!xrayEnabled &&
+                !visibleInDepth(depthLayers->regularSceneDepth,
+                                depthLayers->regularSceneDepthSize)) {
+                return false;
+            }
+            if (!visibleInDepth(depthLayers->inFrontSceneDepth,
+                                depthLayers->inFrontSceneDepthSize)) {
+                return false;
             }
             return true;
         };

@@ -8812,6 +8812,21 @@ resolve remain open.
   targets can still take the legacy fallback. Matched large-viewport
   comparisons remain open.
 
+### QPainter control-point X-Ray in-front depth (2026-10-15)
+
+- QPainter control cages, curve handles, and selected surface/solid component
+  points now bypass regular scene-depth occlusion under X-Ray while continuing
+  to respect the separate `showInFront` depth domain. Outside X-Ray, regular
+  control points still test both regular and in-front depth; in-front objects
+  test only their own in-front domain. This keeps X-Ray visibility separate
+  from Blender's in-front pass ordering, which routes X-Ray objects into
+  distinct regular and in-front accumulation/depth passes in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L238-L250).
+  Blender's Overlay X-Ray fade pass also binds regular and in-front depth
+  textures separately in
+  [`overlay_xray_fade.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_xray_fade.hh#L361-L374).
+  Matched control-point and cage captures remain open.
+
 ### NURBS surface derivative normals (2026-10-15)
 
 - Smooth NURBS surface and solid shading normals are now evaluated from the

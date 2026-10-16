@@ -4054,25 +4054,38 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
     painter.setBrush(Qt::NoBrush);
 
     int globalControlPointIndex = 0;
-    const bool depthAvailable = !shadingSettings_.xrayEnabled() &&
-        (showInFront
-             ? inFrontSceneDepth != nullptr && inFrontDepthSize.width() > 0 &&
-                   inFrontDepthSize.height() > 0 &&
-                   inFrontSceneDepth->size() ==
-                       inFrontDepthSize.width() * inFrontDepthSize.height()
-             : regularSceneDepth != nullptr && regularDepthSize.width() > 0 &&
-                   regularDepthSize.height() > 0 &&
-                   regularSceneDepth->size() ==
-                       regularDepthSize.width() * regularDepthSize.height());
-    const QSize &depthSize = showInFront ? inFrontDepthSize : regularDepthSize;
-    const QVector<float> *domainDepth = showInFront
-        ? inFrontSceneDepth : regularSceneDepth;
-    const qreal depthScaleX = depthSize.width() > 0 &&
+    const bool xrayEnabled = shadingSettings_.xrayEnabled();
+    const auto hasValidDepth = [](const QVector<float> *depth,
+                                  const QSize &depthSize) {
+        return depth != nullptr && depthSize.width() > 0 &&
+               depthSize.height() > 0 &&
+               depth->size() == depthSize.width() * depthSize.height();
+    };
+    const bool regularDepthAvailable = !xrayEnabled &&
+        hasValidDepth(regularSceneDepth, regularDepthSize);
+    const bool inFrontDepthAvailable =
+        hasValidDepth(inFrontSceneDepth, inFrontDepthSize);
+    const bool relevantDepthAvailable = showInFront
+        ? inFrontDepthAvailable
+        : regularDepthAvailable || inFrontDepthAvailable;
+    QSize samplingDepthSize;
+    if (showInFront) {
+        if (inFrontDepthAvailable) samplingDepthSize = inFrontDepthSize;
+    } else if (regularDepthAvailable && inFrontDepthAvailable) {
+        samplingDepthSize = QSize(
+            std::max(regularDepthSize.width(), inFrontDepthSize.width()),
+            std::max(regularDepthSize.height(), inFrontDepthSize.height()));
+    } else if (regularDepthAvailable) {
+        samplingDepthSize = regularDepthSize;
+    } else if (inFrontDepthAvailable) {
+        samplingDepthSize = inFrontDepthSize;
+    }
+    const qreal depthScaleX = samplingDepthSize.width() > 0 &&
             viewportSize.width() > 0
-        ? qreal(depthSize.width()) / viewportSize.width() : 1.0;
-    const qreal depthScaleY = depthSize.height() > 0 &&
+        ? qreal(samplingDepthSize.width()) / viewportSize.width() : 1.0;
+    const qreal depthScaleY = samplingDepthSize.height() > 0 &&
             viewportSize.height() > 0
-        ? qreal(depthSize.height()) / viewportSize.height() : 1.0;
+        ? qreal(samplingDepthSize.height()) / viewportSize.height() : 1.0;
     const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
     const Point3D viewDirection = transform_.viewDirection();
     const auto pointDepth = [&](const Point3D &point) {
@@ -4085,25 +4098,32 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
     };
     const auto depthVisible = [&](const QPointF &screen,
                                   const Point3D &world) {
-        if (!depthAvailable) return true;
-        const int x = qFloor(screen.x() * depthScaleX);
-        const int y = qFloor(screen.y() * depthScaleY);
-        if (x < 0 || x >= depthSize.width() ||
-            y < 0 || y >= depthSize.height()) return true;
-        const int pixelIndex = y * depthSize.width() + x;
+        if (!relevantDepthAvailable || viewportSize.width() <= 0 ||
+            viewportSize.height() <= 0) return true;
         const qreal depth = pointDepth(world);
         const qreal tolerance = std::max<qreal>(1.0e-4,
                                                 std::abs(depth) * 1.0e-6);
-        const float surfaceDepth = (*domainDepth)[pixelIndex];
-        if (std::isfinite(surfaceDepth) &&
-            surfaceDepth > depth + tolerance) return false;
-        if (!showInFront && inFrontSceneDepth != nullptr &&
-            inFrontDepthSize == depthSize &&
-            pixelIndex < inFrontSceneDepth->size()) {
-            const float frontDepth = (*inFrontSceneDepth)[pixelIndex];
-            if (std::isfinite(frontDepth) && frontDepth > depth + tolerance)
-                return false;
+        const auto visibleInDepth = [&](const QVector<float> *sceneDepth,
+                                        const QSize &sceneDepthSize) {
+            if (!hasValidDepth(sceneDepth, sceneDepthSize)) return true;
+            const int x = qFloor(screen.x() * sceneDepthSize.width() /
+                                 viewportSize.width());
+            const int y = qFloor(screen.y() * sceneDepthSize.height() /
+                                 viewportSize.height());
+            if (x < 0 || x >= sceneDepthSize.width() ||
+                y < 0 || y >= sceneDepthSize.height()) return true;
+            const float surfaceDepth = (*sceneDepth)[
+                y * sceneDepthSize.width() + x];
+            return !std::isfinite(surfaceDepth) ||
+                   surfaceDepth <= depth + tolerance;
+        };
+        if (showInFront) {
+            return visibleInDepth(inFrontSceneDepth, inFrontDepthSize);
         }
+        if (regularDepthAvailable &&
+            !visibleInDepth(regularSceneDepth, regularDepthSize)) return false;
+        if (inFrontDepthAvailable &&
+            !visibleInDepth(inFrontSceneDepth, inFrontDepthSize)) return false;
         return true;
     };
     const auto drawControlPointChain = [&](const QVector<QPointF> &controlPoints,
@@ -4151,7 +4171,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                 connectedCageRun = false;
                 continue;
             }
-            if (!depthAvailable) {
+            if (!relevantDepthAvailable) {
                 painter.drawLine(start, end);
                 connectedCageRun = false;
                 continue;
@@ -4260,7 +4280,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     startWorld, viewportSize, &startScreen) &&
                 transform_.worldPointToScreenUnclipped(
                     endWorld, viewportSize, &endScreen)) {
-                if (!depthAvailable) {
+                if (!relevantDepthAvailable) {
                     painter.drawLine(startScreen, endScreen);
                 } else {
                     const qreal pixelLength = std::hypot(

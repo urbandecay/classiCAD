@@ -1458,6 +1458,19 @@ bool ViewportSceneRenderer::draw(
         }
         glViewport(0, 0, pixelSize.width(), pixelSize.height());
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeLineFramebuffer_);
+        // Candidate wires compare against the frozen surface depth texture in
+        // the shader, while this attachment records the nearest wire seen so
+        // far. Do not seed it with scene depth or earlier wires would hide
+        // later wires at crossings.
+        const GLboolean previousLineScissor = glIsEnabled(GL_SCISSOR_TEST);
+        GLboolean previousLineDepthMask = GL_TRUE;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &previousLineDepthMask);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        const GLfloat clearWireDepth = 1.0f;
+        glClearBufferfv(GL_DEPTH, 0, &clearWireDepth);
+        glDepthMask(previousLineDepthMask);
+        if (previousLineScissor) glEnable(GL_SCISSOR_TEST);
         const GLfloat clearLineColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         const GLfloat clearLineRecord[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         const GLfloat clearCandidateDepth[4] = {1.0f, 1.0f, 1.0f, 1.0f};

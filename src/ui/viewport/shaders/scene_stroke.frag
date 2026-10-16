@@ -177,6 +177,17 @@ void main()
             gl_FragDepth = sceneDepth;
         }
     }
+    if (uRecordLine != 0) {
+        // The candidate framebuffer keeps wire depth separately so wires do
+        // not occlude other wires. Test visibility against the unchanged
+        // scene depth here, matching Blender's copy of surface depth for its
+        // wire visibility pass.
+        ivec2 pixel = ivec2(gl_FragCoord.xy);
+        float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
+        if (gl_FragDepth > sceneDepth) {
+            discard;
+        }
+    }
     vec3 strokeColor = uLinearDisplayBlend != 0
                            ? srgbToLinear(uColor.rgb)
                            : uColor.rgb;

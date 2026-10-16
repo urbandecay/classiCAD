@@ -1850,13 +1850,20 @@ edge path. Build passed; matched outline images remain open.
 - The GPU neighbor-based Smooth Wires resolve now accepts solid, depth-writing
   strokes with partial opacity. Their premultiplied line color keeps both the
   stroke opacity and interpolated vertex alpha through the same per-pixel
-  coverage resolve. Point strokes, styled patterns, multisample frames, and
-  strokes that do not write depth remain on the established path.
+  coverage resolve. Point strokes, styled patterns, and strokes that do not
+  write depth remain on the established path. The resolve only skips an
+  actual multisample framebuffer; classiCAD's normal Workbench AA modes finish
+  scene sampling before strokes draw into the single-sample widget target.
 - Blender 5.2.2 passes the configured opacity into the Overlay wireframe pass
   and submits the overlay AA resolve without requiring opaque wire color in
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh)
   and
   [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh).
+  That resolve is designed for single-sample screen-space coverage to avoid
+  managing MSAA buffers, as described in Blender's
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L384-L445).
+  A separately supplied true multisample target still uses direct stroke
+  rendering without the neighbor-depth correction.
   Build passed; matched translucent-wire images remain open.
 
 ### GPU smooth-wire resolve preserves scene depth (2026-10-16)

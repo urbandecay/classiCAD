@@ -9208,9 +9208,10 @@ resolve remain open.
 - Still images enabled in the active scene camera's viewport background list
   now import through the existing Picture geometry and image-payload path.
   Fit, crop, and stretch sizing, camera-frame depth, rotation, opacity, and
-  offset follow Blender 5.2's camera background transform. BACK images use
-  alpha-under composition after scene effects so uncovered and transparent
-  scene pixels reveal the image. FRONT images stay in the
+  offset follow Blender 5.2's camera background transform. The GPU path uses
+  alpha-under composition after scene effects. The QPainter path depth-tests
+  BACK images against the retained scene; its transparent-pixel coverage
+  remains approximate. FRONT images stay in the
   in-front image pass. These synthetic picture shapes draw only in camera
   view, including when the active camera is orthographic. Movie/clip or
   unavailable images use the importer's unsupported-feature report. The scene
@@ -9291,7 +9292,8 @@ unverified.
 BACK images with View as Render enabled initially entered the bounded
 scene-linear background before surface composition, which incorrectly exposed
 them to scene DOF and AA. The later QPainter camera image pass correction below
-moves them after scene effects and composites them under scene alpha.
+moves them after scene effects and depth-tests them against retained regular
+scene depth.
 
 ### QPainter Image Empty transparent-surface occlusion (2026-10-16)
 
@@ -9316,9 +9318,10 @@ moves them after scene effects and composites them under scene alpha.
 
 - Camera-only BACK images with View as Render now join the bounded scene-linear
   image layer after QPainter DOF and scene AA, matching Blender's overlay pass
-  ordering. BACK images now alpha-under the completed scene, allowing
-  antialiased and transparent pixels to show the image through; FRONT images
-  remain alpha-over. The active display transform still runs once. The prior
+  ordering. BACK images depth-test against retained regular scene depth;
+  transparent pixels still hide the whole image sample because the retained
+  scene-linear target already includes an opaque viewport background. FRONT
+  images remain alpha-over. The active display transform still runs once. The prior
   QPainter path incorrectly inserted these images into the scene background,
   allowing DOF and scene AA to affect them. Other Image Empties keep their
   existing overlay path. Build passed; matched camera-background captures

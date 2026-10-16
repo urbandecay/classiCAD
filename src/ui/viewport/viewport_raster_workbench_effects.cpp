@@ -3633,7 +3633,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         lightDirection.normalize();
         const auto shadowFactorAt = [&](const QVector2D &lightPixel,
                                         float receiverDepth,
+                                        const QVector3D &receiverPosition,
                                         const QVector3D &normal,
+                                        const QPointF &screenPixelCenter,
                                         bool applyCasterOcclusion = true) {
             if (!applyCasterOcclusion) {
                 // Blender's transparent pass applies the normal-facing
@@ -3644,24 +3646,49 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<float>(settings.shadowOffset),
                     static_cast<float>(settings.shadowFocus), false);
             }
-            // Approximate per-pixel shadow coverage with four receiver
-            // locations. Scale the footprint to the light map: it is twice
-            // the target size when the memory cap permits, and target-sized
-            // otherwise. Interior receivers retain the same binary result.
-            const float footprintX = static_cast<float>(lightMapWidth) /
-                                     std::max(width, 1);
-            const float footprintY = static_cast<float>(lightMapHeight) /
-                                     std::max(height, 1);
-            const float offsetX = footprintX * 0.25f;
-            const float offsetY = footprintY * 0.25f;
-            const std::array<QVector2D, 4> sampleOffsets{{
-                QVector2D(-offsetX, -offsetY),
-                QVector2D(offsetX, -offsetY),
-                QVector2D(-offsetX, offsetY),
-                QVector2D(offsetX, offsetY)}};
+            // Project the four quarter-pixel coverage points onto the
+            // receiver plane before looking them up in the light map. A
+            // viewport pixel becomes a skewed footprint in light-map space
+            // for an angled receiver, so independent light-X/Y offsets do
+            // not represent its actual coverage.
+            const Point3D receiverOrigin{receiverPosition.x(),
+                                         receiverPosition.y(),
+                                         receiverPosition.z()};
+            const Point3D receiverNormal{normal.x(), normal.y(), normal.z()};
+            const WorkPlaneFrame receiverPlane = makeWorkPlaneFrameFromNormal(
+                receiverOrigin, receiverNormal);
+            const qreal pixelQuarter = 0.25 / std::max<qreal>(dpr, 1.0e-6);
+            const std::array<QPointF, 4> screenOffsets{{
+                QPointF(-pixelQuarter, -pixelQuarter),
+                QPointF(pixelQuarter, -pixelQuarter),
+                QPointF(-pixelQuarter, pixelQuarter),
+                QPointF(pixelQuarter, pixelQuarter)}};
             float factorSum = 0.0f;
-            for (const QVector2D &sampleOffset : sampleOffsets) {
-                const QVector2D samplePosition = lightPixel + sampleOffset;
+            for (const QPointF &screenOffset : screenOffsets) {
+                QPointF receiverPlanePoint;
+                QVector2D samplePosition = lightPixel;
+                if (transform.screenToWorkPlaneUnclipped(
+                        screenPixelCenter + screenOffset, viewportSize,
+                        receiverPlane, &receiverPlanePoint)) {
+                    const Point3D worldPoint = workPlaneFramePointToWorld(
+                        receiverPlanePoint, receiverPlane);
+                    const QVector3D worldPosition(
+                        float(worldPoint.x), float(worldPoint.y),
+                        float(worldPoint.z));
+                    const QPointF projectedLight(
+                        (QVector3D::dotProduct(worldPosition,
+                                               shadowLightRight) -
+                         shadowLightMinX) /
+                            (shadowLightMaxX - shadowLightMinX) *
+                            lightMapWidth,
+                        (shadowLightMaxY -
+                         QVector3D::dotProduct(worldPosition,
+                                               shadowLightUp)) /
+                            (shadowLightMaxY - shadowLightMinY) *
+                            lightMapHeight);
+                    samplePosition = QVector2D(projectedLight.x(),
+                                               projectedLight.y());
+                }
                 if (samplePosition.x() < 0.0f || samplePosition.y() < 0.0f ||
                     samplePosition.x() >= lightMapWidth ||
                     samplePosition.y() >= lightMapHeight) {
@@ -3703,7 +3730,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<float>(settings.shadowOffset),
                     static_cast<float>(settings.shadowFocus), shadowed);
             }
-            return factorSum / static_cast<float>(sampleOffsets.size());
+            return factorSum / static_cast<float>(screenOffsets.size());
         };
         const std::vector<RasterWorkbenchLinearPixel> *
             perFragmentShadowedTransparent = nullptr;
@@ -3753,13 +3780,18 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     !hasRetainedLayers) continue;
                 const float opaqueFactor = hasOpaqueReceiver
                     ? shadowFactorAt(receiverLightCoordinates[index],
-                                     receiverLightDepth[index], receiver.normal)
+                                     receiverLightDepth[index],
+                                     receiver.position, receiver.normal,
+                                     QPointF((depthX + 0.5) / dpr,
+                                             (depthY + 0.5) / dpr))
                     : 1.0f;
                 const float transparentFactor = hasTransparentReceiver
                     ? shadowFactorAt(
                           transparentReceiverLightCoordinates[index],
-                          transparentReceiverLightDepth[index], visible.normal,
-                          false)
+                          transparentReceiverLightDepth[index],
+                          visible.position, visible.normal,
+                          QPointF((depthX + 0.5) / dpr,
+                                  (depthY + 0.5) / dpr), false)
                     : 1.0f;
                 const bool perFragmentTransparentChanged =
                     hasPerFragmentShadowResolve &&

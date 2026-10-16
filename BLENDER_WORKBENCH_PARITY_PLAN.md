@@ -5409,20 +5409,19 @@ resolve remain open.
 
 ### QPainter shadow receiver coverage (2026-10-15)
 
-- `shadowFactorAt` now checks four receiver positions around each light-map
-  coordinate and averages their visibility factors. The sample footprint
-  scales with the light-map-to-target ratio, so it covers one target-pixel
-  footprint both when the shadow map is 2x resolution and when the 16M-texel
-  memory cap leaves it at target resolution. Fully lit and fully shadowed
-  interiors retain the prior binary factor; only receivers crossing a shadow
-  edge can produce partial coverage.
+- `shadowFactorAt` checks four quarter-pixel screen positions, projects each
+  onto the receiver plane, maps those world positions to light-map space, and
+  averages their visibility factors. This preserves the screen-pixel footprint
+  on angled receivers instead of applying an axis-aligned light-map offset.
+  Fully lit and fully shadowed interiors retain the prior binary factor; only
+  receivers crossing a shadow edge can produce partial coverage.
 - This is a bounded QPainter approximation of Blender 5.2.2's stencil-volume
   resolve, not an equivalent shadow algorithm. The existing matched cube
   capture predates this change; edge-coverage and effect-delta comparisons
   have not yet been rerun. Caster rasterization, depth bias, transparency, and
   shadow lighting remain unchanged.
-- Validation: `cmake --build build -j4` passed. No matched image comparison
-  was run for this change.
+- Validation: `cmake --build build -j4` passed for the receiver-plane sample
+  correction. No matched image comparison was run for this change.
 
 ### QPainter fully shadowed factor contract (2026-10-15)
 

@@ -9338,6 +9338,19 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
   Build passed; matched silhouette-wire captures remain open.
 
+### QPainter neighboring Smooth Wires distance direction (2026-10-16)
+
+- The software Smooth Wires resolve now subtracts the cardinal pixel offset
+  when reconstructing a neighboring wire's signed distance at the destination
+  pixel. It previously added the offset, shifting fringe coverage in the
+  opposite direction from the GPU resolve and making thin or slanted wires
+  asymmetric. Blender's GPU resolve uses the negated stored perpendicular
+  direction for this reconstruction in
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh);
+  classiCAD's corresponding GPU expression is in
+  [`scene_stroke_resolve.frag`](src/ui/viewport/shaders/scene_stroke_resolve.frag).
+  Build passed; matched software/GPU and Blender wire captures remain open.
+
 ### GPU Smooth Wires resolve in X-Ray (2026-10-16)
 
 - Native single-sample X-Ray wire draws now use the shared GPU Smooth Wires

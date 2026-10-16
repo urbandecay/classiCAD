@@ -1223,8 +1223,8 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             const bool horizontalWire =
                 std::abs(neighbor.normalX) > std::abs(neighbor.normalY);
             if (horizontalWire != (offset.x() != 0)) continue;
-            const qreal distance = neighbor.distance +
-                offset.x() * neighbor.normalX +
+            const qreal distance = neighbor.distance -
+                offset.x() * neighbor.normalX -
                 offset.y() * neighbor.normalY;
             const qreal coverage = lineCoverage(distance, neighbor.width);
             const qreal candidateAlpha = neighbor.alpha * coverage;

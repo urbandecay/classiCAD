@@ -7928,9 +7928,9 @@ resolve remain open.
 - Blender `POINTCLOUD` objects and collection instances import as one grouped
   classiCAD scene object, retaining evaluated world positions, per-point
   radii, supported point-domain colors, and source indices. Import is capped at
-  100,000 points per scene. Uniform scale and rotation are supported; nonuniform
-  scale, shear, and Gaussian splats are reported as unsupported rather than
-  approximated as round points.
+  100,000 points per scene. Point radii follow Blender 5.2.2 Workbench's
+  `length(to_scale(object_to_world)) / sqrt(3)` transform rule; Gaussian splats
+  are reported as unsupported.
 - The grouped data is serialized natively and participates in scene rendering,
   center-based picking and box selection, snapping, transforms, and duplication.
   Current display markers still use a fixed screen size and object color, so

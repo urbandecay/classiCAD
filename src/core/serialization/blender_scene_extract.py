@@ -1585,22 +1585,14 @@ def extract_point_cloud_item(obj, scene, depsgraph,
     points.foreach_get("radius", radii)
     transform = (transform_override if transform_override is not None
                  else evaluated_object.matrix_world)
-    linear_transform = transform.to_3x3()
-    axes = [linear_transform.col[index].copy() for index in range(3)]
-    axis_scales = [axis.length for axis in axes]
-    scale_reference = max(axis_scales)
-    if (not math.isfinite(scale_reference) or scale_reference <= 1.0e-12 or
-            any(not math.isfinite(scale) for scale in axis_scales)):
+    axis_scales = [float(value) for value in transform.to_scale()]
+    if any(not math.isfinite(scale) for scale in axis_scales):
         raise ValueError("point cloud object transform is invalid")
-    scale_tolerance = max(1.0e-6, scale_reference * 1.0e-5)
-    if any(abs(scale - scale_reference) > scale_tolerance
-           for scale in axis_scales):
-        raise ValueError("nonuniformly scaled point clouds are unsupported")
-    orthogonality_tolerance = max(1.0e-8, scale_reference ** 2 * 1.0e-5)
-    if any(abs(axes[first].dot(axes[second])) > orthogonality_tolerance
-           for first, second in ((0, 1), (0, 2), (1, 2))):
-        raise ValueError("sheared point cloud transforms are unsupported")
-    radius_scale = scale_reference
+    # Blender 5.2.2's Workbench point-cloud shader scales the sphere radius by
+    # length(to_scale(object_to_world)) / sqrt(3), including nonuniform scales.
+    radius_scale = math.sqrt(sum(scale * scale for scale in axis_scales) / 3.0)
+    if not math.isfinite(radius_scale):
+        raise ValueError("point cloud object transform is invalid")
 
     color_attribute = point_cloud.attributes.get("color")
     colors = None

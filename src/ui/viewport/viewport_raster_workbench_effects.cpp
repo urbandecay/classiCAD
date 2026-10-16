@@ -2488,9 +2488,15 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
           surfaceLayers->outlineAppliedBeforeDisplay);
     QVector<RasterOutlineSample> outlineSamples;
     QVector<RasterOutlineSample> inFrontOutlineSamples;
+    QVector<float> outlineOpaqueDepth;
+    QVector<float> inFrontOutlineOpaqueDepth;
     if (rasterWorkbenchOutlineEnabled) {
         outlineSamples.resize(width * height);
         inFrontOutlineSamples.resize(width * height);
+        outlineOpaqueDepth.fill(std::numeric_limits<float>::infinity(),
+                                width * height);
+        inFrontOutlineOpaqueDepth.fill(std::numeric_limits<float>::infinity(),
+                                       width * height);
     }
     QVector<RasterSample> opaqueSamples;
     QVector<RasterSample> inFrontOpaqueSamples;
@@ -2996,7 +3002,23 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     writeNearest(sample);
                     const float sourceAlpha = triangleSourceAlpha;
                     if (rasterWorkbenchOutlineEnabled &&
+                        isOpaqueWorkbenchAlpha(sourceAlpha)) {
+                        QVector<float> &domainOpaqueDepth = object.showInFront
+                            ? inFrontOutlineOpaqueDepth : outlineOpaqueDepth;
+                        float &opaqueDepth = domainOpaqueDepth[y * width + x];
+                        opaqueDepth = std::min(opaqueDepth, z);
+                    }
+                    if (rasterWorkbenchOutlineEnabled &&
                         sourceAlpha > 0.0f) {
+                        const QVector<float> &domainOpaqueDepth =
+                            object.showInFront ? inFrontOutlineOpaqueDepth
+                                               : outlineOpaqueDepth;
+                        const float opaqueDepth =
+                            domainOpaqueDepth[y * width + x];
+                        if (std::isfinite(opaqueDepth) &&
+                            z > opaqueDepth + 1.0e-5f) {
+                            continue;
+                        }
                         QVector<RasterOutlineSample> &domainOutlineSamples =
                             object.showInFront ? inFrontOutlineSamples
                                                : outlineSamples;

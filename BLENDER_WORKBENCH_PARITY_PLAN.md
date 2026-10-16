@@ -8339,9 +8339,10 @@ resolve remain open.
   visible transparent ID per pixel and depth domain. The ordinary QPainter
   raster path also records positive-alpha transparent fragments in its
   separate outline depth buffer; fully transparent and texture-cutout
-  fragments remain excluded. Blender 5.2.2 attaches the object-ID target to
-  its opaque pass, then writes visible transparent depth and object ID before
-  running the outline pass in
+  fragments remain excluded, and a nearer opaque surface blocks a hidden
+  transparent fragment from replacing its outline ID. Blender 5.2.2 attaches
+  the object-ID target to its opaque pass, then writes visible transparent
+  depth and object ID before running the outline pass in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2603-L2645)
   and [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1438-L1533),
   then consumes IDs in

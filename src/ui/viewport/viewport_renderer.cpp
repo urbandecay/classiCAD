@@ -3924,16 +3924,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
             qint64(shape.pictureImage.width()) * shape.pictureImage.height();
         const bool canPrepareSceneLinearPicture = pictureSourcePixels > 0 &&
             pictureSourcePixels <= kMaximumPictureProcessPixels;
-        const QVector4D pictureTint = shape.pictureColorSceneLinear;
-        const bool pictureTinted =
-            pictureTint != QVector4D(1.0f, 1.0f, 1.0f, 1.0f);
-        const bool tintLargePictureAfterSampling = pictureTinted &&
-            pictureSourcePixels > kMaximumPictureProcessPixels;
-        const QString pictureColorSpace = shape.pictureColorSpace.trimmed();
-        const bool pictureSourceIsLinear = pictureColorSpace.startsWith(
-            QStringLiteral("Linear"), Qt::CaseInsensitive) ||
-            pictureColorSpace.compare(QStringLiteral("Non-Color"),
-                                      Qt::CaseInsensitive) == 0;
         const bool canUseViewportCutoutRaster =
             !shape.pictureUseAlphaBlend && viewportRasterPixels > 0 &&
             viewportRasterPixels <= maximumPictureDepthPixels;
@@ -4031,64 +4021,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     imagePainter.setTransform(mipToSource * imageToDevice);
                     imagePainter.drawImage(QPointF(0.0, 0.0), painterImage);
                     imagePainter.end();
-
-                    if (tintLargePictureAfterSampling) {
-                        const auto decodeSrgb = [](float value) {
-                            value = std::clamp(value, 0.0f, 1.0f);
-                            return value <= 0.04045f
-                                ? value / 12.92f
-                                : std::pow((value + 0.055f) / 1.055f,
-                                           2.4f);
-                        };
-                        for (int y = 0; y < depthMaskedImage.height(); ++y) {
-                            auto *imageRow = reinterpret_cast<float *>(
-                                depthMaskedImage.scanLine(y));
-                            for (int x = 0; x < depthMaskedImage.width(); ++x) {
-                                float *pixel = imageRow + x * 4;
-                                const float sourceAlpha = pixel[3];
-                                if (sourceAlpha <= 1.0e-8f) continue;
-                                QVector3D linearColor(
-                                    pixel[0] / sourceAlpha,
-                                    pixel[1] / sourceAlpha,
-                                    pixel[2] / sourceAlpha);
-                                if (!pictureSourceIsLinear) {
-                                    linearColor.setX(
-                                        decodeSrgb(linearColor.x()));
-                                    linearColor.setY(
-                                        decodeSrgb(linearColor.y()));
-                                    linearColor.setZ(
-                                        decodeSrgb(linearColor.z()));
-                                }
-                                linearColor.setX(linearColor.x() *
-                                                 pictureTint.x());
-                                linearColor.setY(linearColor.y() *
-                                                 pictureTint.y());
-                                linearColor.setZ(linearColor.z() *
-                                                 pictureTint.z());
-                                const QVector3D displayColor =
-                                    shape.pictureUseViewTransform
-                                        ? workbenchSceneLinearToDisplaySrgb(
-                                              linearColor,
-                                              shadingSettings_.colorTransform,
-                                              shadingSettings_.colorExposure,
-                                              shadingSettings_.colorGamma,
-                                              shadingSettings_.colorLutData,
-                                              shadingSettings_.colorLutMetadata)
-                                        : pictureLinearToSrgb(linearColor);
-                                const float tintedAlpha = shape.pictureUseAlphaBlend
-                                    ? sourceAlpha *
-                                          std::clamp(pictureTint.w(), 0.0f, 1.0f)
-                                    : sourceAlpha;
-                                pixel[0] = std::clamp(displayColor.x(), 0.0f,
-                                                      1.0f) * tintedAlpha;
-                                pixel[1] = std::clamp(displayColor.y(), 0.0f,
-                                                      1.0f) * tintedAlpha;
-                                pixel[2] = std::clamp(displayColor.z(), 0.0f,
-                                                      1.0f) * tintedAlpha;
-                                pixel[3] = tintedAlpha;
-                            }
-                        }
-                    }
 
                     const Point3D cameraPosition =
                         transform_.cameraPosition(viewportSize);

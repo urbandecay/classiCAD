@@ -2895,15 +2895,20 @@ public:
             if (shape == nullptr) {
                 continue;
             }
-            const QSet<int> components = selectAll
-                ? editComponentIndicesForShape(*shape,
-                                               componentSelectionMode_)
-                : QSet<int>{};
+            const QSet<int> allComponents = editComponentIndicesForShape(
+                *shape, componentSelectionMode_);
+            const QSet<int> components = selectAll ? allComponents : QSet<int>{};
             selections.insert(objectValue, components);
             if (objectId == componentSelectionObject_) {
-                activeComponentIndices_[modeIndex] = components.isEmpty()
-                    ? -1
-                    : *std::max_element(components.cbegin(), components.cend());
+                int &activeComponent = activeComponentIndices_[modeIndex];
+                if (selectAll) {
+                    activeComponent = components.isEmpty()
+                        ? -1
+                        : *std::max_element(components.cbegin(),
+                                            components.cend());
+                } else if (!allComponents.contains(activeComponent)) {
+                    activeComponent = -1;
+                }
             }
         }
         update();

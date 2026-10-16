@@ -3944,8 +3944,11 @@ current Edit Mode selection domain without leaving Edit Mode; `Ctrl+I` inverts
 that domain across the edited objects. Blender 5.2.2 documents this shortcut
 for both [curve](https://docs.blender.org/manual/en/5.2/modeling/curves/selecting.html)
 and [surface](https://docs.blender.org/manual/en/5.2/modeling/surfaces/selecting.html)
-Edit Mode. Grab, rotate, and scale transform curve and NURBS surface control
-points through their existing geometry paths. NURBS solid component transforms are
+Edit Mode. Deselect All preserves a still-valid active component index while
+clearing the current domain's selected set, following Blender's documented
+active-element behavior for curve control points. Grab, rotate, and scale
+transform curve and NURBS surface control points through their existing
+geometry paths. NURBS solid component transforms are
 suppressed because solid faces are derived from the exact base surface and
 extrusion vector; whole-object solid transforms remain supported. During
 component transforms, surface CV propagation stays inside the selected surface

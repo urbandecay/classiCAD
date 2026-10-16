@@ -13262,7 +13262,10 @@ protected:
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_, false,
-                        nullptr, true);
+                        nullptr, true,
+                        1.0 - std::clamp<qreal>(
+                            viewportShadingSettings_.xrayAlphaForMode(),
+                            0.0, 1.0));
                 } else {
                     sceneDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,

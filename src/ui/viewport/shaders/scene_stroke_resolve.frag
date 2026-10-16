@@ -10,6 +10,7 @@ uniform sampler2D uSceneDepth;
 uniform sampler2D uLineWireFlag;
 uniform ivec2 uViewportSize;
 uniform int uIgnoreSceneDepth;
+uniform float uXrayHiddenFade;
 
 layout(location = 0) out vec4 fragmentColor;
 
@@ -22,6 +23,15 @@ bool pixelInViewport(ivec2 pixel)
 {
     return all(greaterThanEqual(pixel, ivec2(0))) &&
            all(lessThan(pixel, uViewportSize));
+}
+
+float xrayFadeForSample(ivec2 pixel, float candidateDepth)
+{
+    if (uIgnoreSceneDepth == 0) {
+        return 1.0;
+    }
+    float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
+    return candidateDepth > sceneDepth + 1.0e-6 ? uXrayHiddenFade : 1.0;
 }
 
 vec4 fetchLineRecord(ivec2 pixel)
@@ -121,12 +131,14 @@ void main()
         centerRasterColor = texelFetch(uLineColor, pixel, 0);
         float centerCoverage =
             lineCoverage(centerRecord.z, centerRecord.w);
-        resolvedLineColor = centerRasterColor * centerCoverage;
+        float centerDepth = texelFetch(uCandidateDepth, pixel, 0).r;
+        resolvedLineColor = centerRasterColor * centerCoverage *
+                            xrayFadeForSample(pixel, centerDepth);
         // The opaque stroke prepass already tests center candidates against
         // scene depth with LEQUAL. Retain that candidate as the initial AA
         // overlay sample; neighbors are compared against its depth below.
-        resolvedLineDepth = correctedMeshWireDepth(
-            pixel, centerRecord, texelFetch(uCandidateDepth, pixel, 0).r);
+        resolvedLineDepth = correctedMeshWireDepth(pixel, centerRecord,
+                                                   centerDepth);
         outputDepth = resolvedLineDepth;
     }
 
@@ -146,8 +158,9 @@ void main()
         float neighborDepth = correctedMeshWireDepth(
             neighborPixel, neighborRecord,
             texelFetch(uCandidateDepth, neighborPixel, 0).r);
+        float neighborFade = xrayFadeForSample(neighborPixel, neighborDepth);
         blendNeighbor(resolvedLineColor, resolvedLineDepth,
-                      texelFetch(uLineColor, neighborPixel, 0),
+                      texelFetch(uLineColor, neighborPixel, 0) * neighborFade,
                       neighborDepth, coverage);
     }
 

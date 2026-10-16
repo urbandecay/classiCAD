@@ -1196,7 +1196,14 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
         }
         if (center.valid) {
             const qreal coverage = lineCoverage(center.distance, center.width);
-            alpha = center.alpha * coverage;
+            const qreal centerXrayFade = batchIt->ignoreSceneDepth &&
+                    std::isfinite(targetSceneDepth) &&
+                    center.depth > targetSceneDepth + std::max<qreal>(
+                        1.0e-4, std::abs(center.depth) * 1.0e-6)
+                ? 1.0 - std::clamp<qreal>(
+                      shadingSettings_.xrayAlphaForMode(), 0.0, 1.0)
+                : 1.0;
+            alpha = center.alpha * coverage * centerXrayFade;
             premultipliedColor =
                 QVector3D(center.color.redF(), center.color.greenF(),
                           center.color.blueF()) * static_cast<float>(alpha);
@@ -1213,11 +1220,13 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             const SmoothWireRecord neighbor = batchIt->records.value(
                 neighborY * opaqueSceneDepthSize.width() + neighborX);
             if (!neighbor.valid) continue;
+            const float neighborSceneDepth = (*opaqueSceneDepth)[
+                neighborY * opaqueSceneDepthSize.width() + neighborX];
             const qreal sceneDepthTolerance = std::max<qreal>(
                 1.0e-4, std::abs(neighbor.depth) * 1.0e-6);
             if (!batchIt->ignoreSceneDepth &&
-                std::isfinite(targetSceneDepth) &&
-                neighbor.depth > targetSceneDepth + sceneDepthTolerance) {
+                std::isfinite(neighborSceneDepth) &&
+                neighbor.depth > neighborSceneDepth + sceneDepthTolerance) {
                 continue;
             }
             const bool horizontalWire =
@@ -1227,7 +1236,14 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
                 offset.x() * neighbor.normalX -
                 offset.y() * neighbor.normalY;
             const qreal coverage = lineCoverage(distance, neighbor.width);
-            const qreal candidateAlpha = neighbor.alpha * coverage;
+            const qreal candidateXrayFade = batchIt->ignoreSceneDepth &&
+                    std::isfinite(neighborSceneDepth) &&
+                    neighbor.depth > neighborSceneDepth + sceneDepthTolerance
+                ? 1.0 - std::clamp<qreal>(
+                      shadingSettings_.xrayAlphaForMode(), 0.0, 1.0)
+                : 1.0;
+            const qreal candidateAlpha =
+                neighbor.alpha * coverage * candidateXrayFade;
             const QVector3D candidateColor =
                 QVector3D(neighbor.color.redF(), neighbor.color.greenF(),
                           neighbor.color.blueF()) *
@@ -2098,7 +2114,11 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         }
         if (shadingSettings_.xrayEnabledForMode() &&
             !smoothWireSubmitted && !hiddenPath.isEmpty()) {
+            painter.save();
+            painter.setOpacity(painter.opacity() * (1.0 - std::clamp<qreal>(
+                shadingSettings_.xrayAlphaForMode(), 0.0, 1.0)));
             painter.drawPath(hiddenPath);
+            painter.restore();
         }
         if (smoothWireSubmitted && smoothWireBatch != nullptr) {
             SmoothWireBatch::FallbackPath fallback;
@@ -2110,6 +2130,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             }
             if (ignoreSceneDepth && !hiddenPath.isEmpty()) {
                 fallback.path = hiddenPath;
+                fallback.opacity *= 1.0 - std::clamp<qreal>(
+                    shadingSettings_.xrayAlphaForMode(), 0.0, 1.0);
                 smoothWireBatch->fallbackPaths.append(std::move(fallback));
             }
         }

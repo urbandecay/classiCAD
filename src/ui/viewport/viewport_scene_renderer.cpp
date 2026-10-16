@@ -1175,7 +1175,8 @@ bool ViewportSceneRenderer::draw(
     bool smoothEditModeWires,
     bool sceneLinearOutput,
     bool *strokeResolveUsed,
-    bool isolatedDepth)
+    bool isolatedDepth,
+    qreal xrayHiddenFade)
 {
     if (strokeResolveUsed != nullptr) {
         *strokeResolveUsed = false;
@@ -1824,6 +1825,10 @@ bool ViewportSceneRenderer::draw(
         strokeResolveProgram_.setUniformValue("uSceneDepth", 4);
         strokeResolveProgram_.setUniformValue(
             "uIgnoreSceneDepth", isolatedDepthActive ? 1 : 0);
+        strokeResolveProgram_.setUniformValue(
+            "uXrayHiddenFade",
+            static_cast<float>(std::clamp<qreal>(
+                xrayHiddenFade, 0.0, 1.0)));
         strokeResolveProgram_.setUniformValue("uLineWireFlag", 5);
         const GLint viewportSizeLocation =
             strokeResolveProgram_.uniformLocation("uViewportSize");

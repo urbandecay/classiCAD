@@ -209,7 +209,8 @@ public:
               bool smoothEditModeWires = true,
               bool sceneLinearOutput = false,
               bool *strokeResolveUsed = nullptr,
-              bool isolatedDepth = false);
+              bool isolatedDepth = false,
+              qreal xrayHiddenFade = 1.0);
     bool drawDepthOnly(const QVector<ViewportSceneStroke> &strokes,
                        const ViewportTransform &transform,
                        const QSize &viewportSize,

@@ -10248,6 +10248,22 @@ scene depth.
   disabled or the individual overlay is off. These overlays remain
   unimplemented.
 
+### Match QPainter X-Ray fade for hidden mesh wires (2026-10-16)
+
+- The ordinary QPainter mesh-wire fallback previously skipped depth rejection
+  under X-Ray but drew hidden wire samples at full opacity. It now applies
+  Blender's hidden-wire factor (`1 - xray_alpha`) when retained scene depth
+  shows that a sample is behind the surface. Matched images remain open.
+
+### Preserve per-view-layer collection render visibility (2026-10-16)
+
+- The Blender extractor now records `LayerCollection.hide_render` instead of
+  the underlying collection's global `hide_render`, and the render visibility
+  check honors that per-view-layer value alongside collection exclusion.
+  This preserves different render visibility for separate instances/paths of
+  the same collection. C++ build passed; a matched multi-view-layer render
+  comparison remains open.
+
 ### GPU open-surface shadow caps (2026-10-16)
 
 - The stencil shadow path now submits source and far caps for every triangle

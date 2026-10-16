@@ -14202,6 +14202,7 @@ protected:
                             worldFirst.z + (worldSecond.z - worldFirst.z) *
                                                worldFraction};
                         bool visible = true;
+                        bool hiddenBySceneDepth = false;
                         const QSize domainSize = renderObject->showInFront
                             ? frontSize : regularSize;
                         const qreal scaleX = domainSize.width() > 0
@@ -14271,9 +14272,12 @@ protected:
                             }
                             const float tolerance = std::max(
                                 5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
-                            if (!viewportShadingSettings_.xrayEnabled()) {
-                                visible = !std::isfinite(surfaceDepth) ||
-                                    strokeDepth >= surfaceDepth - tolerance;
+                            if (std::isfinite(surfaceDepth)) {
+                                hiddenBySceneDepth =
+                                    strokeDepth < surfaceDepth - tolerance;
+                                if (!viewportShadingSettings_.xrayEnabled()) {
+                                    visible = !hiddenBySceneDepth;
+                                }
                             }
                             if (visible && !renderObject->showInFront &&
                                 hasFrontDepth && pixel <
@@ -14284,6 +14288,13 @@ protected:
                         }
                         if (visible) {
                             QColor wireColor = stroke.color;
+                            if (hiddenBySceneDepth &&
+                                viewportShadingSettings_.xrayEnabled()) {
+                                wireColor.setAlphaF(wireColor.alphaF() *
+                                    (1.0 - std::clamp(
+                                        viewportShadingSettings_.xrayAlphaForMode(),
+                                        0.0, 1.0)));
+                            }
                             if (endpointColors.size() == segments.size()) {
                                 const QVector4D firstColor =
                                     endpointColors[index];

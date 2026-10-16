@@ -1242,7 +1242,8 @@ bool Document::isObjectRenderable(ObjectId objectId) const
                     }
                 }
                 if (!foundNodeState ||
-                    nodeState.value(QStringLiteral("exclude")).toBool()) {
+                    nodeState.value(QStringLiteral("exclude")).toBool() ||
+                    nodeState.value(QStringLiteral("hide_render")).toBool()) {
                     renderable = false;
                     break;
                 }

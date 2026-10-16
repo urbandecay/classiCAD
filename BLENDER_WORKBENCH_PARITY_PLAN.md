@@ -10217,6 +10217,16 @@ scene depth.
   selected-fill tint, and did not support the claim made there. C++ build
   passed; a matched selected-object image comparison remains open.
 
+### Keep all QPainter curve segments when depth sampling is capped (2026-10-16)
+
+- The prepared-curve fallback previously skipped every segment between depth
+  samples once a curve exceeded one million segments. It now spreads that
+  bounded depth-sample budget across the curve while keeping every segment in
+  the visible wire path. Segments outside the sampled subset remain visible
+  without occlusion, so this extreme case trades depth accuracy for complete
+  geometry rather than dropping line sections. C++ build passed; matched
+  large-curve occlusion images remain open.
+
 ### GPU open-surface shadow caps (2026-10-16)
 
 - The stencil shadow path now submits source and far caps for every triangle

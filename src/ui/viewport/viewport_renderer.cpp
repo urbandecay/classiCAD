@@ -1867,12 +1867,16 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         constexpr quint64 maximumDepthSamples = 1'000'000;
         const quint64 segmentCount =
             static_cast<quint64>(worldVertices.size() / 2);
-        const quint64 segmentStride = std::max<quint64>(
-            1, (segmentCount + maximumDepthSamples - 1) /
-                   maximumDepthSamples);
+        // A minimum of two endpoint samples is needed to depth-check a
+        // segment. Spread the available slots across very large curves; the
+        // unsampled segments are still drawn below without depth occlusion.
+        const quint64 maximumSampledSegments = maximumDepthSamples / 2;
+        const quint64 depthSegmentStride = std::max<quint64>(
+            1, (segmentCount + maximumSampledSegments - 1) /
+                   maximumSampledSegments);
         quint64 requestedSamples = 0;
-        for (quint64 segment = 0; segment < segmentCount;
-             segment += segmentStride) {
+        for (quint64 segment = 0; segment < segmentCount; ++segment) {
+            if (segment % depthSegmentStride != 0) continue;
             const int index = static_cast<int>(segment * 2);
             Point3D clippedStart = worldVertices[index];
             Point3D clippedEnd = worldVertices[index + 1];
@@ -1901,20 +1905,25 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 maximumDepthSamples * maximumDepthSamples,
                 requestedSamples + steps + 1);
         }
-        // Preserve at least one segment sample but reduce density uniformly
-        // when a very large curve would otherwise exceed the bounded depth
-        // sampling work. This avoids falling back to an unoccluded full path.
+        // Keep every segment in the display path, reducing depth-sample density
+        // uniformly when a very large curve would exceed the bounded work.
         const quint64 sampleStride = std::max<quint64>(
             1, (requestedSamples + maximumDepthSamples - 1) /
                    maximumDepthSamples);
+        const auto appendUnoccludedSegment = [&](const QPointF &start,
+                                                  const QPointF &end) {
+            if (!visibleRun) {
+                visiblePath.moveTo(start);
+                visibleRun = true;
+            } else {
+                visiblePath.lineTo(start);
+            }
+            visiblePath.lineTo(end);
+            hiddenRun = false;
+        };
         for (int index = 0; index + 1 < worldVertices.size(); index += 2) {
             const quint64 segmentIndex =
                 static_cast<quint64>(index / 2);
-            if (segmentIndex % segmentStride != 0) {
-                visibleRun = false;
-                hiddenRun = false;
-                continue;
-            }
             QPointF screenStart;
             QPointF screenEnd;
             const Point3D &worldStart = worldVertices[index];
@@ -1949,10 +1958,22 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             const qreal deviceLength = std::hypot(
                 deviceEnd.x() - deviceStart.x(),
                 deviceEnd.y() - deviceStart.y());
-            if (!std::isfinite(deviceLength) ||
-                sampleBudget + 2 > maximumDepthSamples) {
+            if (!std::isfinite(deviceLength)) {
                 visibleRun = false;
                 hiddenRun = false;
+                continue;
+            }
+            if (segmentIndex % depthSegmentStride != 0) {
+                // Preserve every line segment even when the depth-sample
+                // budget only covers a distributed subset of the curve.
+                appendUnoccludedSegment(screenStart, screenEnd);
+                continue;
+            }
+            if (sampleBudget + 2 > maximumDepthSamples) {
+                // The depth budget cannot cover every remaining short segment.
+                // Keep its geometry visible instead of dropping the segment;
+                // only its occlusion becomes approximate at this extreme size.
+                appendUnoccludedSegment(screenStart, screenEnd);
                 continue;
             }
             const quint64 requestedSteps = static_cast<quint64>(

@@ -3458,9 +3458,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.specularLighting,
                             shadingSettings_.matcapFlipX);
                     }
-                    if (triangle.selected &&
-                        (preserveSceneLinearPictureOutput ||
-                         fragmentSink != nullptr)) {
+                    if (triangle.selected && preserveSceneLinearPictureOutput &&
+                        fragmentSink == nullptr) {
                         shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
                                        editSelectionLinear * editSelectionMix;
                     }
@@ -3575,9 +3574,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 QColor fallbackColor = triangle.color;
                 if (triangle.useWorkbenchColor) {
                     QVector3D sceneLinearColor = triangle.sceneLinearColor;
-                    if (triangle.selected &&
-                        (preserveSceneLinearPictureOutput ||
-                         fragmentSink != nullptr)) {
+                    if (triangle.selected && preserveSceneLinearPictureOutput &&
+                        fragmentSink == nullptr) {
                         sceneLinearColor = sceneLinearColor *
                                 (1.0f - editSelectionMix) +
                             editSelectionLinear * editSelectionMix;
@@ -5509,10 +5507,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     normalView, incidentView,
                     shadingSettings_.specularLighting,
                     shadingSettings_.matcapFlipX);
-            }
-            if (selected && !preview && fragmentSink != nullptr) {
-                shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
-                               editSelectionLinear * editSelectionMix;
             }
             if (resolvedSceneLinear != nullptr) {
                 *resolvedSceneLinear = shadedLinear;

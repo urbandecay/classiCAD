@@ -13630,9 +13630,10 @@ protected:
                 const Point3D cameraPosition = viewportTransform_.cameraPosition(
                     renderFrame.viewportSize);
                 const Point3D viewDirection = viewportTransform_.viewDirection();
-                const auto lineVisibleAt = [&](const QPointF &screen,
+                const auto lineOpacityAt = [&](const QPointF &screen,
                                                const Point3D &world,
-                                               bool showInFront) {
+                                               bool showInFront)
+                    -> std::optional<qreal> {
                     const float strokeDepth = rasterWorkbenchCameraDepth(
                         QVector3D(float(world.x), float(world.y),
                                   float(world.z)),
@@ -13666,27 +13667,42 @@ protected:
                         const QVector<float> &depth, const QSize &depthSize) {
                         const std::optional<float> surfaceDepth =
                             depthSample(depth, depthSize);
-                        if (!surfaceDepth.has_value()) return true;
+                        if (!surfaceDepth.has_value())
+                            return std::optional<bool>();
                         const float tolerance = std::max(
                             5.0e-4f, std::abs(*surfaceDepth) * 1.0e-5f);
-                        return strokeDepth >= *surfaceDepth - tolerance;
+                        return std::optional<bool>(
+                            strokeDepth >= *surfaceDepth - tolerance);
                     };
                     if (showInFront) {
-                        return isVisibleAgainst(
+                        const std::optional<bool> visible = isVisibleAgainst(
                             rasterSurfaceLayers.inFrontSceneDepth,
                             rasterSurfaceLayers.inFrontSceneDepthSize);
+                        if (visible.has_value() && !*visible) {
+                            return viewportShadingSettings_.xrayEnabled()
+                                ? std::optional<qreal>(0.5)
+                                : std::nullopt;
+                        }
+                        return 1.0;
                     }
-                    if (!viewportShadingSettings_.xrayEnabled() &&
-                        !isVisibleAgainst(
-                            rasterSurfaceLayers.regularSceneDepth,
-                            rasterSurfaceLayers.regularSceneDepthSize)) {
-                        return false;
+                    const std::optional<bool> visible = isVisibleAgainst(
+                        rasterSurfaceLayers.regularSceneDepth,
+                        rasterSurfaceLayers.regularSceneDepthSize);
+                    const bool xrayEnabled =
+                        viewportShadingSettings_.xrayEnabled();
+                    if (!xrayEnabled && visible.has_value() && !*visible) {
+                        return std::nullopt;
                     }
                     // Blender's in-front overlay is composed after ordinary
                     // Edit Mode geometry and therefore covers its edges.
-                    return !depthSample(
+                    if (depthSample(
                         rasterSurfaceLayers.inFrontSceneDepth,
-                        rasterSurfaceLayers.inFrontSceneDepthSize).has_value();
+                        rasterSurfaceLayers.inFrontSceneDepthSize).has_value()) {
+                        return std::nullopt;
+                    }
+                    return xrayEnabled && visible.has_value() && !*visible
+                        ? std::optional<qreal>(0.5)
+                        : std::optional<qreal>(1.0);
                 };
 
                 painter.save();
@@ -13718,8 +13734,10 @@ protected:
                         const auto active = componentSelectionObject_ ==
                                 renderObject.objectId &&
                             edgeIndex == activeComponentIndex();
-                        QPen pen(active ? QColor(Qt::white)
-                                        : QColor(QStringLiteral("#ff7a00")));
+                        const QColor baseColor = active
+                            ? QColor(Qt::white)
+                            : QColor(QStringLiteral("#ff7a00"));
+                        QPen pen(baseColor);
                         pen.setWidthF(2.0);
                         pen.setCapStyle(Qt::RoundCap);
                         pen.setJoinStyle(Qt::RoundJoin);
@@ -13765,8 +13783,15 @@ protected:
                                 first.x + (second.x - first.x) * tm,
                                 first.y + (second.y - first.y) * tm,
                                 first.z + (second.z - first.z) * tm};
-                            if (lineVisibleAt(a + (b - a) * 0.5, midpoint,
-                                              renderObject.showInFront)) {
+                            const std::optional<qreal> opacity = lineOpacityAt(
+                                a + (b - a) * 0.5, midpoint,
+                                renderObject.showInFront);
+                            if (opacity.has_value()) {
+                                QColor segmentColor = baseColor;
+                                segmentColor.setAlphaF(
+                                    baseColor.alphaF() * *opacity);
+                                pen.setColor(segmentColor);
+                                painter.setPen(pen);
                                 painter.drawLine(a, b);
                             }
                         }

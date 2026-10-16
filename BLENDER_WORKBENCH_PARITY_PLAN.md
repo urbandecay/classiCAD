@@ -8838,6 +8838,19 @@ resolve remain open.
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L238-L250).
   Matched component-edge captures remain open.
 
+### QPainter selected component-edge X-Ray fade (2026-10-15)
+
+- Selected NURBS surface/solid component edges remain visible through ordinary
+  geometry in X-Ray, but segments behind their applicable regular or
+  `showInFront` depth layer now draw at 50% alpha. Visible segments retain full
+  alpha, and regular selected edges remain covered by a later in-front layer.
+  Blender 5.2.2 sets the Edit Mode wire opacity to 0.5 when its X-Ray flag is
+  active and applies that opacity in the mesh edit edge pass in
+  [`overlay_mesh.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_mesh.hh#L2370-L2375)
+  and
+  [`overlay_mesh.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_mesh.hh#L2566-L2584).
+  Matched edge captures remain open.
+
 ### NURBS surface derivative normals (2026-10-15)
 
 - Smooth NURBS surface and solid shading normals are now evaluated from the

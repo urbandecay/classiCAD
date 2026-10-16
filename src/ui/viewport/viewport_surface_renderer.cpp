@@ -8073,7 +8073,9 @@ bool ViewportSurfaceRenderer::draw(
         if (outlineFramebufferReady) {
             QVector<QVector3D> xraySelectedEdgeVertices;
             QVector<XRaySelectedEdgeRange> xraySelectedEdgeRanges;
-            bool xraySelectedMeshesOnly = true;
+            QSet<quint32> xraySelectedMeshObjectIds;
+            bool xraySelectedMeshPresent = false;
+            bool xraySelectedNurbsPresent = false;
             if (selectedOutlineRequested && settings.xrayEnabled()) {
                 const Point3D viewDirection = transform.viewDirection();
                 const bool perspective = transform.isPerspectiveEnabled();
@@ -8083,12 +8085,16 @@ bool ViewportSurfaceRenderer::draw(
                     const ViewportRenderObject &object = objects[objectIndex];
                     if (object.selected && !object.outlineHandledBySceneStroke &&
                         hasNurbsSurfaceGeometry(object)) {
-                        xraySelectedMeshesOnly = false;
+                        xraySelectedNurbsPresent = true;
                     }
                     if (!object.selected || object.outlineHandledBySceneStroke ||
                         !hasPolygonMeshGeometry(object)) {
                         continue;
                     }
+                    xraySelectedMeshPresent = true;
+                    xraySelectedMeshObjectIds.insert(
+                        static_cast<quint32>(objectIndex + 1) &
+                        0x7fffffffu);
                     const PolygonMesh3D &mesh = object.shape.polygonMesh;
                     const auto &matrix = object.meshObjectTransform;
                     const auto worldPoint = [&](int index) {
@@ -8257,7 +8263,12 @@ bool ViewportSurfaceRenderer::draw(
                         // surface, while leaving its own perimeter to the
                         // shared scene-stroke renderer.
                         objectId = 0u;
-                    } else if (range.selected) {
+                    } else if (range.selected &&
+                               !(settings.xrayEnabled() &&
+                                 xraySelectedMeshPresent &&
+                                 xraySelectedNurbsPresent &&
+                                 xraySelectedMeshObjectIds.contains(
+                                     range.effectObjectId))) {
                         objectId |= 0x80000000u;
                     }
                     glUniform1ui(objectIdUniformLocation, objectId);
@@ -8530,7 +8541,7 @@ bool ViewportSurfaceRenderer::draw(
             }
             bool xraySelectedOutlineReady = false;
             if (selectedOutlineRequested && settings.xrayEnabled() &&
-                xraySelectedMeshesOnly &&
+                xraySelectedMeshPresent &&
                 !xraySelectedEdgeVertices.isEmpty() &&
                 ensureSelectedOutlineFramebuffers(pixelSize)) {
                 GLint savedFramebuffer = 0;
@@ -8678,6 +8689,10 @@ bool ViewportSurfaceRenderer::draw(
                                   useSharedOutlineIds
                                       ? workbenchOutlineIdTexture_
                                       : objectIdTexture_);
+                    if (xraySelectedNurbsPresent) {
+                        drawOutlineColor(settings.themeActiveObjectColor,
+                                         true);
+                    }
                 }
             }
             if (hiddenSelectedOutlineReady) {

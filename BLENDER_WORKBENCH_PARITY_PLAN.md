@@ -9475,10 +9475,9 @@ moves them after scene effects and depth-tests them against the retained scene.
   vertices and account for perspective versus orthographic views. The GPU path
   keeps general object outlines on the existing triangle ID buffer and
   resolves selected silhouettes from a dedicated edge ID/depth target, with
-  separate regular and `showInFront` depth domains. GPU edge resolution is
-  currently used when the selected surface set consists only of polygon
-  meshes; mixed mesh/NURBS selections retain the existing surface-mask path.
-  Loose edges and matched captures remain open.
+  separate regular and `showInFront` depth domains. Mixed mesh/NURBS GPU
+  selections now resolve mesh silhouettes and NURBS surface contours through
+  their separate paths. Loose edges and matched captures remain open.
 - Blender 5.2.2 requests edge-detection geometry for selected meshes in X-Ray
   and resolves it through the overlay wire prepass. The wire geometry shader
   drops shared edges whose adjacent faces face the same direction and applies
@@ -9488,6 +9487,22 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_outline_prepass_wire_vert.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_prepass_wire_vert.glsl#L597-L668).
   Build passed; exact edge expansion, smoothing, depth bias, and visual parity
   remain unverified.
+
+### GPU mixed X-Ray mesh and NURBS selected outlines (2026-10-16)
+
+- X-Ray selected mesh silhouettes now remain on the dedicated edge path when
+  selected NURBS surfaces or solids are also present. In mixed selections, the
+  ordinary object-ID target omits the selected marker from mesh face IDs while
+  retaining their IDs for general outlines; selected NURBS contours still use
+  the surface-ID target. The resolve draws the NURBS contours and mesh
+  silhouettes separately, avoiding mesh face seams without dropping either
+  selected type. Per-pixel overlap ordering and matched captures remain open.
+- Blender 5.2.2 requests mesh edge-detection geometry for selected X-Ray
+  outlines while non-mesh surface outlines retain their own geometry path in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L148-L170)
+  and
+  [`overlay_outline_prepass_wire_vert.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_prepass_wire_vert.glsl#L597-L668).
+  Build passed; matched GPU outline captures remain open.
 
 ### GPU hidden selected-object contours (2026-10-16)
 

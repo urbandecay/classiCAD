@@ -2478,94 +2478,20 @@ bool ViewportSurfaceRenderer::initialize()
     static constexpr const char *shadowVertexShader = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPosition;
-        layout(location = 3) in vec2 aUv;
         uniform mat4 uShadowViewProjection;
         uniform vec3 uWorldOffset;
-        out vec2 vUv;
         void main()
         {
-            vUv = aUv;
             gl_Position = uShadowViewProjection *
                           vec4(aPosition + uWorldOffset, 1.0);
         }
     )glsl";
+    // Workbench's shadow pass uses caster geometry without sampling visible
+    // Image Texture alpha, so the depth-map fallback must not cut holes here.
     static constexpr const char *shadowFragmentShader = R"glsl(
         #version 330 core
-        in vec2 vUv;
-        uniform sampler2D uShadowAlphaTexture;
-        uniform bool uUseShadowUdimImage;
-        uniform sampler2DArray uShadowUdimImage;
-        uniform sampler2D uShadowUdimLookup;
-        uniform bool uUseShadowAlphaMask;
-        uniform int uTextureInterpolation;
-        uniform int uTextureExtension;
-        ivec2 mapShadowUdimCoord(ivec2 p, ivec2 size, out bool valid)
-        {
-            valid=true;
-            for(int axis=0;axis<2;++axis){int n=size[axis];int c=p[axis];
-                if(uTextureExtension==0)c=(c%n+n)%n;
-                else if(uTextureExtension==1)c=clamp(c,0,n-1);
-                else if(uTextureExtension==2){if(c<0||c>=n)valid=false;}
-                else{c=(c%(2*n)+2*n)%(2*n);if(c>=n)c=2*n-1-c;}p[axis]=c;}
-            return p;
-        }
-        vec4 fetchShadowUdimAlpha(sampler2DArray image,vec4 info,ivec2 p)
-        {ivec2 size=ivec2(round(vec2(textureSize(image,0).xy)*info.yz));bool valid;ivec2 mapped=mapShadowUdimCoord(p,size,valid);
-         return valid?texelFetch(image,ivec3(mapped,int(info.x+0.5)-1),0):vec4(0.0);}
-        vec4 sampleShadowUdimTexture(sampler2DArray image,sampler2D lookup,vec2 uv)
-        {
-            vec2 tile=floor(uv);
-            if(tile.x<0.0||tile.x>=10.0||tile.y<0.0||tile.y>=100.0)return vec4(1.0,0.0,1.0,1.0);
-            vec4 info=texelFetch(lookup,ivec2(tile),0);if(info.x<0.5)return vec4(1.0,0.0,1.0,1.0);
-            ivec2 size=ivec2(round(vec2(textureSize(image,0).xy)*info.yz));vec2 p=fract(uv)*vec2(size)-0.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
-            if(uTextureInterpolation==1)return fetchShadowUdimAlpha(image,info,ivec2(floor(fract(uv)*vec2(size))));
-            if(uTextureInterpolation!=2){vec4 a=mix(fetchShadowUdimAlpha(image,info,base),fetchShadowUdimAlpha(image,info,base+ivec2(1,0)),f.x);
-                vec4 b=mix(fetchShadowUdimAlpha(image,info,base+ivec2(0,1)),fetchShadowUdimAlpha(image,info,base+ivec2(1,1)),f.x);return mix(a,b,f.y);}
-            vec2 w0=(1.0-f)*(1.0-f)*(1.0-f)/6.0;vec2 w1=(3.0*f*f*f-6.0*f*f+4.0)/6.0;
-            vec2 w2=(-3.0*f*f*f+3.0*f*f+3.0*f+1.0)/6.0;vec2 w3=f*f*f/6.0;vec4 result=vec4(0.0);
-            for(int y=0;y<4;++y){float wy=y==0?w0.y:y==1?w1.y:y==2?w2.y:w3.y;for(int x=0;x<4;++x){float wx=x==0?w0.x:x==1?w1.x:x==2?w2.x:w3.x;
-                result+=fetchShadowUdimAlpha(image,info,base+ivec2(x-1,y-1))*wx*wy;}}
-            return result;
-        }
-        vec4 sampleShadowUdimAlphaLinear(vec2 uv)
-        {
-            return sampleShadowUdimTexture(uShadowUdimImage,
-                                            uShadowUdimLookup, uv);
-        }
-        vec4 sampleShadowUdimAlpha(vec2 uv)
-        {
-            return sampleShadowUdimTexture(uShadowUdimImage,
-                                            uShadowUdimLookup, uv);
-        }
-        vec4 sampleShadowAlphaImage(vec2 uv)
-        {
-            if (uUseShadowUdimImage) return sampleShadowUdimAlpha(uv);
-            if (uTextureInterpolation != 2) return texture(uShadowAlphaTexture, uv);
-            vec2 size = vec2(textureSize(uShadowAlphaTexture, 0));
-            vec2 p = uv * size - 0.5;
-            vec2 base = floor(p);
-            vec2 f = fract(p);
-            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
-            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
-            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
-            vec2 w3 = f * f * f / 6.0;
-            vec4 result = vec4(0.0);
-            for (int y = 0; y < 4; ++y) {
-                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
-                for (int x = 0; x < 4; ++x) {
-                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
-                    result += texture(uShadowAlphaTexture,
-                        (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size) * wx * wy;
-                }
-            }
-            return result;
-        }
         void main()
         {
-            if (uUseShadowAlphaMask &&
-                sampleShadowAlphaImage(vUv).a < 0.1) {
-                discard;
-            }
         }
     )glsl";
 
@@ -2989,7 +2915,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     activeAttribute->componentCount >= 1 &&
                     activeAttribute->componentCount <= 4;
                 range.useTextureColor = textureAvailable;
-                range.shadowTextureAlphaMask = textureAvailable;
                 range.textureImagePath = textureAvailable ? imagePath : QString{};
                 const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, -1);
                 if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
@@ -3083,7 +3008,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     !material.textureImageTiles.isEmpty() ||
                     !material.textureImageSceneLinearFloatDataBase64.isEmpty();
                 range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
-                range.shadowTextureAlphaMask = range.useTextureColor;
                 range.textureImagePath = range.useTextureColor
                     ? material.textureImagePath : QString{};
                 range.textureImageTiles = range.useTextureColor
@@ -4531,9 +4455,6 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     shadowProgram_.bind();
     shadowProgram_.setUniformValue("uShadowViewProjection",
                                    shadowViewProjection_);
-    shadowProgram_.setUniformValue("uShadowAlphaTexture", 0);
-    shadowProgram_.setUniformValue("uShadowUdimImage", 1);
-    shadowProgram_.setUniformValue("uShadowUdimLookup", 2);
     for (const DrawRange &range : ranges_) {
         if (range.count <= 0 ||
             (fallbackOnly && range.shadowVolumeSupported)) {
@@ -4546,7 +4467,6 @@ bool ViewportSurfaceRenderer::renderShadowMap(
                       static_cast<float>(range.offset.z)));
         // Blender's shadow-volume pass uses geometry and does not sample
         // Image Texture alpha. Keep that behavior in this depth-map fallback.
-        shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
         glDrawArrays(GL_TRIANGLES, range.first, range.count);
     }
     shadowProgram_.release();
@@ -4880,7 +4800,6 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     shadowProgram_.bind();
     shadowProgram_.setUniformValue("uShadowViewProjection", viewProjection);
     shadowProgram_.setUniformValue("uWorldOffset", QVector3D());
-    shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
     glDrawArrays(GL_TRIANGLES, 0,
                  useDepthPass ? depthPassSideVertices.size()
                               : volumeVertices.size());
@@ -6080,9 +5999,6 @@ bool ViewportSurfaceRenderer::draw(
         shadowProgram_.setUniformValue(
             "uShadowViewProjection",
             viewportViewProjection(transform, viewportSize));
-        shadowProgram_.setUniformValue("uShadowAlphaTexture", 0);
-        shadowProgram_.setUniformValue("uShadowUdimImage", 1);
-        shadowProgram_.setUniformValue("uShadowUdimLookup", 2);
         for (const DrawRange &range : ranges_) {
             if (range.count <= 0) {
                 continue;
@@ -6092,56 +6008,6 @@ bool ViewportSurfaceRenderer::draw(
                 QVector3D(static_cast<float>(range.offset.x),
                           static_cast<float>(range.offset.y),
                           static_cast<float>(range.offset.z)));
-            const QString alphaMode =
-                range.workbenchMaterial.textureImageAlphaMode;
-            const bool ignoreTextureAlpha =
-                alphaMode.compare(QStringLiteral("NONE"),
-                                  Qt::CaseInsensitive) == 0 ||
-                alphaMode.compare(QStringLiteral("IGNORE"),
-                                  Qt::CaseInsensitive) == 0 ||
-                alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
-                                  Qt::CaseInsensitive) == 0;
-            const GLuint alphaTexture = range.shadowTextureAlphaMask &&
-                    settings.colorMode == ViewportColorMode::Texture &&
-                    !ignoreTextureAlpha
-                ? ensureImageTexture(
-                      range.textureImagePath,
-                      range.workbenchMaterial.textureImagePackedDataBase64,
-                      range.textureImageSrgb,
-                      range.workbenchMaterial
-                          .textureImageSceneLinearFloatDataBase64,
-                      range.workbenchMaterial
-                          .textureImageSceneLinearFloatWidth,
-                      range.workbenchMaterial
-                          .textureImageSceneLinearFloatHeight)
-                : 0;
-            const UdimTextureSet udimTexture = range.shadowTextureAlphaMask &&
-                    settings.colorMode == ViewportColorMode::Texture &&
-                    !ignoreTextureAlpha
-                ? ensureUdimTexture(range.textureImageTiles,
-                                    range.textureImageSrgb)
-                : UdimTextureSet{};
-            shadowProgram_.setUniformValue(
-                "uTextureInterpolation", workbenchTextureInterpolation(
-                    range.workbenchMaterial.textureImageInterpolation));
-            shadowProgram_.setUniformValue(
-                "uTextureExtension", workbenchTextureExtension(
-                    range.workbenchMaterial.textureImageExtension));
-            configureWorkbenchImageTexture(alphaTexture,
-                                           range.workbenchMaterial);
-            configureWorkbenchUdimTexture(udimTexture.imageArray,
-                                          range.workbenchMaterial);
-            shadowProgram_.setUniformValue(
-                "uUseShadowAlphaMask",
-                alphaTexture != 0 || udimTexture.imageArray != 0);
-            shadowProgram_.setUniformValue(
-                "uUseShadowUdimImage", udimTexture.imageArray != 0);
-            glBindTexture(GL_TEXTURE_2D, alphaTexture);
-            glActiveTexture(GL_TEXTURE1);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, udimTexture.imageArray);
-            glActiveTexture(GL_TEXTURE2);
-            glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
-            glActiveTexture(GL_TEXTURE0);
             glDrawArrays(GL_TRIANGLES, range.first, range.count);
         }
         shadowProgram_.release();
@@ -6323,7 +6189,6 @@ bool ViewportSurfaceRenderer::draw(
                 shadowProgram_.setUniformValue(
                     "uShadowViewProjection",
                     viewportViewProjection(transform, viewportSize));
-                shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
                 for (const int rangeIndex : opaqueRangeIndices) {
                     const DrawRange &range = ranges_[rangeIndex];
                     shadowProgram_.setUniformValue(

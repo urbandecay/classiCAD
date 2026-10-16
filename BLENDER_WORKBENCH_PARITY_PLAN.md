@@ -9259,6 +9259,19 @@ fallback path remain unverified.
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
   Build passed; matched crossing-wire images remain open.
 
+### Textured cutout shadow-caster parity (2026-10-16)
+
+- Blender Workbench's visible Image Texture pass applies alpha cutout, while
+  its shadow pass submits geometry without sampling image alpha. QPainter's
+  software shadow map already uses full caster triangles, so it matches this
+  behavior. The classiCAD GPU depth-map fallback used to discard those texels;
+  that mask and its now-unneeded shadow texture sampling have been removed.
+  Visible surface alpha handling is unchanged. Sources:
+  [Blender shadow shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh),
+  [shadow submission](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc), and
+  [visible image alpha](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl).
+  Build passed; matched shadow captures remain open.
+
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 
 - When an imported document has no active view-layer key, Workbench render

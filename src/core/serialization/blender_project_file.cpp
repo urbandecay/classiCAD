@@ -2670,7 +2670,7 @@ bool loadVignolaDocument(const QString &path,
         QVector<DocumentCollection> collections;
         QVector<DocumentMaterial> materials;
         BlenderSceneImportReport importReport;
-        if (!importBlenderScene(path, QStringLiteral("original"), &objects,
+        if (!importBlenderScene(path, QStringLiteral("evaluated"), &objects,
                                 &collections, &materials, &importReport,
                                 errorMessage)) {
             return false;

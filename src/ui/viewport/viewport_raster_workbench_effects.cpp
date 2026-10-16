@@ -3504,10 +3504,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
     }
 
-    const auto applyOutline = [&]() {
-        const bool drawWorkbenchOutline = rasterWorkbenchOutlineEnabled;
-        const bool drawSelectionOutline =
-            settings.selectedObjectOutlineVisible && settings.wireOverlaysVisible;
+    const auto applyOutline = [&](bool drawWorkbenchOutline,
+                                  bool drawSelectionOutline) {
         if (!drawWorkbenchOutline && !drawSelectionOutline) return;
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
@@ -4437,7 +4435,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             (void)displayRetainedSceneLinear();
     }
 
-    applyOutline();
+    applyOutline(rasterWorkbenchOutlineEnabled, false);
 
     // QPainter fallback approximation: use the software-resolved visible
     // surface depth to estimate a physical circle of confusion, apply a
@@ -5273,6 +5271,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         (void)displayRetainedSceneLinear();
         surfaceLayers->sceneLinearDofPending = false;
     }
+    // Selection contours belong to the editor overlay. Keep them sharp by
+    // compositing them after the Workbench scene's depth-of-field resolve.
+    applyOutline(false, selectedOutlineEnabled);
 }
 
 } // namespace classiCAD

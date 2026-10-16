@@ -1784,6 +1784,18 @@ boundary wires, matching their GPU Edit Mode wire category. Ordinary committed
 curve strokes continue to use the Overlay preference. Build passed; matched
 wire comparison remains open.
 
+### QPainter selected outline after scene DOF (2026-10-16)
+
+- The raster fallback now applies the Workbench scene outline before its
+  depth-of-field pass, then draws selected-object contours afterward as editor
+  overlays. This keeps the orange selection contour sharp while scene content
+  still receives DOF. Blender resolves Workbench outline and DOF in its scene
+  engine, then draws selection contours in the later Overlay engine in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L498-L504)
+  and the later Overlay selection pass in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh).
+  Build passed; matched selected-outline/DOF captures remain open.
+
 **QPainter prepared-wire resolve (2026-10-16):** Smooth solid prepared wires
 with retained scene depth now use an analytic center/cardinal-neighbor coverage
 resolve modeled on Blender's single-sample wire pass. It is limited to a

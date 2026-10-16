@@ -952,7 +952,7 @@ def extract_camera_background_images(scene, packed_payload_budget,
             picture_depth = "DEFAULT" if display_depth == "BACK" else "FRONT"
             proxy.empty_image_depth = picture_depth
             proxy.show_empty_image_perspective = True
-            proxy.show_empty_image_orthographic = False
+            proxy.show_empty_image_orthographic = True
             proxy.show_empty_image_only_axis_aligned = False
             item, image_error = extract_image_empty(
                 proxy, scene, packed_payload_budget)

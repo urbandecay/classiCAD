@@ -9081,9 +9081,10 @@ resolve remain open.
   under-scene compositing; antialiased edges and transparent surfaces can
   differ from Blender's dedicated alpha-under pass. FRONT images stay in the
   in-front image pass. These synthetic picture shapes draw only in camera
-  view. Movie/clip or unavailable images use the importer's unsupported-feature
-  report. The scene extractor record is version 23. Matched camera background
-  captures have not been run.
+  view, including when the active camera is orthographic. Movie/clip or
+  unavailable images use the importer's unsupported-feature report. The scene
+  extractor record is version 23. Matched camera background captures have not
+  been run.
 
 ### Camera background image flips (2026-10-15)
 

@@ -7618,8 +7618,10 @@ resolve remain open.
   are drawn first with the Blender X-Ray fade `1 - xrayAlpha`. Previously this
   path dimmed the whole curve by `xrayAlpha` and discarded hidden samples. The
   GPU-stroke fallback's separate hidden/visible passes remain independently
-  handled. The C++ build passed; transparent receiver depth and matched Blender
-  captures remain open.
+  handled. When the raster surface compositor retains depth, the curve path
+  uses its regular or in-front depth map, including accepted transparent
+  fragments. If surface composition cannot retain depth, curve strokes remain
+  unoccluded. A matched Blender comparison remains open.
 
 ### QPainter control-cage depth visibility (2026-10-15)
 
@@ -8846,4 +8848,6 @@ resolve remain open.
   view. Blender stores these values on `SpaceView3D.region_3d`; see
   [`RegionView3D`](https://docs.blender.org/api/5.2/bpy.types.RegionView3D.html).
   The scene render camera remains a separate record for Workbench render
-  results. C++ build passed; a matched saved-view comparison has not been run.
+  results. The scene extractor record is now version 20, and the reader accepts
+  versions 10 through 20. C++ build passed; a matched saved-view comparison
+  has not been run.

@@ -4250,20 +4250,26 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
 
 ## QPainter direct translucent shadow receiver (2026-10-14)
 
-- The software resolve now retains the nearest visible surface alpha and uses
-  that surface's light-space position and normal to evaluate a shadow factor.
-  It applies the factor to the retained transparent contribution while
-  preserving final alpha; any opaque receiver beneath it is still shaded by
-  its separate factor. Blender 5.2.2's
+- **2026-10-16 source audit correction:** Blender's `get_shadow` call in the
+  transparent accumulation shader contributes the normal-based light factor;
+  it does not sample the opaque shadow stencil or caster visibility. The
+  QPainter normal-based factor therefore matches that part of Blender's
+  transparent shading. QPainter does not apply software caster visibility to
+  transparent receiver fragments, also matching Blender. The separate opaque
+  receiver contribution beneath transparency still uses the software shadow
+  map. The earlier wording below that described a cast shadow changing a
+  transparent receiver's contribution overstated Blender's behavior.
+- The software resolve retains transparent receiver data and applies the
+  normal-based shadow-lighting factor to the retained transparent
+  contribution while preserving final alpha. Opaque caster visibility is not
+  applied to that transparent contribution; any opaque receiver beneath it
+  still uses its separate software-map visibility factor. Blender 5.2.2's
   [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L478-L526)
   calls `get_shadow` for transparent fragments before weighted accumulation.
 - The CPU contract uses a half-alpha blue receiver over a white opaque surface
-  and verifies that a shadow changes the transparent contribution while
-  preserving the composed alpha. QPainter retains a weighted aggregate of
-  transparent layers, so the nearest visible fragment's factor is applied to
-  that aggregate when several layers overlap. Exact per-layer receiver factors
-  remain open; this remains a bounded CPU
-  approximation to Blender's GPU shadow path.
+  and verifies the normal-based factor while preserving the composed alpha.
+  QPainter retains a weighted aggregate of transparent layers, so its bounded
+  receiver approximation is not exact per-layer Blender weighted OIT.
 
 ## QPainter per-fragment transparent shadow factors (2026-10-14)
 
@@ -4446,6 +4452,15 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   that all tessellation vertices remain on the shared plane; it keeps the
   orthographic depth-uniformity guard. Image alpha cutoff behavior is
   unchanged.
+- For ordinary color rendering, the bounded resolver now combines coverage
+  across the full tessellated surface, including curved NURBS, so internal
+  triangle edges are not independently source-over blended. When the effects
+  fragment sink is active, the resolver remains restricted to coplanar,
+  same-normal and depth-uniform surfaces because its current per-pixel record
+  cannot preserve multiple curved receiver layers. Curved surfaces can still
+  show internal coverage seams in that effects path; a depth-aware layered
+  resolver remains open. Full-surface aggregation is also an approximation
+  when a folded surface projects multiple depths to one pixel.
 - This makes the NURBS software edges use the same approximation as mesh
   edges; it does not reproduce Blender's TAA/SMAA temporal and filter stages.
   Blender 5.2.2 AA remains a later pass in

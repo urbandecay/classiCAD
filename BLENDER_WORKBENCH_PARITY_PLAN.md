@@ -9977,3 +9977,12 @@ scene depth.
   and reads the blue-noise/IGN coordinates from the blur pass in
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L370-L415).
   Build passed; matched QPainter DOF captures remain open.
+
+### QPainter Random wire color fallback identity (2026-10-16)
+
+- The generic QPainter curve/geometry fallback now uses the shared Blender
+  Random wire-color resolver, which hashes the imported object name and linked
+  library path and produces Blender's wire palette. This replaces the fallback's
+  ObjectId-only HSV color. The resulting wire color continues to bypass the
+  Workbench scene color transform, as Blender's wire overlay does. Build passed;
+  no matched Blender wire-color image comparison has been run.

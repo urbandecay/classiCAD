@@ -2319,9 +2319,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                               : QColor(QStringLiteral("#000000"));
     if (!selected && !preview &&
         shadingSettings_.wireColorMode == ViewportWireColorMode::Random) {
-        const quint32 seed = static_cast<quint32>(shapeObjectId.value());
-        curveColor = QColor::fromHsv(
-            static_cast<int>((seed * 2654435761u) % 360u), 160, 230);
+        curveColor = workbenchRandomObjectWireColor(
+            shapeObjectId.value(), displayName, libraryPath);
     }
     if (!selected && !preview &&
         shadingSettings_.mode == ViewportShadingMode::Solid &&

@@ -9867,3 +9867,17 @@ moves them after scene effects and depth-tests them against the retained scene.
 - Blender 5.2.2 takes this early return before collecting neighboring pixels
   in [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L129-L145).
   Build passed; runtime GPU and matched wire images remain open.
+
+### QPainter NURBS lighting values across color modes (2026-10-16)
+
+- QPainter NURBS surfaces and solids now retain their assigned material
+  roughness and metallic values when Object, Random, or Custom supplies the
+  displayed color. These modes change the material color source while Studio
+  lighting continues to use the material's lighting values, matching the
+  existing mesh and GPU behavior. Missing materials keep Workbench defaults.
+- Blender's material adapter exposes base color and lighting values
+  independently in
+  [`workbench_material.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_material.bsl.hh#L272-L295);
+  the composite resolve passes roughness and metallic to world lighting in
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
+  Build passed; matched QPainter NURBS captures remain open.

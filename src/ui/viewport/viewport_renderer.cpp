@@ -5208,8 +5208,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const bool nurbsTextureSrgb = material.textureImageSrgb;
         QVector3D sourceColorLinear = workbenchDefaultSolidMaterialDiffuseColor();
         qreal sourceAlpha = 1.0;
-        qreal roughness = 0.4;
-        qreal metallic = 0.0;
+        qreal roughness = workbenchMaterial ? material.roughness : 0.4;
+        qreal metallic = workbenchMaterial ? material.metallic : 0.0;
 
         switch (shadingSettings_.colorMode) {
         case ViewportColorMode::Material:
@@ -5230,8 +5230,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 sourceColorLinear = workbenchDefaultSolidMaterialDiffuseColor();
                 sourceAlpha = 1.0;
             }
-            roughness = workbenchMaterial ? material.roughness : 0.4;
-            metallic = workbenchMaterial ? material.metallic : 0.0;
             break;
         case ViewportColorMode::Object:
             if (displayColorSceneLinear) {

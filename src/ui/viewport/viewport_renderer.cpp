@@ -1552,8 +1552,11 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
         }
         QColor color = gridAppearance_.axisZColor;
         color.setAlphaF(color.alphaF() * gridAppearance_.opacity);
+        painter.save();
+        painter.setClipRect(QRect(QPoint(0, 0), viewportSize));
         painter.setPen(QPen(color, 1.25));
         painter.drawLine(screenStart, screenEnd);
+        painter.restore();
     };
     QPointF corners[4];
     const QPointF screenCorners[] = {{0.0, 0.0},
@@ -1578,6 +1581,7 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
         ++cornerCount;
     }
     if (cornerCount < 2) {
+        drawGlobalNormalAxis();
         return;
     }
     qreal minimumU = corners[0].x();
@@ -1598,6 +1602,7 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
         minimumV = std::max(minimumV, -farClipDistance);
         maximumV = std::min(maximumV, farClipDistance);
         if (minimumU > maximumU || minimumV > maximumV) {
+            drawGlobalNormalAxis();
             return;
         }
 

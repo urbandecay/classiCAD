@@ -10559,3 +10559,27 @@ scene depth.
   render-contract executable still exits 1 on existing unrelated viewport
   assertions; the native curve-wire and new framebuffer-format assertions
   pass. `cmake --build build -j4` passed; the GUI was not launched.
+
+### Follow-up audit: QPainter bounds, mesh color transform, and shadow alpha (2026-10-16)
+
+- The one-million-pixel QPainter target is a work bound: normal Solid and
+  native-renderer-failure callers reduce the internal raster scale before
+  invoking the compositor, so weighted transparency remains active at lower
+  resolution on large viewports. The separate four-million-fragment cap can
+  still decline the compositor and send the scene to its older average-depth
+  fallback. Raising either cap alone risks high CPU memory use; exact
+  full-resolution behavior would need a tiled compositor that also preserves
+  depth domains and later screen-space effects.
+- Rechecked the suspected oversized-mesh color-transform bypass in
+  `viewport_renderer.cpp`. Exceeding coverage-resolve work limits disables
+  fractional-edge accumulation, but ordinary Solid mesh triangles still pass
+  through `drawWorkbenchTriangle`, which shades in scene-linear space and
+  applies the active Standard/AgX/custom transform before display. No color
+  fix was justified by the source path.
+- Rechecked software shadow alpha handling. QPainter submits caster geometry
+  to the shadow depth map before its separate texture-alpha visibility tests.
+  Blender 5.2.2's shadow caster pass also uses geometry without sampling Image
+  Texture alpha, so adding cutout shadows only to QPainter would reduce parity.
+  Existing texture-alpha cutouts still apply to visible raster/effect coverage.
+  These audits found no source change to make; large-target and fallback image
+  comparisons remain open.

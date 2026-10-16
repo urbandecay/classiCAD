@@ -2033,6 +2033,33 @@ bool compositeRasterWorkbenchSurfaces(
         if (surfaceLayers != nullptr)
             surfaceLayers->cavityAppliedBeforeTransparency = true;
     }
+    for (int index = 0; index < pixelCount; ++index) {
+        const int regularIndex = opaqueObject[index];
+        if (regularIndex >= 0 && regularIndex < objects.size()) {
+            if (objects[regularIndex].selected) {
+                auto &pixel = opaqueScenePixels[static_cast<std::size_t>(index)];
+                pixel.red = pixel.red * (1.0f - editSelectionMix) +
+                    editSelectionRgb.x() * pixel.alpha * editSelectionMix;
+                pixel.green = pixel.green * (1.0f - editSelectionMix) +
+                    editSelectionRgb.y() * pixel.alpha * editSelectionMix;
+                pixel.blue = pixel.blue * (1.0f - editSelectionMix) +
+                    editSelectionRgb.z() * pixel.alpha * editSelectionMix;
+            }
+        }
+        const int frontIndex = frontOpaqueObject[index];
+        if (frontIndex >= 0 && frontIndex < objects.size()) {
+            if (objects[frontIndex].selected) {
+                auto &pixel = frontOpaqueScenePixels[static_cast<std::size_t>(index)];
+                pixel.red = pixel.red * (1.0f - editSelectionMix) +
+                    editSelectionRgb.x() * pixel.alpha * editSelectionMix;
+                pixel.green = pixel.green * (1.0f - editSelectionMix) +
+                    editSelectionRgb.y() * pixel.alpha * editSelectionMix;
+                pixel.blue = pixel.blue * (1.0f - editSelectionMix) +
+                    editSelectionRgb.z() * pixel.alpha * editSelectionMix;
+            }
+        }
+    }
+
     // The sorted fallback retains its per-pixel far-to-near order, but now
     // composites the captured Workbench fragments in scene-linear color.
     bool transparentFragmentBudgetExceeded = false;
@@ -2304,22 +2331,6 @@ bool compositeRasterWorkbenchSurfaces(
                     ? frontObjectIds[pixelIndex] : regularObjectIds[pixelIndex];
         }
     }
-    std::vector<std::uint8_t> sortedRegularOpaqueSelected(
-        static_cast<std::size_t>(pixelCount), 0);
-    std::vector<std::uint8_t> sortedInFrontOpaqueSelected(
-        static_cast<std::size_t>(pixelCount), 0);
-    for (int index = 0; index < pixelCount; ++index) {
-        const int regularIndex = opaqueObject[index];
-        if (regularIndex >= 0 && regularIndex < objects.size())
-            sortedRegularOpaqueSelected[static_cast<std::size_t>(index)] =
-                objects[regularIndex].selected ? 1 : 0;
-        const int frontIndex = frontOpaqueObject[index];
-        if (frontIndex >= 0 && frontIndex < objects.size())
-            sortedInFrontOpaqueSelected[static_cast<std::size_t>(index)] =
-                objects[frontIndex].selected ? 1 : 0;
-    }
-    const bool deferSortedOpaqueSelectionTint = retainSortedSceneLinear &&
-        shadingSettings.shadows && !shadingSettings.xrayEnabled();
     if (retainSortedSceneLinear) {
         surfaceLayers->sceneLinearSize = QSize(width, height);
         surfaceLayers->sceneLinearColor.assign(
@@ -2328,16 +2339,6 @@ bool compositeRasterWorkbenchSurfaces(
             !shadingSettings.xrayEnabled()) {
             surfaceLayers->sceneLinearOpaqueColor.assign(
                 static_cast<std::size_t>(pixelCount), {});
-            surfaceLayers->sceneLinearRegularOpaqueColor.assign(
-                static_cast<std::size_t>(pixelCount), {});
-            surfaceLayers->sceneLinearInFrontOpaqueColor.assign(
-                static_cast<std::size_t>(pixelCount), {});
-            if (deferSortedOpaqueSelectionTint) {
-                surfaceLayers->sceneLinearRegularOpaqueSelected =
-                    sortedRegularOpaqueSelected;
-                surfaceLayers->sceneLinearInFrontOpaqueSelected =
-                    sortedInFrontOpaqueSelected;
-            }
             surfaceLayers->sceneLinearTransparentColor.assign(
                 static_cast<std::size_t>(pixelCount), {});
         }
@@ -2347,25 +2348,6 @@ bool compositeRasterWorkbenchSurfaces(
             surfaceLayers->sceneLinearOutlinePending = true;
         }
         surfaceLayers->sceneLinearDofPending = sortedSceneLinearDofPending;
-    }
-    if (!deferSortedOpaqueSelectionTint) {
-        for (int index = 0; index < pixelCount; ++index) {
-            const std::size_t pixelIndex = static_cast<std::size_t>(index);
-            const auto tintSelected = [&](RasterWorkbenchLinearPixel &pixel,
-                                          bool selected) {
-                if (!selected || pixel.alpha <= 0.0f) return;
-                pixel.red = pixel.red * (1.0f - editSelectionMix) +
-                    editSelectionRgb.x() * pixel.alpha * editSelectionMix;
-                pixel.green = pixel.green * (1.0f - editSelectionMix) +
-                    editSelectionRgb.y() * pixel.alpha * editSelectionMix;
-                pixel.blue = pixel.blue * (1.0f - editSelectionMix) +
-                    editSelectionRgb.z() * pixel.alpha * editSelectionMix;
-            };
-            tintSelected(opaqueScenePixels[pixelIndex],
-                         sortedRegularOpaqueSelected[pixelIndex] != 0);
-            tintSelected(frontOpaqueScenePixels[pixelIndex],
-                         sortedInFrontOpaqueSelected[pixelIndex] != 0);
-        }
     }
     const QVector3D sortedOutlineColor = canResolveSortedOutlineInSceneLinear
         ? workbenchSrgbToSceneLinear(QVector3D(
@@ -2478,10 +2460,6 @@ bool compositeRasterWorkbenchSurfaces(
                     static_cast<std::size_t>(index);
                 surfaceLayers->sceneLinearOpaqueColor[linearIndex] =
                     opaqueLayer;
-                surfaceLayers->sceneLinearRegularOpaqueColor[linearIndex] =
-                    regularOpaque;
-                surfaceLayers->sceneLinearInFrontOpaqueColor[linearIndex] =
-                    frontOpaque;
                 surfaceLayers->sceneLinearTransparentColor[linearIndex] =
                     transparentLayer;
             }

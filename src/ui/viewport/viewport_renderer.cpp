@@ -151,7 +151,7 @@ QImage pictureImageForPainter(const Shape &picture,
                                     0.0f, 1.0f) * 255.0f)
                 : deferCutoutAlphaThreshold
                     ? qRound(std::clamp(sourceAlphaFloat, 0.0f, 1.0f) * 255.0f)
-                    : sourceAlphaFloat < 0.05f ? 0 : 255;
+                    : sourceAlphaFloat < kWorkbenchImageAlphaCutoff ? 0 : 255;
             QVector3D linearColor(sceneLinearChannel(source, 0, pixelOffset),
                                   sceneLinearChannel(source, 1, pixelOffset),
                                   sceneLinearChannel(source, 2, pixelOffset));
@@ -3595,7 +3595,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             }
                             if (!shape.pictureUseAlphaBlend) {
                                 const float alpha = pixel[3];
-                                if (alpha < 0.05f) {
+                                if (alpha < kWorkbenchImageAlphaCutoff) {
                                     std::fill(pixel, pixel + 4, 0.0f);
                                     continue;
                                 }

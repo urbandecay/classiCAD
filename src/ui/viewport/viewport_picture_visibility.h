@@ -9,6 +9,8 @@
 
 namespace classiCAD {
 
+inline constexpr float kWorkbenchImageAlphaCutoff = 0.1f;
+
 inline bool viewportPictureFrameVisibleInView(
     const Shape &shape, const ViewportTransform &transform)
 {

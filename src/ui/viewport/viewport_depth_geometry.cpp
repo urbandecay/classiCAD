@@ -9,6 +9,7 @@
 #include "core/geometry/nurbs_surface_evaluator.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "services/sampling/curve_sampler.h"
+#include "viewport_picture_visibility.h"
 
 #include <QCryptographicHash>
 #include <QDataStream>
@@ -73,7 +74,8 @@ void appendPictureDepthSurface(const Shape &shape,
         const uchar *pixels = image.constScanLine(rowIndex);
         const int maskRow = rowIndex * maskHeight / image.height();
         for (int column = 0; column < image.width(); ++column) {
-            if (pixels[column * 4 + 3] < qRound(0.05 * 255.0)) {
+            if (pixels[column * 4 + 3] <
+                qRound(kWorkbenchImageAlphaCutoff * 255.0f)) {
                 const int maskColumn = column * maskWidth / image.width();
                 alphaPassingCells[maskRow * maskWidth + maskColumn] = 0;
             }

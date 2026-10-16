@@ -8159,7 +8159,7 @@ resolve remain open.
 
 - Imported Image Empties now retain Blender's object RGBA color and
   `use_empty_image_alpha` setting in native shape data. The GPU shader
-  applies the tint in scene-linear color and reproduces Blender's 0.05 source
+  applies the tint in scene-linear color and reproduces Blender's 0.1 source
   alpha cutout when alpha blending is off. QPainter applies the tint and
   cutout for images up to 16M pixels and encodes their linear image colors to
   sRGB without applying the Workbench view transform, matching Blender's
@@ -8223,7 +8223,7 @@ resolve remain open.
 ### QPainter Image Empty filtered alpha cutout (2026-10-15)
 
 - When Blender Image Empty alpha blending is disabled, QPainter now filters
-  the image into a bounded device-pixel raster before applying Blender's 5%
+  the image into a bounded device-pixel raster before applying Blender's 10%
   alpha cutoff. The existing retained scene-depth mask is applied after that
   cutoff, and the raster is composited without another scaling pass. If the
   viewport raster exceeds 16M pixels, QPainter keeps the source-texel cutoff
@@ -8237,7 +8237,7 @@ resolve remain open.
 
 - The retained scene-depth geometry now gives Image Empties depth only for
   Default images with alpha blending disabled and `In Front` off. Its bounded
-  conservative mask keeps cells whose source pixels all pass Blender's 5%
+  conservative mask keeps cells whose source pixels all pass Blender's 10%
   alpha cutoff; blended, Back, and Front images no longer occlude later
   scene-depth queries. Blender separates the
   depth-writing opaque image pass from blended passes in
@@ -8784,3 +8784,11 @@ resolve remain open.
   Blender's rule to ignore their stored alpha channel. Sequence, movie, and
   tiled Image Empties remain unsupported; no matched Blender comparison has
   been run.
+
+### QPainter Image Empty alpha cutoff (2026-10-15)
+
+- The QPainter Image Empty cutout and conservative depth-mask paths now share
+  Blender Workbench's 0.1 alpha cutoff. This replaces the former 0.05 cutoff in
+  source-texel masking, filtered-raster masking, and retained picture depth.
+  The GPU shader already uses Blender's threshold. C++ build passed; no matched
+  Blender image comparison has been run.

@@ -944,7 +944,9 @@ def extract_camera_background_images(scene, packed_payload_budget,
             proxy.empty_display_size = 1.0
             proxy.empty_image_offset = (0.0, 0.0)
             proxy.matrix_world = camera_matrix
-            alpha = min(1.0, max(0.0, float(
+            # Blender keeps camera BACK images infinitesimally transparent so
+            # they cannot occlude a transparent FRONT image composited later.
+            alpha = min(0.999999, max(0.0, float(
                 getattr(background, "alpha", 1.0))))
             proxy.color = (1.0, 1.0, 1.0, alpha)
             proxy.use_empty_image_alpha = True

@@ -9978,6 +9978,15 @@ scene depth.
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L370-L415).
   Build passed; matched QPainter DOF captures remain open.
 
+### Camera BACK image opacity cap (2026-10-16)
+
+- Imported camera background images now cap their opacity at `0.999999`,
+  matching Blender 5.2.2. Blender does this so a fully opaque BACK image cannot
+  cover a transparent FRONT image drawn afterward. The behavior is in
+  [`overlay_camera.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_camera.hh#L547-L560).
+  Build passed; the overlapping opaque-BACK and transparent-FRONT case still
+  needs a matched image comparison.
+
 ### QPainter Random wire color fallback identity (2026-10-16)
 
 - The generic QPainter curve/geometry fallback now uses the shared Blender

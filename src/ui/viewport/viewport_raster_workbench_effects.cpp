@@ -2569,6 +2569,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
               validatePolygonMesh(object.shape.polygonMesh))) {
             continue;
         }
+        const bool rasterizeSelectedMeshEdges =
+            selectedOutlineEnabled && xrayEnabled && object.selected &&
+            object.shape.geometryType == GeometryType::PolygonMesh;
         const bool perFaceMaterialAlpha =
             (object.shape.geometryType == GeometryType::PolygonMesh ||
              object.shape.geometryType == GeometryType::NurbsSolid) &&
@@ -2577,7 +2580,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
              settings.colorMode == ViewportColorMode::Texture);
         if (!perFaceMaterialAlpha &&
             objectSourceAlpha(object, settings.colorMode) <= 0.0f &&
-            !shadowEnabled) {
+            !shadowEnabled && !rasterizeSelectedMeshEdges) {
             continue;
         }
         const float objectAlpha = perFaceMaterialAlpha
@@ -2738,6 +2741,103 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     triangleAlphas.append(triangleSourceAlpha);
                 }
                 firstCorner += face.size();
+            }
+            if (rasterizeSelectedMeshEdges) {
+                QSet<quint64> visitedEdges;
+                const quint64 objectId = object.objectId.value() |
+                                         0x80000000ull;
+                const QVector3D offset(
+                    static_cast<float>(object.preparedGeometryOffset.x),
+                    static_cast<float>(object.preparedGeometryOffset.y),
+                    static_cast<float>(object.preparedGeometryOffset.z));
+                const auto rasterizeEdge = [&](int first, int second) {
+                    if (first < 0 || second < 0 ||
+                        first >= mesh.vertices.size() ||
+                        second >= mesh.vertices.size() || first == second) {
+                        return;
+                    }
+                    const quint32 low = static_cast<quint32>(
+                        std::min(first, second));
+                    const quint32 high = static_cast<quint32>(
+                        std::max(first, second));
+                    const quint64 key = (quint64(low) << 32) | high;
+                    if (visitedEdges.contains(key)) return;
+                    visitedEdges.insert(key);
+                    QVector3D worldFirst = worldPoint(mesh.vertices[first]) + offset;
+                    QVector3D worldSecond = worldPoint(mesh.vertices[second]) + offset;
+                    QPointF screenFirst;
+                    QPointF screenSecond;
+                    if (!transform.worldPointToScreenUnclipped(
+                            Point3D(worldFirst.x(), worldFirst.y(), worldFirst.z()),
+                            viewportSize, &screenFirst) ||
+                        !transform.worldPointToScreenUnclipped(
+                            Point3D(worldSecond.x(), worldSecond.y(), worldSecond.z()),
+                            viewportSize, &screenSecond)) {
+                        return;
+                    }
+                    QPointF a = screenFirst * dpr;
+                    QPointF b = screenSecond * dpr;
+                    const QPointF originalA = a;
+                    const QPointF originalB = b;
+                    const qreal dx = b.x() - a.x();
+                    const qreal dy = b.y() - a.y();
+                    qreal t0 = 0.0;
+                    qreal t1 = 1.0;
+                    const auto clip = [&](qreal p, qreal q) {
+                        if (std::abs(p) <= 1.0e-12) return q >= 0.0;
+                        const qreal t = q / p;
+                        if (p < 0.0) {
+                            if (t > t1) return false;
+                            t0 = std::max(t0, t);
+                        } else {
+                            if (t < t0) return false;
+                            t1 = std::min(t1, t);
+                        }
+                        return true;
+                    };
+                    if (!clip(-dx, a.x()) ||
+                        !clip(dx, width - 1.0 - a.x()) ||
+                        !clip(-dy, a.y()) ||
+                        !clip(dy, height - 1.0 - a.y()) || t1 < t0) {
+                        return;
+                    }
+                    a = originalA + (originalB - originalA) * t0;
+                    b = originalA + (originalB - originalA) * t1;
+                    const float depthA = rasterWorkbenchCameraDepth(
+                        worldFirst, camera, towardCamera);
+                    const float depthB = rasterWorkbenchCameraDepth(
+                        worldSecond, camera, towardCamera);
+                    const qreal length = std::max(std::abs(b.x() - a.x()),
+                                                  std::abs(b.y() - a.y()));
+                    const int steps = std::clamp(
+                        qCeil(length * 2.0), 1,
+                        std::max(width, height) * 4);
+                    auto &domainSamples = object.showInFront
+                        ? inFrontSelectedOutlineSamples
+                        : selectedOutlineSamples;
+                    for (int step = 0; step <= steps; ++step) {
+                        const qreal t = static_cast<qreal>(step) / steps;
+                        const int x = qFloor(a.x() + (b.x() - a.x()) * t);
+                        const int y = qFloor(a.y() + (b.y() - a.y()) * t);
+                        if (x < 0 || x >= width || y < 0 || y >= height)
+                            continue;
+                        const float sourceT = t0 + (t1 - t0) * t;
+                        const float depth = depthA + (depthB - depthA) * sourceT;
+                        RasterOutlineSample &sample =
+                            domainSamples[y * width + x];
+                        if (sample.objectId == 0 || depth <= sample.depth) {
+                            sample.depth = depth;
+                            sample.objectId = objectId;
+                        }
+                    }
+                };
+                for (const QVector<int> &face : mesh.faces) {
+                    if (face.size() < 2) continue;
+                    for (int corner = 0; corner < face.size(); ++corner) {
+                        rasterizeEdge(face[corner],
+                                      face[(corner + 1) % face.size()]);
+                    }
+                }
             }
             geometry = &fallback;
         }
@@ -3044,7 +3144,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     };
                     const float sourceAlpha = triangleSourceAlpha;
                     if (selectedOutlineEnabled && object.selected &&
-                        sourceAlpha > 0.0f) {
+                        sourceAlpha > 0.0f &&
+                        !rasterizeSelectedMeshEdges) {
                         QVector<RasterOutlineSample> &domainSelectedOutline =
                             object.showInFront ? inFrontSelectedOutlineSamples
                                                : selectedOutlineSamples;

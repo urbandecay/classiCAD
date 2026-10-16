@@ -9466,6 +9466,21 @@ moves them after scene effects and depth-tests them against the retained scene.
   [#L1572-L1615](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1572-L1615).
   Build passed; matched overlapping-image captures remain open.
 
+### QPainter X-Ray selected mesh edges (2026-10-16)
+
+- In X-Ray, selected polygon meshes now build the selected-outline mask from
+  deduplicated polygon-loop boundary edges instead of filled triangle coverage.
+  Edges are transformed with the mesh object matrix and prepared world offset,
+  clipped to the raster target, and passed through the existing four-neighbor
+  outline resolve. Regular Solid selection outlines and non-mesh selected
+  objects retain their filled-surface mask. Loose mesh edges and matched
+  captures remain open.
+- Blender 5.2.2 uses its mesh edge-detection pass for selected meshes in
+  X-Ray and makes occluded outlines fully opaque in that mode, in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L898-L920)
+  and [#L982-L1008](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L982-L1008).
+  Build passed; line smoothing and visual parity remain unverified.
+
 ### GPU hidden selected-object contours (2026-10-16)
 
 - The GPU path now renders regular selected ranges into their own ID/depth

@@ -94,6 +94,11 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 
 ## Stage 4 implementation notes
 
+- The GPU grid now removes the center line only for an enabled matching world
+  axis. Hidden X/Y/Z axes leave their corresponding grid center lines visible
+  in XY, XZ, and YZ views, matching Blender's per-axis fragment mask. The
+  C++ build passes; matched hidden-axis grid captures remain open.
+
 - Added persistent `DocumentSettings` for display units and base grid spacing.
   The document geometry remains in millimeters; unit selection converts only
   the visible grid interval before Blender's LOD step selection. Document JSON

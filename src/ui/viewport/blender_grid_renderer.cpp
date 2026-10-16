@@ -2012,6 +2012,17 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
         gridFrame.visibleAxes[1] && appearance.showAxisY ? 1 : 0);
     program_.setUniformValue("uAxisVisibleZ",
         gridFrame.visibleAxes[2] && appearance.showAxisZ ? 1 : 0);
+    const bool axisXVisible = gridFrame.visibleAxes[0] && appearance.showAxisX;
+    const bool axisYVisible = gridFrame.visibleAxes[1] && appearance.showAxisY;
+    const bool axisZVisible = gridFrame.visibleAxes[2] && appearance.showAxisZ;
+    const bool gridAxisUVisible = plane == WorkPlane::YZ
+        ? axisYVisible : axisXVisible;
+    const bool gridAxisVVisible = plane == WorkPlane::XY
+        ? axisYVisible : axisZVisible;
+    program_.setUniformValue("uGridAxisUVisible",
+                             gridAxisUVisible ? 1 : 0);
+    program_.setUniformValue("uGridAxisVVisible",
+                             gridAxisVVisible ? 1 : 0);
     program_.setUniformValue("uPlaneNormal", normal);
     program_.setUniformValue("uCameraPosition", eye);
     program_.setUniformValue("uViewDirection", asVector(cameraOut));

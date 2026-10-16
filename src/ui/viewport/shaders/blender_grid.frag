@@ -28,6 +28,8 @@ uniform vec4 uGridEmphasisColor;
 uniform vec4 uAxisColorX;
 uniform vec4 uAxisColorY;
 uniform vec4 uAxisColorZ;
+uniform int uGridAxisUVisible;
+uniform int uGridAxisVVisible;
 uniform int uMode;
 uniform int uIteration;
 
@@ -35,7 +37,6 @@ in vec2 vGridCoord;
 in vec3 vWorldPosition;
 flat in float vAlpha;
 flat in float vEmphasis;
-flat in float vFixedCoordinate;
 flat in int vLineAxis;
 flat in int vRenderMode;
 flat in vec2 vLineStart;
@@ -55,8 +56,10 @@ void main()
         color = vLineAxis == 0 ? uAxisColorX
                               : (vLineAxis == 1 ? uAxisColorY : uAxisColorZ);
     }
-    else if (abs(vFixedCoordinate) <= 2.0e-7) {
-        // Blender's fragment shader omits floor-grid fragments underneath axes.
+    else if ((vLineAxis == 0 && uGridAxisUVisible != 0) ||
+             (vLineAxis == 1 && uGridAxisVVisible != 0)) {
+        // Blender omits a floor-grid line only when the corresponding global
+        // axis is enabled. Keep the center grid line when its axis is hidden.
         discard;
     }
 

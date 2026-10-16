@@ -36,7 +36,6 @@ out vec2 vGridCoord;
 out vec3 vWorldPosition;
 flat out float vAlpha;
 flat out float vEmphasis;
-flat out float vFixedCoordinate;
 flat out int vLineAxis;
 flat out int vRenderMode;
 flat out vec2 vLineStart;
@@ -201,7 +200,6 @@ void main()
         // Keep the close subdivision visible while fading subpixel lines.
         vAlpha *= smoothstep(0.25, 4.0, stepSize * uZoom);
     }
-    vFixedCoordinate = uMode == 0 ? position[1 - line.axis] : 0.0;
     vLineAxis = line.axis;
     vRenderMode = uMode;
     vec3 axisDirection = globalAxisDirection(line.axis);

@@ -98,6 +98,7 @@ private:
         Point3D offset;
         quint32 effectObjectId = 0;
         bool showInFront = false;
+        bool flatEdgeOnly = false;
     };
 
     bool initialize();

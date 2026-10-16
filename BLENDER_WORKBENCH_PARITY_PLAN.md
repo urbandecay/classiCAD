@@ -9743,6 +9743,13 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L148-L170).
   Build passed; matched edge-on outline captures remain open.
 
+- The GPU outline pass now applies the same narrow flat-mesh rule. It switches
+  from shared triangle IDs to the local ID target only when a selected polygon
+  mesh is flat and viewed edge-on, then writes that mesh's edges into regular
+  and `showInFront` selected-ID/depth domains. Other selected meshes keep their
+  triangle IDs; ordinary non-flat views and X-Ray keep their existing paths.
+  Build passed; runtime GPU and matched Blender captures remain open.
+
 ### Restrict mesh backface culling to Solid mode (2026-10-16)
 
 - The QPainter polygon-mesh path now applies the saved backface-culling option

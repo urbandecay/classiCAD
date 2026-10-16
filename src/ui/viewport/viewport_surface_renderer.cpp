@@ -8112,10 +8112,87 @@ bool ViewportSurfaceRenderer::draw(
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const QSize pixelSize(qRound(viewportSize.width() * dpr),
                               qRound(viewportSize.height() * dpr));
+        const Point3D viewDirection = transform.viewDirection();
+        const bool perspective = transform.isPerspectiveEnabled();
+        const QVector3D viewFacingVector(
+            static_cast<float>(viewDirection.x),
+            static_cast<float>(viewDirection.y),
+            static_cast<float>(viewDirection.z));
+        const auto flatMeshViewedEdgeOn = [&](
+            const ViewportRenderObject &object) {
+            if (perspective || !hasPolygonMeshGeometry(object)) return false;
+            const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            if (mesh.vertices.isEmpty()) return false;
+            qreal minimum[3] = {
+                std::numeric_limits<qreal>::infinity(),
+                std::numeric_limits<qreal>::infinity(),
+                std::numeric_limits<qreal>::infinity()};
+            qreal maximum[3] = {
+                -std::numeric_limits<qreal>::infinity(),
+                -std::numeric_limits<qreal>::infinity(),
+                -std::numeric_limits<qreal>::infinity()};
+            for (const Point3D &vertex : mesh.vertices) {
+                const qreal coordinates[3] = {vertex.x, vertex.y, vertex.z};
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (!std::isfinite(coordinates[axis])) return false;
+                    minimum[axis] = std::min(minimum[axis], coordinates[axis]);
+                    maximum[axis] = std::max(maximum[axis], coordinates[axis]);
+                }
+            }
+            qreal dimensions[3];
+            qreal largestDimension = 0.0;
+            for (int axis = 0; axis < 3; ++axis) {
+                dimensions[axis] = maximum[axis] - minimum[axis];
+                largestDimension = std::max(largestDimension, dimensions[axis]);
+            }
+            if (largestDimension <= 0.0) return false;
+            const qreal flatTolerance = largestDimension * 1.0e-6;
+            int flatAxis = -1;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (dimensions[axis] <= flatTolerance) {
+                    if (flatAxis != -1) return false;
+                    flatAxis = axis;
+                }
+            }
+            if (flatAxis == -1) return false;
+
+            const auto &matrix = object.meshObjectTransform;
+            const QVector3D axisX{float(matrix[0]), float(matrix[4]),
+                                  float(matrix[8])};
+            const QVector3D axisY{float(matrix[1]), float(matrix[5]),
+                                  float(matrix[9])};
+            const QVector3D axisZ{float(matrix[2]), float(matrix[6]),
+                                  float(matrix[10])};
+            QVector3D flatNormal;
+            if (flatAxis == 0) {
+                flatNormal = QVector3D::crossProduct(axisY, axisZ);
+            } else if (flatAxis == 1) {
+                flatNormal = QVector3D::crossProduct(axisZ, axisX);
+            } else {
+                flatNormal = QVector3D::crossProduct(axisX, axisY);
+            }
+            if (flatNormal.lengthSquared() <= 1.0e-16f) return false;
+            flatNormal.normalize();
+            return std::abs(QVector3D::dotProduct(flatNormal,
+                                                   viewFacingVector)) < 1.0e-3f;
+        };
+        bool flatSelectedEdgesPresent = false;
+        if (selectedOutlineRequested && !settings.xrayEnabled()) {
+            for (const ViewportRenderObject &object : objects) {
+                if (object.selected && !object.outlineHandledBySceneStroke &&
+                    object.blenderSourceObjectType !=
+                        QLatin1String("SURFACE") &&
+                    flatMeshViewedEdgeOn(object)) {
+                    flatSelectedEdgesPresent = true;
+                    break;
+                }
+            }
+        }
         const bool sharedOutlineIdsReady = sharedPrepassReady &&
                                            transparentDepthCoverageReady;
         const bool useSharedOutlineIds = sharedOutlineIdsReady &&
                                          !settings.xrayEnabled() &&
+                                         !flatSelectedEdgesPresent &&
                                          outlineRequested;
         const bool outlineFramebufferReady = useSharedOutlineIds ||
             ensureObjectIdFramebuffer(pixelSize);
@@ -8125,9 +8202,8 @@ bool ViewportSurfaceRenderer::draw(
             QSet<quint32> xraySelectedMeshObjectIds;
             bool xraySelectedMeshPresent = false;
             bool xraySelectedNurbsPresent = false;
-            if (selectedOutlineRequested && settings.xrayEnabled()) {
-                const Point3D viewDirection = transform.viewDirection();
-                const bool perspective = transform.isPerspectiveEnabled();
+            if (selectedOutlineRequested &&
+                (settings.xrayEnabled() || flatSelectedEdgesPresent)) {
                 const Point3D camera = transform.cameraPosition(viewportSize);
                 for (int objectIndex = 0; objectIndex < objects.size();
                      ++objectIndex) {
@@ -8140,13 +8216,20 @@ bool ViewportSurfaceRenderer::draw(
                         xraySelectedNurbsPresent = true;
                     }
                     if (!object.selected || object.outlineHandledBySceneStroke ||
+                        object.blenderSourceObjectType ==
+                            QLatin1String("SURFACE") ||
                         !hasPolygonMeshGeometry(object)) {
                         continue;
                     }
-                    xraySelectedMeshPresent = true;
-                    xraySelectedMeshObjectIds.insert(
-                        static_cast<quint32>(objectIndex + 1) &
-                        0x7fffffffu);
+                    const bool flatEdgeOnly = !settings.xrayEnabled() &&
+                        flatMeshViewedEdgeOn(object);
+                    if (!settings.xrayEnabled() && !flatEdgeOnly) continue;
+                    if (settings.xrayEnabled()) {
+                        xraySelectedMeshPresent = true;
+                        xraySelectedMeshObjectIds.insert(
+                            static_cast<quint32>(objectIndex + 1) &
+                            0x7fffffffu);
+                    }
                     const PolygonMesh3D &mesh = object.shape.polygonMesh;
                     const auto &matrix = object.meshObjectTransform;
                     const auto worldPoint = [&](int index) {
@@ -8210,6 +8293,7 @@ bool ViewportSurfaceRenderer::draw(
                     edgeRange.effectObjectId =
                         static_cast<quint32>(objectIndex + 1) & 0x7fffffffu;
                     edgeRange.showInFront = object.showInFront;
+                    edgeRange.flatEdgeOnly = flatEdgeOnly;
                     for (quint64 edgeKey : edgeKeys) {
                         const QVector<QVector3D> &normals =
                             edgeFaceNormals[edgeKey];
@@ -8246,7 +8330,7 @@ bool ViewportSurfaceRenderer::draw(
                                             (frontFacing || backFacing));
                             }
                         }
-                        if (drawEdge) {
+                        if (drawEdge || flatEdgeOnly) {
                             xraySelectedEdgeVertices.append(worldPoint(first));
                             xraySelectedEdgeVertices.append(worldPoint(second));
                         }
@@ -8401,12 +8485,49 @@ bool ViewportSurfaceRenderer::draw(
                         drawObjectIdRange(range);
                     }
                 }
+                const auto drawFlatSelectedEdges = [&](bool showInFront) {
+                    if (!flatSelectedEdgesPresent) return;
+                    glDepthFunc(GL_LEQUAL);
+                    glDisable(GL_CULL_FACE);
+                    xraySelectedEdgeVertexArray_.bind();
+                    xraySelectedEdgeVertexBuffer_.bind();
+                    xraySelectedEdgeVertexBuffer_.allocate(
+                        xraySelectedEdgeVertices.constData(),
+                        xraySelectedEdgeVertices.size() *
+                            static_cast<int>(sizeof(QVector3D)));
+                    for (const XRaySelectedEdgeRange &edgeRange :
+                         xraySelectedEdgeRanges) {
+                        if (!edgeRange.flatEdgeOnly ||
+                            edgeRange.showInFront != showInFront ||
+                            edgeRange.count <= 0) {
+                            continue;
+                        }
+                        glUniform1ui(objectIdUniformLocation,
+                                     edgeRange.effectObjectId | 0x80000000u);
+                        objectIdProgram_.setUniformValue(
+                            "uWorldOffset",
+                            QVector3D(static_cast<float>(edgeRange.offset.x),
+                                      static_cast<float>(edgeRange.offset.y),
+                                      static_cast<float>(edgeRange.offset.z)));
+                        glDrawArrays(GL_LINES, edgeRange.first,
+                                     edgeRange.count);
+                    }
+                    xraySelectedEdgeVertexBuffer_.release();
+                    xraySelectedEdgeVertexArray_.release();
+                    glDepthFunc(GL_LESS);
+                    if (settings.backfaceCulling) {
+                        glEnable(GL_CULL_FACE);
+                        glCullFace(GL_BACK);
+                    }
+                };
+                drawFlatSelectedEdges(false);
                 glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
                 for (const DrawRange &range : ranges_) {
                     if (range.count > 0 && range.showInFront) {
                         drawObjectIdRange(range);
                     }
                 }
+                drawFlatSelectedEdges(true);
                 vertexBuffer_.release();
                 vertexArray_.release();
                 objectIdProgram_.release();
@@ -8564,6 +8685,41 @@ bool ViewportSurfaceRenderer::draw(
                                       static_cast<float>(range.offset.y),
                                       static_cast<float>(range.offset.z)));
                         glDrawArrays(GL_TRIANGLES, range.first, range.count);
+                    }
+                    if (flatSelectedEdgesPresent) {
+                        glDepthFunc(GL_LEQUAL);
+                        glDisable(GL_CULL_FACE);
+                        xraySelectedEdgeVertexArray_.bind();
+                        xraySelectedEdgeVertexBuffer_.bind();
+                        xraySelectedEdgeVertexBuffer_.allocate(
+                            xraySelectedEdgeVertices.constData(),
+                            xraySelectedEdgeVertices.size() *
+                                static_cast<int>(sizeof(QVector3D)));
+                        for (const XRaySelectedEdgeRange &edgeRange :
+                             xraySelectedEdgeRanges) {
+                            if (!edgeRange.flatEdgeOnly ||
+                                edgeRange.showInFront || edgeRange.count <= 0) {
+                                continue;
+                            }
+                            glUniform1ui(
+                                objectIdLocation,
+                                edgeRange.effectObjectId | 0x80000000u);
+                            objectIdProgram_.setUniformValue(
+                                "uWorldOffset",
+                                QVector3D(
+                                    static_cast<float>(edgeRange.offset.x),
+                                    static_cast<float>(edgeRange.offset.y),
+                                    static_cast<float>(edgeRange.offset.z)));
+                            glDrawArrays(GL_LINES, edgeRange.first,
+                                         edgeRange.count);
+                        }
+                        xraySelectedEdgeVertexBuffer_.release();
+                        xraySelectedEdgeVertexArray_.release();
+                        glDepthFunc(GL_LESS);
+                        if (settings.backfaceCulling) {
+                            glEnable(GL_CULL_FACE);
+                            glCullFace(GL_BACK);
+                        }
                     }
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D,
@@ -8855,6 +9011,42 @@ bool ViewportSurfaceRenderer::draw(
                                       static_cast<float>(range.offset.y),
                                       static_cast<float>(range.offset.z)));
                         glDrawArrays(GL_TRIANGLES, range.first, range.count);
+                    }
+                    if (flatSelectedEdgesPresent) {
+                        glDepthFunc(GL_LEQUAL);
+                        glDisable(GL_CULL_FACE);
+                        xraySelectedEdgeVertexArray_.bind();
+                        xraySelectedEdgeVertexBuffer_.bind();
+                        xraySelectedEdgeVertexBuffer_.allocate(
+                            xraySelectedEdgeVertices.constData(),
+                            xraySelectedEdgeVertices.size() *
+                                static_cast<int>(sizeof(QVector3D)));
+                        for (const XRaySelectedEdgeRange &edgeRange :
+                             xraySelectedEdgeRanges) {
+                            if (!edgeRange.flatEdgeOnly ||
+                                !edgeRange.showInFront ||
+                                edgeRange.count <= 0) {
+                                continue;
+                            }
+                            glUniform1ui(
+                                objectIdProgram_.uniformLocation("uObjectId"),
+                                edgeRange.effectObjectId | 0x80000000u);
+                            objectIdProgram_.setUniformValue(
+                                "uWorldOffset",
+                                QVector3D(
+                                    static_cast<float>(edgeRange.offset.x),
+                                    static_cast<float>(edgeRange.offset.y),
+                                    static_cast<float>(edgeRange.offset.z)));
+                            glDrawArrays(GL_LINES, edgeRange.first,
+                                         edgeRange.count);
+                        }
+                        xraySelectedEdgeVertexBuffer_.release();
+                        xraySelectedEdgeVertexArray_.release();
+                        glDepthFunc(GL_LESS);
+                        if (settings.backfaceCulling) {
+                            glEnable(GL_CULL_FACE);
+                            glCullFace(GL_BACK);
+                        }
                     }
                     vertexBuffer_.release();
                     vertexArray_.release();

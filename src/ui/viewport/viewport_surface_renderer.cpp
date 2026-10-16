@@ -5882,6 +5882,41 @@ bool ViewportSurfaceRenderer::draw(
                 }
             }
         }
+        // A NurbsSolid stores its shared shadow topology on its first face
+        // range, while Blender selects depth-fail from transparency anywhere
+        // on the object. Aggregate face alpha here, where the active Workbench
+        // color mode and effective alpha rules are available.
+        for (int index = 0; index < ranges_.size(); ++index) {
+            const DrawRange &candidate = ranges_[index];
+            if (!candidate.shadowVolumeSupported ||
+                candidate.shadowVolumePolygonMesh ||
+                !candidate.shadowVolumeClosed ||
+                candidate.shadowTriangles.isEmpty()) {
+                continue;
+            }
+            bool hasTransparentFace = false;
+            for (int rangeIndex = 0; rangeIndex < ranges_.size(); ++rangeIndex) {
+                const DrawRange &faceRange = ranges_[rangeIndex];
+                if (faceRange.objectSeed != candidate.objectSeed ||
+                    faceRange.count <= 0) {
+                    continue;
+                }
+                const qreal alpha = workbenchSourceAlpha(
+                    settings.colorMode,
+                    faceRange.displayColorSceneLinear.w(),
+                    faceRange.workbenchMaterial,
+                    faceRange.hasWorkbenchMaterial,
+                    settings.customColor);
+                const float packedAlpha = workbenchPackUnitFloatToUnorm8(
+                    static_cast<float>(alpha));
+                if (workbenchEffectiveAlpha(packedAlpha, settings, false) <
+                    1.0 - 1.0e-6) {
+                    hasTransparentFace = true;
+                    break;
+                }
+            }
+            ranges_[index].shadowVolumeForceDepthFail = hasTransparentFace;
+        }
     }
     const bool solidXray = settings.mode == ViewportShadingMode::Solid &&
                            settings.xrayEnabled() && !previewOverlay &&

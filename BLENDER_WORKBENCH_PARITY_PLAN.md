@@ -10204,7 +10204,7 @@ scene depth.
 ### Selected-outline theme width preference (2026-10-16)
 
 - Added a saved classiCAD viewport preference for Blender's theme outline width
-  (range 1–5). The GPU and QPainter selected-object outline resolves now enable
+  (range 1–5, default 1). The GPU and QPainter selected-object outline resolves now enable
   the wider sampling footprint when the preference is above 2 or the UI scale
   is above 1, matching Blender 5.2.2's `do_expand` condition. This setting only
   selects the wider contour sampling path; it does not change stroke thickness.

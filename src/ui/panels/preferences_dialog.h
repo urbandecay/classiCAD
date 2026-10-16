@@ -21,7 +21,7 @@ struct PreferencesDialogValues {
     int viewportAaMode = 8;
     bool smoothWiresOverlay = true;
     bool smoothWiresEditMode = true;
-    int selectedOutlineWidth = 2;
+    int selectedOutlineWidth = 1;
 };
 
 // Returns true when the user accepts the dialog and writes the selected values.

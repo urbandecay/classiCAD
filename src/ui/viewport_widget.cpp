@@ -26756,7 +26756,7 @@ private:
     bool controlPointsVisible_ = false;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
-    int selectedOutlineWidth_ = 2;
+    int selectedOutlineWidth_ = 1;
     bool viewportPlaybackActive_ = false;
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     bool componentBoxSelectionActive_ = false;

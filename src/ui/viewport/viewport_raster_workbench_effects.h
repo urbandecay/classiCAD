@@ -246,7 +246,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  qreal cameraFrameSensorScale = 1.0,
                                  bool smoothWiresOverlay = true,
                                  bool sceneCameraView = true,
-                                 int selectedOutlineWidth = 2);
+                                 int selectedOutlineWidth = 1);
 
 // Render surface objects into temporary color layers, use their display
 // tessellation to depth-test opaque coverage, then accumulate visible partial

@@ -210,7 +210,7 @@ private:
     GLuint outlineSceneDepthFramebuffer_ = 0;
     GLuint outlineSceneDepthTexture_ = 0;
     QSize selectedOutlineFramebufferSize_;
-    int selectedOutlineWidth_ = 2;
+    int selectedOutlineWidth_ = 1;
     bool cavityDiagnosticOutput_ = false;
     int cavityDiagnosticTap_ = -1;
     GLuint workbenchEffectFramebuffer_ = 0;

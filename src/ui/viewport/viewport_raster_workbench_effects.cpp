@@ -2326,6 +2326,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  std::vector<float> *cavityFactors,
                                  RasterWorkbenchCavityTapCapture *cavityTapCapture,
                                  const QVector<float> *committedCurveDepth,
+                                 const QVector<float> *committedInFrontCurveDepth,
                                  const QSize &committedCurveDepthSize)
 {
     const bool xrayEnabled = settings.xrayEnabled();
@@ -2955,6 +2956,18 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                 }
             }
+        }
+    }
+
+    // Preserve regular scene depth for the DOF visibility test before
+    // depth_in_front replaces regular samples in the combined scene buffer.
+    QVector<float> regularDofDepth;
+    if (settings.depthOfField) {
+        regularDofDepth.resize(samples.size());
+        for (int index = 0; index < samples.size(); ++index) {
+            regularDofDepth[index] = samples[index].objectId != 0
+                ? samples[index].depth
+                : -std::numeric_limits<float>::infinity();
         }
     }
 
@@ -4019,15 +4032,36 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 committedCurveDepth != nullptr &&
                 committedCurveDepthSize == QSize(outputWidth, outputHeight) &&
                 committedCurveDepth->size() == outputPixelCount;
+            const bool hasCommittedInFrontCurveDepth =
+                committedInFrontCurveDepth != nullptr &&
+                committedCurveDepthSize == QSize(outputWidth, outputHeight) &&
+                committedInFrontCurveDepth->size() == outputPixelCount;
             const auto visibleCurveDepthAt = [&](int x, int y,
-                                                  const RasterSample &sample) {
-                if (!hasCommittedCurveDepth) {
+                                                  bool inFrontDomain) {
+                const bool hasCurveDepth = inFrontDomain
+                    ? hasCommittedInFrontCurveDepth : hasCommittedCurveDepth;
+                if (!hasCurveDepth) {
                     return std::numeric_limits<float>::infinity();
                 }
-                const float depth = (*committedCurveDepth)[
+                const QVector<float> *curveDepths = inFrontDomain
+                    ? committedInFrontCurveDepth : committedCurveDepth;
+                const float depth = (*curveDepths)[
                     qsizetype(y) * outputWidth + x];
+                const int depthX = std::clamp(
+                    static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                    0, width - 1);
+                const int depthY = std::clamp(
+                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                    0, height - 1);
+                const int depthIndex = depthY * width + depthX;
+                const bool hasSurface = inFrontDomain
+                    ? inFrontSamples[depthIndex].objectId != 0
+                    : std::isfinite(regularDofDepth[depthIndex]);
+                const float surfaceDepth = inFrontDomain
+                    ? inFrontSamples[depthIndex].depth
+                    : regularDofDepth[depthIndex];
                 if (!std::isfinite(depth) || depth <= 0.0f ||
-                    (sample.objectId != 0 && depth > sample.depth + 1.0e-4f)) {
+                    (hasSurface && depth > surfaceDepth + 1.0e-4f)) {
                     return std::numeric_limits<float>::infinity();
                 }
                 return depth;
@@ -4043,7 +4077,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const RasterSample &sample =
                         samples[depthY * width + depthX];
                     if (sample.objectId != 0 ||
-                        std::isfinite(visibleCurveDepthAt(x, y, sample))) {
+                        std::isfinite(visibleCurveDepthAt(x, y, false)) ||
+                        std::isfinite(visibleCurveDepthAt(x, y, true))) {
                         dofCoverage[qsizetype(y) * outputWidth + x] = 1;
                     }
                 }
@@ -4133,7 +4168,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
                     0, height - 1);
                 const RasterSample &sample = samples[depthY * width + depthX];
-                const float curveDepth = visibleCurveDepthAt(x, y, sample);
+                const float inFrontCurveDepth =
+                    visibleCurveDepthAt(x, y, true);
+                const float curveDepth = std::isfinite(inFrontCurveDepth)
+                    ? inFrontCurveDepth : visibleCurveDepthAt(x, y, false);
                 const qreal z = std::isfinite(curveDepth)
                     ? curveDepth
                     : sample.objectId != 0

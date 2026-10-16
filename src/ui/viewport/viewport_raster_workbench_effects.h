@@ -229,6 +229,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  std::vector<float> *cavityFactors = nullptr,
                                  RasterWorkbenchCavityTapCapture *cavityTapCapture = nullptr,
                                  const QVector<float> *committedCurveDepth = nullptr,
+                                 const QVector<float> *committedInFrontCurveDepth = nullptr,
                                  const QSize &committedCurveDepthSize = {});
 
 // Render surface objects into temporary color layers, use their display

@@ -13461,6 +13461,7 @@ protected:
             QImage &effectTarget = rasterWorkbenchEffectsLayered
                 ? rasterWorkbenchEffectLayer : committedSceneLayer;
             QVector<float> committedCurveDepth;
+            QVector<float> committedInFrontCurveDepth;
             const QSize committedCurveDepthSize = effectTarget.size();
             const qreal curveDepthDpr = std::max<qreal>(
                 effectTarget.devicePixelRatioF(), 1.0e-6);
@@ -13475,6 +13476,9 @@ protected:
                 const int curveDepthWidth = committedCurveDepthSize.width();
                 const int curveDepthHeight = committedCurveDepthSize.height();
                 committedCurveDepth.fill(
+                    std::numeric_limits<float>::infinity(),
+                    curveDepthWidth * curveDepthHeight);
+                committedInFrontCurveDepth.fill(
                     std::numeric_limits<float>::infinity(),
                     curveDepthWidth * curveDepthHeight);
                 const Point3D cameraPosition = viewportTransform_.cameraPosition(
@@ -13492,6 +13496,12 @@ protected:
                         !stroke.preparedDepthGeometry) {
                         continue;
                     }
+                    const ViewportRenderObject *renderObject =
+                        renderFrame.find(stroke.objectId);
+                    QVector<float> &curveDepthBuffer =
+                        renderObject != nullptr && renderObject->showInFront
+                            ? committedInFrontCurveDepth
+                            : committedCurveDepth;
                     const QVector<Point3D> &segments =
                         stroke.preparedDepthGeometry->preciseLineVertices;
                     const qreal radius = std::max<qreal>(
@@ -13571,7 +13581,7 @@ protected:
                                         depth = 1.0 / reciprocalDepth;
                                     }
                                 }
-                                float &storedDepth = committedCurveDepth[
+                                float &storedDepth = curveDepthBuffer[
                                     y * curveDepthWidth + x];
                                 storedDepth = std::min(
                                     storedDepth, float(depth));
@@ -13587,6 +13597,8 @@ protected:
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr,
                 nullptr, nullptr,
                 committedCurveDepth.isEmpty() ? nullptr : &committedCurveDepth,
+                committedInFrontCurveDepth.isEmpty()
+                    ? nullptr : &committedInFrontCurveDepth,
                 committedCurveDepthSize);
             if (!rasterDeferredPictures.isEmpty()) {
                 QImage displayOutputLayer(

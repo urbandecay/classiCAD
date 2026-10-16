@@ -9107,7 +9107,10 @@ resolve remain open.
   selection cages, component highlights, control points, and other editor
   overlays stay after the effect. The fallback uses a bounded
   screen-space stroke footprint and approximates depth along perspective
-  segments, so edge coverage and curve blur can differ from Blender. No matched
-  curve-blur captures have been run.
+  segments, so edge coverage and curve blur can differ from Blender. Regular
+  and `showInFront` curve depths are kept separate: each is visibility-tested
+  against its matching surface-depth domain, and visible in-front curves supply
+  their own CoC ahead of the regular scene. No matched curve-blur captures have
+  been run.
   Blender routes curves through its mesh passes before DOF in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L429-L446).

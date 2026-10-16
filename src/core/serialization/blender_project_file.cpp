@@ -1690,6 +1690,119 @@ bool parseBlenderPointItem(
     return true;
 }
 
+bool parseBlenderPointCloudItem(
+    const QJsonObject &item,
+    const QHash<QString, classiCAD::CollectionId> &collectionIds,
+    classiCAD::SceneObject *sceneObject,
+    QString *errorMessage)
+{
+    if (sceneObject == nullptr ||
+        item.value(QStringLiteral("object_type")).toString() !=
+            QLatin1String("POINTCLOUD") ||
+        item.value(QStringLiteral("pointcloud_type")).toString() !=
+            QLatin1String("POINTS")) {
+        setError(errorMessage, QStringLiteral("object is not a point-based Blender Point Cloud"));
+        return false;
+    }
+    const QJsonArray points = item.value(QStringLiteral("points")).toArray();
+    if (points.isEmpty() || points.size() > 100'000) {
+        setError(errorMessage, QStringLiteral("point cloud point count is invalid or exceeds the per-scene limit"));
+        return false;
+    }
+    classiCAD::PointCloud3D pointCloud;
+    pointCloud.positions.reserve(points.size());
+    pointCloud.radii.reserve(points.size());
+    pointCloud.sourceIndices.reserve(points.size());
+    bool hasColors = false;
+    bool missingColor = false;
+    for (const QJsonValue &pointValue : points) {
+        const bool hasColor = pointValue.isObject() &&
+            pointValue.toObject().contains(QStringLiteral("color_linear"));
+        hasColors = hasColors || hasColor;
+        missingColor = missingColor || !hasColor;
+    }
+    if (hasColors && missingColor) {
+        setError(errorMessage, QStringLiteral("point cloud color attribute is incomplete"));
+        return false;
+    }
+    for (const QJsonValue &pointValue : points) {
+        if (!pointValue.isObject()) {
+            setError(errorMessage, QStringLiteral("point cloud record is malformed"));
+            return false;
+        }
+        const QJsonObject pointRecord = pointValue.toObject();
+        QVector<double> position;
+        QVector<double> color;
+        double radius = 0.0;
+        int sourceIndex = -1;
+        if (!jsonNumberArray(pointRecord.value(QStringLiteral("position_world")),
+                             3, &position) ||
+            !jsonFiniteNumber(pointRecord.value(QStringLiteral("radius_world")),
+                              &radius) || radius < 0.0 ||
+            !jsonInteger(pointRecord.value(QStringLiteral("source_index")),
+                         &sourceIndex) || sourceIndex < 0) {
+            setError(errorMessage, QStringLiteral("point cloud position, radius, or source index is invalid"));
+            return false;
+        }
+        const QJsonValue colorValue = pointRecord.value(QStringLiteral("color_linear"));
+        if (hasColors) {
+            if (!jsonNumberArray(colorValue, 4, &color) ||
+                std::any_of(color.cbegin(), color.cend(), [](double value) {
+                    return std::abs(value) > std::numeric_limits<float>::max();
+                })) {
+                setError(errorMessage, QStringLiteral("point cloud color is invalid"));
+                return false;
+            }
+        }
+        pointCloud.positions.append({position[0], position[1], position[2]});
+        pointCloud.radii.append(radius);
+        pointCloud.sourceIndices.append(sourceIndex);
+        if (hasColors) {
+            pointCloud.colors.append(QVector4D(
+                float(color[0]), float(color[1]), float(color[2]), float(color[3])));
+        }
+    }
+    if (!classiCAD::validatePointCloud(pointCloud)) {
+        setError(errorMessage, QStringLiteral("point cloud payload is invalid"));
+        return false;
+    }
+
+    classiCAD::SceneObject result;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.workbenchRandomLibraryPath = item.value(
+        QStringLiteral("workbench_random_library_path")).toString();
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")),
+                         4, &objectColor)) {
+        setError(errorMessage, QStringLiteral("point cloud object display color is invalid"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(
+        float(objectColor[0]), float(objectColor[1]),
+        float(objectColor[2]), float(objectColor[3]));
+    for (const QJsonValue &collectionValue :
+         item.value(QStringLiteral("collection_ids")).toArray()) {
+        const QString sourceId = collectionValue.toString();
+        if (sourceId.isEmpty() || !collectionIds.contains(sourceId)) {
+            setError(errorMessage, QStringLiteral("point cloud references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(sourceId));
+    }
+    result.geometry.geometryType = classiCAD::GeometryType::PointCloud;
+    result.geometry.pointCloud = std::move(pointCloud);
+    const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
+    result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
+    result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
+    result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+    result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
+    result.viewLayerHidden = item.value(QStringLiteral("view_layer_hidden")).toObject();
+    *sceneObject = std::move(result);
+    return true;
+}
+
 bool parseBlenderSurfaceItem(
     const QJsonObject &item,
     const QHash<QString, classiCAD::CollectionId> &collectionIds,
@@ -2607,7 +2720,8 @@ bool importBlenderScene(const QString &path,
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
-         bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18)) {
+         bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18 &&
+         bridgeVersion != 19)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3052,6 +3166,9 @@ bool importBlenderScene(const QString &path,
                       item, collectionIdsBySource,
                       source.value(QStringLiteral("blender_version")).toString(),
                       mode, &sceneObject, &itemError)
+            : objectType == QLatin1String("POINTCLOUD")
+                ? parseBlenderPointCloudItem(
+                      item, collectionIdsBySource, &sceneObject, &itemError)
             : objectType == QLatin1String("SURFACE")
                 ? parseBlenderSurfaceItem(item, collectionIdsBySource,
                                           materialsById,

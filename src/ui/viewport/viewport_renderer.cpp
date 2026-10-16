@@ -1861,6 +1861,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
         shape.components.isEmpty() &&
         !validateNurbsSurface(shape.nurbsSurface) &&
         !validateNurbsSolid(shape.nurbsSolid) &&
+        !(shape.geometryType == GeometryType::PointCloud &&
+          validatePointCloud(shape.pointCloud)) &&
         !(shape.geometryType == GeometryType::PolygonMesh &&
           validatePolygonMesh(shape.polygonMesh))) {
         return;
@@ -3793,6 +3795,21 @@ void ViewportRenderer::drawShape(QPainter &painter,
         const qreal radius = kViewportPointVertexMarkerDiameterPixels * 0.5;
         painter.drawEllipse(worldToScreen(shape.points.first(), viewportSize),
                             radius, radius);
+    } else if (shape.geometryType == GeometryType::PointCloud &&
+               validatePointCloud(shape.pointCloud)) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(curveColor);
+        const qreal radius = kViewportPointVertexMarkerDiameterPixels * 0.5;
+        for (const Point3D &sourcePoint : shape.pointCloud.positions) {
+            Point3D worldPoint{sourcePoint.x + preparedOffset.x,
+                               sourcePoint.y + preparedOffset.y,
+                               sourcePoint.z + preparedOffset.z};
+            QPointF screenPoint;
+            if (transform_.worldPointToScreenUnclipped(
+                    worldPoint, viewportSize, &screenPoint)) {
+                painter.drawEllipse(screenPoint, radius, radius);
+            }
+        }
     } else if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));

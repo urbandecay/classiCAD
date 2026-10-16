@@ -25,6 +25,9 @@ bool validDuplicateGeometry(const Shape &shape)
                std::isfinite(shape.points.first().x()) &&
                std::isfinite(shape.points.first().y());
     }
+    if (shape.geometryType == GeometryType::PointCloud) {
+        return validatePointCloud(shape.pointCloud);
+    }
     if (shape.geometryType == GeometryType::Picture) {
         return true;
     }

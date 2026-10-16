@@ -580,6 +580,22 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         }
         return std::hypot(screenPosition.x() - point.x(), screenPosition.y() - point.y());
     }
+    if (shape.geometryType == GeometryType::PointCloud &&
+        validatePointCloud(shape.pointCloud)) {
+        qreal nearest = 1.0e9;
+        for (const Point3D &sourcePoint : shape.pointCloud.positions) {
+            Point3D worldPoint{sourcePoint.x + worldOffset.x,
+                               sourcePoint.y + worldOffset.y,
+                               sourcePoint.z + worldOffset.z};
+            QPointF point;
+            if (!transform.worldPointToScreen(worldPoint, viewportSize, &point))
+                continue;
+            nearest = std::min(nearest, std::hypot(
+                screenPosition.x() - point.x(),
+                screenPosition.y() - point.y()));
+        }
+        return nearest;
+    }
     if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
         if (validateNurbsCurve(shape.nurbs)) {
             return distanceToNurbsCurve(screenPosition,
@@ -1275,6 +1291,25 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
         if (shape.geometryType == GeometryType::Point &&
             !shape.points.isEmpty()) {
             candidate = shapePointToWorld(shape, shape.points.first());
+        }
+        if (shape.geometryType == GeometryType::PointCloud &&
+            validatePointCloud(shape.pointCloud)) {
+            qreal closestDistance = std::numeric_limits<qreal>::infinity();
+            for (const Point3D &sourcePoint : shape.pointCloud.positions) {
+                Point3D point{sourcePoint.x + worldOffset.x,
+                              sourcePoint.y + worldOffset.y,
+                              sourcePoint.z + worldOffset.z};
+                QPointF projected;
+                if (!transform.worldPointToScreen(point, viewportSize,
+                                                  &projected)) continue;
+                const qreal distance = std::hypot(
+                    screenPosition.x() - projected.x(),
+                    screenPosition.y() - projected.y());
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    candidate = point;
+                }
+            }
         }
         const qreal depth = transform.worldDirectionToView(candidate).towardCamera;
         if (!found || depth > nearestDepth + 1.0e-6 ||

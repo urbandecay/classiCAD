@@ -473,6 +473,7 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
     const GeometryType geometryType = shape.geometryType;
     const bool strokeType =
         geometryType == GeometryType::Point ||
+        geometryType == GeometryType::PointCloud ||
         geometryType == GeometryType::Line ||
         geometryType == GeometryType::Rectangle ||
         geometryType == GeometryType::Polygon ||
@@ -488,7 +489,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
         layerGpuLinePattern(object.layerLineType);
     const bool nativeStroke =
         strokeType &&
-        (geometryType == GeometryType::Point || object.selected ||
+        ((geometryType == GeometryType::Point ||
+          geometryType == GeometryType::PointCloud) || object.selected ||
          object.scalePreview || object.rotatePreview ||
          layerPattern.kind != LayerGpuLinePatternKind::Unsupported) &&
         (geometryType != GeometryType::Arc || validateNurbsCurve(shape.nurbs)) &&
@@ -503,6 +505,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
          validateNurbsSurface(shape.nurbsSurface)) &&
         (geometryType != GeometryType::NurbsSolid ||
          validateNurbsSolid(shape.nurbsSolid)) &&
+        (geometryType != GeometryType::PointCloud ||
+         validatePointCloud(shape.pointCloud)) &&
         (geometryType != GeometryType::PolyCurve ||
          !shape.components.isEmpty());
     if (!nativeStroke) {
@@ -534,7 +538,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
                           : QColor(QStringLiteral("#000000")),
         static_cast<float>(storedWidth),
         false,
-        geometryType == GeometryType::Point
+        (geometryType == GeometryType::Point ||
+         geometryType == GeometryType::PointCloud)
             ? static_cast<float>(kViewportPointVertexMarkerDiameterPixels)
             : 0.0f};
     sceneStroke->objectId = object.objectId;

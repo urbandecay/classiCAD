@@ -224,6 +224,15 @@ bool bakeShapePlacementTranslation(Shape *shape,
         }
         return true;
     }
+    if (shape->geometryType == GeometryType::PointCloud) {
+        if (!validatePointCloud(shape->pointCloud)) return false;
+        for (Point3D &point : shape->pointCloud.positions) {
+            point.x += translation.x;
+            point.y += translation.y;
+            point.z += translation.z;
+        }
+        return true;
+    }
 
     WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);
     frame.origin.x += translation.x;
@@ -328,6 +337,14 @@ bool translateShapeGeometry(Shape *shape,
             }
         }
     }
+    if (shape->geometryType == GeometryType::PointCloud) {
+        if (!validatePointCloud(shape->pointCloud)) return false;
+        for (Point3D &point : shape->pointCloud.positions) {
+            point.x += worldDelta.x;
+            point.y += worldDelta.y;
+            point.z += worldDelta.z;
+        }
+    }
     return true;
 }
 
@@ -361,6 +378,19 @@ bool mirrorShapeAcrossLine(const Shape &source,
     mirrorCurve(&mirrored->nurbs, axisStart, unitNormal);
     for (Shape::NurbsCurve2D &component : mirrored->components) {
         mirrorCurve(&component, axisStart, unitNormal);
+    }
+    if (mirrored->geometryType == GeometryType::PointCloud) {
+        if (!validatePointCloud(mirrored->pointCloud)) return false;
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(*mirrored);
+        for (Point3D &point : mirrored->pointCloud.positions) {
+            const qreal depth = signedDistanceFromWorkPlaneFrame(point, frame);
+            const QPointF local = mirrorPointAcrossLine(
+                worldPointToWorkPlaneFrame(point, frame), axisStart, unitNormal);
+            point = workPlaneFramePointToWorld(local, frame);
+            point.x += frame.normal.x * depth;
+            point.y += frame.normal.y * depth;
+            point.z += frame.normal.z * depth;
+        }
     }
     if (validateNurbsSurface(shapeBaseSurface(*mirrored))) {
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(*mirrored);
@@ -437,6 +467,17 @@ bool scaleShapeGeometry(Shape *shape,
     if (shape == nullptr) {
         return false;
     }
+    if (shape->geometryType == GeometryType::PointCloud) {
+        if (!validatePointCloud(shape->pointCloud) || !std::isfinite(factor) ||
+            !isValidWorkPlaneFrame(surfaceFrame)) return false;
+        for (Point3D &point : shape->pointCloud.positions) {
+            point = scalePointInFrame(point, base, axisDirection, factor,
+                                      oneDimensional, surfaceFrame);
+        }
+        const qreal radiusScale = std::abs(factor);
+        for (qreal &radius : shape->pointCloud.radii) radius *= radiusScale;
+        return validatePointCloud(shape->pointCloud);
+    }
     if (oneDimensional && shape->geometryType == GeometryType::Rectangle &&
         shape->points.size() == 2) {
         shape->points = rectangleVertices(*shape);
@@ -494,6 +535,12 @@ bool rotateShapeGeometry(Shape *shape,
 {
     if (shape == nullptr) {
         return false;
+    }
+    if (shape->geometryType == GeometryType::PointCloud) {
+        if (!validatePointCloud(shape->pointCloud)) return false;
+        for (Point3D &point : shape->pointCloud.positions)
+            point = rotatePoint(point, pivot, axis, angle);
+        return true;
     }
     if (shape->componentWorkPlaneFrames.size() == shape->components.size()) {
         for (const WorkPlaneFrame &componentFrame :
@@ -609,6 +656,19 @@ bool transformShapeControlPoints(
         }
         shape->workPlaneFrame = frame;
         return true;
+    }
+
+    if (shape->geometryType == GeometryType::PointCloud) {
+        if (!validatePointCloud(shape->pointCloud)) return false;
+        bool changed = false;
+        for (int index = 0; index < shape->pointCloud.positions.size(); ++index) {
+            if (!controlPointIndices.contains(index)) continue;
+            const Point3D moved = transform(shape->pointCloud.positions[index]);
+            if (!finite(moved)) return false;
+            shape->pointCloud.positions[index] = moved;
+            changed = true;
+        }
+        return changed && validatePointCloud(shape->pointCloud);
     }
 
     if (shape->geometryType == GeometryType::NurbsSurface) {

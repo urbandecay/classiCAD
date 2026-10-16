@@ -28,6 +28,7 @@ enum class GeometryType : int {
     NurbsSolid = 15,
     PolygonMesh = 16,
     ScalarVolume = 17,
+    PointCloud = 18,
 };
 
 bool isPersistentGeometryType(GeometryType type);

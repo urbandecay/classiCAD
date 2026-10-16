@@ -1145,7 +1145,32 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
         shape.geometryType != GeometryType::NurbsSurface &&
         shape.geometryType != GeometryType::NurbsSolid &&
+        shape.geometryType != GeometryType::PointCloud &&
         shape.components.isEmpty()) {
+        return candidates;
+    }
+
+    if (shape.geometryType == GeometryType::PointCloud &&
+        validatePointCloud(shape.pointCloud)) {
+        for (int index = 0; index < shape.pointCloud.positions.size(); ++index) {
+            const Point3D &sourcePoint = shape.pointCloud.positions[index];
+            const Point3D worldPoint{sourcePoint.x + worldOffset.x,
+                                     sourcePoint.y + worldOffset.y,
+                                     sourcePoint.z + worldOffset.z};
+            SnapCandidate endpoint{SnapType::Endpoint,
+                                   {sourcePoint.x, sourcePoint.y}};
+            endpoint.worldPoint = worldPoint;
+            endpoint.hasWorldPoint = true;
+            candidates.append(endpoint);
+            if (settings_.controlPoint || includeControlPointCandidates) {
+                SnapCandidate controlPoint{SnapType::ControlPoint,
+                                           {sourcePoint.x, sourcePoint.y}};
+                controlPoint.worldPoint = worldPoint;
+                controlPoint.hasWorldPoint = true;
+                controlPoint.controlPointIndex = index;
+                candidates.append(controlPoint);
+            }
+        }
         return candidates;
     }
 
@@ -1461,6 +1486,7 @@ QVector<SnapCandidate> SnapEngine::edgeCenterCandidatesForShape(
 {
     QVector<SnapCandidate> candidates;
     if (shape.geometryType == GeometryType::Point ||
+        shape.geometryType == GeometryType::PointCloud ||
         isDimensionGeometryType(shape.geometryType)) {
         return candidates;
     }

@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 18
+BRIDGE_FORMAT_VERSION = 19
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -55,6 +55,7 @@ MAX_GREASE_PENCIL_STROKES_PER_SCENE = 10000
 MAX_GREASE_PENCIL_POINTS_PER_SCENE = 100000
 MAX_HAIR_CURVES_PER_SCENE = 10000
 MAX_HAIR_CURVE_POINTS_PER_SCENE = 100000
+MAX_POINT_CLOUD_POINTS_PER_SCENE = 100000
 # Mesh JSON expands into several parallel per-vertex/per-corner arrays. Bound
 # both a single source mesh and all emitted copies in one scene, including
 # collection instances and generated curve/font/metaball meshes.
@@ -1510,10 +1511,94 @@ def unsupported_object_record(obj, scene, depsgraph=None):
         record["reason"] = "Hair Curves has no supported strand centerlines"
     elif obj.type == "POINTCLOUD":
         record["reason"] = (
-            "Point Cloud needs a grouped multi-point object; classiCAD currently stores and renders points one at a time")
+            "Point Cloud has no supported evaluated point-based component")
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
+
+
+def extract_point_cloud_item(obj, scene, depsgraph,
+                             transform_override=None,
+                             evaluated_object_override=None,
+                             max_points=MAX_POINT_CLOUD_POINTS_PER_SCENE):
+    """Extract one evaluated Blender point cloud as a bounded grouped object."""
+    from mathutils import Vector
+
+    evaluated_object = (evaluated_object_override or
+                        obj.evaluated_get(depsgraph))
+    evaluated_geometry = evaluated_object.evaluated_geometry()
+    point_cloud = (getattr(evaluated_geometry, "pointcloud", None)
+                   if evaluated_geometry is not None else None)
+    if point_cloud is None:
+        point_cloud = getattr(evaluated_object, "data", None)
+    if point_cloud is None or getattr(point_cloud, "type", "POINTS") != "POINTS":
+        raise ValueError("evaluated geometry is not a point-based Point Cloud")
+    points = point_cloud.points
+    point_count = len(points)
+    if point_count <= 0:
+        raise ValueError("point cloud has no points")
+    if point_count > max_points:
+        raise ValueError("point cloud point limit exceeded")
+
+    positions = [0.0] * (point_count * 3)
+    radii = [0.0] * point_count
+    points.foreach_get("co", positions)
+    points.foreach_get("radius", radii)
+    transform = (transform_override if transform_override is not None
+                 else evaluated_object.matrix_world)
+    linear_transform = transform.to_3x3()
+    axes = [linear_transform.col[index].copy() for index in range(3)]
+    axis_scales = [axis.length for axis in axes]
+    scale_reference = max(axis_scales)
+    if (not math.isfinite(scale_reference) or scale_reference <= 1.0e-12 or
+            any(not math.isfinite(scale) for scale in axis_scales)):
+        raise ValueError("point cloud object transform is invalid")
+    scale_tolerance = max(1.0e-6, scale_reference * 1.0e-5)
+    if any(abs(scale - scale_reference) > scale_tolerance
+           for scale in axis_scales):
+        raise ValueError("nonuniformly scaled point clouds are unsupported")
+    orthogonality_tolerance = max(1.0e-8, scale_reference ** 2 * 1.0e-5)
+    if any(abs(axes[first].dot(axes[second])) > orthogonality_tolerance
+           for first, second in ((0, 1), (0, 2), (1, 2))):
+        raise ValueError("sheared point cloud transforms are unsupported")
+    radius_scale = scale_reference
+
+    color_attribute = point_cloud.attributes.get("color")
+    colors = None
+    if (color_attribute is not None and
+            color_attribute.domain == "POINT" and
+            color_attribute.data_type in {"FLOAT_COLOR", "BYTE_COLOR"} and
+            len(color_attribute.data) == point_count):
+        raw_colors = [0.0] * (point_count * 4)
+        color_attribute.data.foreach_get("color", raw_colors)
+        colors = [
+            raw_colors[index * 4:index * 4 + 4]
+            for index in range(point_count)
+        ]
+
+    item = object_metadata(obj, scene, depsgraph)
+    item["object_type"] = "POINTCLOUD"
+    item["pointcloud_type"] = "POINTS"
+    item["points"] = []
+    for index in range(point_count):
+        position = Vector(positions[index * 3:index * 3 + 3])
+        world = transform @ position
+        # Blender's signed radius field still controls a nonnegative point
+        # extent in the Workbench point primitive.
+        radius = abs(float(radii[index])) * radius_scale
+        if (not all(math.isfinite(float(value)) for value in world) or
+                not math.isfinite(radius) or radius < 0.0):
+            raise ValueError("point cloud contains a non-finite position or radius")
+        point_record = {
+            "position_world": [float(world.x), float(world.y), float(world.z)],
+            "radius_world": radius,
+            "source_index": index,
+        }
+        if colors is not None:
+            point_record["color_linear"] = colors[index]
+        item["points"].append(point_record)
+    item["_transport_metrics"] = {"point_count": point_count}
+    return item
 
 
 def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
@@ -2225,6 +2310,8 @@ def extract_scene(input_path, mode):
         hair_curve_count = 0
         hair_curve_point_count = 0
         hair_curve_limit_exceeded = False
+        point_cloud_point_count = 0
+        point_cloud_limit_exceeded = False
         mesh_payload_budget = {
             "estimated_bytes": 0,
             "limit_exceeded": False,
@@ -2339,6 +2426,36 @@ def extract_scene(input_path, mode):
                         **object_metadata(obj, scene, depsgraph),
                         "object_type": obj.type,
                         "reason": "Hair Curves extraction failed; whole object skipped: " + str(error),
+                    })
+                continue
+            if obj.type == "POINTCLOUD":
+                try:
+                    point_cloud_depsgraph = depsgraph or depsgraph_for_scene(scene)
+                    item = extract_point_cloud_item(
+                        obj, scene, point_cloud_depsgraph,
+                        evaluated_object_override=obj.evaluated_get(
+                            point_cloud_depsgraph),
+                        max_points=(MAX_POINT_CLOUD_POINTS_PER_SCENE -
+                                    point_cloud_point_count))
+                    metrics = item.pop("_transport_metrics")
+                    point_cloud_point_count += metrics["point_count"]
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer):
+                        object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                except Exception as error:
+                    if "limit exceeded" in str(error):
+                        point_cloud_limit_exceeded = True
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene, depsgraph),
+                        "object_type": obj.type,
+                        "reason": "Point Cloud extraction failed; whole object skipped: " + str(error),
                     })
                 continue
             if obj.type == "CURVE":
@@ -2580,7 +2697,7 @@ def extract_scene(input_path, mode):
                     str(getattr(evaluated_obj, "empty_display_type", "")) == "IMAGE")
                 if source_obj.type not in {
                         "MESH", "CURVE", "SURFACE", "FONT", "META",
-                        "VOLUME", "GREASEPENCIL", "CURVES"} and not is_image_empty:
+                        "VOLUME", "GREASEPENCIL", "CURVES", "POINTCLOUD"} and not is_image_empty:
                     unsupported_instance_types.add(source_obj.type)
                     continue
                 if is_image_empty:
@@ -2796,6 +2913,30 @@ def extract_scene(input_path, mode):
                             instance_transform)
                         output["items"].append(item)
                         output["unsupported_features"].extend(item_features)
+                    elif source_obj.type == "POINTCLOUD":
+                        item = extract_point_cloud_item(
+                            source_obj, scene, instance_depsgraph,
+                            transform_override=instance_transform,
+                            evaluated_object_override=source_obj.evaluated_get(
+                                instance_depsgraph),
+                            max_points=(MAX_POINT_CLOUD_POINTS_PER_SCENE -
+                                        point_cloud_point_count))
+                        metrics = item.pop("_transport_metrics")
+                        if point_cloud_point_count + metrics["point_count"] > \
+                                MAX_POINT_CLOUD_POINTS_PER_SCENE:
+                            point_cloud_limit_exceeded = True
+                            unsupported_item = unsupported_object_record(
+                                source_obj, scene, instance_depsgraph)
+                            unsupported_item["object_id"] = instance_id
+                            unsupported_item["reason"] = (
+                                "collection Point Cloud instance aggregate point limit was reached")
+                            output["unsupported_items"].append(unsupported_item)
+                            continue
+                        assign_instance_metadata(
+                            item, instance_id, source_obj, parent_source,
+                            instance_transform)
+                        output["items"].append(item)
+                        point_cloud_point_count += metrics["point_count"]
                     elif source_obj.type == "MESH":
                         item = extract_mesh_object(
                             source_obj, scene, mode, instance_depsgraph,
@@ -2890,6 +3031,9 @@ def extract_scene(input_path, mode):
                     if (source_obj.type == "CURVES" and
                             "limit exceeded" in str(error)):
                         hair_curve_limit_exceeded = True
+                    if (source_obj.type == "POINTCLOUD" and
+                            "limit exceeded" in str(error)):
+                        point_cloud_limit_exceeded = True
                     output["unsupported_items"].append({
                         **object_metadata(source_obj, scene, depsgraph),
                         "object_id": instance_id,
@@ -2943,6 +3087,13 @@ def extract_scene(input_path, mode):
                 "Hair Curves extraction exceeded the per-scene limit of %d strands or %d points; remaining objects were skipped" %
                 (MAX_HAIR_CURVES_PER_SCENE,
                  MAX_HAIR_CURVE_POINTS_PER_SCENE),
+            )
+        if point_cloud_limit_exceeded:
+            add_unsupported(
+                output["unsupported_features"], stable_id(scene),
+                "point_cloud_scene_limit",
+                "Point Cloud extraction exceeded the per-scene limit of %d points; remaining objects and instances were skipped" %
+                MAX_POINT_CLOUD_POINTS_PER_SCENE,
             )
         if mesh_payload_budget["limit_exceeded"]:
             add_unsupported(

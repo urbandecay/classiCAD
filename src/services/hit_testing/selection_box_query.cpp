@@ -136,6 +136,15 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
         }
     }
 
+    if (shape.geometryType == GeometryType::PointCloud &&
+        validatePointCloud(shape.pointCloud)) {
+        for (const Point3D &point : shape.pointCloud.positions) {
+            includeWorldPoint({point.x + worldOffset.x,
+                               point.y + worldOffset.y,
+                               point.z + worldOffset.z});
+        }
+    }
+
     for (const auto &face : shapeSurfaceFaces(shape)) {
         for (const Point3D &point : face.controlPoints) {
             includeWorldPoint({point.x + worldOffset.x,
@@ -244,6 +253,27 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
             viewportSize,
             &screenPoint);
         return {true, projects && pointInside(hitRect, screenPoint)};
+    }
+    if (shape.geometryType == GeometryType::PointCloud &&
+        validatePointCloud(shape.pointCloud)) {
+        bool anyPoint = false;
+        bool everyProjectedPointInside = true;
+        bool projectedPoint = false;
+        for (const Point3D &point : shape.pointCloud.positions) {
+            QPointF screenPoint;
+            if (!viewportTransform.worldPointToScreen(
+                    {point.x + worldOffset.x, point.y + worldOffset.y,
+                     point.z + worldOffset.z}, viewportSize, &screenPoint)) {
+                everyProjectedPointInside = false;
+                continue;
+            }
+            projectedPoint = true;
+            const bool inside = pointInside(hitRect, screenPoint);
+            anyPoint = anyPoint || inside;
+            everyProjectedPointInside = everyProjectedPointInside && inside;
+        }
+        return {true, projectedPoint && (crossingSelection
+                      ? anyPoint : everyProjectedPointInside)};
     }
 
     return {};

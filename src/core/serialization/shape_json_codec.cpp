@@ -89,6 +89,95 @@ QJsonArray scalarVolumeMatrixToJson(const ScalarVolumeMatrix &matrix)
     return rows;
 }
 
+QJsonObject pointCloudToJson(const PointCloud3D &cloud)
+{
+    QJsonObject object;
+    QJsonArray positions;
+    QJsonArray radii;
+    QJsonArray colors;
+    QJsonArray sourceIndices;
+    for (qsizetype index = 0; index < cloud.positions.size(); ++index) {
+        positions.append(point3DToJson(cloud.positions[index]));
+        radii.append(cloud.radii[index]);
+        if (!cloud.colors.isEmpty()) {
+            const QVector4D &color = cloud.colors[index];
+            colors.append(QJsonArray{color.x(), color.y(), color.z(), color.w()});
+        }
+        if (!cloud.sourceIndices.isEmpty())
+            sourceIndices.append(cloud.sourceIndices[index]);
+    }
+    object.insert(QStringLiteral("positions"), positions);
+    object.insert(QStringLiteral("radii"), radii);
+    object.insert(QStringLiteral("colors"), colors);
+    object.insert(QStringLiteral("sourceIndices"), sourceIndices);
+    return object;
+}
+
+bool pointCloudFromJson(const QJsonValue &value, PointCloud3D *cloud)
+{
+    if (cloud == nullptr || !value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    const QJsonValue positionsValue = object.value(QStringLiteral("positions"));
+    const QJsonValue radiiValue = object.value(QStringLiteral("radii"));
+    const QJsonValue colorsValue = object.value(QStringLiteral("colors"));
+    const QJsonValue indicesValue = object.value(QStringLiteral("sourceIndices"));
+    if (!positionsValue.isArray() || positionsValue.toArray().isEmpty() ||
+        positionsValue.toArray().size() > 1'000'000 || !radiiValue.isArray() ||
+        radiiValue.toArray().size() != positionsValue.toArray().size() ||
+        !colorsValue.isArray() ||
+        (!colorsValue.toArray().isEmpty() &&
+         colorsValue.toArray().size() != positionsValue.toArray().size()) ||
+        !indicesValue.isArray() ||
+        (!indicesValue.toArray().isEmpty() &&
+         indicesValue.toArray().size() != positionsValue.toArray().size()))
+        return false;
+    PointCloud3D parsed;
+    const QJsonArray positions = positionsValue.toArray();
+    const QJsonArray radii = radiiValue.toArray();
+    const QJsonArray colors = colorsValue.toArray();
+    const QJsonArray indices = indicesValue.toArray();
+    parsed.positions.reserve(positions.size());
+    parsed.radii.reserve(positions.size());
+    if (!colors.isEmpty()) parsed.colors.reserve(positions.size());
+    if (!indices.isEmpty()) parsed.sourceIndices.reserve(positions.size());
+    for (qsizetype index = 0; index < positions.size(); ++index) {
+        Point3D point;
+        if (!point3DFromJson(positions[index], &point) ||
+            !radii[index].isDouble() ||
+            !std::isfinite(radii[index].toDouble()) ||
+            radii[index].toDouble() < 0.0) return false;
+        parsed.positions.append(point);
+        parsed.radii.append(radii[index].toDouble());
+        if (!colors.isEmpty()) {
+            const QJsonValue colorValue = colors[index];
+            if (!colorValue.isArray() || colorValue.toArray().size() != 4)
+                return false;
+            const QJsonArray color = colorValue.toArray();
+            for (const QJsonValue &channel : color) {
+                if (!channel.isDouble() || !std::isfinite(channel.toDouble()))
+                    return false;
+            }
+            parsed.colors.append(QVector4D(
+                float(color[0].toDouble()), float(color[1].toDouble()),
+                float(color[2].toDouble()), float(color[3].toDouble())));
+        }
+        if (!indices.isEmpty()) {
+            const QJsonValue sourceIndexValue = indices[index];
+            if (!sourceIndexValue.isDouble() ||
+                !std::isfinite(sourceIndexValue.toDouble()) ||
+                std::floor(sourceIndexValue.toDouble()) !=
+                    sourceIndexValue.toDouble() ||
+                sourceIndexValue.toDouble() < 0.0 ||
+                sourceIndexValue.toDouble() >
+                    std::numeric_limits<int>::max()) return false;
+            parsed.sourceIndices.append(sourceIndexValue.toInt());
+        }
+    }
+    if (!validatePointCloud(parsed)) return false;
+    *cloud = std::move(parsed);
+    return true;
+}
+
 bool scalarVolumeMatrixFromJson(const QJsonValue &value,
                                 ScalarVolumeMatrix *matrix)
 {
@@ -809,6 +898,10 @@ QJsonObject shapeToJson(const Shape &shape)
         object.insert(QStringLiteral("scalarVolume"),
                       scalarVolumeToJson(shape.scalarVolume));
     }
+    if (shape.geometryType == GeometryType::PointCloud) {
+        object.insert(QStringLiteral("pointCloud"),
+                      pointCloudToJson(shape.pointCloud));
+    }
     if (shape.geometryType == GeometryType::PolygonMesh) {
         object.insert(QStringLiteral("polygonMesh"), polygonMeshToJson(shape.polygonMesh));
     }
@@ -1046,6 +1139,10 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     if (geometryType == GeometryType::ScalarVolume &&
         !scalarVolumeFromJson(object.value(QStringLiteral("scalarVolume")),
                               &scalarVolume)) return false;
+    PointCloud3D pointCloud;
+    if (geometryType == GeometryType::PointCloud &&
+        !pointCloudFromJson(object.value(QStringLiteral("pointCloud")),
+                            &pointCloud)) return false;
     QImage pictureImage;
     bool pictureShowPerspective = true;
     bool pictureShowOrthographic = true;
@@ -1440,6 +1537,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->nurbsSolid = nurbsSolid;
     shape->polygonMesh = std::move(polygonMesh);
     shape->scalarVolume = std::move(scalarVolume);
+    shape->pointCloud = std::move(pointCloud);
     shape->arcMode = static_cast<ArcMode>(arcModeValue);
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;

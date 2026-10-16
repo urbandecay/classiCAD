@@ -930,6 +930,18 @@ void appendShapeDepthGeometry(const Shape &shape,
             }
             return;
         }
+        if (shape.geometryType == GeometryType::PointCloud) {
+            if (validatePointCloud(shape.pointCloud)) {
+                geometry.pointVertices.reserve(shape.pointCloud.positions.size());
+                geometry.precisePointVertices.reserve(
+                    shape.pointCloud.positions.size());
+                for (const Point3D &point : shape.pointCloud.positions) {
+                    geometry.pointVertices.append(asVector(point));
+                    geometry.precisePointVertices.append(point);
+                }
+            }
+            return;
+        }
         if (shape.geometryType == GeometryType::Picture) {
             const QVector<QPointF> corners = pictureFrameCorners(shape);
             if (!shape.pictureImage.isNull() && corners.size() == 4) {
@@ -1097,6 +1109,12 @@ QByteArray viewportDepthGeometryCacheKey(
                << double(frame.normal.z);
         for (const QPointF &point : shape.points) {
             stream << double(point.x()) << double(point.y());
+        }
+        stream << qint32(shape.pointCloud.positions.size());
+        for (int index = 0; index < shape.pointCloud.positions.size(); ++index) {
+            const Point3D &point = shape.pointCloud.positions[index];
+            stream << double(point.x) << double(point.y) << double(point.z)
+                   << double(shape.pointCloud.radii.value(index, 0.0));
         }
         writeCurve(stream, shape.nurbs);
         const auto faces = shapeSurfaceFaces(shape);

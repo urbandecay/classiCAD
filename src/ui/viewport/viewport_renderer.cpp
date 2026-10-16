@@ -2776,7 +2776,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 (screenC.x() - screenA.x());
                         bool frontFacing = area < 0.0;
                         if (reflectedMeshTransform) frontFacing = !frontFacing;
-                        if (!shadingSettings_.backfaceCulling || frontFacing) {
+                        if (shadingSettings_.mode != ViewportShadingMode::Solid ||
+                            !shadingSettings_.backfaceCulling || frontFacing) {
                             triangles.append(std::move(triangle));
                         }
                     }

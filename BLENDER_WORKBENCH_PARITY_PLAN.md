@@ -9742,3 +9742,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   and
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L148-L170).
   Build passed; matched edge-on outline captures remain open.
+
+### Restrict mesh backface culling to Solid mode (2026-10-16)
+
+- The QPainter polygon-mesh path now applies the saved backface-culling option
+  only in Solid mode. In Wireframe it keeps back-facing mesh coverage, matching
+  Blender's separate wire pass and the GPU path, which applies `cull_state`
+  only to Workbench surface passes. This also makes a retained Solid setting
+  harmless after switching display mode. Build passed; matched wire captures
+  remain open.
+- Blender 5.2.2 applies its cull state to the Workbench opaque and transparent
+  surface passes in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L98-L112)
+  and [#L210-L225](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L210-L225).

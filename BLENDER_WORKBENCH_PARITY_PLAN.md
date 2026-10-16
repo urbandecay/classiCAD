@@ -3929,12 +3929,23 @@ component transforms, surface CV propagation stays inside the selected surface
 or solid; matching coordinates on another object do not connect it. Curve
 control points propagate across objects only through the existing explicit
 weld groups. Component duplication uses the existing curve/surface component
-paths. Curve and point component
-deletion use their existing geometry operations. A NURBS surface or solid can
-only be deleted as a whole through component deletion; deleting an individual
-closed-solid face is rejected because it would break the stored solid
-topology. Multi-object Edit Mode remains limited to the active geometry
-family.
+paths. Curve and point component deletion use their existing geometry
+operations. For untrimmed NURBS surfaces, Delete removes selected complete
+control-net rows or columns and bridges the remaining rectangular grid. If
+only one row or column remains, that grid becomes a dimension-3 NURBS curve
+along the other axis. A selection must consist entirely of complete rows or
+entirely of complete columns; mixed directions and trimmed surfaces are
+rejected. The untouched knot vector is retained. The edited direction receives
+clamped uniform knots over its original parameter domain, and its degree is
+reduced when required by the remaining control-point count. Blender's
+[surface Delete behavior](https://docs.blender.org/manual/en/5.2/modeling/surfaces/editing/surface.html)
+and [5.2.2 implementation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/curve/editcurve.cc#L1643-L1735)
+also recalculate the edited direction's knots; classiCAD's openNURBS contract
+keeps its parameter domain. Exact post-delete shape matching for imported
+nonuniform knots remains unverified. A NURBS solid can only be deleted as a
+whole; partial solid control-net deletion and individual face deletion are
+rejected because its faces are derived from closed extrusion topology.
+Multi-object Edit Mode remains limited to the active geometry family.
 `Ctrl+L` now selects linked components from the active selection: curve control
 points expand to their containing spline, while a selected curve spline stays
 on that spline; surface and solid components map back to their owning patch and
@@ -3977,10 +3988,11 @@ but does not yet provide Blender's transform-orientation toggle, middle-mouse
 interactive axis choice, or alternate pivot modes. The shortcut is limited to
 Edit Mode's Select tool and the supported NURBS point/curve/surface targets.
 NURBS solid component mirroring remains unsupported because its faces are
-derived from the exact base surface and extrusion vector. Partial surface CV
-deletion, individual solid-face deletion, exact active/selected outlines,
-other mode-specific overlay details, Blender's Shift-digit simultaneous
-selection modes, and matched GPU/QPainter captures remain open. Ctrl+1/2/3 now
+derived from the exact base surface and extrusion vector. Trimmed-surface and
+surface-segment deletion, exact post-delete results for imported nonuniform
+knots, individual solid-face deletion, exact active/selected outlines, other
+mode-specific overlay details, Blender's Shift-digit simultaneous selection
+modes, and matched GPU/QPainter captures remain open. Ctrl+1/2/3 now
 adapts Blender's mesh-mode expand/contract transfer to the requested
 CV/spline/patch mapping: switching to a higher component mode includes
 components touching selected lower-mode components; switching to a lower mode

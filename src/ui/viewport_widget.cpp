@@ -19443,6 +19443,251 @@ private:
         return true;
     }
 
+    bool rebuildNurbsSurfaceWithoutControlPoints(
+        Shape *shape,
+        const QSet<int> &selectedLocalIndices) const
+    {
+        if (shape == nullptr ||
+            shape->geometryType != GeometryType::NurbsSurface ||
+            !validateNurbsSurface(shape->nurbsSurface) ||
+            !shape->nurbsSurface.trimLoops.isEmpty() ||
+            selectedLocalIndices.isEmpty()) {
+            return false;
+        }
+
+        const Shape::NurbsSurface3D original = shape->nurbsSurface;
+        const Shape::NurbsSurface3D *surface = &original;
+        const int countU = surface->controlVertexCountU;
+        const int countV = surface->controlVertexCountV;
+        const int controlPointCount = countU * countV;
+        if (controlPointCount <= 0 ||
+            selectedLocalIndices.size() >= controlPointCount) {
+            return false;
+        }
+        for (const int index : selectedLocalIndices) {
+            if (index < 0 || index >= controlPointCount) {
+                return false;
+            }
+        }
+
+        QVector<char> removedRows(countU, 0);
+        QVector<char> removedColumns(countV, 0);
+        bool completeRowSelection = true;
+        bool completeColumnSelection = true;
+        bool hasCompleteRow = false;
+        bool hasCompleteColumn = false;
+        for (int u = 0; u < countU; ++u) {
+            int selectedInRow = 0;
+            for (int v = 0; v < countV; ++v) {
+                selectedInRow += selectedLocalIndices.contains(u * countV + v)
+                    ? 1 : 0;
+            }
+            if (selectedInRow != 0 && selectedInRow != countV) {
+                completeRowSelection = false;
+            }
+            removedRows[u] = selectedInRow == countV ? 1 : 0;
+            hasCompleteRow = hasCompleteRow || removedRows[u] != 0;
+        }
+        for (int v = 0; v < countV; ++v) {
+            int selectedInColumn = 0;
+            for (int u = 0; u < countU; ++u) {
+                selectedInColumn += selectedLocalIndices.contains(u * countV + v)
+                    ? 1 : 0;
+            }
+            if (selectedInColumn != 0 && selectedInColumn != countU) {
+                completeColumnSelection = false;
+            }
+            removedColumns[v] = selectedInColumn == countU ? 1 : 0;
+            hasCompleteColumn = hasCompleteColumn || removedColumns[v] != 0;
+        }
+
+        // Blender accepts complete rows in one direction, or complete
+        // columns in the other. A mixed row-and-column selection is rejected.
+        const bool removeRows = completeRowSelection && hasCompleteRow;
+        const bool removeColumns = !removeRows && completeColumnSelection &&
+                                   hasCompleteColumn;
+        if (!removeRows && !removeColumns) {
+            return false;
+        }
+        if (!removeRows) {
+            removedRows.fill(0);
+        }
+        if (!removeColumns) {
+            removedColumns.fill(0);
+        }
+
+        const int removedRowCount = removeRows ? static_cast<int>(std::count(
+            removedRows.cbegin(), removedRows.cend(), char(1))) : 0;
+        const int removedColumnCount = removeColumns ? static_cast<int>(std::count(
+            removedColumns.cbegin(), removedColumns.cend(), char(1))) : 0;
+        const int rebuiltCountU = countU - removedRowCount;
+        const int rebuiltCountV = countV - removedColumnCount;
+        if (rebuiltCountU < 1 || rebuiltCountV < 1) {
+            return false;
+        }
+
+        // Require the selected CV mask to match precisely the accepted rows
+        // or columns, then keep the remaining grid rectangular.
+        for (int u = 0; u < countU; ++u) {
+            for (int v = 0; v < countV; ++v) {
+                const int index = u * countV + v;
+                const bool belongsToRemovedLane =
+                    removedRows[u] != 0 || removedColumns[v] != 0;
+                if (selectedLocalIndices.contains(index) !=
+                    belongsToRemovedLane) {
+                    return false;
+                }
+            }
+        }
+
+        const QVector<double> fullKnotsU =
+            expandedNurbsSurfaceKnotVector(surface->knotsU);
+        const QVector<double> fullKnotsV =
+            expandedNurbsSurfaceKnotVector(surface->knotsV);
+        const double domainUStart = fullKnotsU[surface->degreeU];
+        const double domainUEnd = fullKnotsU[countU];
+        const double domainVStart = fullKnotsV[surface->degreeV];
+        const double domainVEnd = fullKnotsV[countV];
+
+        if (rebuiltCountU == 1 || rebuiltCountV == 1) {
+            Shape::NurbsCurve3D curve;
+            curve.dimension = 3;
+            curve.rational = surface->rational;
+            const bool variesAlongV = rebuiltCountU == 1;
+            curve.degree = variesAlongV ? surface->degreeV
+                                        : surface->degreeU;
+            curve.order = curve.degree + 1;
+            curve.knots = variesAlongV ? surface->knotsV
+                                       : surface->knotsU;
+            const int curvePointCount = variesAlongV ? rebuiltCountV
+                                                     : rebuiltCountU;
+            curve.controlPoints.reserve(curvePointCount);
+            curve.normalCoordinates.reserve(curvePointCount);
+            curve.weights.reserve(curvePointCount);
+            QVector<quint64> rebuiltWeldGroups;
+            const bool hadWeldGroups =
+                !shape->controlPointWeldGroups.isEmpty();
+            if (hadWeldGroups) {
+                rebuiltWeldGroups.reserve(curvePointCount);
+            }
+            int survivingRow = -1;
+            int survivingColumn = -1;
+            if (variesAlongV) {
+                for (int u = 0; u < countU; ++u) {
+                    if (removedRows[u] == 0) {
+                        survivingRow = u;
+                        break;
+                    }
+                }
+                if (survivingRow < 0) {
+                    return false;
+                }
+            } else {
+                for (int v = 0; v < countV; ++v) {
+                    if (removedColumns[v] == 0) {
+                        survivingColumn = v;
+                        break;
+                    }
+                }
+                if (survivingColumn < 0) {
+                    return false;
+                }
+            }
+            for (int varying = 0; varying < curvePointCount; ++varying) {
+                const int sourceIndex = variesAlongV
+                    ? survivingRow * countV + varying
+                    : varying * countV + survivingColumn;
+                const Point3D &point = surface->controlPoints[sourceIndex];
+                curve.controlPoints.append(QPointF(point.x, point.y));
+                curve.normalCoordinates.append(point.z);
+                curve.weights.append(surface->rational
+                    ? surface->weights[sourceIndex] : 1.0);
+                if (hadWeldGroups) {
+                    rebuiltWeldGroups.append(
+                        sourceIndex < shape->controlPointWeldGroups.size()
+                            ? shape->controlPointWeldGroups[sourceIndex] : 0);
+                }
+            }
+            if (!validateNurbsCurve(curve)) {
+                return false;
+            }
+
+            shape->geometryType = GeometryType::Nurbs;
+            shape->nurbs = std::move(curve);
+            shape->points = shape->nurbs.controlPoints;
+            shape->nurbsSurface = Shape::NurbsSurface3D{};
+            shape->workPlane = WorkPlane::XY;
+            shape->workPlaneOffset = 0.0;
+            shape->workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            if (hadWeldGroups) {
+                shape->controlPointWeldGroups =
+                    std::move(rebuiltWeldGroups);
+            }
+            return true;
+        }
+
+        Shape::NurbsSurface3D rebuilt = *surface;
+        rebuilt.controlVertexCountU = rebuiltCountU;
+        rebuilt.controlVertexCountV = rebuiltCountV;
+        rebuilt.degreeU = std::min(surface->degreeU, rebuiltCountU - 1);
+        rebuilt.degreeV = std::min(surface->degreeV, rebuiltCountV - 1);
+        rebuilt.orderU = rebuilt.degreeU + 1;
+        rebuilt.orderV = rebuilt.degreeV + 1;
+        rebuilt.controlPoints.clear();
+        rebuilt.weights.clear();
+        rebuilt.controlPoints.reserve(rebuiltCountU * rebuiltCountV);
+        rebuilt.weights.reserve(rebuiltCountU * rebuiltCountV);
+        for (int u = 0; u < countU; ++u) {
+            if (removedRows[u] != 0) {
+                continue;
+            }
+            for (int v = 0; v < countV; ++v) {
+                if (removedColumns[v] != 0) {
+                    continue;
+                }
+                const int index = u * countV + v;
+                rebuilt.controlPoints.append(surface->controlPoints[index]);
+                rebuilt.weights.append(surface->rational
+                    ? surface->weights[index] : 1.0);
+            }
+        }
+
+        const auto makeReducedClampedKnots = [](
+            int controlVertexCount, int degree, double domainStart,
+            double domainEnd) {
+            QVector<double> fullKnots;
+            fullKnots.reserve(controlVertexCount + degree + 1);
+            for (int index = 0; index <= degree; ++index) {
+                fullKnots.append(domainStart);
+            }
+            const int interiorCount = controlVertexCount - degree - 1;
+            for (int index = 1; index <= interiorCount; ++index) {
+                const double t = static_cast<double>(index) /
+                                 static_cast<double>(interiorCount + 1);
+                fullKnots.append(domainStart +
+                                 (domainEnd - domainStart) * t);
+            }
+            for (int index = 0; index <= degree; ++index) {
+                fullKnots.append(domainEnd);
+            }
+            return fullKnots.mid(1, fullKnots.size() - 2);
+        };
+        if (removedRowCount > 0) {
+            rebuilt.knotsU = makeReducedClampedKnots(
+                rebuiltCountU, rebuilt.degreeU, domainUStart, domainUEnd);
+        }
+        if (removedColumnCount > 0) {
+            rebuilt.knotsV = makeReducedClampedKnots(
+                rebuiltCountV, rebuilt.degreeV, domainVStart, domainVEnd);
+        }
+        if (!validateNurbsSurface(rebuilt)) {
+            return false;
+        }
+
+        shape->nurbsSurface = std::move(rebuilt);
+        return true;
+    }
+
     bool deleteSelectedControlPoints(
         const QHash<quint64, QSet<int>> &targets)
     {
@@ -19450,6 +19695,14 @@ private:
         QVector<ObjectId> liveObjects;
         int editedObjectCount = 0;
         DocumentTransaction transaction = session_.beginTransaction();
+        const auto reject = [this, &transaction](const QString &message) {
+            transaction.rollback();
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(message);
+            }
+            DebugLog::instance().write(message);
+            return false;
+        };
 
         for (int objectIndexValue = 0;
              objectIndexValue < document_.size(); ++objectIndexValue) {
@@ -19469,19 +19722,49 @@ private:
                 continue;
             }
 
-            if (source->geometryType == GeometryType::NurbsSurface ||
-                source->geometryType == GeometryType::NurbsSolid) {
+            if (source->geometryType == GeometryType::NurbsSurface) {
+                const int count = source->nurbsSurface.controlPoints.size();
+                bool allControlPointsSelected = count > 0 &&
+                    selected.value().size() == count;
+                for (int index = 0; index < count && allControlPointsSelected;
+                     ++index) {
+                    allControlPointsSelected = selected.value().contains(index);
+                }
+                if (allControlPointsSelected) {
+                    objectsToDelete.append(objectId);
+                    continue;
+                }
+                if (!source->nurbsSurface.trimLoops.isEmpty()) {
+                    return reject(QStringLiteral(
+                        "Delete cannot remove control points from a trimmed NURBS surface; select all control points to delete the object"));
+                }
+                Shape rebuilt = *source;
+                if (!rebuildNurbsSurfaceWithoutControlPoints(
+                        &rebuilt, selected.value())) {
+                    return reject(QStringLiteral(
+                        "Delete on a NURBS surface requires complete rows or columns and a valid remaining NURBS surface or curve"));
+                }
+                Shape *shape = transaction.editGeometry(objectId);
+                if (shape == nullptr) {
+                    continue;
+                }
+                *shape = std::move(rebuilt);
+                ++editedObjectCount;
+                continue;
+            }
+
+            if (source->geometryType == GeometryType::NurbsSolid) {
                 const int count = selectedSurfaceControlNet(*source)
                                       .precisePointVertices.size();
-                if (count <= 0 || selected.value().size() < count) {
-                    transaction.rollback();
-                    const QString message = QStringLiteral(
-                        "Delete cannot remove a partial NURBS surface or solid control-point set; select all control points to delete the object");
-                    if (toolStatusUpdate_) {
-                        toolStatusUpdate_(message);
-                    }
-                    DebugLog::instance().write(message);
-                    return false;
+                bool allControlPointsSelected = count > 0 &&
+                    selected.value().size() == count;
+                for (int index = 0; index < count && allControlPointsSelected;
+                     ++index) {
+                    allControlPointsSelected = selected.value().contains(index);
+                }
+                if (!allControlPointsSelected) {
+                    return reject(QStringLiteral(
+                        "Delete cannot remove part of a closed NURBS solid; select all control points to delete the object"));
                 }
                 objectsToDelete.append(objectId);
                 continue;

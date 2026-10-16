@@ -16,6 +16,7 @@ uniform int uSmoothWire;
 uniform int uEditModeWire;
 uniform int uLinearDisplayBlend;
 uniform int uRecordLine;
+uniform int uIgnoreSceneDepth;
 uniform int uBlenderMeshWire;
 uniform int uCorrectMeshWireDepth;
 uniform sampler2D uSceneDepth;
@@ -150,7 +151,8 @@ void main()
                                 0.0, 1.0);
     vec4 edgeColor = uEditModeWire != 0 ? gEdgeColor
                                        : mix(gStartColor, gEndColor, edgeParameter);
-    if (uCorrectMeshWireDepth != 0 && uBlenderMeshWire != 0 &&
+    if (uIgnoreSceneDepth == 0 && uCorrectMeshWireDepth != 0 &&
+        uBlenderMeshWire != 0 &&
         uSmoothWire != 0) {
         ivec2 pixel = ivec2(gl_FragCoord.xy);
         ivec2 viewportSize = textureSize(uSceneDepth, 0);
@@ -184,7 +186,7 @@ void main()
         // wire visibility pass.
         ivec2 pixel = ivec2(gl_FragCoord.xy);
         float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
-        if (gl_FragDepth > sceneDepth) {
+        if (uIgnoreSceneDepth == 0 && gl_FragDepth > sceneDepth) {
             discard;
         }
     }

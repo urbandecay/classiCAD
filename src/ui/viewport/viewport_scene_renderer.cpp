@@ -1392,7 +1392,8 @@ bool ViewportSceneRenderer::draw(
                                     originalColorWriteMask[1] &&
                                     originalColorWriteMask[2] &&
                                     originalColorWriteMask[3];
-    bool strokeResolveActive = !isolatedDepthActive && depthTest && originalSamples == 0 &&
+    bool strokeResolveActive = (isolatedDepthActive || depthTest) &&
+        originalSamples == 0 &&
         originalDepthAttachment != GL_NONE && sourceDepthFormat.isValid() &&
         colorWritesEnabled && opacity >= 0.999999;
     if (strokeResolveActive) {
@@ -1437,7 +1438,8 @@ bool ViewportSceneRenderer::draw(
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeBaseFramebuffer_);
         glBlitFramebuffer(0, 0, pixelSize.width(), pixelSize.height(),
                           0, 0, pixelSize.width(), pixelSize.height(),
-                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                          GL_COLOR_BUFFER_BIT |
+                              (isolatedDepthActive ? 0 : GL_DEPTH_BUFFER_BIT),
                           GL_NEAREST);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, strokeBaseFramebuffer_);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeLineFramebuffer_);
@@ -1664,6 +1666,8 @@ bool ViewportSceneRenderer::draw(
                     QVector2D(pixelSize.width(), pixelSize.height()));
                 nextProgram->setUniformValue(
                     "uRecordLine", strokeResolveActive ? 1 : 0);
+                nextProgram->setUniformValue(
+                    "uIgnoreSceneDepth", isolatedDepthActive ? 1 : 0);
                 nextProgram->setUniformValue("uSceneDepth", 6);
             }
             // Move edit wires and component points a tiny amount toward the
@@ -1696,7 +1700,8 @@ bool ViewportSceneRenderer::draw(
                 stroke.blenderMeshWire ? blenderMeshWireNdcOffsetFactor : 0.0f);
             boundProgram->setUniformValue(
                 "uCorrectMeshWireDepth",
-                strokeResolveActive && smoothOverlayWires && smoothWire &&
+                strokeResolveActive && !isolatedDepthActive &&
+                        smoothOverlayWires && smoothWire &&
                         stroke.blenderMeshWire
                     ? 1
                     : 0);
@@ -1827,6 +1832,8 @@ bool ViewportSceneRenderer::draw(
         strokeResolveProgram_.setUniformValue("uLineRecord", 2);
         strokeResolveProgram_.setUniformValue("uCandidateDepth", 3);
         strokeResolveProgram_.setUniformValue("uSceneDepth", 4);
+        strokeResolveProgram_.setUniformValue(
+            "uIgnoreSceneDepth", isolatedDepthActive ? 1 : 0);
         strokeResolveProgram_.setUniformValue("uLineWireFlag", 5);
         const GLint viewportSizeLocation =
             strokeResolveProgram_.uniformLocation("uViewportSize");

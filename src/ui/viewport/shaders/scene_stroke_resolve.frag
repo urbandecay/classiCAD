@@ -9,6 +9,7 @@ uniform sampler2D uCandidateDepth;
 uniform sampler2D uSceneDepth;
 uniform sampler2D uLineWireFlag;
 uniform ivec2 uViewportSize;
+uniform int uIgnoreSceneDepth;
 
 layout(location = 0) out vec4 fragmentColor;
 
@@ -77,7 +78,7 @@ void blendNeighbor(inout vec4 targetColor,
 
 float correctedMeshWireDepth(ivec2 pixel, vec4 record, float wireDepth)
 {
-    if (record.w <= 0.0 ||
+    if (uIgnoreSceneDepth != 0 || record.w <= 0.0 ||
         texelFetch(uLineWireFlag, pixel, 0).r < 0.5) {
         return wireDepth;
     }
@@ -113,7 +114,7 @@ void main()
 
     vec4 centerRecord = fetchLineRecord(pixel);
     vec4 resolvedLineColor = vec4(0.0);
-    float resolvedLineDepth = sceneDepth;
+    float resolvedLineDepth = uIgnoreSceneDepth != 0 ? 1.0 : sceneDepth;
     float outputDepth = sceneDepth;
     vec4 centerRasterColor = vec4(0.0);
     if (centerRecord.w != 0.0) {

@@ -9296,6 +9296,20 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
   Build passed; matched silhouette-wire captures remain open.
 
+### GPU Smooth Wires resolve in X-Ray (2026-10-16)
+
+- Native single-sample X-Ray wire draws now use the shared GPU Smooth Wires
+  candidate and resolve passes. Candidate wires ignore scene-surface depth,
+  while the cleared private wire-depth attachment still keeps nearer wires
+  ahead of farther wires. The resolve composites the antialiased wires over
+  the saved scene color, then restores the original scene depth.
+- Blender 5.2.2 keeps Smooth Wires active with X-Ray and uses isolated wire
+  depth; see
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh)
+  and
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L74-L82).
+  Build passed; matched X-Ray wire captures remain open.
+
 ### Blender Solid interactive AA preference precedence (2026-10-16)
 
 - Opening a Blender scene no longer applies its saved `scene.display.viewport_aa`

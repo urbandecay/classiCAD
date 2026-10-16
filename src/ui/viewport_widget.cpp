@@ -13939,7 +13939,8 @@ protected:
                 committedCurveDepthSize,
                 importedCameraFrameTextureScale(
                     document_, renderFrame.camera,
-                    renderFrame.viewportSize));
+                    renderFrame.viewportSize),
+                smoothWiresOverlay_);
             const qint64 sceneLinearTargetPixels =
                 qint64(committedSceneLayer.width()) *
                 committedSceneLayer.height();

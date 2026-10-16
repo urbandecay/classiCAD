@@ -9526,3 +9526,15 @@ moves them after scene effects and depth-tests them against the retained scene.
   classiCAD does not yet carry Blender's theme outline-width preference, so
   only the UI-scale expansion trigger is matched. Build passed; matched outline
   captures remain open.
+
+### QPainter selected-outline smoothing preference (2026-10-16)
+
+- The raster fallback now uses the Overlay Smooth Wires preference for selected
+  object contours. When enabled it keeps the existing partial edge coverage;
+  when disabled any selected-object boundary is drawn at full coverage. The
+  QPainter fallback still does not expand selected contours using Blender's
+  high-DPI/theme-width rule.
+- Blender 5.2.2 passes the same `USER_GPU_FLAG_OVERLAY_SMOOTH_WIRE` preference
+  into the selected-outline resolve in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913).
+  Build passed; matched QPainter outline captures remain open.

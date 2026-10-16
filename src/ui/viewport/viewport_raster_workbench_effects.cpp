@@ -2420,7 +2420,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QVector<float> *committedCurveDepth,
                                  const QVector<float> *committedInFrontCurveDepth,
                                  const QSize &committedCurveDepthSize,
-                                 qreal cameraFrameSensorScale)
+                                 qreal cameraFrameSensorScale,
+                                 bool smoothWiresOverlay)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     const bool selectedOutlineEnabled =
@@ -3573,8 +3574,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                 }
                 if (drawSelectionOutline) {
-                    blend(selectionOutline,
-                          selectedOutlineCoverage / 4.0f);
+                    const float coverage = smoothWiresOverlay
+                        ? selectedOutlineCoverage / 4.0f
+                        : (selectedOutlineCoverage > 0.0f ? 1.0f : 0.0f);
+                    blend(selectionOutline, coverage);
                 }
             }
         }

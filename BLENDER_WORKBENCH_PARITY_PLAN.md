@@ -10211,15 +10211,3 @@ scene depth.
   Blender's preference is a user theme value, so classiCAD stores it in app
   preferences rather than imported document shading. Build passed; matched
   selected-outline images remain open.
-
-### QPainter curved NURBS transparency coverage (2026-10-16)
-
-- The ordinary QPainter color resolve now combines partial pixel coverage
-  across all triangles of a NURBS surface, including curved and nonplanar
-  surfaces. This avoids applying the transparent material alpha repeatedly
-  along internal tessellation edges. The depth-sensitive fragment-sink path
-  keeps its coplanar and normal checks, so effect data from genuinely different
-  depths and normals is not collapsed into a single sample. The bounded
-  one-million-pixel and 100,000-triangle limits still select the older fallback
-  above budget. This addresses internal tessellation coverage only; projected
-  self-overlap and matched Blender images remain open. Build passed.

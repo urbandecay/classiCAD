@@ -9046,3 +9046,12 @@ resolve remain open.
   mesh keeps loop data associated with the corresponding vertex when winding
   is reversed. C++ build passed; a matched reflected-mesh Blender capture has
   not been run.
+
+### QPainter software shadow texture cutouts (2026-10-15)
+
+- Software shadow-map casters now carry the same per-triangle texture alpha
+  data as the QPainter receiver raster. The light-map pass interpolates UVs
+  across each caster triangle and skips texels below the existing 0.1 alpha
+  cutoff, including supported packed, float, and UDIM image data. Alpha modes
+  that Blender ignores remain solid casters. C++ build passed; a matched
+  cutout-shadow comparison has not been run.

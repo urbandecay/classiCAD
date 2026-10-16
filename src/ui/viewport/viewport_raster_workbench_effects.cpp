@@ -84,6 +84,7 @@ struct TextureAlphaTriangle {
 
 struct ShadowTriangle {
     QVector3D vertices[3];
+    TextureAlphaTriangle textureAlpha;
 };
 
 TextureAlphaTriangle::FloatImage loadFloatAlphaPayload(const QString &encoded,
@@ -2833,6 +2834,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 for (int corner = 0; corner < 3; ++corner) {
                     caster.vertices[corner] = world[corner];
                 }
+                if (textureAlphaTriangle != nullptr &&
+                    textureAlphaTriangle->cutout) {
+                    caster.textureAlpha = *textureAlphaTriangle;
+                }
                 shadowTriangles.append(caster);
             }
             // Shadow casters are submitted from world geometry independently
@@ -3082,6 +3087,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const qreal b = ((p[2].x()-px)*(p[0].y()-py)-(p[2].y()-py)*(p[0].x()-px))/area;
                 const qreal c = 1.0 - a - b;
                 if (a < -1e-6 || b < -1e-6 || c < -1e-6) continue;
+                if (triangle.textureAlpha.cutout) {
+                    const QPointF uv =
+                        triangle.textureAlpha.uvs[0] * a +
+                        triangle.textureAlpha.uvs[1] * b +
+                        triangle.textureAlpha.uvs[2] * c;
+                    if (sampleTextureAlpha(triangle.textureAlpha, uv) < 0.1f)
+                        continue;
+                }
                 const qsizetype mapIndex =
                     qsizetype(y) * lightMapWidth + x;
                 float &depth = lightDepth[mapIndex];

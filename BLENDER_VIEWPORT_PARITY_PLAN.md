@@ -428,12 +428,14 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   Source: [mesh conversion](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh_convert.cc#L210-L281), [surface sampling](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/curve.cc#L1299-L1375), [surface DispList dimensions](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/displist.cc#L1195-L1207).
 
 - GPU Workbench texture-alpha masking now includes trimmed NURBS surfaces in
-  the object-ID/outline pass and shadow-map pass. Surface tessellation already
-  emits active-domain UV coordinates for every visible triangle vertex, so
-  the existing image/UDIM sampling and Blender's 0.1 cutoff apply across the
-  tessellated trimmed region as they do on untrimmed surfaces. Trim boundaries
-  remain tessellation approximations; missing or unsupported images still use
-  the material fallback.
+  the object-ID/outline pass. Surface tessellation already emits active-domain
+  UV coordinates for every visible triangle vertex, so the existing image/
+  UDIM sampling and Blender's 0.1 cutoff apply across the tessellated trimmed
+  region as they do on untrimmed surfaces. Blender's shadow-caster pass is
+  geometry-only and does not sample Image Texture alpha; both the GPU and
+  QPainter shadow paths therefore keep cutout shapes as full shadow casters.
+  Trim boundaries remain tessellation approximations; missing or unsupported
+  images still use the material fallback in the color/effect-alpha paths.
 
 - A `QOpenGLWidget` now presents the viewport on desktop OpenGL systems. The
   procedural grid remains in a GPU framebuffer and is resolved/composited into

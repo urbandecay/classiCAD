@@ -1729,8 +1729,15 @@ bool ViewportSceneRenderer::draw(
             // Antialias coverage has the same color-space meaning for curve
             // wires and surface boundaries as it does for edit wires.
             const bool linearDisplayBlend = linearDisplayBlendAvailable;
+            // The resolve target stores premultiplied line colors in half
+            // float. Keep those colors linear whenever a resolve will blend
+            // them with the copied scene. The ordinary widget target is
+            // GL_RGBA8 (display-sRGB values without sRGB framebuffer
+            // conversion), so the resolve shader performs the matching
+            // decode/encode around its composite.
             const bool convertStrokeColorToLinear =
-                linearDisplayBlendAvailable || sceneLinearOutput;
+                linearDisplayBlendAvailable || sceneLinearOutput ||
+                strokeResolveActive;
             if (linearDisplayBlend) {
                 glEnable(GL_FRAMEBUFFER_SRGB);
             } else {
@@ -1832,6 +1839,11 @@ bool ViewportSceneRenderer::draw(
         strokeResolveProgram_.setUniformValue("uSceneDepth", 4);
         strokeResolveProgram_.setUniformValue(
             "uIgnoreSceneDepth", isolatedDepthActive ? 1 : 0);
+        strokeResolveProgram_.setUniformValue(
+            "uManualSrgbBlend",
+            !sceneLinearOutput &&
+                    framebufferColorEncoding != GL_SRGB
+                ? 1 : 0);
         strokeResolveProgram_.setUniformValue(
             "uXrayHiddenFade",
             static_cast<float>(std::clamp<qreal>(

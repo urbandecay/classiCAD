@@ -10422,3 +10422,16 @@ scene depth.
   expectations. The QPainter/capability fallback is separate and is not
   covered by this native GPU line path. `cmake --build build -j4` passed;
   classiCAD's GUI was not launched.
+- Follow-up: the live viewport's `GL_RGBA8` target stores display-sRGB bytes,
+  while the native wire resolve stores line color in linear light. The resolve
+  had blended those values without decoding the scene background, making
+  antialiased line edges darker and visually heavier than the same stroke on
+  an sRGB framebuffer. It now decodes the background, composites in linear
+  light, and encodes for the display target; line coverage and width are
+  unchanged. The offscreen contract renders the same native curve to both
+  framebuffer formats and checks their 5x5 line-center samples (maximum
+  difference: 2 levels in 8-bit channels). This checks framebuffer
+  consistency, not a matched live-app screenshot against Blender. The full
+  render-contract executable still exits 1 on existing unrelated viewport
+  assertions; the native curve-wire and new framebuffer-format assertions
+  pass. `cmake --build build -j4` passed; the GUI was not launched.

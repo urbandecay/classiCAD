@@ -18682,6 +18682,8 @@ int main(int argc, char *argv[])
                             "CLASSICAD_BLENDER_CURVE_WIRE_CAPTURE");
                     bool blenderCurveCaptureSaved =
                         blenderCurveCapturePath.isEmpty();
+                    bool widgetFormatResolveMatchesSrgb =
+                        blenderCurveCapturePath.isEmpty();
                     if (!blenderCurveCapturePath.isEmpty()) {
                         const QSize captureSize(1920, 1080);
                         QOpenGLFramebufferObjectFormat captureFormat;
@@ -18724,9 +18726,13 @@ int main(int argc, char *argv[])
                             functions.glViewport(0, 0, captureSize.width(),
                                                  captureSize.height());
                             functions.glDisable(GL_FRAMEBUFFER_SRGB);
-                            functions.glClearColor(51.0f / 255.0f,
-                                                   51.0f / 255.0f,
-                                                   51.0f / 255.0f, 1.0f);
+                            // The sRGB FBO expects linear clear values. Use
+                            // the linear equivalent of display RGB 51 so the
+                            // reference background matches the widget's
+                            // plain GL_RGBA8 display-byte target.
+                            constexpr float linearGray = 0.0331047666f;
+                            functions.glClearColor(linearGray, linearGray,
+                                                   linearGray, 1.0f);
                             functions.glClearDepth(1.0);
                             functions.glClear(GL_COLOR_BUFFER_BIT |
                                               GL_DEPTH_BUFFER_BIT);
@@ -18752,10 +18758,93 @@ int main(int argc, char *argv[])
                                 captureLineMinimum + 10 <
                                     captureBackgroundPixel &&
                                 captureImage.save(blenderCurveCapturePath);
+
+                            constexpr int comparisonX = 958;
+                            constexpr int comparisonY = 538;
+                            constexpr int comparisonSize = 5;
+                            QVector<unsigned char> srgbResolvePixels(
+                                comparisonSize * comparisonSize * 4);
+                            captureFramebuffer.bind();
+                            functions.glReadPixels(
+                                comparisonX, comparisonY, comparisonSize,
+                                comparisonSize, GL_RGBA, GL_UNSIGNED_BYTE,
+                                srgbResolvePixels.data());
+
+                            QOpenGLFramebufferObjectFormat widgetFormat;
+                            widgetFormat.setAttachment(
+                                QOpenGLFramebufferObject::CombinedDepthStencil);
+                            widgetFormat.setInternalTextureFormat(GL_RGBA8);
+                            QOpenGLFramebufferObject widgetFramebuffer(
+                                captureSize, widgetFormat);
+                            if (widgetFramebuffer.isValid()) {
+                                widgetFramebuffer.bind();
+                                functions.glViewport(
+                                    0, 0, captureSize.width(),
+                                    captureSize.height());
+                                functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                                functions.glClearColor(51.0f / 255.0f,
+                                                       51.0f / 255.0f,
+                                                       51.0f / 255.0f, 1.0f);
+                                functions.glClearDepth(1.0);
+                                functions.glClear(GL_COLOR_BUFFER_BIT |
+                                                  GL_DEPTH_BUFFER_BIT);
+                                bool widgetResolveUsed = false;
+                                const bool widgetRendered = wireRenderer.draw(
+                                    {captureStroke}, captureTransform,
+                                    captureSize, 1.0, true, 1.0, true, true,
+                                    false, &widgetResolveUsed);
+                                functions.glFinish();
+                                QVector<unsigned char> widgetResolvePixels(
+                                    comparisonSize * comparisonSize * 4);
+                                functions.glReadPixels(
+                                    comparisonX, comparisonY,
+                                    comparisonSize, comparisonSize, GL_RGBA,
+                                    GL_UNSIGNED_BYTE,
+                                    widgetResolvePixels.data());
+                                int maximumChannelDifference = 0;
+                                for (int index = 0;
+                                     index < widgetResolvePixels.size();
+                                     ++index) {
+                                    maximumChannelDifference = std::max(
+                                        maximumChannelDifference,
+                                        std::abs(
+                                            int(widgetResolvePixels[index]) -
+                                            int(srgbResolvePixels[index])));
+                                }
+                                widgetFormatResolveMatchesSrgb =
+                                    widgetRendered && widgetResolveUsed &&
+                                    // Shader transfer math and fixed-function
+                                    // sRGB conversion can round an 8-bit edge
+                                    // pixel differently by up to two levels.
+                                    maximumChannelDifference <= 2;
+                                if (!widgetFormatResolveMatchesSrgb) {
+                                    QVector<int> srgbRedValues;
+                                    QVector<int> widgetRedValues;
+                                    for (int index = 0;
+                                         index < widgetResolvePixels.size();
+                                         index += 4) {
+                                        srgbRedValues.append(
+                                            int(srgbResolvePixels[index]));
+                                        widgetRedValues.append(
+                                            int(widgetResolvePixels[index]));
+                                    }
+                                    qWarning()
+                                        << "Display-sRGB resolve comparison"
+                                        << "draw=" << widgetRendered
+                                        << "resolve=" << widgetResolveUsed
+                                        << "max difference="
+                                        << maximumChannelDifference
+                                        << "sRGB red=" << srgbRedValues
+                                        << "widget red=" << widgetRedValues;
+                                }
+                            }
                         }
                     }
                     passed &= check(blenderCurveCaptureSaved,
                                     "the matched Blender-style curve-wire capture must save when requested");
+                    passed &= check(
+                        widgetFormatResolveMatchesSrgb,
+                        "GL_RGBA8 display-sRGB viewport strokes must resolve like Blender's sRGB target");
 
                     QOpenGLFramebufferObjectFormat sceneLinearStrokeFormat;
                     sceneLinearStrokeFormat.setAttachment(

@@ -11,11 +11,26 @@ uniform sampler2D uSceneDepth;
 uniform sampler2D uLineWireFlag;
 uniform ivec2 uViewportSize;
 uniform int uIgnoreSceneDepth;
+uniform int uManualSrgbBlend;
 uniform float uXrayHiddenFade;
 
 layout(location = 0) out vec4 fragmentColor;
 
 const float kNoLineDistance = 1.0e10;
+
+vec3 srgbToLinear(vec3 color)
+{
+    vec3 low = color / 12.92;
+    vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+    return mix(high, low, lessThanEqual(color, vec3(0.04045)));
+}
+
+vec3 linearToSrgb(vec3 color)
+{
+    vec3 low = color * 12.92;
+    vec3 high = 1.055 * pow(max(color, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+}
 
 bool pixelInViewport(ivec2 pixel)
 {
@@ -146,6 +161,9 @@ void main()
 {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     vec4 baseColor = texelFetch(uBaseColor, pixel, 0);
+    if (uManualSrgbBlend != 0) {
+        baseColor.rgb = srgbToLinear(baseColor.rgb);
+    }
     float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
     const ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
                                      ivec2(0, 1), ivec2(0, -1));
@@ -247,6 +265,10 @@ void main()
     // Resolve the line overlay separately, then composite it over the copied
     // scene target. Folding all wires before a single scene-depth comparison
     // can incorrectly place a farther wire in front of the surface.
-    fragmentColor = resolvedLineColor + baseColor *
-                    (1.0 - resolvedLineColor.a);
+    vec4 compositedColor = resolvedLineColor + baseColor *
+                           (1.0 - resolvedLineColor.a);
+    if (uManualSrgbBlend != 0) {
+        compositedColor.rgb = linearToSrgb(compositedColor.rgb);
+    }
+    fragmentColor = compositedColor;
 }

@@ -7627,9 +7627,11 @@ resolve remain open.
 - Curve control cages and handles now use the retained regular or in-front
   raster depth when available, so normal Solid overlays do not draw through
   nearer surfaces. Regular cages also hide behind in-front surfaces. X-Ray
-  keeps the overlays visible through geometry. The depth sampling is bounded
-  and has no effect when the fallback did not retain scene depth. Blender's
-  pinned Overlay wire pass depth-tests against the scene in
+  keeps cages visible through geometry and fades the hidden runs by
+  `1 - xrayAlpha`; visible runs retain their normal opacity. Ordinary cages
+  remain covered by the later in-front layer, and in-front cages use their own
+  depth. The depth sampling is bounded and has no effect when the fallback did
+  not retain scene depth. Blender's pinned Overlay wire pass depth-tests against the scene in
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L60-L74).
   The C++ build passed; no matched Blender image comparison has been run.
 

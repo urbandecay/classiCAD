@@ -4061,7 +4061,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                depthSize.height() > 0 &&
                depth->size() == depthSize.width() * depthSize.height();
     };
-    const bool regularDepthAvailable = !xrayEnabled &&
+    const bool regularDepthAvailable =
         hasValidDepth(regularSceneDepth, regularDepthSize);
     const bool inFrontDepthAvailable =
         hasValidDepth(inFrontSceneDepth, inFrontDepthSize);
@@ -4096,34 +4096,42 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
         }
         return transform_.worldDirectionToView(point).towardCamera;
     };
+    const auto visibleInDepth = [&](const QPointF &screen,
+                                    qreal depth,
+                                    const QVector<float> *sceneDepth,
+                                    const QSize &sceneDepthSize) {
+        if (!hasValidDepth(sceneDepth, sceneDepthSize) ||
+            viewportSize.width() <= 0 || viewportSize.height() <= 0) {
+            return true;
+        }
+        const int x = qFloor(screen.x() * sceneDepthSize.width() /
+                             viewportSize.width());
+        const int y = qFloor(screen.y() * sceneDepthSize.height() /
+                             viewportSize.height());
+        if (x < 0 || x >= sceneDepthSize.width() ||
+            y < 0 || y >= sceneDepthSize.height()) return true;
+        const float surfaceDepth = (*sceneDepth)[
+            y * sceneDepthSize.width() + x];
+        const qreal tolerance = std::max<qreal>(1.0e-4,
+                                                std::abs(depth) * 1.0e-6);
+        return !std::isfinite(surfaceDepth) ||
+               surfaceDepth <= depth + tolerance;
+    };
     const auto depthVisible = [&](const QPointF &screen,
                                   const Point3D &world) {
         if (!relevantDepthAvailable || viewportSize.width() <= 0 ||
             viewportSize.height() <= 0) return true;
         const qreal depth = pointDepth(world);
-        const qreal tolerance = std::max<qreal>(1.0e-4,
-                                                std::abs(depth) * 1.0e-6);
-        const auto visibleInDepth = [&](const QVector<float> *sceneDepth,
-                                        const QSize &sceneDepthSize) {
-            if (!hasValidDepth(sceneDepth, sceneDepthSize)) return true;
-            const int x = qFloor(screen.x() * sceneDepthSize.width() /
-                                 viewportSize.width());
-            const int y = qFloor(screen.y() * sceneDepthSize.height() /
-                                 viewportSize.height());
-            if (x < 0 || x >= sceneDepthSize.width() ||
-                y < 0 || y >= sceneDepthSize.height()) return true;
-            const float surfaceDepth = (*sceneDepth)[
-                y * sceneDepthSize.width() + x];
-            return !std::isfinite(surfaceDepth) ||
-                   surfaceDepth <= depth + tolerance;
-        };
         if (showInFront) {
-            return visibleInDepth(inFrontSceneDepth, inFrontDepthSize);
+            return visibleInDepth(screen, depth,
+                                  inFrontSceneDepth, inFrontDepthSize);
         }
-        if (regularDepthAvailable &&
-            !visibleInDepth(regularSceneDepth, regularDepthSize)) return false;
+        if (!xrayEnabled && regularDepthAvailable &&
+            !visibleInDepth(screen, depth,
+                            regularSceneDepth, regularDepthSize)) return false;
         if (inFrontDepthAvailable &&
-            !visibleInDepth(inFrontSceneDepth, inFrontDepthSize)) return false;
+            !visibleInDepth(screen, depth,
+                            inFrontSceneDepth, inFrontDepthSize)) return false;
         return true;
     };
     const auto drawControlPointChain = [&](const QVector<QPointF> &controlPoints,
@@ -4151,7 +4159,9 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
         painter.setRenderHint(QPainter::Antialiasing,
                               smoothWiresEditMode_);
         QPainterPath visibleCage;
-        bool connectedCageRun = false;
+        QPainterPath hiddenCage;
+        bool connectedVisibleCageRun = false;
+        bool connectedHiddenCageRun = false;
         quint64 depthSampleBudget = 0;
         constexpr quint64 kMaximumControlCageDepthSamples = 1'000'000;
         for (int index = 0; index + 1 < controlPoints.size(); ++index) {
@@ -4159,7 +4169,8 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
             Point3D worldEnd = worldPosition(index + 1);
             if (!clipWorkbenchSegmentToViewDepth(
                     transform_, viewportSize, &worldStart, &worldEnd)) {
-                connectedCageRun = false;
+                connectedVisibleCageRun = false;
+                connectedHiddenCageRun = false;
                 continue;
             }
             QPointF start;
@@ -4168,12 +4179,14 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     worldStart, viewportSize, &start) ||
                 !transform_.worldPointToScreenUnclipped(
                     worldEnd, viewportSize, &end)) {
-                connectedCageRun = false;
+                connectedVisibleCageRun = false;
+                connectedHiddenCageRun = false;
                 continue;
             }
             if (!relevantDepthAvailable) {
                 painter.drawLine(start, end);
-                connectedCageRun = false;
+                connectedVisibleCageRun = false;
+                connectedHiddenCageRun = false;
                 continue;
             }
             const qreal pixelLength = std::hypot(
@@ -4184,13 +4197,16 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                 static_cast<qreal>(kMaximumControlCageDepthSamples)));
             if (steps + 1 > kMaximumControlCageDepthSamples -
                                 depthSampleBudget) {
-                connectedCageRun = false;
+                connectedVisibleCageRun = false;
+                connectedHiddenCageRun = false;
                 break;
             }
             depthSampleBudget += steps + 1;
             const qreal startDepth = pointDepth(worldStart);
             const qreal endDepth = pointDepth(worldEnd);
-            bool visibleRun = connectedCageRun;
+            bool visibleRun = connectedVisibleCageRun;
+            bool hiddenRun = connectedHiddenCageRun;
+            bool lastSampleHidden = false;
             for (quint64 step = 0; step <= steps; ++step) {
                 const qreal fraction = static_cast<qreal>(step) /
                                        static_cast<qreal>(steps);
@@ -4207,20 +4223,66 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     worldStart.x + (worldEnd.x - worldStart.x) * worldFraction,
                     worldStart.y + (worldEnd.y - worldStart.y) * worldFraction,
                     worldStart.z + (worldEnd.z - worldStart.z) * worldFraction};
-                if (depthVisible(screen, world)) {
+                bool hiddenByScene = false;
+                if (xrayEnabled) {
+                    if (showInFront) {
+                        hiddenByScene = inFrontDepthAvailable &&
+                            !visibleInDepth(screen, pointDepth(world),
+                                            inFrontSceneDepth,
+                                            inFrontDepthSize);
+                    } else {
+                        hiddenByScene = regularDepthAvailable &&
+                            !visibleInDepth(screen, pointDepth(world),
+                                            regularSceneDepth,
+                                            regularDepthSize);
+                    }
+                }
+                const bool coveredByInFront = !showInFront &&
+                    inFrontDepthAvailable &&
+                    !visibleInDepth(screen, pointDepth(world),
+                                    inFrontSceneDepth, inFrontDepthSize);
+                if (coveredByInFront) {
+                    visibleRun = false;
+                    hiddenRun = false;
+                    continue;
+                }
+                if (!xrayEnabled && !depthVisible(screen, world)) {
+                    visibleRun = false;
+                    hiddenRun = false;
+                    continue;
+                }
+                if (hiddenByScene) {
+                    if (!hiddenRun) {
+                        hiddenCage.moveTo(screen);
+                        hiddenRun = true;
+                    } else {
+                        hiddenCage.lineTo(screen);
+                    }
+                    visibleRun = false;
+                } else {
                     if (!visibleRun) {
                         visibleCage.moveTo(screen);
                         visibleRun = true;
                     } else {
                         visibleCage.lineTo(screen);
                     }
-                } else {
-                    visibleRun = false;
+                    hiddenRun = false;
                 }
+                lastSampleHidden = hiddenByScene;
             }
-            connectedCageRun = visibleRun;
+            connectedVisibleCageRun = visibleRun && !lastSampleHidden;
+            connectedHiddenCageRun = hiddenRun && lastSampleHidden;
         }
         if (!visibleCage.isEmpty()) painter.drawPath(visibleCage);
+        if (xrayEnabled && !hiddenCage.isEmpty()) {
+            QColor fadedHandleColor = handleColor;
+            fadedHandleColor.setAlphaF(
+                handleColor.alphaF() * (1.0 - std::clamp(
+                    shadingSettings_.xrayAlphaForMode(), 0.0, 1.0)));
+            painter.setPen(QPen(fadedHandleColor, 1.0, Qt::DashLine));
+            painter.drawPath(hiddenCage);
+            painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
+        }
         painter.restore();
 
         for (int index = 0; index < controlPoints.size(); ++index) {

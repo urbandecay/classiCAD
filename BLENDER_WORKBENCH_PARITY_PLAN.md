@@ -7892,14 +7892,12 @@ resolve remain open.
 
 ### QPainter Workbench effect memory bound (2026-10-15)
 
-- The software effects pass previously allocated multiple full-resolution
-  depth, normal, and object buffers without a practical pixel limit. It now
-  skips those effects above one million target pixels and displays retained
-  scene-linear surfaces without effects when available. This bounds CPU
-  memory use but leaves shadows, cavity, outlines, and depth of field absent
-  in oversized QPainter fallback frames. Blender's GPU path does not share
-  this CPU allocation limit. The C++ build passed; matched output remains
-  open.
+- **Historical note, superseded by “QPainter effects on large viewports” below:**
+  the first memory-bound implementation skipped effects above one million
+  target pixels. The current implementation reduces the internal depth,
+  normal, and object-ID buffer resolution to stay within that budget, then
+  applies effects across the full-size scene image. Large-view detail is
+  coarser than Blender's GPU result; matched output remains open.
 
 ### Blender font visibility in original mesh mode (2026-10-15)
 

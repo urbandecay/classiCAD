@@ -573,6 +573,8 @@ private:
             session_.selection().setObjectIds(
                 ordinaryImportReport.selectedObjectIds,
                 ordinaryImportReport.activeObjectId);
+            session_.selection().setActiveObjectId(
+                ordinaryImportReport.activeObjectId);
         }
         // Opening a normal Blender file imports its supported scene data into
         // a new classiCAD document. Never let Ctrl+S replace that source file.
@@ -870,15 +872,15 @@ private:
             ObjectId activeImportedObjectId = ObjectId::invalid();
             if (report.activeObjectIndex >= 0 &&
                 report.activeObjectIndex < insertedObjectIds.size()) {
-                const ObjectId candidate =
+                activeImportedObjectId =
                     insertedObjectIds[report.activeObjectIndex];
-                if (selectedImportedObjectIds.contains(candidate)) {
-                    activeImportedObjectId = candidate;
-                }
             }
             if (!selectedImportedObjectIds.isEmpty()) {
                 session_.selection().setObjectIds(selectedImportedObjectIds,
                                                   activeImportedObjectId);
+            }
+            if (activeImportedObjectId.isValid()) {
+                session_.selection().setActiveObjectId(activeImportedObjectId);
             }
             if (viewport_ != nullptr) {
                 viewport_->refreshAfterProjectImport();

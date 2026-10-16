@@ -633,7 +633,7 @@ bool SessionSerializer::write(const QString &path,
     }
 
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 6);
+    root.insert(QStringLiteral("version"), 7);
     root.insert(QStringLiteral("zoom"), view.zoom);
     root.insert(QStringLiteral("pan"), pointToJson(view.pan));
     root.insert(QStringLiteral("document"), documentToJson(document));
@@ -674,6 +674,8 @@ bool SessionSerializer::write(const QString &path,
     root.insert(QStringLiteral("selectedObjectIds"), selectedObjectIds);
     root.insert(QStringLiteral("primaryObjectId"),
                 QString::number(view.primaryObjectId.value()));
+    root.insert(QStringLiteral("activeObjectId"),
+                QString::number(view.activeObjectId.value()));
     if (view.activeControlPoint.isValid()) {
         QJsonObject controlPoint;
         controlPoint.insert(QStringLiteral("objectId"),
@@ -715,7 +717,7 @@ bool SessionSerializer::read(const QString &path,
 
     const QJsonObject root = json.object();
     const int version = root.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 6) {
+    if (version < 1 || version > 7) {
         return fail(errorMessage,
                     QStringLiteral("Unsupported update session version %1.").arg(version));
     }
@@ -837,6 +839,18 @@ bool SessionSerializer::read(const QString &path,
             return fail(errorMessage, QStringLiteral("Invalid primary object ID."));
         }
         restored.view.primaryObjectId = ObjectId::fromValue(primaryId);
+
+        if (version >= 7) {
+            bool activeIdOk = false;
+            const quint64 activeId = root.value(QStringLiteral("activeObjectId"))
+                                        .toString().toULongLong(&activeIdOk);
+            if (!activeIdOk) {
+                return fail(errorMessage, QStringLiteral("Invalid active object ID."));
+            }
+            restored.view.activeObjectId = ObjectId::fromValue(activeId);
+        } else {
+            restored.view.activeObjectId = restored.view.primaryObjectId;
+        }
 
         const QJsonValue activeControlPointValue = root.value(QStringLiteral("activeControlPoint"));
         if (!activeControlPointValue.isUndefined()) {

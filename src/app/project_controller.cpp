@@ -73,9 +73,12 @@ bool ProjectController::open(const QString &path,
 
     session_.replaceDocument(std::move(candidate));
     if (ordinaryImportReport != nullptr &&
-        !ordinaryImportReport->selectedObjectIds.isEmpty()) {
+        (!ordinaryImportReport->selectedObjectIds.isEmpty() ||
+         ordinaryImportReport->activeObjectId.isValid())) {
         session_.selection().setObjectIds(
             ordinaryImportReport->selectedObjectIds,
+            ordinaryImportReport->activeObjectId);
+        session_.selection().setActiveObjectId(
             ordinaryImportReport->activeObjectId);
     }
     if (cameraSettings != nullptr) {

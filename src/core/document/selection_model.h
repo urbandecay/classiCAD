@@ -28,12 +28,15 @@ public:
     const QVector<ObjectId> &objectIds() const;
 
     const ObjectId &primaryObjectId() const;
+    const ObjectId &activeObjectId() const;
 
     bool contains(ObjectId objectId) const;
     void clear();
+    void deselectAllPreservingActive();
     void setObjectIds(const QVector<ObjectId> &objectIds,
                       ObjectId primaryObjectId = ObjectId::invalid());
     void setPrimaryObjectId(ObjectId objectId);
+    void setActiveObjectId(ObjectId objectId);
     void add(ObjectId objectId);
     void remove(ObjectId objectId);
     void toggle(ObjectId objectId);
@@ -48,6 +51,7 @@ private:
 
     QVector<ObjectId> objectIds_;
     ObjectId primaryObjectId_ = ObjectId::invalid();
+    ObjectId activeObjectId_ = ObjectId::invalid();
     ControlPointReference activeControlPoint_;
     ChangeNotifier changeNotifier_;
 };

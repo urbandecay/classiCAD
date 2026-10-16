@@ -2638,6 +2638,7 @@ public:
         if (requested == interactionMode_) {
             return true;
         }
+        ObjectId editSeedObjectId = ObjectId::invalid();
         if (requested == ViewportInteractionMode::Edit) {
             const auto geometryFamily = [this](ObjectId objectId) {
                 const Shape *shape = document_.shape(objectId);
@@ -2668,23 +2669,27 @@ public:
                     return 0;
                 }
             };
-            const int activeFamily = geometryFamily(selection_.primaryObjectId());
+            editSeedObjectId =
+                selection_.activeObjectId().isValid()
+                    ? selection_.activeObjectId()
+                    : selection_.primaryObjectId();
+            const int activeFamily = geometryFamily(editSeedObjectId);
             if (activeFamily == 0) {
                 notifyViewportControlsChanged();
                 if (toolStatusUpdate_) {
                     const Shape *activeShape =
-                        document_.shape(selection_.primaryObjectId());
+                        document_.shape(editSeedObjectId);
                     const QString message =
                         activeShape != nullptr &&
                                 activeShape->geometryType ==
                                     GeometryType::PolygonMesh
                             ? QStringLiteral(
                                   "Polygon mesh Edit Mode is not available yet")
-                            : selection_.objectIds().isEmpty()
+                            : !editSeedObjectId.isValid()
                                   ? QStringLiteral(
                                         "Select an editable curve, point, surface, or solid first")
                                   : QStringLiteral(
-                                        "The selected object cannot enter Edit Mode");
+                                        "The active object cannot enter Edit Mode");
                     toolStatusUpdate_(message);
                 }
                 return false;
@@ -2698,6 +2703,7 @@ public:
                     skippedIncompatibleSelection = true;
                 }
             }
+            editObjectIds_.insert(editSeedObjectId.value());
             if (editObjectIds_.isEmpty()) {
                 notifyViewportControlsChanged();
                 return false;
@@ -2711,7 +2717,7 @@ public:
                 componentSelectionMode_ = ComponentSelectionMode::Vertex;
             }
             const Shape *activeShape =
-                document_.shape(selection_.primaryObjectId());
+                document_.shape(editSeedObjectId);
             if (activeShape != nullptr &&
                 activeShape->geometryType == GeometryType::Point &&
                 componentSelectionMode_ != ComponentSelectionMode::Vertex) {
@@ -2741,13 +2747,13 @@ public:
                         allComponents.cbegin(), allComponents.cend());
                     activeSelections.insert(objectValue, std::move(allComponents));
                     if (ObjectId::fromValue(objectValue) ==
-                        selection_.primaryObjectId()) {
+                        editSeedObjectId) {
                         activeComponentIndices_[static_cast<int>(
                             componentSelectionMode_)] = lastComponent;
                     }
                 }
             }
-            componentSelectionObject_ = selection_.primaryObjectId();
+            componentSelectionObject_ = editSeedObjectId;
         }
         componentBoxSelectionActive_ = false;
         pendingComponentClickShapeIndex_ = -1;
@@ -2776,8 +2782,13 @@ public:
             key < Qt::Key_1 || key > Qt::Key_3) {
             return false;
         }
-        const Shape *activeShape =
-            document_.shape(selection_.primaryObjectId());
+        ObjectId editActiveObjectId = componentSelectionObject_;
+        if (!isEditObject(editActiveObjectId)) {
+            editActiveObjectId = selection_.activeObjectId().isValid()
+                                     ? selection_.activeObjectId()
+                                     : selection_.primaryObjectId();
+        }
+        const Shape *activeShape = document_.shape(editActiveObjectId);
         if (activeShape == nullptr) {
             return false;
         }
@@ -2889,13 +2900,12 @@ public:
                                                componentSelectionMode_)
                 : QSet<int>{};
             selections.insert(objectValue, components);
-            if (objectId == selection_.primaryObjectId()) {
+            if (objectId == componentSelectionObject_) {
                 activeComponentIndices_[modeIndex] = components.isEmpty()
                     ? -1
                     : *std::max_element(components.cbegin(), components.cend());
             }
         }
-        componentSelectionObject_ = selection_.primaryObjectId();
         update();
         emitCoordinateUpdate();
     }
@@ -2908,7 +2918,7 @@ public:
         }
         const int modeIndex = static_cast<int>(componentSelectionMode_);
         auto &selections = componentSelections_[modeIndex];
-        const ObjectId primaryObjectId = selection_.primaryObjectId();
+        const ObjectId primaryObjectId = componentSelectionObject_;
         for (quint64 objectValue : editObjectIds_) {
             const ObjectId objectId = ObjectId::fromValue(objectValue);
             const Shape *shape = document_.shape(objectId);
@@ -2971,7 +2981,7 @@ public:
             return false;
         }
         if (key == Qt::Key_A) {
-            clearSelection();
+            selection_.deselectAllPreservingActive();
             update();
             emitCoordinateUpdate();
         } else {
@@ -3865,7 +3875,7 @@ public:
 
         if (editEdgeMode) {
             const Shape *activeShape =
-                document_.shape(selection_.primaryObjectId());
+                document_.shape(componentSelectionObject_);
             if (activeShape != nullptr &&
                 (activeShape->geometryType == GeometryType::NurbsSurface ||
                  activeShape->geometryType == GeometryType::NurbsSolid)) {
@@ -7896,6 +7906,7 @@ public:
         view.cameraPreferences = viewportTransform_.cameraPreferences();
         view.selectedObjectIds = selectedShapeIndices_;
         view.primaryObjectId = selectedShapeIndex_;
+        view.activeObjectId = selection_.activeObjectId();
         view.activeControlPoint = selection_.activeControlPoint();
         view.controlPointsVisible = controlPointsVisible_;
         view.activeTool = activeTool_;
@@ -7910,7 +7921,7 @@ public:
         }
 
         DebugLog::instance().write(
-            QStringLiteral("saveUpdateSession path=%1 shapes=%2 version=6 preset=%3 perspective=%4 zoom=%5 pan=%6 shading=%7")
+            QStringLiteral("saveUpdateSession path=%1 shapes=%2 version=7 preset=%3 perspective=%4 zoom=%5 pan=%6 shading=%7")
                 .arg(path)
                 .arg(shapes_.size())
                 .arg(static_cast<int>(viewportTransform_.viewPreset()))
@@ -7965,6 +7976,7 @@ public:
             }
             selection_.setObjectIds(restored.view.selectedObjectIds,
                                     restored.view.primaryObjectId);
+            selection_.setActiveObjectId(restored.view.activeObjectId);
             selection_.prune(document_);
             if (restored.view.activeControlPoint.isValid() &&
                 selection_.contains(restored.view.activeControlPoint.objectId)) {

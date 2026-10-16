@@ -3904,14 +3904,23 @@ geometry when it has no retained component selection.
 Returning to Object Mode preserves the component caches without allowing them
 to affect object transforms, point extrusion, or object duplication.
 
+The active object is now stored separately from the selected-object list.
+Object Mode `Alt+A` clears selection and component state while retaining the
+active object, and Tab can enter Edit Mode on that active editable object even
+when nothing is selected. The active object determines the Edit Mode geometry
+family; compatible selected objects join it when present. Blender imports now
+retain an active object even if it is unselected, and update-session version 7
+saves and restores this state. Selection visuals continue to use only the
+selected-object list. This ports the active-object state needed by the current
+workflow; exact Blender behavior for every selection gesture and hidden-object
+case remains under review.
+
 Object Mode selection now routes Blender's `Alt+A` deselect and `Ctrl+I` invert
 shortcuts through the Select tool when no selection drag is active. Invert
 complements the current selection over visible, selectable document objects;
 the last resulting object becomes the primary selection. `Alt+A` clears the
-primary object along with the selection because `SelectionModel` currently
-requires the primary object to be selected; Blender retains an active-object
-pointer after deselection. Modeling that independent active state remains
-open. The shortcuts follow Blender's documented
+primary selected object while retaining the independent active-object ID. The
+shortcuts follow Blender's documented
 [object selection shortcuts](https://docs.blender.org/manual/en/5.2/scene_layout/object/selecting.html)
 while using `Document::isObjectEditable` for classiCAD's visibility and
 selectability rules.
@@ -4055,8 +4064,10 @@ model, without importing Blender's architecture:
 
 - Object Mode selects and transforms whole objects. The primary selected object
   is distinct from the other selected objects.
-- Tab enters Edit Mode for selected, editable objects and exits to Object Mode.
-  The mode selector and keyboard state must stay synchronized.
+- Tab enters Edit Mode for the active editable object (including after
+  deselection) and exits to Object Mode. Compatible selected objects can join
+  the active object's edit set. The mode selector and keyboard state must stay
+  synchronized.
 - Edit Mode selects geometry within the edited object: mesh and surface
   vertex/edge/face components, and curve control points/handles. The existing
   per-component selection caches are retained and routed only while editing.

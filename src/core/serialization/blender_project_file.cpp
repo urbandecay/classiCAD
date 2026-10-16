@@ -2688,11 +2688,8 @@ bool loadVignolaDocument(const QString &path,
         }
         if (importReport.activeObjectIndex >= 0 &&
             importReport.activeObjectIndex < objects.size()) {
-            const ObjectId activeId =
+            importReport.activeObjectId =
                 objects[importReport.activeObjectIndex].id;
-            if (importReport.selectedObjectIds.contains(activeId)) {
-                importReport.activeObjectId = activeId;
-            }
         }
         snapshot.collections = std::move(collections);
         snapshot.objects = std::move(objects);

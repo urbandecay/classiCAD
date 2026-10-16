@@ -20,6 +20,7 @@ struct UpdateSessionViewState {
     ViewportCameraPreferences cameraPreferences;
     QVector<ObjectId> selectedObjectIds;
     ObjectId primaryObjectId = ObjectId::invalid();
+    ObjectId activeObjectId = ObjectId::invalid();
     ControlPointReference activeControlPoint;
     bool controlPointsVisible = false;
     ToolId activeTool = ToolId::Select;

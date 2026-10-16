@@ -5125,7 +5125,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         int displayGridU,
                                         int displayGridV) const
 {
-    Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
         const WorkbenchMaterialData fallbackMaterial;
         const WorkbenchMaterialData &material = workbenchMaterial
@@ -5306,6 +5305,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         qreal sourceAlpha = 1.0;
         qreal roughness = workbenchMaterial ? material.roughness : 0.4;
         qreal metallic = workbenchMaterial ? material.metallic : 0.0;
+        const QColor editSelectionColor(QStringLiteral("#ffa300"));
+        const QVector3D editSelectionLinear = workbenchSrgbToSceneLinear(
+            QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
+                      editSelectionColor.blueF()));
+        constexpr float editSelectionMix = 51.0f / 255.0f;
 
         switch (shadingSettings_.colorMode) {
         case ViewportColorMode::Material:
@@ -5483,6 +5487,10 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     normalView, incidentView,
                     shadingSettings_.specularLighting,
                     shadingSettings_.matcapFlipX);
+            }
+            if (selected && !preview) {
+                shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
+                               editSelectionLinear * editSelectionMix;
             }
             if (resolvedSceneLinear != nullptr) {
                 *resolvedSceneLinear = shadedLinear;

@@ -8615,9 +8615,10 @@ resolve remain open.
   suppressed foreground bokeh at depth edges. Blender derives each tap's weight
   from its CoC and sample-ring radius in
   [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl).
-  classiCAD keeps its bounded 12-tap gather; Blender's signed near/far CoC,
-  mip selection, and full sample pattern are still more detailed. Runtime GPU
-  and matched foreground-edge comparisons remain open; C++ build passed.
+  classiCAD now iterates all 49 square-perimeter taps through radius three,
+  with CoC-dependent mip selection and Blender's zero-weight center fallback.
+  Runtime GPU and matched foreground-edge comparisons remain open; C++ build
+  passed.
 
 ### QPainter Back Image depth ordering (2026-10-15)
 

@@ -15,6 +15,33 @@ namespace classiCAD {
 
 namespace {
 
+QString activeImportedSceneCameraObjectId(const Document &document,
+                                          bool *sceneFound)
+{
+    if (sceneFound != nullptr) *sceneFound = false;
+    const QString activeLayer = document.settings().activeViewLayerKey;
+    for (const QJsonValue &sceneValue :
+         document.settings().importedBlenderScenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = activeLayer.isEmpty();
+        if (!activeLayer.isEmpty()) {
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key"))
+                        .toString() == activeLayer) {
+                    matchesActiveLayer = true;
+                    break;
+                }
+            }
+        }
+        if (!matchesActiveLayer) continue;
+        if (sceneFound != nullptr) *sceneFound = true;
+        return scene.value(QStringLiteral("active_camera")).toObject()
+            .value(QStringLiteral("object_id")).toString();
+    }
+    return {};
+}
+
 bool remapCameraBackgroundPicture(Shape *shape,
                                   const ViewportTransform &camera,
                                   const QSize &viewportSize)
@@ -143,6 +170,10 @@ ViewportRenderFrame buildViewportRenderFrame(
         }
     }
 
+    bool activeSceneCameraFound = false;
+    const QString activeSceneCameraId = activeImportedSceneCameraObjectId(
+        document, &activeSceneCameraFound);
+
     QSet<quint64> hiddenPreviewIds;
     if (!input.activeToolPreview.shapes.isEmpty()) {
         hiddenPreviewIds.reserve(input.activeToolPreview.hiddenObjectIds.size());
@@ -155,6 +186,13 @@ ViewportRenderFrame buildViewportRenderFrame(
 
     int objectIndex = 0;
     for (const SceneObject &sceneObject : document.objects()) {
+        if (camera.cameraState().cameraView &&
+            sceneObject.geometry.pictureCameraViewOnly &&
+            activeSceneCameraFound &&
+            sceneObject.blenderSourceObjectId != activeSceneCameraId) {
+            ++objectIndex;
+            continue;
+        }
         const bool visible = input.visibility ==
                 ViewportRenderFrameInput::Visibility::Render
             ? document.isObjectRenderable(sceneObject.id)

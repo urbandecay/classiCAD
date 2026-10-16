@@ -9138,6 +9138,8 @@ resolve remain open.
   viewport render snapshots rebuild the image frame from the current camera
   view so later camera-view movement carries the background with it. Remapped
   pictures bypass the geometry cache so their depth shape updates along with
-  the camera. Camera object scale remains outside this remapping approximation.
-  The extractor bridge is version 25. C++ build passed; matched image captures
-  have not been run.
+  the camera. When Blender scenes share visible collections, the viewport also
+  filters camera backgrounds by the active scene's camera so images from a
+  different scene cannot appear in the same camera view. Camera object scale
+  remains outside this remapping approximation. The extractor bridge is
+  version 25. C++ build passed; matched image captures have not been run.

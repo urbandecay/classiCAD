@@ -9462,6 +9462,7 @@ protected:
         bool rasterWorkbenchEffectsLayered = false;
         RasterWorkbenchSurfaceLayers rasterSurfaceLayers;
         QPainter rasterScenePainter;
+        QPainter rasterWorkbenchEffectPainter;
         if (nativeRenderer == nullptr) {
             gpuViewportBackground = blenderGridRenderer_.render(
                 renderFrame.camera, renderFrame.viewportSize,
@@ -9788,6 +9789,13 @@ protected:
                     rasterScenePainter.begin(&committedSceneLayer);
                     rasterScenePainter.setRenderHint(
                         QPainter::Antialiasing, viewportAaMode_ != 0);
+                    if (renderShadingSettings.depthOfField &&
+                        !renderShadingSettings.xrayEnabled()) {
+                        rasterWorkbenchEffectPainter.begin(
+                            &rasterWorkbenchEffectLayer);
+                        rasterWorkbenchEffectPainter.setRenderHint(
+                            QPainter::Antialiasing, viewportAaMode_ != 0);
+                    }
                     rasterWorkbenchEffectsLayered = true;
                 }
             }
@@ -11888,7 +11896,11 @@ protected:
                               ? rasterSurfaceLayers.inFrontSceneDepthSize
                               : rasterSurfaceLayers.regularSceneDepthSize);
             } else {
-                drawShape(scenePainter,
+                QPainter &shapePainter =
+                    rasterWorkbenchEffectPainter.isActive() &&
+                    isViewportCurveStrokeType(geometryType)
+                        ? rasterWorkbenchEffectPainter : scenePainter;
+                drawShape(shapePainter,
                           visibleShape,
                           false,
                           selected,
@@ -13443,13 +13455,139 @@ protected:
             }
         } else {
             rasterScenePainter.end();
+            if (rasterWorkbenchEffectPainter.isActive()) {
+                rasterWorkbenchEffectPainter.end();
+            }
             QImage &effectTarget = rasterWorkbenchEffectsLayered
                 ? rasterWorkbenchEffectLayer : committedSceneLayer;
+            QVector<float> committedCurveDepth;
+            const QSize committedCurveDepthSize = effectTarget.size();
+            const qreal curveDepthDpr = std::max<qreal>(
+                effectTarget.devicePixelRatioF(), 1.0e-6);
+            if (renderShadingSettings.depthOfField &&
+                renderShadingSettings.mode == ViewportShadingMode::Solid &&
+                !viewportShadingSettings_.xrayEnabled() &&
+                viewportTransform_.cameraPreferences().sceneCameraEnabled &&
+                !committedCurveDepthSize.isEmpty() &&
+                qint64(committedCurveDepthSize.width()) *
+                    committedCurveDepthSize.height() <=
+                    std::numeric_limits<int>::max()) {
+                const int curveDepthWidth = committedCurveDepthSize.width();
+                const int curveDepthHeight = committedCurveDepthSize.height();
+                committedCurveDepth.fill(
+                    std::numeric_limits<float>::infinity(),
+                    curveDepthWidth * curveDepthHeight);
+                const Point3D cameraPosition = viewportTransform_.cameraPosition(
+                    renderFrame.viewportSize);
+                const Point3D viewDirection = viewportTransform_.viewDirection();
+                const bool perspective =
+                    viewportTransform_.isPerspectiveEnabled();
+                for (const ViewportSceneStroke &stroke : gpuStrokes) {
+                    if (!stroke.writeDepth || stroke.controlGuide ||
+                        stroke.editModeWire || stroke.blenderMeshWire ||
+                        stroke.pointDiameter > 0.0f || stroke.shape == nullptr ||
+                        stroke.lineStyle != ViewportSceneLineStyle::Solid ||
+                        !isViewportCurveStrokeType(
+                            stroke.shape->geometryType) ||
+                        !stroke.preparedDepthGeometry) {
+                        continue;
+                    }
+                    const QVector<Point3D> &segments =
+                        stroke.preparedDepthGeometry->preciseLineVertices;
+                    const qreal radius = std::max<qreal>(
+                        0.5, qreal(stroke.width) * curveDepthDpr * 0.5) + 0.5;
+                    for (int segment = 0; segment + 1 < segments.size();
+                         segment += 2) {
+                        const Point3D &localFirst = segments[segment];
+                        const Point3D &localSecond = segments[segment + 1];
+                        const Point3D first{
+                            localFirst.x + stroke.worldOffset.x,
+                            localFirst.y + stroke.worldOffset.y,
+                            localFirst.z + stroke.worldOffset.z};
+                        const Point3D second{
+                            localSecond.x + stroke.worldOffset.x,
+                            localSecond.y + stroke.worldOffset.y,
+                            localSecond.z + stroke.worldOffset.z};
+                        const auto cameraDepth = [&](const Point3D &point) {
+                            return -((point.x - cameraPosition.x) *
+                                         viewDirection.x +
+                                     (point.y - cameraPosition.y) *
+                                         viewDirection.y +
+                                     (point.z - cameraPosition.z) *
+                                         viewDirection.z);
+                        };
+                        const qreal firstDepth = cameraDepth(first);
+                        const qreal secondDepth = cameraDepth(second);
+                        if (!std::isfinite(firstDepth) ||
+                            !std::isfinite(secondDepth) || firstDepth <= 0.0 ||
+                            secondDepth <= 0.0) {
+                            continue;
+                        }
+                        QPointF firstScreen;
+                        QPointF secondScreen;
+                        if (!viewportTransform_.worldPointToScreenUnclipped(
+                                first, renderFrame.viewportSize, &firstScreen) ||
+                            !viewportTransform_.worldPointToScreenUnclipped(
+                                second, renderFrame.viewportSize, &secondScreen)) {
+                            continue;
+                        }
+                        firstScreen *= curveDepthDpr;
+                        secondScreen *= curveDepthDpr;
+                        const QPointF delta = secondScreen - firstScreen;
+                        const qreal lengthSquared = QPointF::dotProduct(
+                            delta, delta);
+                        const int minX = std::max(0, qFloor(
+                            std::min(firstScreen.x(), secondScreen.x()) - radius));
+                        const int maxX = std::min(curveDepthWidth - 1, qCeil(
+                            std::max(firstScreen.x(), secondScreen.x()) + radius));
+                        const int minY = std::max(0, qFloor(
+                            std::min(firstScreen.y(), secondScreen.y()) - radius));
+                        const int maxY = std::min(curveDepthHeight - 1, qCeil(
+                            std::max(firstScreen.y(), secondScreen.y()) + radius));
+                        if (minX > maxX || minY > maxY) continue;
+                        const qreal radiusSquared = radius * radius;
+                        for (int y = minY; y <= maxY; ++y) {
+                            for (int x = minX; x <= maxX; ++x) {
+                                const QPointF pixelCenter(x + 0.5, y + 0.5);
+                                const qreal screenT = lengthSquared > 1.0e-12
+                                    ? std::clamp(QPointF::dotProduct(
+                                          pixelCenter - firstScreen, delta) /
+                                          lengthSquared, 0.0, 1.0)
+                                    : 0.0;
+                                const QPointF nearest = firstScreen +
+                                    delta * screenT;
+                                const QPointF distance = pixelCenter - nearest;
+                                if (QPointF::dotProduct(distance, distance) >
+                                    radiusSquared) {
+                                    continue;
+                                }
+                                qreal depth = firstDepth +
+                                    (secondDepth - firstDepth) * screenT;
+                                if (perspective) {
+                                    const qreal reciprocalDepth =
+                                        (1.0 - screenT) / firstDepth +
+                                        screenT / secondDepth;
+                                    if (reciprocalDepth > 1.0e-12) {
+                                        depth = 1.0 / reciprocalDepth;
+                                    }
+                                }
+                                float &storedDepth = committedCurveDepth[
+                                    y * curveDepthWidth + x];
+                                storedDepth = std::min(
+                                    storedDepth, float(depth));
+                            }
+                        }
+                    }
+                }
+            }
             applyRasterWorkbenchEffects(
                 &effectTarget, visibleSurfaceShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings,
-                rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
+                rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr,
+                nullptr, nullptr,
+                committedCurveDepth.isEmpty() ? nullptr : &committedCurveDepth,
+                committedCurveDepthSize);
             if (!rasterDeferredPictures.isEmpty()) {
                 QImage displayOutputLayer(
                     committedSceneLayer.size(),

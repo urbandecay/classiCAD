@@ -227,7 +227,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const ViewportShadingSettings &settings,
                                  RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
                                  std::vector<float> *cavityFactors = nullptr,
-                                 RasterWorkbenchCavityTapCapture *cavityTapCapture = nullptr);
+                                 RasterWorkbenchCavityTapCapture *cavityTapCapture = nullptr,
+                                 const QVector<float> *committedCurveDepth = nullptr,
+                                 const QSize &committedCurveDepthSize = {});
 
 // Render surface objects into temporary color layers, use their display
 // tessellation to depth-test opaque coverage, then accumulate visible partial

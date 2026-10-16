@@ -2325,7 +2325,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const ViewportShadingSettings &settings,
                                  RasterWorkbenchSurfaceLayers *surfaceLayers,
                                  std::vector<float> *cavityFactors,
-                                 RasterWorkbenchCavityTapCapture *cavityTapCapture)
+                                 RasterWorkbenchCavityTapCapture *cavityTapCapture,
+                                 const QVector<float> *committedCurveDepth,
+                                 const QSize &committedCurveDepthSize)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     if (colorImage == nullptr || colorImage->isNull() ||
@@ -4026,6 +4028,23 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             // pixels by the maximum bounded CoC radius in linear time.
             QVector<quint8> dofCoverage(outputPixelCount, 0);
             QVector<quint8> horizontalCoverage(outputPixelCount, 0);
+            const bool hasCommittedCurveDepth =
+                committedCurveDepth != nullptr &&
+                committedCurveDepthSize == QSize(outputWidth, outputHeight) &&
+                committedCurveDepth->size() == outputPixelCount;
+            const auto visibleCurveDepthAt = [&](int x, int y,
+                                                  const RasterSample &sample) {
+                if (!hasCommittedCurveDepth) {
+                    return std::numeric_limits<float>::infinity();
+                }
+                const float depth = (*committedCurveDepth)[
+                    qsizetype(y) * outputWidth + x];
+                if (!std::isfinite(depth) || depth <= 0.0f ||
+                    (sample.objectId != 0 && depth > sample.depth + 1.0e-4f)) {
+                    return std::numeric_limits<float>::infinity();
+                }
+                return depth;
+            };
             for (int y = 0; y < outputHeight; ++y) {
                 const int depthY = std::clamp(
                     static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
@@ -4034,7 +4053,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const int depthX = std::clamp(
                         static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                         0, width - 1);
-                    if (samples[depthY * width + depthX].objectId != 0) {
+                    const RasterSample &sample =
+                        samples[depthY * width + depthX];
+                    if (sample.objectId != 0 ||
+                        std::isfinite(visibleCurveDepthAt(x, y, sample))) {
                         dofCoverage[qsizetype(y) * outputWidth + x] = 1;
                     }
                 }
@@ -4124,8 +4146,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
                     0, height - 1);
                 const RasterSample &sample = samples[depthY * width + depthX];
-                const qreal z = sample.objectId != 0
-                    ? sample.depth : cameraOptics.clipEnd;
+                const float curveDepth = visibleCurveDepthAt(x, y, sample);
+                const qreal z = std::isfinite(curveDepth)
+                    ? curveDepth
+                    : sample.objectId != 0
+                        ? sample.depth : cameraOptics.clipEnd;
                 if (!std::isfinite(z) || z <= 0.0) return 0.0f;
                 const qreal coc = 0.5 *
                     (focal * focal /

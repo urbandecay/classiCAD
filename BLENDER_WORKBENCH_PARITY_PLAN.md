@@ -9093,8 +9093,15 @@ resolve remain open.
 - Committed CAD curve strokes that write scene depth now render into the
   jittered GPU scene sample before Workbench Depth of Field and accumulation.
   They are omitted from the later sharp overlay pass, including when presenting
-  cached scene history. Selection cages, component highlights, control points,
-  and other editor overlays stay after the effect. QPainter still lacks a
-  matching curve-depth input, and no matched curve-blur captures have been run.
+  cached scene history. The QPainter fallback now rasterizes the depth of
+  visible, committed Solid curve strokes into a separate depth buffer and feeds
+  it to the existing CoC coverage and gather. Surface depth masks curve parts
+  behind the scene. When the fallback separates effect output from later
+  overlays, committed curves are drawn into the effect layer as well;
+  selection cages, component highlights, control points, and other editor
+  overlays stay after the effect. The fallback uses a bounded
+  screen-space stroke footprint and approximates depth along perspective
+  segments, so edge coverage and curve blur can differ from Blender. No matched
+  curve-blur captures have been run.
   Blender routes curves through its mesh passes before DOF in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L429-L446).

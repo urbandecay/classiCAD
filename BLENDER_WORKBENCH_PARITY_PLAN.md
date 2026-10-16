@@ -8387,12 +8387,12 @@ resolve remain open.
   image mipmaps in
   [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L2917-L2928).
   For source images and viewports within the 16-million-pixel CPU budget, the
-  QPainter path now builds scene-linear mip levels with premultiplied-alpha
-  filtering and blends the two adjacent levels by the fractional part of the
-  projected quad's screen footprint before Qt's final smooth transform.
-  Blender uses implicit per-fragment LOD and trilinear mip blending, while
-  QPainter uses one bounded LOD for the whole quad; strong perspective
-  minification can still differ.
+  QPainter path now builds scene-linear mip levels with alpha-mode-aware
+  filtering and samples between adjacent levels using local source-coordinate
+  derivatives for each covered device pixel. This follows Blender's
+  per-fragment LOD and trilinear mip selection under perspective more closely;
+  the bounded CPU footprint estimate and bilinear mip sampling remain
+  approximations.
   Oversized inputs retain the existing fallback. No matched image comparison
   has been run.
 
@@ -10273,3 +10273,14 @@ scene depth.
   supplied screenshots do not show the same scene and do not expose the
   imported floor-grid setting, so they cannot establish why classiCAD's grid is
   hidden. A same-file view comparison remains open. C++ build passed.
+
+### QPainter Image Empty per-pixel mip selection (2026-10-16)
+
+- The bounded scene-linear QPainter Image Empty raster now chooses mip level
+  per device pixel from local source-coordinate derivatives, then bilinearly
+  samples and blends adjacent mip levels. It no longer stretches one quad-wide
+  mip through a perspective-skewed image. Alpha-blended images filter through
+  premultiplied color; cutout images preserve straight RGB until their 0.05
+  alpha threshold. Source processing and viewport raster retain the 16M-pixel
+  limits. Inputs above the scene-linear processing budget keep their existing
+  fallback, and matched Blender images remain open. C++ build passed.

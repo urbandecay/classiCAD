@@ -2894,9 +2894,11 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                          : ranges_.last().first + ranges_.last().count);
                 int count = 0;
                 for (const auto &triangle : triangles) {
-                    const int indexA = triangle[0];
-                    const int indexB = reflected ? triangle[2] : triangle[1];
-                    const int indexC = reflected ? triangle[1] : triangle[2];
+                    const int triangleCornerOrder[3] = {
+                        0, reflected ? 2 : 1, reflected ? 1 : 2};
+                    const int indexA = triangle[triangleCornerOrder[0]];
+                    const int indexB = triangle[triangleCornerOrder[1]];
+                    const int indexC = triangle[triangleCornerOrder[2]];
                     const Point3D &a = worldLoop[indexA];
                     const Point3D &b = worldLoop[indexB];
                     const Point3D &c = worldLoop[indexC];
@@ -2915,16 +2917,19 @@ void ViewportSurfaceRenderer::prepareGeometry(
                         QVector3D(1.0f, 1.0f, 1.0f)};
                     QPointF triangleUvs[3] = {};
                     if (textureAvailable) {
-                        for (int corner = 0; corner < 3; ++corner)
+                        for (int corner = 0; corner < 3; ++corner) {
                             triangleUvs[corner] = activeUvMap->cornerValues[
-                                faceFirstCorner + triangle[corner]];
+                                faceFirstCorner +
+                                triangle[triangleCornerOrder[corner]]];
+                        }
                     }
                     bool triangleHasAttribute = activeAttribute != nullptr &&
                         activeAttribute->componentCount >= 1 &&
                         activeAttribute->componentCount <= 4;
                     if (triangleHasAttribute) {
                         for (int corner = 0; corner < 3; ++corner) {
-                            const int loopIndex = triangle[corner];
+                            const int loopIndex =
+                                triangle[triangleCornerOrder[corner]];
                             int elementIndex = faceIndex;
                             if (activeAttribute->domain == MeshAttributeDomain::Point) {
                                 elementIndex = face[loopIndex];
@@ -2958,7 +2963,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                             const QVector3D &color = triangleColors[corner];
                             QVector3D vertexNormal = normal;
                             if (!mesh.cornerNormals.isEmpty()) {
-                                const int loopIndex = triangle[corner];
+                                const int loopIndex =
+                                    triangle[triangleCornerOrder[corner]];
                                 vertexNormal = transformMeshNormal(
                                     matrix, mesh.cornerNormals[faceFirstCorner + loopIndex]);
                                 if (vertexNormal.lengthSquared() <= 1.0e-16f)

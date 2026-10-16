@@ -9036,3 +9036,13 @@ resolve remain open.
   Edit Mode edges depth-test with `LESS_EQUAL` in
   [`overlay_mesh.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_mesh.hh#L2566-L2584).
   C++ build passed; matched selected-edge occlusion captures remain open.
+
+### GPU mirrored-mesh corner attribute order (2026-10-15)
+
+- When a reflected object transform reverses triangle winding, the GPU mesh
+  preparation path now applies that same corner permutation to UVs, point and
+  corner attributes, and corner normals. This keeps each value attached to its
+  source vertex/face corner after the winding correction. Blender's evaluated
+  mesh keeps loop data associated with the corresponding vertex when winding
+  is reversed. C++ build passed; a matched reflected-mesh Blender capture has
+  not been run.

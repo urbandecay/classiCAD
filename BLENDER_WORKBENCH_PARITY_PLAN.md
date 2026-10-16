@@ -9356,3 +9356,15 @@ moves them after scene effects and depth-tests them against the retained scene.
   view-layer keys that include the scene ID, so the fallback key selects only
   that default scene. The C++ build passed; no matched multi-scene render
   comparison has been run.
+
+### QPainter DOF mip near/far CoC preservation (2026-10-16)
+
+- Quarter- and eighth-resolution QPainter DOF downsampling now carries near
+  and far circle-of-confusion values as separate channels through every mip
+  step. It computes both sets of weights independently and keeps Blender's far
+  sample priority when any far weight is present. Previously, each source mip
+  texel was collapsed to whichever side had the larger CoC, losing one blur
+  field when near and far coverage shared a block.
+- Blender 5.2.2 keeps the channels separate and applies far-weight priority in
+  [`workbench_effect_dof_downsample_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_downsample_frag.glsl#L369-L399).
+  Build passed; matched near/far DOF captures remain open.

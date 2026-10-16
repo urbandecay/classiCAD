@@ -121,6 +121,11 @@ struct RasterWorkbenchCavityTapCapture {
 // near weights, and attenuates samples whose CoC differs by one pixel or more.
 RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
     const std::array<float, 4> &signedCocs) noexcept;
+// Mip downsampling keeps near and far CoC channels independently rather than
+// collapsing each texel back to one signed value.
+RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
+    const std::array<float, 4> &nearCocs,
+    const std::array<float, 4> &farCocs) noexcept;
 
 // Blender's gather kernel's radial CoC weight for one aperture tap.
 float rasterWorkbenchDofGatherWeight(float sampleCoc, float maximumCoc,

@@ -624,6 +624,30 @@ RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
     return result;
 }
 
+RasterWorkbenchDofPrefilter rasterWorkbenchDofPrefilter2x2(
+    const std::array<float, 4> &nearCocs,
+    const std::array<float, 4> &farCocs) noexcept
+{
+    RasterWorkbenchDofPrefilter result;
+    for (std::size_t i = 0; i < nearCocs.size(); ++i) {
+        result.nearCoc = std::max(result.nearCoc, nearCocs[i]);
+        result.farCoc = std::max(result.farCoc, farCocs[i]);
+    }
+
+    std::array<float, 4> nearWeights{};
+    std::array<float, 4> farWeights{};
+    bool hasFarWeight = false;
+    for (std::size_t i = 0; i < nearCocs.size(); ++i) {
+        nearWeights[i] = std::clamp(
+            1.0f - std::abs(result.nearCoc - nearCocs[i]), 0.0f, 1.0f);
+        farWeights[i] = std::clamp(
+            1.0f - std::abs(result.farCoc - farCocs[i]), 0.0f, 1.0f);
+        hasFarWeight = hasFarWeight || farWeights[i] != 0.0f;
+    }
+    result.colorWeights = hasFarWeight ? farWeights : nearWeights;
+    return result;
+}
+
 float rasterWorkbenchDofGatherWeight(float sampleCoc, float maximumCoc,
                                      float sampleRadius) noexcept
 {
@@ -4384,13 +4408,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                                  previous.width + sourceX],
                             &previous.pixels[static_cast<std::size_t>(std::min(sourceY + 1, previous.height - 1)) *
                                                  previous.width + std::min(sourceX + 1, previous.width - 1)]}};
-                        const std::array<float, 4> cocs{{
-                            inputs[0]->nearCoc > inputs[0]->farCoc ? inputs[0]->nearCoc : -inputs[0]->farCoc,
-                            inputs[1]->nearCoc > inputs[1]->farCoc ? inputs[1]->nearCoc : -inputs[1]->farCoc,
-                            inputs[2]->nearCoc > inputs[2]->farCoc ? inputs[2]->nearCoc : -inputs[2]->farCoc,
-                            inputs[3]->nearCoc > inputs[3]->farCoc ? inputs[3]->nearCoc : -inputs[3]->farCoc}};
+                        std::array<float, 4> nearCocs{};
+                        std::array<float, 4> farCocs{};
+                        for (std::size_t i = 0; i < inputs.size(); ++i) {
+                            nearCocs[i] = inputs[i]->nearCoc;
+                            farCocs[i] = inputs[i]->farCoc;
+                        }
                         const RasterWorkbenchDofPrefilter filtered =
-                            rasterWorkbenchDofPrefilter2x2(cocs);
+                            rasterWorkbenchDofPrefilter2x2(nearCocs, farCocs);
                         LinearGatherPixel color;
                         qreal weightSum = 0.0;
                         for (std::size_t i = 0; i < inputs.size(); ++i) {

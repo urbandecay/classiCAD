@@ -1802,8 +1802,10 @@ Workbench object-outline option is off, including X-Ray when the saved
 selection-outline overlay remains enabled. Its raster pass keeps a selected-
 only ID/depth layer and fades contours hidden by the resolved scene depth to
 35% opacity (full opacity in X-Ray), matching Blender's overlay rule. The GPU
-path still lacks this separate selected-object depth input and occlusion fade.
-Build passed; matched outline images remain open.
+path now has a separate selected ID/depth target for regular and
+`showInFront` geometry, with visible and hidden contours resolved against the
+corresponding scene-depth domain. X-Ray selected meshes retain their dedicated
+edge path. Build passed; matched outline images remain open.
 
 - The GPU single-sample dense one-pixel-wire correction now gates on the copied center wire's alpha, matching Blender's test of the original center overlay pixel. Opaque-stroke eligibility previously made the stroke-alpha check unconditional for this case, so partially transparent wires could receive a correction that Blender skips. GPU runtime and matched image comparisons remain open.
 
@@ -9508,18 +9510,18 @@ moves them after scene effects and depth-tests them against the retained scene.
 
 - The GPU path now renders regular selected ranges into their own ID/depth
   target, copies the resolved scene depth into a matching depth-stencil target,
-  and adds only selected contour sections that are behind scene geometry at
-  35% opacity. Visible selection contours continue through the existing pass.
-  This avoids losing a selected object's entire outline when a nearer
-  unselected object wins the ordinary scene ID/depth pass.
+  and resolves visible and hidden contour sections separately. It also draws
+  selected `showInFront` ranges into their own target and compares them against
+  the front-domain depth, so regular and front geometry keep separate depth
+  rules. Hidden contours use 35% opacity. This avoids losing a selected
+  object's entire outline when a nearer unselected object wins the ordinary
+  scene ID/depth pass.
 - Blender 5.2.2 keeps selected-outline IDs and depth separate from scene depth,
   and uses 0.35 opacity for occluded outlines (1.0 in X-Ray), in
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L774-L820)
   and [#L898-L920](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L898-L920).
-  Current coverage requires shared scene depth and is limited to regular
-  non-X-Ray selected geometry; selected `showInFront` depth-domain behavior,
-  X-Ray hidden contours, the GPU stroke-failure fallback, and matched captures
-  remain open. Build passed.
+  Current coverage requires shared scene depth. X-Ray hidden contours, the GPU
+  stroke-failure fallback, and matched captures remain open. Build passed.
 
 ### GPU selected outlines ignore Image Texture alpha (2026-10-16)
 

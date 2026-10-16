@@ -71,6 +71,14 @@ InteractionTool::EventResult MirrorTool::dispatchMousePress(
     if (interactionState_.sourceObjectIds.isEmpty()) {
         return EventResult::Handled;
     }
+    if (interactionState_.globalAxisMirror) {
+        if (interactionState_.globalAxis < 0) {
+            return EventResult::Handled;
+        }
+        lastCommitResult_ = commitGlobalAxis(context);
+        hasLastCommitResult_ = true;
+        return EventResult::Handled;
+    }
     if (!handleMousePress(input, context)) {
         return EventResult::Unhandled;
     }
@@ -84,6 +92,38 @@ InteractionTool::EventResult MirrorTool::dispatchMousePress(
 InteractionTool::EventResult MirrorTool::dispatchKey(
     const ToolInput &input, ToolContext &context)
 {
+    hasLastCommitResult_ = false;
+    if (interactionState_.globalAxisMirror) {
+        if (input.key == Qt::Key_Escape) {
+            clearInteraction();
+            context.finishTool(ToolId::Select);
+            return EventResult::Handled;
+        }
+        if (input.modifiers == Qt::NoModifier &&
+            (input.key == Qt::Key_X || input.key == Qt::Key_Y ||
+             input.key == Qt::Key_Z)) {
+            interactionState_.globalAxis = input.key == Qt::Key_X ? 0
+                                           : input.key == Qt::Key_Y ? 1
+                                                                    : 2;
+            const QChar axisName = input.key == Qt::Key_X ? QLatin1Char('X')
+                                  : input.key == Qt::Key_Y ? QLatin1Char('Y')
+                                                           : QLatin1Char('Z');
+            status_.text = QStringLiteral(
+                "Mirror: global %1 plane; press Enter or click to confirm")
+                               .arg(axisName);
+            status_.canCommit = true;
+            context.publishStatus(status_);
+            return EventResult::Handled;
+        }
+        if (input.modifiers == Qt::NoModifier &&
+            (input.key == Qt::Key_Return || input.key == Qt::Key_Enter) &&
+            interactionState_.globalAxis >= 0) {
+            lastCommitResult_ = commitGlobalAxis(context);
+            hasLastCommitResult_ = true;
+            return EventResult::Handled;
+        }
+        return EventResult::Unhandled;
+    }
     if (input.key != Qt::Key_Escape) {
         return EventResult::Unhandled;
     }
@@ -145,6 +185,52 @@ MirrorCommitResult MirrorTool::commitAxis(ToolContext &context)
     return result;
 }
 
+MirrorCommitResult MirrorTool::commitGlobalAxis(ToolContext &context)
+{
+    MirrorCommitResult result;
+    if (!interactionState_.globalAxisMirror ||
+        interactionState_.globalAxis < 0 ||
+        interactionState_.sourceObjectIds.isEmpty() ||
+        !isComponentEdit()) {
+        return result;
+    }
+
+    result.sourceCount = interactionState_.sourceObjectIds.size();
+    result.componentEdit = true;
+    result.globalAxisMirror = true;
+    result.globalAxis = interactionState_.globalAxis;
+    result.pivot = interactionState_.pivot;
+    for (auto target = interactionState_.controlPointIndices.cbegin();
+         target != interactionState_.controlPointIndices.cend(); ++target) {
+        result.controlPointCount += target.value().size();
+    }
+
+    DocumentTransaction transaction = context.beginTransaction();
+    const bool applied = MirrorCommand::applyControlPointsAcrossGlobalAxisPlane(
+        context.document(), transaction,
+        interactionState_.sourceObjectIds,
+        interactionState_.controlPointIndices,
+        interactionState_.pivot,
+        interactionState_.globalAxis);
+    if (!applied) {
+        status_.text = QStringLiteral(
+            "Mirror could not transform the selected components");
+        status_.canCommit = false;
+        context.publishStatus(status_);
+        return result;
+    }
+    if (!context.commitTransaction(transaction)) {
+        return result;
+    }
+
+    updateAssociativeDimensions(context.document(), context.curveSampler());
+    context.notifyCollectionsChanged();
+    clearInteraction();
+    context.finishTool(ToolId::Select);
+    result.committed = true;
+    return result;
+}
+
 MirrorCommitResult MirrorTool::takeLastCommitResult()
 {
     if (!hasLastCommitResult_) {
@@ -181,6 +267,17 @@ void MirrorTool::setComponentControlPointTargets(
     interactionState_.controlPointIndices = controlPointIndices;
 }
 
+void MirrorTool::beginGlobalAxisComponentMirror(const Point3D &pivot,
+                                                ToolContext &context)
+{
+    interactionState_.globalAxisMirror = true;
+    interactionState_.globalAxis = -1;
+    interactionState_.pivot = pivot;
+    status_.text = QStringLiteral("Mirror: choose global X, Y, or Z plane");
+    status_.canCommit = false;
+    context.publishStatus(status_);
+}
+
 void MirrorTool::clearInteraction()
 {
     interactionState_ = InteractionState{};
@@ -194,12 +291,16 @@ void MirrorTool::rejectAxisEndpoint()
 
 bool MirrorTool::hasAxisStart() const
 {
-    return interactionState_.hasAxisStart;
+    return interactionState_.globalAxisMirror
+               ? interactionState_.globalAxis >= 0
+               : interactionState_.hasAxisStart;
 }
 
 bool MirrorTool::hasCompleteAxis() const
 {
-    return interactionState_.hasCompleteAxis;
+    return interactionState_.globalAxisMirror
+               ? interactionState_.globalAxis >= 0
+               : interactionState_.hasCompleteAxis;
 }
 
 const QPointF &MirrorTool::axisStart() const
@@ -220,6 +321,21 @@ const WorkPlaneFrame &MirrorTool::axisFrame() const
 bool MirrorTool::isComponentEdit() const
 {
     return !interactionState_.controlPointIndices.isEmpty();
+}
+
+bool MirrorTool::isGlobalAxisMirror() const
+{
+    return interactionState_.globalAxisMirror;
+}
+
+int MirrorTool::globalAxis() const
+{
+    return interactionState_.globalAxis;
+}
+
+const Point3D &MirrorTool::mirrorPivot() const
+{
+    return interactionState_.pivot;
 }
 
 const QHash<quint64, QSet<int>> &MirrorTool::controlPointIndices() const

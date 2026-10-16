@@ -70,6 +70,12 @@ Point3D mirrorPointAcrossWorkPlaneLine(const Point3D &point,
                                        const QPointF &axisEnd,
                                        const WorkPlaneFrame &axisFrame);
 
+// Reflect across a global axis-aligned plane through pivot. Axis 0 is the
+// plane normal to X, 1 normal to Y, and 2 normal to Z.
+Point3D mirrorPointAcrossGlobalAxisPlane(const Point3D &point,
+                                         const Point3D &pivot,
+                                         int axis) noexcept;
+
 Point3D scalePointInFrame(const Point3D &point,
                           const QPointF &base,
                           const QPointF &axisDirection,

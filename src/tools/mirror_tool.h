@@ -13,8 +13,11 @@ class ToolContext;
 struct MirrorCommitResult {
     bool committed = false;
     bool componentEdit = false;
+    bool globalAxisMirror = false;
     int sourceCount = 0;
     int controlPointCount = 0;
+    int globalAxis = -1;
+    Point3D pivot;
     QVector<ObjectId> createdObjectIds;
     QPointF axisStart;
     QPointF axisEnd;
@@ -30,6 +33,9 @@ public:
         QPointF axisEnd{0.0, 0.0};
         bool hasAxisStart = false;
         bool hasCompleteAxis = false;
+        bool globalAxisMirror = false;
+        int globalAxis = -1;
+        Point3D pivot;
     };
 
     ToolId id() const override;
@@ -46,6 +52,8 @@ public:
     void setSourceObjectIds(const QVector<ObjectId> &objectIds);
     void setComponentControlPointTargets(
         const QHash<quint64, QSet<int>> &controlPointIndices);
+    void beginGlobalAxisComponentMirror(const Point3D &pivot,
+                                        ToolContext &context);
     void clearInteraction();
     void rejectAxisEndpoint();
     bool hasAxisStart() const;
@@ -54,10 +62,15 @@ public:
     const QPointF &axisEnd() const;
     const WorkPlaneFrame &axisFrame() const;
     bool isComponentEdit() const;
+    bool isGlobalAxisMirror() const;
+    int globalAxis() const;
+    const Point3D &mirrorPivot() const;
     const QHash<quint64, QSet<int>> &controlPointIndices() const;
     const QVector<ObjectId> &sourceObjectIds() const;
 
 private:
+    MirrorCommitResult commitGlobalAxis(ToolContext &context);
+
     ToolStatus status_;
     InteractionState interactionState_;
     MirrorCommitResult lastCommitResult_;

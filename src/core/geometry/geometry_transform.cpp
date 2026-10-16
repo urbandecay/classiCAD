@@ -609,6 +609,22 @@ Point3D mirrorPointAcrossWorkPlaneLine(const Point3D &point,
     return mirrored;
 }
 
+Point3D mirrorPointAcrossGlobalAxisPlane(const Point3D &point,
+                                         const Point3D &pivot,
+                                         int axis) noexcept
+{
+    switch (axis) {
+    case 0:
+        return {2.0 * pivot.x - point.x, point.y, point.z};
+    case 1:
+        return {point.x, 2.0 * pivot.y - point.y, point.z};
+    case 2:
+        return {point.x, point.y, 2.0 * pivot.z - point.z};
+    default:
+        return point;
+    }
+}
+
 Point3D scalePointInFrame(const Point3D &point,
                           const QPointF &base,
                           const QPointF &axisDirection,

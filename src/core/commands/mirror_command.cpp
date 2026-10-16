@@ -104,4 +104,38 @@ bool MirrorCommand::applyControlPoints(
         editedObjectCount);
 }
 
+bool MirrorCommand::applyControlPointsAcrossGlobalAxisPlane(
+    Document &document,
+    DocumentTransaction &transaction,
+    const QVector<ObjectId> &sourceObjectIds,
+    const QHash<quint64, QSet<int>> &controlPointIndices,
+    const Point3D &pivot,
+    int axis,
+    int *editedObjectCount)
+{
+    if (editedObjectCount != nullptr) {
+        *editedObjectCount = 0;
+    }
+    if (controlPointIndices.isEmpty() || axis < 0 || axis > 2 ||
+        !std::isfinite(pivot.x) || !std::isfinite(pivot.y) ||
+        !std::isfinite(pivot.z)) {
+        return false;
+    }
+
+    return TransformCommand::applyPerObject(
+        document, transaction, sourceObjectIds,
+        [&controlPointIndices, &pivot, axis](ObjectId objectId, Shape &shape) {
+            const auto targets = controlPointIndices.constFind(objectId.value());
+            if (targets == controlPointIndices.cend() || targets->isEmpty()) {
+                return;
+            }
+            transformShapeControlPoints(
+                &shape, targets.value(),
+                [&pivot, axis](const Point3D &point) {
+                    return mirrorPointAcrossGlobalAxisPlane(point, pivot, axis);
+                });
+        },
+        editedObjectCount);
+}
+
 } // namespace classiCAD

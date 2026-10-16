@@ -5315,8 +5315,170 @@ public:
         return true;
     }
 
+    bool componentSelectionMedianWorld(
+        const QHash<quint64, QSet<int>> &targets,
+        Point3D *median) const
+    {
+        if (median == nullptr || targets.isEmpty()) {
+            return false;
+        }
+        Point3D sum{};
+        qsizetype count = 0;
+        for (auto target = targets.cbegin(); target != targets.cend(); ++target) {
+            const ObjectId objectId = ObjectId::fromValue(target.key());
+            const Shape *shape = document_.shape(objectId);
+            const SceneObject *object = document_.object(objectId);
+            if (shape == nullptr || object == nullptr ||
+                target.value().isEmpty()) {
+                continue;
+            }
+            const Point3D offset = object->placementTranslation;
+            const auto append = [&](const Point3D &point, int index) {
+                if (!target.value().contains(index) ||
+                    !std::isfinite(point.x) || !std::isfinite(point.y) ||
+                    !std::isfinite(point.z)) {
+                    return;
+                }
+                sum.x += point.x;
+                sum.y += point.y;
+                sum.z += point.z;
+                ++count;
+            };
+
+            if (shape->geometryType == GeometryType::Point) {
+                if (shape->points.size() == 1 && target.value().contains(0)) {
+                    Point3D point = shapePointToWorld(*shape,
+                                                      shape->points.first());
+                    point.x += offset.x;
+                    point.y += offset.y;
+                    point.z += offset.z;
+                    append(point, 0);
+                }
+            } else if (shape->geometryType == GeometryType::NurbsSurface) {
+                const ViewportDepthGeometry cage =
+                    selectedSurfaceControlNet(*shape);
+                for (int index = 0;
+                     index < cage.precisePointVertices.size(); ++index) {
+                    Point3D point = cage.precisePointVertices[index];
+                    point.x += offset.x;
+                    point.y += offset.y;
+                    point.z += offset.z;
+                    append(point, index);
+                }
+            } else {
+                const auto controlPoints =
+                    curveControlPointVertices(*shape, offset);
+                for (const auto &entry : controlPoints) {
+                    append(entry.second, entry.first);
+                }
+            }
+        }
+        if (count <= 0) {
+            return false;
+        }
+        const qreal inverseCount = 1.0 / static_cast<qreal>(count);
+        *median = {sum.x * inverseCount, sum.y * inverseCount,
+                   sum.z * inverseCount};
+        return std::isfinite(median->x) && std::isfinite(median->y) &&
+               std::isfinite(median->z);
+    }
+
+    bool beginEditGlobalAxisMirror()
+    {
+        if (interactionMode_ != ViewportInteractionMode::Edit ||
+            activeTool_ != Tool::Select) {
+            return false;
+        }
+        const QHash<quint64, QSet<int>> targets =
+            selectedTransformControlPointTargets();
+        Point3D pivot;
+        if (targets.isEmpty() ||
+            !componentSelectionMedianWorld(targets, &pivot)) {
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(QStringLiteral(
+                    "Select editable NURBS components before using Ctrl+M"));
+            }
+            return false;
+        }
+        const QVector<ObjectId> sourceObjectIds =
+            controlPointTargetObjectIds(targets);
+        if (sourceObjectIds.isEmpty()) {
+            return false;
+        }
+
+        setTool(Tool::Mirror);
+        mirrorTool_.setSourceObjectIds(sourceObjectIds);
+        mirrorTool_.setComponentControlPointTargets(targets);
+        mirrorTool_.beginGlobalAxisComponentMirror(pivot, toolContext_);
+        pendingPoints_.clear();
+        setFocus(Qt::OtherFocusReason);
+        setCursor(Qt::CrossCursor);
+        update();
+        DebugLog::instance().write(
+            QStringLiteral("beginEditGlobalAxisMirror objects=%1 components=%2 pivot=(%3,%4,%5)")
+                .arg(sourceObjectIds.size())
+                .arg([&targets] {
+                    qsizetype total = 0;
+                    for (auto item = targets.cbegin(); item != targets.cend(); ++item) {
+                        total += item.value().size();
+                    }
+                    return total;
+                }())
+                .arg(pivot.x, 0, 'g', 12)
+                .arg(pivot.y, 0, 'g', 12)
+                .arg(pivot.z, 0, 'g', 12));
+        return true;
+    }
+
+    void logMirrorCommitResult(const MirrorCommitResult &result) const
+    {
+        if (result.sourceCount <= 0) {
+            return;
+        }
+        if (result.globalAxisMirror) {
+            static const QStringList axes{QStringLiteral("X"),
+                                          QStringLiteral("Y"),
+                                          QStringLiteral("Z")};
+            const QString axis = result.globalAxis >= 0 &&
+                                         result.globalAxis < axes.size()
+                                     ? axes[result.globalAxis]
+                                     : QStringLiteral("?");
+            DebugLog::instance().write(
+                QStringLiteral("mirror %1 editObjects=%2 controlPoints=%3 global=%4 pivot=(%5,%6,%7)")
+                    .arg(result.committed ? QStringLiteral("committed")
+                                          : QStringLiteral("rejected"))
+                    .arg(result.sourceCount)
+                    .arg(result.controlPointCount)
+                    .arg(axis)
+                    .arg(result.pivot.x, 0, 'g', 12)
+                    .arg(result.pivot.y, 0, 'g', 12)
+                    .arg(result.pivot.z, 0, 'g', 12));
+            return;
+        }
+        const QString message = result.committed
+            ? (result.componentEdit
+                   ? QStringLiteral("mirror committed editObjects=%1 controlPoints=%2 axis=%3->%4")
+                         .arg(result.sourceCount)
+                         .arg(result.controlPointCount)
+                         .arg(pointText(result.axisStart),
+                              pointText(result.axisEnd))
+                   : QStringLiteral("mirror committed sourceCount=%1 copyCount=%2 axis=%3->%4")
+                         .arg(result.sourceCount)
+                         .arg(result.createdObjectIds.size())
+                         .arg(pointText(result.axisStart),
+                              pointText(result.axisEnd)))
+            : QStringLiteral("mirror rejected axis=%1->%2 objects=%3")
+                  .arg(pointText(result.axisStart),
+                       pointText(result.axisEnd))
+                  .arg(result.sourceCount);
+        DebugLog::instance().write(message);
+    }
+
     QPointF mirrorAxisEndInCapturedFrame() const
     {
+        if (mirrorTool_.isGlobalAxisMirror()) {
+            return {};
+        }
         const WorkPlaneFrame &currentFrame = viewportTransform_.workPlaneFrame();
         if (!mirrorTool_.isComponentEdit() ||
             !isValidWorkPlaneFrame(currentFrame) ||
@@ -5350,6 +5512,18 @@ public:
         if ((placement.x != 0.0 || placement.y != 0.0 || placement.z != 0.0) &&
             !bakeShapePlacementTranslation(mirroredShape, placement)) {
             return false;
+        }
+        if (mirrorTool_.isGlobalAxisMirror()) {
+            const int axis = mirrorTool_.globalAxis();
+            if (axis < 0 || axis > 2) {
+                return false;
+            }
+            const Point3D pivot = mirrorTool_.mirrorPivot();
+            return transformShapeControlPoints(
+                mirroredShape, targets.value(),
+                [pivot, axis](const Point3D &point) {
+                    return mirrorPointAcrossGlobalAxisPlane(point, pivot, axis);
+                });
         }
         return transformShapeControlPoints(
             mirroredShape, targets.value(),
@@ -13214,7 +13388,7 @@ protected:
             }
 
             if (activeTool_ == Tool::Mirror && mirrorTool_.hasAxisStart() &&
-                cursorValid_) {
+                (cursorValid_ || mirrorTool_.isGlobalAxisMirror())) {
                 const QPointF mirrorAxisEnd =
                     mirrorAxisEndInCapturedFrame();
                 for (const ObjectId objectId : mirrorTool_.sourceObjectIds()) {
@@ -16133,25 +16307,7 @@ protected:
                 if (dispatchedTool == Tool::Mirror) {
                     const MirrorCommitResult result =
                         mirrorTool_.takeLastCommitResult();
-                    if (result.sourceCount > 0) {
-                        const QString message = result.committed
-                            ? (result.componentEdit
-                                   ? QStringLiteral("mirror committed editObjects=%1 controlPoints=%2 axis=%3->%4")
-                                         .arg(result.sourceCount)
-                                         .arg(result.controlPointCount)
-                                         .arg(pointText(result.axisStart),
-                                              pointText(result.axisEnd))
-                                   : QStringLiteral("mirror committed sourceCount=%1 copyCount=%2 axis=%3->%4")
-                                         .arg(result.sourceCount)
-                                         .arg(result.createdObjectIds.size())
-                                         .arg(pointText(result.axisStart),
-                                              pointText(result.axisEnd)))
-                            : QStringLiteral("mirror rejected axis=%1->%2 objects=%3")
-                                  .arg(pointText(result.axisStart),
-                                       pointText(result.axisEnd))
-                                  .arg(result.sourceCount);
-                        DebugLog::instance().write(message);
-                    }
+                    logMirrorCommitResult(result);
                 } else if (dispatchedTool == Tool::Scale) {
                     const ScaleDispatchResult result =
                         scaleTool_.takeLastDispatchResult();
@@ -17587,6 +17743,17 @@ protected:
     bool event(QEvent *event) override
     {
         if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            activeTool_ == Tool::Select &&
+            viewportModeShortcutAvailable()) {
+            const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+            if (keyEvent->key() == Qt::Key_M &&
+                keyEvent->modifiers() == Qt::ControlModifier) {
+                event->accept();
+                return true;
+            }
+        }
+        if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
             activeTool_ == Tool::PointExtrude) {
             const auto *keyEvent = static_cast<const QKeyEvent *>(event);
             if (keyEvent->key() == Qt::Key_W &&
@@ -17661,6 +17828,15 @@ protected:
              event->modifiers() == Qt::AltModifier)) {
             setAllEditComponentsSelected(
                 event->modifiers() == Qt::NoModifier);
+            event->accept();
+            return;
+        }
+        if (viewportModeShortcutAvailable() &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            activeTool_ == Tool::Select &&
+            !event->isAutoRepeat() && event->key() == Qt::Key_M &&
+            event->modifiers() == Qt::ControlModifier) {
+            beginEditGlobalAxisMirror();
             event->accept();
             return;
         }
@@ -17963,9 +18139,15 @@ protected:
                     return;
                 }
                 if (dispatchedTool == Tool::Mirror) {
+                    const MirrorCommitResult result =
+                        mirrorTool_.takeLastCommitResult();
+                    logMirrorCommitResult(result);
                     currentSnap_ = SnapResult{};
-                    DebugLog::instance().write(
-                        QStringLiteral("mirror canceled"));
+                    if (result.sourceCount == 0 &&
+                        event->key() == Qt::Key_Escape) {
+                        DebugLog::instance().write(
+                            QStringLiteral("mirror canceled"));
+                    }
                     update();
                     event->accept();
                     return;
@@ -18061,6 +18243,16 @@ protected:
             targetWidget == this || isAncestorOf(targetWidget);
         if (!viewportHasKeyboardContext || keyEvent->isAutoRepeat()) {
             return false;
+        }
+
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            activeTool_ == Tool::Select &&
+            keyEvent->key() == Qt::Key_M &&
+            keyEvent->modifiers() == Qt::ControlModifier &&
+            viewportModeShortcutAvailable()) {
+            beginEditGlobalAxisMirror();
+            keyEvent->accept();
+            return true;
         }
 
         if (viewportModeShortcutAvailable() &&
@@ -26823,7 +27015,8 @@ private:
         QPainter &painter,
         const QVector<ObjectId> &gpuHandledObjects = {})
     {
-        if (!mirrorTool_.hasAxisStart() || !cursorValid_) {
+        if (!mirrorTool_.hasAxisStart() ||
+            (!cursorValid_ && !mirrorTool_.isGlobalAxisMirror())) {
             return;
         }
 

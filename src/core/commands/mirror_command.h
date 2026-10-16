@@ -28,6 +28,17 @@ public:
         const QPointF &axisEnd,
         const WorkPlaneFrame &axisFrame,
         int *editedObjectCount = nullptr);
+
+    // Blender-style Edit Mode mirror across a global axis plane through the
+    // selection pivot. The selected control vertices are transformed in place.
+    static bool applyControlPointsAcrossGlobalAxisPlane(
+        Document &document,
+        DocumentTransaction &transaction,
+        const QVector<ObjectId> &sourceObjectIds,
+        const QHash<quint64, QSet<int>> &controlPointIndices,
+        const Point3D &pivot,
+        int axis,
+        int *editedObjectCount = nullptr);
 };
 
 } // namespace classiCAD

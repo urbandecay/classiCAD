@@ -3948,16 +3948,22 @@ component selection never falls back to extruding the whole object.
 Polygon-mesh component work remains deferred, and Tab now refuses to enter
 Edit Mode for a polygon mesh until that component editing exists; mesh objects
 remain selectable and transformable in Object Mode.
-Edit Mode Mirror now reflects only the selected NURBS control-point targets in
-place. Vertex selections mirror their CVs, curve Edge selections mirror the
-selected spline's CVs, and a selected NURBS surface patch mirrors its CV net.
-The reflection is computed in world space from the two-click axis and the
-workplane captured at the first point; object placement is baked once. The
-existing CAD two-click arbitrary-line interaction remains in place, so
-Blender's transform-orientation, pivot, and axis-key interaction is not yet
-ported. NURBS solid component mirroring remains unsupported because its faces
-are derived from the exact base surface and extrusion vector. Partial surface
-CV deletion, individual solid-face deletion, exact active/selected outlines,
+Edit Mode Mirror now has both the existing CAD two-click arbitrary-line
+operation and a Blender-style `Ctrl+M`, then `X`, `Y`, or `Z` global-axis
+operation. The global-axis operation previews and reflects only selected NURBS
+control-point targets in place: vertex selections mirror their CVs, curve Edge
+selections mirror the selected spline's CVs, and a selected NURBS surface
+patch mirrors its CV net. It uses the arithmetic mean of the selected targets'
+world positions as classiCAD's fixed pivot, bakes object placement once, and
+confirms with Enter or left click; Escape or right click cancels. Plain `M`
+keeps its CAD two-click arbitrary-line behavior. This covers the global-axis
+shortcut from Blender 5.2.2's [Interactive Mirror](https://docs.blender.org/manual/en/5.2/scene_layout/object/editing/mirror.html),
+but does not yet provide Blender's transform-orientation toggle, middle-mouse
+interactive axis choice, or alternate pivot modes. The shortcut is limited to
+Edit Mode's Select tool and the supported NURBS point/curve/surface targets.
+NURBS solid component mirroring remains unsupported because its faces are
+derived from the exact base surface and extrusion vector. Partial surface CV
+deletion, individual solid-face deletion, exact active/selected outlines,
 other mode-specific overlay details, Blender's Shift/Ctrl digit selection
 extensions, and matched GPU/QPainter captures remain open. Blender 5.2.2 binds
 Shift/Ctrl digit mode variants to mesh selection operators; its curve Edit

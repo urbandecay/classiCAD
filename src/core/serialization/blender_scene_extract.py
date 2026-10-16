@@ -1163,6 +1163,29 @@ def workbench_shading_record(scene, shading=None):
     return record
 
 
+def _saved_view_screens(scene=None):
+    screens = [screen for screen in bpy.data.screens
+               if not bool(getattr(screen, "is_temporary", False))]
+    screens.sort(key=lambda screen: screen.name_full)
+    window = getattr(bpy.context, "window", None)
+    active_screen = getattr(window, "screen", None)
+    if ((scene is None or getattr(window, "scene", None) == scene) and
+            active_screen in screens):
+        screens.remove(active_screen)
+        screens.insert(0, active_screen)
+    return screens
+
+
+def _saved_view_areas(screen):
+    areas = sorted(screen.areas, key=lambda area: (-area.y, area.x))
+    active_area = getattr(bpy.context, "area", None)
+    if (active_area is not None and active_area.type == "VIEW_3D" and
+            active_area in areas):
+        areas.remove(active_area)
+        areas.insert(0, active_area)
+    return areas
+
+
 def saved_viewport_shading_record(scene):
     """Return the deterministically selected saved VIEW_3D shading record.
 
@@ -1171,16 +1194,8 @@ def saved_viewport_shading_record(scene):
     bottom, then left to right. Temporary screens are ignored so this stays
     tied to a persistent saved layout rather than a transient popup view.
     """
-    screens = [screen for screen in bpy.data.screens
-               if not bool(getattr(screen, "is_temporary", False))]
-    screens.sort(key=lambda screen: screen.name_full)
-    window = getattr(bpy.context, "window", None)
-    active_screen = getattr(window, "screen", None)
-    if getattr(window, "scene", None) == scene and active_screen in screens:
-        screens.remove(active_screen)
-        screens.insert(0, active_screen)
-    for screen in screens:
-        areas = sorted(screen.areas, key=lambda area: (-area.y, area.x))
+    for screen in _saved_view_screens(scene):
+        areas = _saved_view_areas(screen)
         for area in areas:
             if area.type == "VIEW_3D":
                 space = area.spaces.active
@@ -1226,16 +1241,8 @@ def saved_viewport_view_record(scene):
     """Return the first saved free or scene-camera VIEW_3D view."""
     if scene is None:
         return None
-    screens = [screen for screen in bpy.data.screens
-               if not bool(getattr(screen, "is_temporary", False))]
-    screens.sort(key=lambda screen: screen.name_full)
-    window = getattr(bpy.context, "window", None)
-    active_screen = getattr(window, "screen", None)
-    if active_screen in screens:
-        screens.remove(active_screen)
-        screens.insert(0, active_screen)
-    for screen in screens:
-        areas = sorted(screen.areas, key=lambda area: (-area.y, area.x))
+    for screen in _saved_view_screens(scene):
+        areas = _saved_view_areas(screen)
         for area in areas:
             if area.type != "VIEW_3D":
                 continue

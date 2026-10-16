@@ -1798,6 +1798,26 @@ boundary wires, matching their GPU Edit Mode wire category. Ordinary committed
 curve strokes continue to use the Overlay preference. Build passed; matched
 wire comparison remains open.
 
+### Viewport parity rollback audit corrections (2026-10-16)
+
+- Restored Blender's separate floor visibility rule: perspective and
+  free-angle orthographic views use `show_floor`; fixed-axis orthographic views
+  use `show_ortho_grid`, in both GPU and QPainter renderers. A prior rollback
+  had made every orthographic view use the fixed-axis setting.
+- Restored Blender's gamma-2.2 interpolation for Linear and Radial theme
+  backgrounds in both scene-linear GPU and QPainter construction. Single Color
+  retains exact sRGB decoding. A prior rollback had changed these scene-linear
+  paths back to sRGB-linear interpolation, disagreeing with Blender and the
+  direct-display fallback.
+- The Blender scene extractor now prefers the active `VIEW_3D` area for saved
+  view and overlay state when that context is available; headless extraction
+  keeps deterministic ordering. The HUD again displays the active projection
+  instead of the inaccurate fixed `2D VIEWPORT` label.
+- These changes address source-confirmed mismatches and the current rollback
+  regressions. They have not been confirmed by a matched capture from the
+  user's `.blend`; framing and missing-grid causes remain unverified until its
+  exact imported settings and view are captured.
+
 ### QPainter selected outline after scene DOF (2026-10-16)
 
 - The raster fallback now applies the Workbench scene outline before its
@@ -3130,8 +3150,9 @@ depth domain. Visual depth comparison remains open.
 - The ordinary bounded QPainter surface compositor now accepts per-pixel
   scene-linear background samples. The widget builds the Theme gradient with
   Blender's `viewport_background.frag` factor for Single Color, Linear, and
-  Radial styles, decodes the sRGB theme endpoints, and interpolates them in
-  scene-linear RGB before the surface/OIT resolve. World and Custom continue
+  Radial styles. Single Color uses the exact sRGB-to-linear transfer; Linear
+  and Radial encode their endpoints with gamma 2.2, interpolate, then decode
+  to scene-linear RGB before the surface/OIT resolve. World and Custom continue
   to use their scalar scene-linear bases; missing-World uses the Theme samples.
   The existing coverage cap also bounds gradient allocation to the compositor's
   one-million-pixel limit; oversized targets keep the prior fallback.
@@ -3172,10 +3193,9 @@ background shader. Linear gradients no longer approximate the ramp with 32
 stops. A high-contrast 101×101 contract checks every row against that equation
 within one display code value; the existing full-frame CPU/GPU comparison
 continues to cover Single, Linear, and Radial backgrounds at 1× DPR and Radial
-at 2× DPR. This improves consistency when the native background shader cannot
-draw; the scene-linear QPainter compositor continues to decode sRGB endpoints
-with the exact transfer function described above. The direct-display formula
-is in
+at 2× DPR. Scene-linear GPU and QPainter background construction must use the
+same gamma-2.2 interpolation before the final display transform; exact sRGB
+decoding is reserved for Single Color. The direct-display formula is in
 [`viewport_background.frag`](src/ui/viewport/shaders/viewport_background.frag);
 the scene-linear comparison remains tied to Blender's 5.2.2 Workbench
 background behavior documented in the Theme integration entry above.

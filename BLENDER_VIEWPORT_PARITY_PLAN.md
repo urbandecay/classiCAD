@@ -49,7 +49,9 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   GPU renderer and Qt fallback consume this frame.
 - Fixed-axis views select Blender's planes: Top/Bottom use XY, Front/Back use
   XZ, and Right/Left use YZ. Free-angle orthographic and perspective views use
-  the XY floor plane. This is display-only; the user's active CAD construction
+  the XY floor plane. Perspective and free-angle orthographic views gate that
+  floor with Blender's `show_floor`; fixed-axis orthographic views use
+  `show_ortho_grid`. This is display-only; the user's active CAD construction
   plane and offset remain unchanged for drawing and picking.
 - Perspective grid placement uses Blender's camera-height/view-angle blend;
   orthographic placement follows the center view ray onto the grid plane, with
@@ -328,6 +330,19 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   are recorded there. Stage 7's committed-picture, layer-style, and hardware
   checks are recorded below. Close-zoom curve chord error has a geometry
   regression.
+- **Saved-view selection correction (2026-10-16):** When Blender exposes an
+  active `VIEW_3D` area, the extractor now prefers that area for both saved
+  projection/orbit state and shading/overlay settings. Background extraction,
+  where there is no active area, retains deterministic screen/area ordering.
+  This prevents an interactive import from selecting a different visible
+  viewport when a saved screen contains multiple 3D areas. A headless
+  multi-area fixture and matched loaded-file capture remain unverified.
+- **Free-angle grid visibility correction (2026-10-16):** Perspective and
+  free-angle orthographic views use Blender's `show_floor` flag; fixed-axis
+  orthographic views use `show_ortho_grid`. This rule is restored in both GPU
+  and QPainter grid renderers after a rollback had made every orthographic
+  view use the fixed-axis flag. Matched free-angle and fixed-axis screenshots
+  remain open.
 - Validation passed: `cmake --build build -j2`, all four CTest suites,
   `git diff --check`, the XCB/Mesa software-OpenGL interaction test, and a
   five-second offscreen application startup. The offscreen platform cannot

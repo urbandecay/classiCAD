@@ -1360,9 +1360,10 @@ void ViewportRenderer::drawGrid(QPainter &painter,
                                                                viewportSize);
     const WorkPlane plane = gridFrame.plane;
     const qreal planeOffset = gridFrame.planeOffset;
-    const bool floorVisible = transform_.isPerspectiveEnabled()
-                                  ? gridAppearance_.showFloor
-                                  : gridAppearance_.showOrthographicGrid;
+    const bool floorVisible =
+        transform_.isPerspectiveEnabled() || !gridFrame.fixedAxisOrthographic
+            ? gridAppearance_.showFloor
+            : gridAppearance_.showOrthographicGrid;
     if (!floorVisible) return;
     if (transform_.isPerspectiveEnabled()) {
         const qreal farClipDistance = transform_.cameraPreferences().clipEnd;

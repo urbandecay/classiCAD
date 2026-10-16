@@ -308,11 +308,12 @@ std::vector<QVector3D> viewportThemeBackgroundSceneLinearPixels(
     const QColor highColor = themeBackground.style ==
             ViewportThemeBackgroundStyle::SingleColor
         ? themeBackground.lowColor : themeBackground.highColor;
-    const QVector3D high = workbenchSrgbToSceneLinear(QVector3D(
-        highColor.redF(), highColor.greenF(), highColor.blueF()));
-    const QVector3D low = workbenchSrgbToSceneLinear(QVector3D(
+    const QVector3D highDisplay(
+        highColor.redF(), highColor.greenF(), highColor.blueF());
+    const QVector3D lowDisplay(
         themeBackground.lowColor.redF(), themeBackground.lowColor.greenF(),
-        themeBackground.lowColor.blueF()));
+        themeBackground.lowColor.blueF());
+    const QVector3D highSingleColor = workbenchSrgbToSceneLinear(highDisplay);
     std::vector<QVector3D> pixels;
     pixels.reserve(static_cast<std::size_t>(pixelSize.width()) *
                    static_cast<std::size_t>(pixelSize.height()));
@@ -330,8 +331,33 @@ std::vector<QVector3D> viewportThemeBackgroundSceneLinearPixels(
                     std::hypot(u - 0.5, v - 0.5) * kSqrtTwo,
                     0.0, 1.0);
             }
-            pixels.emplace_back(high * static_cast<float>(1.0 - factor) +
-                                low * static_cast<float>(factor));
+            if (themeBackground.style ==
+                ViewportThemeBackgroundStyle::SingleColor) {
+                pixels.push_back(highSingleColor);
+                continue;
+            }
+            const auto gamma22Encode = [](float channel) {
+                return std::pow(std::clamp(channel, 0.0f, 1.0f),
+                                1.0f / 2.2f);
+            };
+            const auto gamma22Decode = [](float channel) {
+                return std::pow(std::clamp(channel, 0.0f, 1.0f), 2.2f);
+            };
+            const QVector3D highGamma(
+                gamma22Encode(highDisplay.x()),
+                gamma22Encode(highDisplay.y()),
+                gamma22Encode(highDisplay.z()));
+            const QVector3D lowGamma(
+                gamma22Encode(lowDisplay.x()),
+                gamma22Encode(lowDisplay.y()),
+                gamma22Encode(lowDisplay.z()));
+            const float lowWeight = static_cast<float>(factor);
+            const QVector3D mixedGamma =
+                highGamma * (1.0f - lowWeight) + lowGamma * lowWeight;
+            pixels.emplace_back(
+                gamma22Decode(mixedGamma.x()),
+                gamma22Decode(mixedGamma.y()),
+                gamma22Decode(mixedGamma.z()));
         }
     }
     return pixels;
@@ -14811,6 +14837,7 @@ protected:
         drawImportedCameraPassepartout(
             document_, size(), viewportTransform_, painter);
         ViewportHudState hudState;
+        hudState.perspectiveView = viewportTransform_.isPerspectiveEnabled();
         hudState.activeTool = activeTool_;
         hudState.arcMode = arcState().mode;
         hudState.subdivisionActive = subdivisionTool_.isActive();

@@ -10158,9 +10158,12 @@ scene depth.
   of an open caster, including faces turned away from the light. Back-facing
   faces reverse the source cap winding and retain the input winding on the far
   cap, matching Blender's double-manifold cap shader. Closed manifold solids
-  retain the light-facing cap rule. Boundary side quads and the near-plane
-  safety gate are unchanged. Build passed; matched open-surface shadow
-  captures remain open. Blender references:
+  retain the light-facing cap rule. Internal silhouette edges on open casters
+  now submit two coincident stencil side quads, while border edges submit one,
+  matching Blender's double-manifold edge rule. Closed casters and fallback
+  depth-pass geometry retain one side quad per silhouette edge. The near-plane
+  safety gate is unchanged. Build passed; matched open-surface shadow captures
+  remain open. Blender references:
   [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L247-L276)
   and
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L401-L422).

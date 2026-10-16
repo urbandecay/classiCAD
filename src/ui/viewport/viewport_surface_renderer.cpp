@@ -5013,6 +5013,13 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
             const QVector3D farB = extrudeToFarPlane(b);
             appendTriangle(&volumeVertices, a, farA, farB);
             appendTriangle(&volumeVertices, a, farB, b);
+            if (!range.shadowVolumeClosed) {
+                // Blender's double-manifold path emits two coincident side
+                // quads for an internal silhouette edge on an open caster.
+                // Border edges above still emit one quad.
+                appendTriangle(&volumeVertices, a, farA, farB);
+                appendTriangle(&volumeVertices, a, farB, b);
+            }
             appendTriangle(&depthPassSideVertices, a, farA, farB);
             appendTriangle(&depthPassSideVertices, a, farB, b);
         }

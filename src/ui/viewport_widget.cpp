@@ -201,6 +201,43 @@ qreal averageSurfaceViewDepth(const ViewportRenderObject &object,
     return fallbackDepth / std::max<qsizetype>(1, vertices->size() / 3);
 }
 
+struct BoundedRasterTarget {
+    QSize pixelSize;
+    qreal devicePixelRatio = 1.0;
+};
+
+BoundedRasterTarget boundedRasterTarget(const QSize &viewportSize,
+                                        qreal requestedDevicePixelRatio,
+                                        qint64 maximumPixelCount)
+{
+    if (viewportSize.isEmpty() || maximumPixelCount <= 0 ||
+        !std::isfinite(requestedDevicePixelRatio) ||
+        requestedDevicePixelRatio <= 0.0) {
+        return {};
+    }
+
+    const qint64 logicalPixelCount =
+        qint64(viewportSize.width()) * viewportSize.height();
+    qreal devicePixelRatio = std::min(
+        requestedDevicePixelRatio,
+        std::sqrt(static_cast<qreal>(maximumPixelCount) /
+                  static_cast<qreal>(logicalPixelCount)));
+    QSize pixelSize;
+    while (true) {
+        pixelSize = QSize(
+            std::max(1, qRound(viewportSize.width() * devicePixelRatio)),
+            std::max(1, qRound(viewportSize.height() * devicePixelRatio)));
+        const qint64 pixelCount =
+            qint64(pixelSize.width()) * pixelSize.height();
+        if (pixelCount <= maximumPixelCount) break;
+        const qreal correction = std::sqrt(
+            static_cast<qreal>(maximumPixelCount) /
+            static_cast<qreal>(pixelCount));
+        devicePixelRatio *= std::min<qreal>(correction, 0.99);
+    }
+    return {pixelSize, devicePixelRatio};
+}
+
 enum class ComponentSelectionMode { Vertex, Edge, Face };
 
 struct ComponentPickCycleState {
@@ -9350,22 +9387,14 @@ protected:
                                       : viewportAaMode_ >= 16 ? 4
                                       : viewportAaMode_ >= 8 ? 3
                                       : viewportAaMode_ > 0 ? 2 : 1;
-            const qreal requestedRasterDevicePixelRatio =
-                devicePixelRatio * rasterAaScale;
             constexpr qint64 maximumRasterScenePixels = 1'000'000;
-            const qint64 logicalPixelCount =
-                qint64(renderFrame.viewportSize.width()) *
-                renderFrame.viewportSize.height();
-            const qreal maximumRasterDevicePixelRatio = logicalPixelCount > 0
-                ? std::sqrt(static_cast<qreal>(maximumRasterScenePixels - 1024) /
-                            static_cast<qreal>(logicalPixelCount))
-                : requestedRasterDevicePixelRatio;
-            const qreal rasterDevicePixelRatio = std::max<qreal>(
-                0.01, std::min(requestedRasterDevicePixelRatio,
-                               maximumRasterDevicePixelRatio));
-            const QSize scenePixelSize(
-                qRound(renderFrame.viewportSize.width() * rasterDevicePixelRatio),
-                qRound(renderFrame.viewportSize.height() * rasterDevicePixelRatio));
+            const BoundedRasterTarget rasterTarget = boundedRasterTarget(
+                renderFrame.viewportSize,
+                devicePixelRatio * rasterAaScale,
+                maximumRasterScenePixels);
+            const qreal rasterDevicePixelRatio =
+                rasterTarget.devicePixelRatio;
+            const QSize scenePixelSize = rasterTarget.pixelSize;
             committedSceneLayer = QImage(scenePixelSize,
                                          QImage::Format_ARGB32_Premultiplied);
             committedSceneLayer.setDevicePixelRatio(rasterDevicePixelRatio);
@@ -12500,11 +12529,14 @@ protected:
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (!fallbackSurfaceObjects.isEmpty() ||
                  !fallbackVolumeObjects.isEmpty())) {
-                const qreal fallbackDpr =
-                    std::max<qreal>(devicePixelRatioF(), 1.0);
+                constexpr qint64 maximumRasterScenePixels = 1'000'000;
+                const BoundedRasterTarget fallbackTarget = boundedRasterTarget(
+                    renderFrame.viewportSize,
+                    std::max<qreal>(devicePixelRatioF(), 1.0),
+                    maximumRasterScenePixels);
+                const qreal fallbackDpr = fallbackTarget.devicePixelRatio;
                 QImage fallbackSurfaceLayer(
-                    QSize(qRound(renderFrame.viewportSize.width() * fallbackDpr),
-                          qRound(renderFrame.viewportSize.height() * fallbackDpr)),
+                    fallbackTarget.pixelSize,
                     QImage::Format_ARGB32_Premultiplied);
                 fallbackSurfaceLayer.setDevicePixelRatio(fallbackDpr);
                 fallbackSurfaceLayer.fill(Qt::transparent);
@@ -12551,7 +12583,10 @@ protected:
                     }, &fallbackSurfaceLayers, fallbackThemeBackgroundPixels, true,
                     fallbackVolumeObjects);
                 if (fallbackSurfaceBatchRendered) {
+                    painter.save();
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
                     painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
+                    painter.restore();
                 }
             }
 

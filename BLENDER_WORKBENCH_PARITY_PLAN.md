@@ -8786,12 +8786,16 @@ resolve remain open.
 
 - The interactive QPainter viewport now reduces its internal supersampling
   scale as needed to keep the committed scene target at or below one million
-  pixels. This lets common high-resolution and antialiased viewports retain
-  the bounded scene-linear transparency compositor and its depth maps instead
-  of switching immediately to average-depth painter composition. Large views
-  can render below display pixel density, and unsupported/offscreen targets
-  can still take the legacy fallback. Matched large-viewport comparisons
-  remain open.
+  pixels, checking the rounded physical dimensions so the cap is guaranteed.
+  The native-renderer failure fallback uses the same bounded target and
+  smoothly scales its result back to the viewport. Prepared curve depth
+  sampling maps viewport device coordinates into the retained depth map when
+  the target runs below display resolution. These paths let large viewports
+  retain the bounded scene-linear transparency compositor and depth maps
+  instead of switching immediately to average-depth painter composition.
+  Large views can render below display pixel density, and unsupported/offscreen
+  targets can still take the legacy fallback. Matched large-viewport
+  comparisons remain open.
 
 ### NURBS surface derivative normals (2026-10-15)
 

@@ -1527,6 +1527,15 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         opaqueSceneDepth->size() ==
             opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height()) {
         const QTransform deviceTransform = painter.deviceTransform();
+        const qreal targetDeviceWidth = viewportSize.width() *
+            std::abs(deviceTransform.m11());
+        const qreal targetDeviceHeight = viewportSize.height() *
+            std::abs(deviceTransform.m22());
+        if (!std::isfinite(targetDeviceWidth) ||
+            !std::isfinite(targetDeviceHeight) || targetDeviceWidth <= 0.0 ||
+            targetDeviceHeight <= 0.0) {
+            return false;
+        }
         const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
         const Point3D viewDirection = transform_.viewDirection();
         const auto cameraDepth = [&](const Point3D &point) {
@@ -1652,8 +1661,12 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                                        static_cast<qreal>(steps);
                 const QPointF devicePoint =
                     deviceStart + (deviceEnd - deviceStart) * fraction;
-                const int x = qFloor(devicePoint.x());
-                const int y = qFloor(devicePoint.y());
+                const int x = qFloor(devicePoint.x() *
+                                     opaqueSceneDepthSize.width() /
+                                     targetDeviceWidth);
+                const int y = qFloor(devicePoint.y() *
+                                     opaqueSceneDepthSize.height() /
+                                     targetDeviceHeight);
                 bool visible = true;
                 if (x >= 0 && x < opaqueSceneDepthSize.width() &&
                     y >= 0 && y < opaqueSceneDepthSize.height()) {

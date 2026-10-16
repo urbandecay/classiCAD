@@ -9272,6 +9272,17 @@ fallback path remain unverified.
   [visible image alpha](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl).
   Build passed; matched shadow captures remain open.
 
+### QPainter smooth-wire fringe scene occlusion (2026-10-16)
+
+- Cardinal-neighbor Smooth Wires contributions now test the candidate wire
+  depth against the destination pixel's retained opaque scene depth. This
+  prevents a visible sample beside a foreground silhouette from painting its
+  antialiasing fringe over that foreground object. Depth-tested candidate
+  ordering behind a center wire remains intact. Blender resolves neighbor
+  coverage against the shared scene color and depth in
+  [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
+  Build passed; matched silhouette-wire captures remain open.
+
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 
 - When an imported document has no active view-layer key, Workbench render

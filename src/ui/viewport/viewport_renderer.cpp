@@ -1183,9 +1183,10 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
         const int x = pixelIndex % opaqueSceneDepthSize.width();
         auto *row = reinterpret_cast<QRgb *>(resolvedWires.scanLine(y));
         const SmoothWireRecord center = batchIt->records.value(pixelIndex);
+        const float targetSceneDepth = (*opaqueSceneDepth)[pixelIndex];
         QVector3D premultipliedColor;
         qreal alpha = 0.0;
-        qreal resolvedDepth = (*opaqueSceneDepth)[pixelIndex];
+        qreal resolvedDepth = targetSceneDepth;
         if (!std::isfinite(resolvedDepth)) {
             resolvedDepth = std::numeric_limits<qreal>::infinity();
         }
@@ -1208,6 +1209,12 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             const SmoothWireRecord neighbor = batchIt->records.value(
                 neighborY * opaqueSceneDepthSize.width() + neighborX);
             if (!neighbor.valid) continue;
+            const qreal sceneDepthTolerance = std::max<qreal>(
+                1.0e-4, std::abs(neighbor.depth) * 1.0e-6);
+            if (std::isfinite(targetSceneDepth) &&
+                neighbor.depth > targetSceneDepth + sceneDepthTolerance) {
+                continue;
+            }
             const bool horizontalWire =
                 std::abs(neighbor.normalX) > std::abs(neighbor.normalY);
             if (horizontalWire != (offset.x() != 0)) continue;

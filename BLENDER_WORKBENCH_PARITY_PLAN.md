@@ -8774,6 +8774,15 @@ resolve remain open.
   [`workbench_effect_dof_prepare_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_prepare_frag.glsl#L405-L415).
   C++ build passed; matched DOF output comparison remains open.
 
+### QPainter scene-linear DOF alpha (2026-10-15)
+
+- Scene-linear QPainter DOF now keeps premultiplied RGB with alpha through its
+  prefilter, mip pyramid, gather, median, and resolve. Blender's DOF shaders
+  accumulate RGBA directly; the previous CPU path unpremultiplied before blur
+  and multiplied by alpha again afterward, changing color around translucent
+  edges. The display-referred fallback keeps its separate QImage path. Matched
+  Blender DOF output remains open.
+
 ### NURBS surface derivative normals (2026-10-15)
 
 - Smooth NURBS surface and solid shading normals are now evaluated from the

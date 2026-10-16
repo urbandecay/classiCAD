@@ -3914,7 +3914,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // camera-gated and uses camera-relative depth for either projection.
     if (depthOfFieldEnabled) {
         struct LinearGatherPixel {
-            // Straight RGB and alpha from the scene-linear source/gather.
+            // Premultiplied RGB and alpha from the scene-linear source/gather.
             float red = 0.0f;
             float green = 0.0f;
             float blue = 0.0f;
@@ -3936,11 +3936,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             for (std::size_t index = 0; index < gatheredLinear.size(); ++index) {
                 const RasterWorkbenchLinearPixel &pixel =
                     surfaceLayers->sceneLinearColor[index];
-                if (pixel.alpha > 0.0f) {
-                    gatheredLinear[index] = {
-                        pixel.red / pixel.alpha, pixel.green / pixel.alpha,
-                        pixel.blue / pixel.alpha, pixel.alpha};
-                }
+                gatheredLinear[index] = {
+                    pixel.red, pixel.green, pixel.blue, pixel.alpha};
             }
         }
         const qsizetype outputPixelCount =
@@ -4050,14 +4047,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const RasterWorkbenchLinearPixel &pixel =
                         surfaceLayers->sceneLinearColor[
                             static_cast<std::size_t>(y) * outputWidth + x];
-                    if (pixel.alpha > 0.0f) {
-                        return LinearGatherPixel{
-                            pixel.red / pixel.alpha,
-                            pixel.green / pixel.alpha,
-                            pixel.blue / pixel.alpha,
-                            pixel.alpha};
-                    }
-                    return LinearGatherPixel{};
+                    return LinearGatherPixel{
+                        pixel.red, pixel.green, pixel.blue, pixel.alpha};
                 }
                 const QRgb pixel = source.pixel(x, y);
                 return LinearGatherPixel{
@@ -4593,11 +4584,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         const LinearGatherPixel blurred =
                             sampleFilteredLinearGather(x, y);
                         original.red = original.red * (1.0f - mix) +
-                            blurred.red * blurred.alpha * mix;
+                            blurred.red * mix;
                         original.green = original.green * (1.0f - mix) +
-                            blurred.green * blurred.alpha * mix;
+                            blurred.green * mix;
                         original.blue = original.blue * (1.0f - mix) +
-                            blurred.blue * blurred.alpha * mix;
+                            blurred.blue * mix;
                         original.alpha = original.alpha * (1.0f - mix) +
                             blurred.alpha * mix;
                         continue;

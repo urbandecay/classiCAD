@@ -7624,16 +7624,16 @@ resolve remain open.
 
 ### QPainter control-cage depth visibility (2026-10-15)
 
-- Curve control cages and handles now use the retained regular or in-front
-  raster depth when available, so normal Solid overlays do not draw through
-  nearer surfaces. Regular cages also hide behind in-front surfaces. X-Ray
-  keeps cages visible through geometry and fades the hidden runs by
-  `1 - xrayAlpha`; visible runs retain their normal opacity. Ordinary cages
-  remain covered by the later in-front layer, and in-front cages use their own
-  depth. The depth sampling is bounded and has no effect when the fallback did
-  not retain scene depth. Blender's pinned Overlay wire pass depth-tests against the scene in
-  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L60-L74).
-  The C++ build passed; no matched Blender image comparison has been run.
+- Correction: these QPainter controls are legacy curve edit cages and markers,
+  not the mesh Overlay wire pass. Blender's pinned curve handle and point
+  subpasses write color without depth testing in
+  [`overlay_curve.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_curve.hh#L988-L1032)
+  and draw after the X-Ray fade in
+  [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L3785-L3797).
+  QPainter curve control cages and markers now follow that depthless behavior;
+  cages are clipped only at the view-depth boundary. This replaces the earlier
+  incorrect scene-depth occlusion and hidden-run fade. The C++ build passed;
+  no matched Blender image comparison has been run.
 
 ### Imported Blender object selection (2026-10-15)
 

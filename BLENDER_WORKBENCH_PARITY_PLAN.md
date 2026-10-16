@@ -3130,10 +3130,9 @@ depth domain. Visual depth comparison remains open.
 - The ordinary bounded QPainter surface compositor now accepts per-pixel
   scene-linear background samples. The widget builds the Theme gradient with
   Blender's `viewport_background.frag` factor for Single Color, Linear, and
-  Radial styles. Gradient endpoints follow Blender's gamma-2.2 encode, mix,
-  and decode sequence before the surface/OIT resolve. Single Color retains its
-  existing scene-linear decode. World and Custom continue to use their scalar
-  scene-linear bases; missing-World uses the Theme samples.
+  Radial styles, decodes the sRGB theme endpoints, and interpolates them in
+  scene-linear RGB before the surface/OIT resolve. World and Custom continue
+  to use their scalar scene-linear bases; missing-World uses the Theme samples.
   The existing coverage cap also bounds gradient allocation to the compositor's
   one-million-pixel limit; oversized targets keep the prior fallback.
 - The headless viewport contract feeds a top-to-bottom linear gradient through
@@ -3180,15 +3179,6 @@ is in
 [`viewport_background.frag`](src/ui/viewport/shaders/viewport_background.frag);
 the scene-linear comparison remains tied to Blender's 5.2.2 Workbench
 background behavior documented in the Theme integration entry above.
-
-### QPainter Theme gradient interpolation (2026-10-16)
-
-- The scene-linear Theme fallback now interpolates Linear and Radial endpoint
-  colors in Blender 5.2.2's gamma-2.2 encoded space, then decodes the result
-  with the matching 2.2 power. Single-color backgrounds retain their previous
-  color conversion. This fixes the mid-gradient response; matched live Blender
-  captures remain open. Blender reference:
-  [`overlay_background_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_background_frag.glsl#L527-L560).
 
 ### QPainter cavity and outline order (2026-10-13)
 

@@ -13496,10 +13496,39 @@ protected:
                             (screenSecond - screenFirst) * t0;
                         const QPointF b = screenFirst +
                             (screenSecond - screenFirst) * t1;
+                        qreal worldFraction = tm;
+                        if (viewportTransform_.isPerspectiveEnabled()) {
+                            const qreal firstCameraDepth = -
+                                rasterWorkbenchCameraDepth(
+                                    QVector3D(float(worldFirst.x),
+                                              float(worldFirst.y),
+                                              float(worldFirst.z)),
+                                    cameraPosition, viewDirection);
+                            const qreal secondCameraDepth = -
+                                rasterWorkbenchCameraDepth(
+                                    QVector3D(float(worldSecond.x),
+                                              float(worldSecond.y),
+                                              float(worldSecond.z)),
+                                    cameraPosition, viewDirection);
+                            if (firstCameraDepth > 1.0e-9 &&
+                                secondCameraDepth > 1.0e-9) {
+                                const qreal reciprocalDepth =
+                                    (1.0 - tm) / firstCameraDepth +
+                                    tm / secondCameraDepth;
+                                if (reciprocalDepth > 1.0e-12) {
+                                    worldFraction =
+                                        (tm / secondCameraDepth) /
+                                        reciprocalDepth;
+                                }
+                            }
+                        }
                         const Point3D midpoint{
-                            worldFirst.x + (worldSecond.x - worldFirst.x) * tm,
-                            worldFirst.y + (worldSecond.y - worldFirst.y) * tm,
-                            worldFirst.z + (worldSecond.z - worldFirst.z) * tm};
+                            worldFirst.x + (worldSecond.x - worldFirst.x) *
+                                               worldFraction,
+                            worldFirst.y + (worldSecond.y - worldFirst.y) *
+                                               worldFraction,
+                            worldFirst.z + (worldSecond.z - worldFirst.z) *
+                                               worldFraction};
                         bool visible = true;
                         const QSize domainSize = renderObject->showInFront
                             ? frontSize : regularSize;
@@ -13570,7 +13599,7 @@ protected:
                             }
                             const float tolerance = std::max(
                                 5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
-                            if (!viewportShadingSettings_.xrayEnabled()) {
+                            if (!viewportShadingSettings_.xrayEnabledForMode()) {
                                 visible = !std::isfinite(surfaceDepth) ||
                                     strokeDepth >= surfaceDepth - tolerance;
                             }

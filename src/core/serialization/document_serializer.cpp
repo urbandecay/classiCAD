@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 22);
+    serialized.insert(QStringLiteral("version"), 23);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -369,32 +369,6 @@ QJsonObject documentToJson(const Document &document)
     }
     settings.insert(QStringLiteral("importedBlenderColorLuts"), colorLuts);
     serialized.insert(QStringLiteral("settings"), settings);
-    serialized.insert(QStringLiteral("activeLayerId"),
-                      idToJson(document.activeLayerId().value()));
-
-    QJsonArray layers;
-    for (const Layer &layer : document.layers()) {
-        QJsonObject serializedLayer;
-        serializedLayer.insert(QStringLiteral("id"), idToJson(layer.id.value()));
-        serializedLayer.insert(QStringLiteral("name"), layer.name);
-        serializedLayer.insert(QStringLiteral("color"), layer.color.name(QColor::HexArgb));
-        serializedLayer.insert(QStringLiteral("lineType"), layer.lineType);
-        serializedLayer.insert(QStringLiteral("lineWeightMm"), layer.lineWeightMm);
-        serializedLayer.insert(QStringLiteral("description"), layer.description);
-        serializedLayer.insert(QStringLiteral("visible"), layer.visible);
-        serializedLayer.insert(QStringLiteral("frozen"), layer.frozen);
-        serializedLayer.insert(QStringLiteral("locked"), layer.locked);
-        serializedLayer.insert(QStringLiteral("plotted"), layer.plotted);
-
-        QJsonArray objectIds;
-        for (const ObjectId objectId : layer.objectIds) {
-            objectIds.append(idToJson(objectId.value()));
-        }
-        serializedLayer.insert(QStringLiteral("objectIds"), objectIds);
-        layers.append(serializedLayer);
-    }
-    serialized.insert(QStringLiteral("layers"), layers);
-
     QJsonArray collections;
     for (const DocumentCollection &collection : document.collections()) {
         QJsonObject record;
@@ -483,7 +457,6 @@ QJsonObject documentToJson(const Document &document)
     for (const SceneObject &sceneObject : document.objects()) {
         QJsonObject serializedObject;
         serializedObject.insert(QStringLiteral("id"), idToJson(sceneObject.id.value()));
-        serializedObject.insert(QStringLiteral("layerId"), idToJson(sceneObject.layerId.value()));
         QJsonArray collectionIds;
         for (const CollectionId collectionId : sceneObject.collectionIds) {
             collectionIds.append(idToJson(collectionId.value()));
@@ -652,15 +625,14 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 22) {
+    if (version < 1 || version > 23) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
 
-    const QJsonValue layersValue = serialized.value(QStringLiteral("layers"));
     const QJsonValue objectsValue = serialized.value(QStringLiteral("objects"));
-    if (!layersValue.isArray() || !objectsValue.isArray()) {
-        setError(errorMessage, QStringLiteral("document layers and objects must be arrays"));
+    if (!objectsValue.isArray()) {
+        setError(errorMessage, QStringLiteral("document objects must be an array"));
         return false;
     }
 
@@ -1112,107 +1084,6 @@ bool documentFromJson(const QJsonValue &value,
         }
         snapshot.settings = settings;
     }
-    QSet<quint64> layerIds;
-    quint64 nextLayerValue = 1;
-    for (const QJsonValue &layerValue : layersValue.toArray()) {
-        if (!layerValue.isObject()) {
-            setError(errorMessage, QStringLiteral("layer record must be an object"));
-            return false;
-        }
-
-        const QJsonObject serializedLayer = layerValue.toObject();
-        quint64 layerValueId = 0;
-        const QString name = serializedLayer.value(QStringLiteral("name")).toString().trimmed();
-        if (!idFromJson(serializedLayer.value(QStringLiteral("id")), &layerValueId) ||
-            layerIds.contains(layerValueId) || name.isEmpty() ||
-            !serializedLayer.value(QStringLiteral("visible")).isBool() ||
-            !serializedLayer.value(QStringLiteral("locked")).isBool()) {
-            setError(errorMessage, QStringLiteral("invalid layer record"));
-            return false;
-        }
-
-        Layer layer;
-        layer.id = LayerId::fromValue(layerValueId);
-        layer.name = name;
-        const QJsonValue colorValue = serializedLayer.value(QStringLiteral("color"));
-        if (colorValue.isUndefined()) {
-            if (version >= 2) {
-                setError(errorMessage, QStringLiteral("layer color is missing"));
-                return false;
-            }
-            // Keep the version-1 file default stable when the current default
-            // for newly created layers changes.
-            layer.color = QColor(QStringLiteral("#d28b45"));
-        } else {
-            if (!colorValue.isString()) {
-                setError(errorMessage, QStringLiteral("invalid layer color"));
-                return false;
-            }
-            const QColor color(colorValue.toString());
-            if (!color.isValid()) {
-                setError(errorMessage, QStringLiteral("invalid layer color"));
-                return false;
-            }
-            layer.color = color;
-        }
-        if (version >= 3) {
-            const QJsonValue lineTypeValue =
-                serializedLayer.value(QStringLiteral("lineType"));
-            const QJsonValue lineWeightValue =
-                serializedLayer.value(QStringLiteral("lineWeightMm"));
-            const QJsonValue descriptionValue =
-                serializedLayer.value(QStringLiteral("description"));
-            const QJsonValue frozenValue = serializedLayer.value(QStringLiteral("frozen"));
-            const QJsonValue plottedValue = serializedLayer.value(QStringLiteral("plotted"));
-            const QString lineType = lineTypeValue.toString().trimmed();
-            const qreal lineWeightMm = lineWeightValue.toDouble(-1.0);
-            if (!lineTypeValue.isString() || lineType.isEmpty() ||
-                !lineWeightValue.isDouble() || !std::isfinite(lineWeightMm) ||
-                lineWeightMm < 0.0 || lineWeightMm > 2.11 ||
-                !descriptionValue.isString() || !frozenValue.isBool() ||
-                !plottedValue.isBool()) {
-                setError(errorMessage, QStringLiteral("invalid layer properties"));
-                return false;
-            }
-            layer.lineType = lineType;
-            layer.lineWeightMm = lineWeightMm;
-            layer.description = descriptionValue.toString();
-            layer.frozen = frozenValue.toBool();
-            layer.plotted = plottedValue.toBool();
-        }
-        layer.visible = serializedLayer.value(QStringLiteral("visible")).toBool();
-        layer.locked = serializedLayer.value(QStringLiteral("locked")).toBool();
-        snapshot.layers.append(layer);
-        layerIds.insert(layerValueId);
-        if (layerValueId < std::numeric_limits<quint64>::max()) {
-            nextLayerValue = std::max(nextLayerValue, layerValueId + 1);
-        }
-    }
-
-    if (snapshot.layers.isEmpty()) {
-        setError(errorMessage, QStringLiteral("document must contain a layer"));
-        return false;
-    }
-
-    quint64 activeLayerValue = 0;
-    if (!idFromJson(serialized.value(QStringLiteral("activeLayerId")), &activeLayerValue) ||
-        !layerIds.contains(activeLayerValue)) {
-        setError(errorMessage, QStringLiteral("invalid active layer"));
-        return false;
-    }
-    snapshot.activeLayerId = LayerId::fromValue(activeLayerValue);
-    const auto activeLayer = std::find_if(
-        snapshot.layers.cbegin(),
-        snapshot.layers.cend(),
-        [activeLayerValue](const Layer &layer) {
-            return layer.id.value() == activeLayerValue;
-        });
-    if (activeLayer == snapshot.layers.cend() || !activeLayer->visible ||
-        activeLayer->frozen || activeLayer->locked) {
-        setError(errorMessage, QStringLiteral("active layer must be visible and unlocked"));
-        return false;
-    }
-
     QSet<quint64> objectIds;
     quint64 nextObjectValue = 1;
     for (const QJsonValue &objectValue : objectsValue.toArray()) {
@@ -1223,12 +1094,9 @@ bool documentFromJson(const QJsonValue &value,
 
         const QJsonObject serializedObject = objectValue.toObject();
         quint64 objectValueId = 0;
-        quint64 objectLayerValue = 0;
         Shape shape;
         if (!idFromJson(serializedObject.value(QStringLiteral("id")), &objectValueId) ||
             objectIds.contains(objectValueId) ||
-            !idFromJson(serializedObject.value(QStringLiteral("layerId")), &objectLayerValue) ||
-            !layerIds.contains(objectLayerValue) ||
             !shapeFromJson(serializedObject.value(QStringLiteral("geometry")), &shape)) {
             setError(errorMessage, QStringLiteral("invalid scene object record"));
             return false;
@@ -1394,7 +1262,6 @@ bool documentFromJson(const QJsonValue &value,
 
         SceneObject sceneObject;
         sceneObject.id = ObjectId::fromValue(objectValueId);
-        sceneObject.layerId = LayerId::fromValue(objectLayerValue);
         sceneObject.collectionIds = std::move(objectCollectionIds);
         sceneObject.hideViewport = hideViewport;
         sceneObject.hideRender = hideRender;
@@ -1687,13 +1554,8 @@ bool documentFromJson(const QJsonValue &value,
         setError(errorMessage, QStringLiteral("scene-linear float image payloads exceed the document limits"));
         return false;
     }
-    snapshot.nextLayerValue = nextLayerValue;
     snapshot.nextObjectValue = nextObjectValue;
     document->restoreSnapshot(snapshot);
-    if (document->activeLayerId() != snapshot.activeLayerId) {
-        setError(errorMessage, QStringLiteral("restored active layer is invalid"));
-        return false;
-    }
     return true;
 }
 

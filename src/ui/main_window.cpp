@@ -5,13 +5,10 @@
 #include "viewport_widget_api.h"
 #include "panels/document_grid_dialog.h"
 #include "panels/collections_panel.h"
-#include "panels/layers_panel.h"
-#include "panels/layer_style_widgets.h"
 #include "panels/preferences_dialog.h"
 #include "panels/preferences_store.h"
 #include "panels/tool_shelf.h"
 #include "theme/classicad_theme.h"
-#include "viewport/line_type_style.h"
 #include "input_helpers.h"
 #include "../core/debug_log.h"
 #include "../core/serialization/blender_project_file.h"
@@ -91,8 +88,7 @@ public:
                 refreshCollections();
                 markDocumentModified();
                 break;
-            case ApplicationSessionChange::Layers:
-                refreshLayers();
+            case ApplicationSessionChange::Collections:
                 refreshCollections();
                 markDocumentModified();
                 break;
@@ -105,7 +101,6 @@ public:
                 break;
             case ApplicationSessionChange::DocumentReplaced:
                 updateHistoryActions();
-                refreshLayers();
                 refreshCollections();
                 markDocumentModified();
                 break;
@@ -117,7 +112,6 @@ public:
 
         createMenus();
         createWorkspaceBar();
-        createLayerPropertiesBar();
         createMainLayout();
         createModelingShortcuts();
         loadPreferences();
@@ -727,7 +721,6 @@ private:
 
         if (!importedObjects.isEmpty() || !importedCollections.isEmpty() ||
             !importedMaterials.isEmpty() || !report.scenes.isEmpty()) {
-            const LayerId targetLayer = session_.document().activeLayerId();
             DocumentTransaction transaction = session_.beginTransaction();
             QHash<quint64, CollectionId> collectionRemap;
             QVector<DocumentCollection> pendingCollections = importedCollections;
@@ -776,7 +769,6 @@ private:
                 pendingCollections = std::move(deferred);
             }
             for (SceneObject &object : importedObjects) {
-                object.layerId = targetLayer;
                 for (CollectionId &collectionId : object.collectionIds) {
                     const auto mapped = collectionRemap.constFind(collectionId.value());
                     if (mapped == collectionRemap.cend()) {
@@ -1552,148 +1544,6 @@ private:
         addToolBar(Qt::TopToolBarArea, bar);
     }
 
-    void createLayerPropertiesBar()
-    {
-        addToolBarBreak(Qt::TopToolBarArea);
-        auto *bar = new QToolBar(QStringLiteral("Layer Properties"), this);
-        bar->setObjectName(QStringLiteral("layerPropertiesBar"));
-        bar->setMovable(false);
-        bar->setFloatable(false);
-        bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-
-        currentLayerCombo_ = new QComboBox;
-        currentLayerCombo_->setObjectName(QStringLiteral("currentLayerCombo"));
-        currentLayerCombo_->setMinimumWidth(150);
-        currentLayerCombo_->setMaximumWidth(190);
-        currentLayerCombo_->setToolTip(QStringLiteral("Current drawing layer"));
-        bar->addWidget(currentLayerCombo_);
-        bar->addSeparator();
-
-        layerColorCombo_ = new QComboBox;
-        layerColorCombo_->setObjectName(QStringLiteral("layerColorCombo"));
-        layerColorCombo_->setMinimumWidth(110);
-        layerColorCombo_->setToolTip(
-            QStringLiteral("Active layer color used by ByLayer geometry"));
-        const auto addColorOption = [this](const QString &name, const QColor &color) {
-            QPixmap swatch(12, 12);
-            swatch.fill(color);
-            layerColorCombo_->addItem(QIcon(swatch), name, color);
-        };
-        addColorOption(QStringLiteral("ByLayer"), QColor(QStringLiteral("#000000")));
-        addColorOption(QStringLiteral("Red"), QColor(QStringLiteral("#ff3030")));
-        addColorOption(QStringLiteral("Yellow"), QColor(QStringLiteral("#f0d030")));
-        addColorOption(QStringLiteral("Green"), QColor(QStringLiteral("#40c060")));
-        addColorOption(QStringLiteral("Cyan"), QColor(QStringLiteral("#40c8d8")));
-        addColorOption(QStringLiteral("Blue"), QColor(QStringLiteral("#4d83e6")));
-        addColorOption(QStringLiteral("Magenta"), QColor(QStringLiteral("#d45adc")));
-        addColorOption(QStringLiteral("White"), QColor(QStringLiteral("#ffffff")));
-        layerColorCombo_->addItem(QStringLiteral("Custom…"), QColor());
-        layerColorCombo_->setItemData(layerColorCombo_->count() - 1,
-                                      true,
-                                      Qt::UserRole + 1);
-        bar->addWidget(layerColorCombo_);
-
-        layerLineTypeCombo_ = new QComboBox;
-        layerLineTypeCombo_->setObjectName(QStringLiteral("layerLineTypeCombo"));
-        layerLineTypeCombo_->setMinimumWidth(125);
-        layerLineTypeCombo_->setToolTip(
-            QStringLiteral("Active layer linetype used by ByLayer geometry"));
-        populateLayerLineTypeCombo(layerLineTypeCombo_, true);
-        bar->addWidget(layerLineTypeCombo_);
-
-        layerLineWeightCombo_ = new QComboBox;
-        layerLineWeightCombo_->setObjectName(QStringLiteral("layerLineWeightCombo"));
-        layerLineWeightCombo_->setMinimumWidth(125);
-        layerLineWeightCombo_->setToolTip(
-            QStringLiteral("Active layer line weight in millimeters; Default matches surface wire thickness"));
-        bar->addWidget(new QLabel(QStringLiteral("Line weight:"), bar));
-        layerLineWeightCombo_->addItem(QStringLiteral("Default (1 px)"), 0.0);
-        for (const auto &lineWeight : QList<QPair<QString, qreal>>{
-                 {QStringLiteral("0.13 mm"), 0.13},
-                 {QStringLiteral("0.18 mm"), 0.18},
-                 {QStringLiteral("0.25 mm"), 0.25},
-                 {QStringLiteral("0.35 mm"), 0.35},
-                 {QStringLiteral("0.50 mm"), 0.50},
-                 {QStringLiteral("0.70 mm"), 0.70},
-                 {QStringLiteral("1.00 mm"), 1.00},
-                 {QStringLiteral("1.40 mm"), 1.40},
-                 {QStringLiteral("2.00 mm"), 2.00},
-                 {QStringLiteral("2.11 mm"), 2.11}}) {
-            layerLineWeightCombo_->addItem(lineWeight.first, lineWeight.second);
-        }
-        bar->addWidget(layerLineWeightCombo_);
-
-        connect(currentLayerCombo_, qOverload<int>(&QComboBox::activated),
-                this, [this](int index) {
-                    if (index < 0 || viewport_ == nullptr) {
-                        return;
-                    }
-                    const LayerId layerId = LayerId::fromValue(
-                        currentLayerCombo_->itemData(index).toULongLong());
-                    QTimer::singleShot(0, this, [this, layerId]() {
-                        ViewportLayerCommandRequest request;
-                        request.command = ViewportLayerCommand::Activate;
-                        request.layerId = layerId;
-                        executeLayerCommand(request, QString(),
-                                            QStringLiteral("Could not change current layer"));
-                    });
-                });
-        connect(layerColorCombo_, qOverload<int>(&QComboBox::activated),
-                this, [this](int index) {
-                    if (index < 0 || viewport_ == nullptr) {
-                        return;
-                    }
-                    const LayerId layerId = currentLayerId();
-                    if (!layerId.isValid()) {
-                        return;
-                    }
-                    QColor color = layerColorCombo_->itemData(index).value<QColor>();
-                    const bool chooseCustom =
-                        layerColorCombo_->itemData(index, Qt::UserRole + 1).toBool();
-                    QTimer::singleShot(0, this, [this, layerId, color, chooseCustom]() {
-                        QColor selectedColor = color;
-                        if (chooseCustom) {
-                            QColor currentColor;
-                            for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
-                                if (info.id == layerId) {
-                                    currentColor = info.color;
-                                    break;
-                                }
-                            }
-                            selectedColor = QColorDialog::getColor(
-                                currentColor, this, QStringLiteral("Layer Color"));
-                        }
-                        if (selectedColor.isValid()) {
-                            setLayerColor(layerId, selectedColor);
-                        }
-                    });
-                });
-        connect(layerLineTypeCombo_, qOverload<int>(&QComboBox::activated),
-                this, [this](int index) {
-                    if (index >= 0) {
-                        const LayerId layerId = currentLayerId();
-                        const QString lineType =
-                            layerLineTypeCombo_->itemData(index).toString();
-                        QTimer::singleShot(0, this, [this, layerId, lineType]() {
-                            setLayerLineType(layerId, lineType);
-                        });
-                    }
-                });
-        connect(layerLineWeightCombo_, qOverload<int>(&QComboBox::activated),
-                this, [this](int index) {
-                    if (index >= 0) {
-                        const LayerId layerId = currentLayerId();
-                        const qreal lineWeightMm =
-                            layerLineWeightCombo_->itemData(index).toDouble();
-                        QTimer::singleShot(0, this, [this, layerId, lineWeightMm]() {
-                            setLayerLineWeight(layerId, lineWeightMm);
-                        });
-                    }
-                });
-
-        addToolBar(Qt::TopToolBarArea, bar);
-    }
-
     void createMainLayout()
     {
         auto *root = new QWidget;
@@ -1845,7 +1695,6 @@ private:
         viewportCallbacks.viewStateUpdate(viewport_->workPlane(),
                                           viewport_->workPlaneOffset(),
                                           viewport_->viewPreset());
-        refreshLayers();
         refreshCollections();
         updateHistoryActions();
     }
@@ -2804,112 +2653,6 @@ private:
         }
     }
 
-    LayerId selectedLayerId() const
-    {
-        return layersPanel_ == nullptr ? LayerId::invalid()
-                                       : layersPanel_->selectedLayerId();
-    }
-
-    LayerId currentLayerId() const
-    {
-        return currentLayerCombo_ == nullptr || currentLayerCombo_->currentIndex() < 0
-                   ? LayerId::invalid()
-                   : LayerId::fromValue(
-                         currentLayerCombo_->currentData().toULongLong());
-    }
-
-    void refreshLayerToolbar(const QVector<ViewportLayerInfo> &infos)
-    {
-        if (currentLayerCombo_ == nullptr) {
-            return;
-        }
-
-        const QSignalBlocker currentBlocker(currentLayerCombo_);
-        const QSignalBlocker colorBlocker(layerColorCombo_);
-        const QSignalBlocker lineTypeBlocker(layerLineTypeCombo_);
-        const QSignalBlocker lineWeightBlocker(layerLineWeightCombo_);
-        currentLayerCombo_->clear();
-        int currentIndex = -1;
-        const ViewportLayerInfo *activeLayer = nullptr;
-        for (const ViewportLayerInfo &info : infos) {
-            QPixmap swatch(12, 12);
-            swatch.fill(info.color);
-            currentLayerCombo_->addItem(
-                QIcon(swatch),
-                info.name,
-                QVariant::fromValue<qulonglong>(info.id.value()));
-            if (info.active) {
-                currentIndex = currentLayerCombo_->count() - 1;
-                activeLayer = &info;
-            }
-        }
-        if (currentIndex >= 0) {
-            currentLayerCombo_->setCurrentIndex(currentIndex);
-        }
-        if (activeLayer == nullptr) {
-            return;
-        }
-
-        int colorIndex = -1;
-        for (int index = 0; index < layerColorCombo_->count(); ++index) {
-            if (!layerColorCombo_->itemData(index, Qt::UserRole + 1).toBool() &&
-                layerColorCombo_->itemData(index).value<QColor>() == activeLayer->color) {
-                colorIndex = index;
-                break;
-            }
-        }
-        const int customIndex = layerColorCombo_->count() - 1;
-        if (colorIndex < 0 && customIndex >= 0) {
-            colorIndex = customIndex;
-            layerColorCombo_->setItemText(customIndex,
-                                          activeLayer->color.name(QColor::HexRgb).toUpper());
-            layerColorCombo_->setItemData(customIndex,
-                                          activeLayer->color,
-                                          Qt::UserRole);
-            QPixmap swatch(12, 12);
-            swatch.fill(activeLayer->color);
-            layerColorCombo_->setItemIcon(customIndex, QIcon(swatch));
-        } else if (customIndex >= 0) {
-            layerColorCombo_->setItemText(customIndex, QStringLiteral("Custom…"));
-            layerColorCombo_->setItemData(customIndex, QColor(), Qt::UserRole);
-            layerColorCombo_->setItemData(customIndex, true, Qt::UserRole + 1);
-            layerColorCombo_->setItemIcon(customIndex, QIcon());
-        }
-        if (colorIndex >= 0) {
-            layerColorCombo_->setCurrentIndex(colorIndex);
-        }
-
-        const QString activeLineType =
-            canonicalLayerLineTypeName(activeLayer->lineType);
-        int lineTypeIndex = layerLineTypeCombo_->findData(activeLineType);
-        if (lineTypeIndex < 0) {
-            layerLineTypeCombo_->addItem(makeLayerLineTypeIcon(activeLayer->lineType),
-                                         activeLayer->lineType,
-                                         activeLayer->lineType);
-            lineTypeIndex = layerLineTypeCombo_->count() - 1;
-        }
-        layerLineTypeCombo_->setCurrentIndex(lineTypeIndex);
-
-        int lineWeightIndex = -1;
-        for (int index = 0; index < layerLineWeightCombo_->count(); ++index) {
-            if (qFuzzyCompare(layerLineWeightCombo_->itemData(index).toDouble() + 1.0,
-                              activeLayer->lineWeightMm + 1.0)) {
-                lineWeightIndex = index;
-                break;
-            }
-        }
-        if (lineWeightIndex >= 0) {
-            layerLineWeightCombo_->setCurrentIndex(lineWeightIndex);
-        }
-    }
-
-    void refreshLayers()
-    {
-        if (layersPanel_ != nullptr) {
-            layersPanel_->refresh();
-        }
-    }
-
     void refreshCollections()
     {
         if (collectionsPanel_ != nullptr) {
@@ -2917,334 +2660,8 @@ private:
         }
     }
 
-    bool executeLayerCommand(const ViewportLayerCommandRequest &request,
-                             const QString &successMessage,
-                             const QString &failureMessage)
-    {
-        if (viewport_ == nullptr) {
-            return false;
-        }
-        const ViewportLayerCommandResult result = viewport_->executeLayerCommand(request);
-        if (!result.accepted) {
-            statusBar()->showMessage(failureMessage, 4000);
-            return false;
-        }
-        if (!successMessage.isEmpty()) {
-            statusBar()->showMessage(successMessage, 3000);
-        }
-        refreshLayers();
-        return true;
-    }
-
-    void addLayer()
-    {
-        bool accepted = false;
-        const QString name = QInputDialog::getText(this,
-                                                   QStringLiteral("Add Layer"),
-                                                   QStringLiteral("Layer name:"),
-                                                   QLineEdit::Normal,
-                                                   QStringLiteral("Layer"),
-                                                   &accepted)
-                                .trimmed();
-        if (!accepted || name.isEmpty()) {
-            return;
-        }
-
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::Create;
-        request.name = name;
-        executeLayerCommand(request,
-                             QStringLiteral("Layer created"),
-                             QStringLiteral("Could not create layer"));
-    }
-
-    void renameLayer(LayerId layerId)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-
-        QString currentName;
-        for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
-            if (info.id == layerId) {
-                currentName = info.name;
-                break;
-            }
-        }
-        bool accepted = false;
-        const QString name = QInputDialog::getText(this,
-                                                   QStringLiteral("Rename Layer"),
-                                                   QStringLiteral("Layer name:"),
-                                                   QLineEdit::Normal,
-                                                   currentName,
-                                                   &accepted)
-                                .trimmed();
-        if (!accepted || name.isEmpty()) {
-            return;
-        }
-
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::Rename;
-        request.layerId = layerId;
-        request.name = name;
-        executeLayerCommand(request,
-                             QStringLiteral("Layer renamed"),
-                             QStringLiteral("Could not rename layer"));
-    }
-
-    void removeLayer(LayerId layerId)
-    {
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::Remove;
-        request.layerId = layerId;
-        executeLayerCommand(request,
-                             QStringLiteral("Layer removed"),
-                             QStringLiteral("Only empty layers can be removed"));
-    }
-
-    void activateLayer(LayerId layerId)
-    {
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::Activate;
-        request.layerId = layerId;
-        executeLayerCommand(request,
-                             QStringLiteral("Active layer changed"),
-                             QStringLiteral("A layer must be visible and unlocked to become active"));
-    }
-
-    void setLayerVisible(LayerId layerId, bool visible)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetVisible;
-        request.layerId = layerId;
-        request.enabled = visible;
-        executeLayerCommand(request,
-                             visible ? QStringLiteral("Layer shown") : QStringLiteral("Layer hidden"),
-                             QStringLiteral("At least one other visible, unlocked layer is required"));
-    }
-
-    void setLayerLocked(LayerId layerId, bool locked)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetLocked;
-        request.layerId = layerId;
-        request.enabled = locked;
-        executeLayerCommand(request,
-                             locked ? QStringLiteral("Layer locked") : QStringLiteral("Layer unlocked"),
-                            QStringLiteral("At least one other visible, unlocked layer is required"));
-    }
-
-    void setLayerColor(LayerId layerId, const QColor &color)
-    {
-        if (!layerId.isValid() || !color.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetColor;
-        request.layerId = layerId;
-        request.color = color;
-        executeLayerCommand(request, QString(), QStringLiteral("Could not update layer color"));
-    }
-
-    void setLayerFrozen(LayerId layerId, bool frozen)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetFrozen;
-        request.layerId = layerId;
-        request.enabled = frozen;
-        executeLayerCommand(request,
-                            frozen ? QStringLiteral("Layer frozen")
-                                   : QStringLiteral("Layer thawed"),
-                            QStringLiteral("Another visible, thawed, unlocked layer is required"));
-    }
-
-    void setLayerPlotted(LayerId layerId, bool plotted)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetPlotted;
-        request.layerId = layerId;
-        request.enabled = plotted;
-        executeLayerCommand(request, QString(), QStringLiteral("Could not update plot setting"));
-    }
-
-    void setLayerLineType(LayerId layerId, const QString &lineType)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetLineType;
-        request.layerId = layerId;
-        request.name = lineType;
-        executeLayerCommand(request, QString(), QStringLiteral("Could not update linetype"));
-    }
-
-    void setLayerLineWeight(LayerId layerId, qreal lineWeightMm)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetLineWeight;
-        request.layerId = layerId;
-        request.lineWeightMm = lineWeightMm;
-        executeLayerCommand(request, QString(), QStringLiteral("Could not update lineweight"));
-    }
-
-    void setLayerDescription(LayerId layerId, const QString &description)
-    {
-        if (!layerId.isValid()) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::SetDescription;
-        request.layerId = layerId;
-        request.name = description;
-        executeLayerCommand(request,
-                            QStringLiteral("Layer description updated"),
-                            QStringLiteral("Could not update description"));
-    }
-
-    void editLayerDescription(LayerId layerId)
-    {
-        if (!layerId.isValid() || viewport_ == nullptr) {
-            return;
-        }
-        QString description;
-        for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
-            if (info.id == layerId) {
-                description = info.description;
-                break;
-            }
-        }
-        bool accepted = false;
-        const QString updatedDescription = QInputDialog::getMultiLineText(
-            this,
-            QStringLiteral("Layer Description"),
-            QStringLiteral("Description:"),
-            description,
-            &accepted);
-        if (accepted && updatedDescription != description) {
-            setLayerDescription(layerId, updatedDescription);
-        }
-    }
-
-    void chooseLayerColor(LayerId layerId)
-    {
-        if (!layerId.isValid() || viewport_ == nullptr) {
-            return;
-        }
-        QColor currentColor;
-        for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
-            if (info.id == layerId) {
-                currentColor = info.color;
-                break;
-            }
-        }
-        if (!currentColor.isValid()) {
-            return;
-        }
-
-        const QColor color = QColorDialog::getColor(currentColor,
-                                                    this,
-                                                    QStringLiteral("Layer Color"));
-        if (!color.isValid() || color == currentColor) {
-            return;
-        }
-        setLayerColor(layerId, color);
-    }
-
-    void moveLayer(LayerId layerId, int targetIndex)
-    {
-        if (!layerId.isValid() || targetIndex < 0) {
-            return;
-        }
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::Move;
-        request.layerId = layerId;
-        request.index = targetIndex;
-        executeLayerCommand(request,
-                             QStringLiteral("Layer order updated"),
-                             QStringLiteral("Could not reorder layer"));
-    }
-
-    void moveSelectedObjectsToLayer(LayerId layerId)
-    {
-        ViewportLayerCommandRequest request;
-        request.command = ViewportLayerCommand::MoveSelectedObjects;
-        request.layerId = layerId;
-        const ViewportLayerCommandResult result = viewport_->executeLayerCommand(request);
-        if (!result.accepted) {
-            statusBar()->showMessage(QStringLiteral("Select editable objects and a visible, unlocked target layer"),
-                                     5000);
-            return;
-        }
-        statusBar()->showMessage(QStringLiteral("Moved %1 object%2 to %3")
-                                     .arg(result.count)
-                                     .arg(result.count == 1 ? QString() : QStringLiteral("s"))
-                                     .arg(layerId.isValid()
-                                              ? QStringLiteral("the selected layer")
-                                              : QStringLiteral("the layer")),
-                                 4000);
-        refreshLayers();
-    }
-
     QWidget *createRightPanel()
     {
-        LayersPanelCallbacks callbacks;
-        callbacks.layerInfos = [this]() {
-            return viewport_ == nullptr ? QVector<ViewportLayerInfo>()
-                                        : viewport_->layerInfos();
-        };
-        callbacks.addLayer = [this]() { addLayer(); };
-        callbacks.removeLayer = [this](LayerId id) { removeLayer(id); };
-        callbacks.renameLayer = [this](LayerId id) { renameLayer(id); };
-        callbacks.activateLayer = [this](LayerId id) { activateLayer(id); };
-        callbacks.setVisible = [this](LayerId id, bool value) {
-            setLayerVisible(id, value);
-        };
-        callbacks.setFrozen = [this](LayerId id, bool value) {
-            setLayerFrozen(id, value);
-        };
-        callbacks.setLocked = [this](LayerId id, bool value) {
-            setLayerLocked(id, value);
-        };
-        callbacks.setPlotted = [this](LayerId id, bool value) {
-            setLayerPlotted(id, value);
-        };
-        callbacks.chooseColor = [this](LayerId id) { chooseLayerColor(id); };
-        callbacks.editDescription = [this](LayerId id) {
-            editLayerDescription(id);
-        };
-        callbacks.setLineType = [this](LayerId id, const QString &lineType) {
-            setLayerLineType(id, lineType);
-        };
-        callbacks.setLineWeight = [this](LayerId id, qreal lineWeightMm) {
-            setLayerLineWeight(id, lineWeightMm);
-        };
-        callbacks.moveLayer = [this](LayerId id, int index) {
-            moveLayer(id, index);
-        };
-        callbacks.moveSelectedObjects = [this](LayerId id) {
-            moveSelectedObjectsToLayer(id);
-        };
-        callbacks.layersRefreshed = [this](const QVector<ViewportLayerInfo> &infos) {
-            refreshLayerToolbar(infos);
-        };
-        layersPanel_ = new LayersPanel(callbacks);
-
         CollectionsPanelCallbacks collectionCallbacks;
         collectionCallbacks.entries = [this]() {
             QVector<CollectionPanelEntry> entries;
@@ -3275,56 +2692,9 @@ private:
                         4000);
                 }
             };
-        collectionCallbacks.viewLayers = [this]() {
-            QHash<QString, BlenderViewLayerChoice> byKey;
-            for (const DocumentCollection &collection :
-                 session_.document().collections()) {
-                for (const QJsonValue &value : collection.viewLayerStates) {
-                    const QJsonObject state = value.toObject();
-                    const QString key =
-                        state.value(QStringLiteral("view_layer_key")).toString();
-                    if (key.isEmpty() || byKey.contains(key)) continue;
-                    byKey.insert(key, BlenderViewLayerChoice{
-                        key,
-                        state.value(QStringLiteral("scene_name")).toString(),
-                        state.value(QStringLiteral("view_layer_name")).toString()});
-                }
-            }
-            QVector<BlenderViewLayerChoice> result = byKey.values().toVector();
-            std::sort(result.begin(), result.end(),
-                      [](const BlenderViewLayerChoice &left,
-                         const BlenderViewLayerChoice &right) {
-                if (left.sceneName != right.sceneName)
-                    return left.sceneName < right.sceneName;
-                if (left.viewLayerName != right.viewLayerName)
-                    return left.viewLayerName < right.viewLayerName;
-                return left.key < right.key;
-            });
-            return result;
-        };
-        collectionCallbacks.activeViewLayerKey = [this]() {
-            return session_.document().settings().activeViewLayerKey;
-        };
-        collectionCallbacks.setActiveViewLayerKey = [this](const QString &key) {
-            DocumentSettings settings = session_.document().settings();
-            if (settings.activeViewLayerKey == key) return;
-            settings.activeViewLayerKey = key;
-            DocumentTransaction transaction = session_.beginTransaction();
-            if (!transaction.setSettings(settings) ||
-                !session_.commitTransaction(transaction)) {
-                statusBar()->showMessage(
-                    QStringLiteral("Could not change Blender view layer"), 4000);
-                refreshCollections();
-                return;
-            }
-            if (viewport_ != nullptr) viewport_->refreshAfterProjectImport();
-        };
         collectionsPanel_ = new CollectionsPanel(collectionCallbacks);
 
-        auto *tabs = new QTabWidget;
-        tabs->addTab(layersPanel_, QStringLiteral("Layers"));
-        tabs->addTab(collectionsPanel_, QStringLiteral("Collections"));
-        return tabs;
+        return collectionsPanel_;
     }
 
     void applyTheme()
@@ -3359,12 +2729,7 @@ private:
     QToolButton *mirrorToolButton_ = nullptr;
     QToolButton *scaleToolButton_ = nullptr;
     ScaleMode scaleMode_ = ScaleMode::TwoD;
-    QComboBox *currentLayerCombo_ = nullptr;
     QActionGroup *workPlaneActionGroup_ = nullptr;
-    QComboBox *layerColorCombo_ = nullptr;
-    QComboBox *layerLineTypeCombo_ = nullptr;
-    QComboBox *layerLineWeightCombo_ = nullptr;
-    LayersPanel *layersPanel_ = nullptr;
     CollectionsPanel *collectionsPanel_ = nullptr;
     QString currentProjectPath_;
     bool documentModified_ = false;

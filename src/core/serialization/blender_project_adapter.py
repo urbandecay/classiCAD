@@ -586,7 +586,7 @@ def evaluate_nurbs_surface(surface, u, v):
     return tuple(value / denominator for value in numerator)
 
 
-def add_nurbs_surface_mesh(layer_collection, object_name, surface_data, display_mesh):
+def add_nurbs_surface_mesh(collection, object_name, surface_data, display_mesh):
     # The .blend mesh is a display proxy. The exact NURBS surface stays in the
     # authoritative classiCAD document text and is rebuilt from that data.
     if display_mesh is not None:
@@ -629,7 +629,7 @@ def add_nurbs_surface_mesh(layer_collection, object_name, surface_data, display_
     if corner_uvs is not None:
         attach_proxy_corner_uvs(mesh, corner_uvs)
     obj = bpy.data.objects.new(object_name, mesh)
-    layer_collection.objects.link(obj)
+    collection.objects.link(obj)
     return obj
 
 
@@ -1107,21 +1107,21 @@ def merge_solid_proxy_materials(document):
             face_materials.pop(face_id, None)
 
 
-def add_scene_object(layer_collections, record, surface_display_mesh=None,
+def add_scene_object(collections, record, surface_display_mesh=None,
                      document=None):
     object_id = str(record["id"])
-    layer_id = str(record["layerId"])
+    collection_key = "default"
     shape = record["geometry"]
     geometry_type = int(shape.get("geometryType", shape.get("tool", 0)))
-    layer_collection = layer_collections.get(layer_id)
-    if layer_collection is None:
-        raise RuntimeError("scene object references an unknown layer " + layer_id)
+    collection = collections.get(collection_key)
+    if collection is None:
+        raise RuntimeError("scene object references an unknown collection " + collection_key)
 
     object_name = "classiCAD.%s.%s" % (geometry_type, object_id)
     frame = frame_matrix(shape)
     if geometry_type in {14, 15}:
         obj = add_nurbs_surface_mesh(
-            layer_collection,
+            collection,
             object_name,
             shape.get("nurbsSurface", {}),
             surface_display_mesh,
@@ -1129,7 +1129,6 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None,
         if obj is None:
             raise RuntimeError("invalid NURBS surface data for object " + object_id)
         obj["classiCAD_object_id"] = object_id
-        obj["classiCAD_layer_id"] = layer_id
         obj["classiCAD_geometry_type"] = geometry_type
         obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
         obj["classiCAD_proxy_geometry"] = "NurbsSurface and NurbsSolid"
@@ -1189,11 +1188,10 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None,
             obj.matrix_world = frame
 
     obj["classiCAD_object_id"] = object_id
-    obj["classiCAD_layer_id"] = layer_id
     obj["classiCAD_geometry_type"] = geometry_type
     obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
     obj.show_in_front = bool(record.get("showInFront", False))
-    layer_collection.objects.link(obj)
+    collection.objects.link(obj)
 
 
 def add_curve_record_to_group(curve_data, record):
@@ -1232,7 +1230,7 @@ def add_curve_record_to_group(curve_data, record):
     return has_curve
 
 
-def create_grouped_scene_objects(layer_collections, records, surface_display_meshes,
+def create_grouped_scene_objects(collections, records, surface_display_meshes,
                                  document):
     # Large projects use grouped Blender display proxies. Per-object identity,
     # exact NURBS data, and layer membership remain in the authoritative text.
@@ -1243,7 +1241,7 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
 
     for record in records:
         object_id = str(record["id"])
-        layer_id = str(record["layerId"])
+        collection_key = "default"
         shape = record["geometry"]
         geometry_type = int(shape.get("geometryType", shape.get("tool", 0)))
         if geometry_type in {14, 15}:
@@ -1260,7 +1258,7 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
                     len(source_corner_uvs) != len(source_faces)):
                 raise ValueError("derived NURBS surface proxy UV count is invalid")
             batch = mesh_batches.setdefault(
-                layer_id, {"vertices": [], "faces": [], "corner_uvs": [],
+                collection_key, {"vertices": [], "faces": [], "corner_uvs": [],
                            "uv_incomplete": False, "face_refs": [], "count": 0}
             )
             vertex_offset = len(batch["vertices"])
@@ -1287,15 +1285,15 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
             continue
 
         if geometry_type in curve_types:
-            batch = curve_batches.get(layer_id)
+            batch = curve_batches.get(collection_key)
             if batch is None:
                 curve_data = bpy.data.curves.new(
-                    "classiCAD.curves-proxy." + layer_id, "CURVE"
+                    "classiCAD.curves-proxy." + collection_key, "CURVE"
                 )
                 curve_data.dimensions = "3D"
                 curve_data.resolution_u = 16
                 batch = {"data": curve_data, "count": 0}
-                curve_batches[layer_id] = batch
+                curve_batches[collection_key] = batch
             if add_curve_record_to_group(batch["data"], record):
                 batch["count"] += 1
             else:
@@ -1304,37 +1302,35 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
 
         fallback_records.append(record)
 
-    for layer_id, batch in mesh_batches.items():
-        mesh = bpy.data.meshes.new("classiCAD.surface-proxy." + layer_id)
+    for collection_key, batch in mesh_batches.items():
+        mesh = bpy.data.meshes.new("classiCAD.surface-proxy." + collection_key)
         mesh.from_pydata(batch["vertices"], [], batch["faces"])
         mesh.update()
         if (not batch["uv_incomplete"] and
                 len(batch["corner_uvs"]) == len(batch["faces"])):
             attach_proxy_corner_uvs(mesh, batch["corner_uvs"])
-        obj = bpy.data.objects.new("classiCAD.surface-proxy." + layer_id, mesh)
+        obj = bpy.data.objects.new("classiCAD.surface-proxy." + collection_key, mesh)
         attach_solid_face_metadata(mesh, batch["face_refs"], document)
-        obj["classiCAD_layer_id"] = layer_id
         obj["classiCAD_proxy_geometry"] = "NurbsSurface and NurbsSolid"
         obj["classiCAD_proxy_object_count"] = batch["count"]
         obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
-        layer_collections[layer_id].objects.link(obj)
+        collections[collection_key].objects.link(obj)
 
-    for layer_id, batch in curve_batches.items():
+    for collection_key, batch in curve_batches.items():
         if not batch["data"].splines:
             bpy.data.curves.remove(batch["data"])
             continue
         obj = bpy.data.objects.new(
-            "classiCAD.curves-proxy." + layer_id, batch["data"]
+            "classiCAD.curves-proxy." + collection_key, batch["data"]
         )
-        obj["classiCAD_layer_id"] = layer_id
         obj["classiCAD_proxy_geometry"] = "NurbsCurves"
         obj["classiCAD_proxy_object_count"] = batch["count"]
         obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
-        layer_collections[layer_id].objects.link(obj)
+        collections[collection_key].objects.link(obj)
 
     for record in fallback_records:
         add_scene_object(
-            layer_collections,
+            collections,
             record,
             surface_display_meshes.get(str(record["id"])),
             document,
@@ -1397,26 +1393,20 @@ def create_project(document, destination_path):
     root_collection["classiCAD_collection_role"] = "document root"
     scene.collection.children.link(root_collection)
 
-    layer_collections = {}
-    for layer in document.get("layers", []):
-        layer_id = str(layer["id"])
-        collection = bpy.data.collections.new(str(layer["name"]))
-        collection["classiCAD_layer_id"] = layer_id
-        collection["classiCAD_color"] = str(layer.get("color", ""))
-        collection["classiCAD_visible"] = bool(layer.get("visible", True))
-        collection["classiCAD_locked"] = bool(layer.get("locked", False))
-        root_collection.children.link(collection)
-        layer_collections[layer_id] = collection
+    # classiCAD no longer invents CAD layers for Blender projects. Keep the
+    # proxy objects under one ordinary Blender collection; imported Blender
+    # collections are represented by the document's separate collection model.
+    collections = {"default": root_collection}
 
     object_records = document.get("objects", [])
     if len(object_records) >= 1000:
         create_grouped_scene_objects(
-            layer_collections, object_records, surface_display_meshes, document
+            collections, object_records, surface_display_meshes, document
         )
     else:
         for record in object_records:
             add_scene_object(
-                layer_collections,
+                collections,
                 record,
                 surface_display_meshes.get(str(record["id"])),
                 document,

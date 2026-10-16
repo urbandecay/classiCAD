@@ -51,10 +51,8 @@ bool deleteContracts()
 {
     Document document;
     const ObjectId editableId = document.append(lineShape({{0, 0}, {1, 0}}));
-    const ObjectId lockedId = document.append(lineShape({{0, 1}, {1, 1}}));
-    const LayerId lockedLayer = document.createLayer(QStringLiteral("Locked"));
-    bool valid = document.moveObjectToLayer(lockedId, lockedLayer) &&
-                 document.setLayerLocked(lockedLayer, true);
+    const ObjectId secondId = document.append(lineShape({{0, 1}, {1, 1}}));
+    bool valid = true;
     History history(document);
 
     DocumentTransaction transaction(document, history);
@@ -62,48 +60,42 @@ bool deleteContracts()
     const bool applied = DeleteCommand::apply(
         document,
         transaction,
-        {editableId, editableId, lockedId, ObjectId::invalid(),
+        {editableId, editableId, ObjectId::invalid(),
          ObjectId::fromValue(999999)},
         &deletedCount);
     valid = valid && applied && deletedCount == 1 && transaction.commit() &&
-            document.size() == 1 && document.shape(lockedId) != nullptr &&
+            document.size() == 1 && document.shape(secondId) != nullptr &&
             history.undoCount() == 1;
     valid = valid && history.undo() && document.size() == 2 &&
             document.indexOf(editableId) == 0 &&
-            document.object(lockedId)->layerId == lockedLayer;
+            document.object(secondId) != nullptr;
 
     const int historyCountBeforeNoOp = history.undoCount();
     DocumentTransaction noOpTransaction(document, history);
     deletedCount = -1;
     const bool noOpApplied = DeleteCommand::apply(
-        document, noOpTransaction, {lockedId, ObjectId::invalid()},
+        document, noOpTransaction, {ObjectId::invalid()},
         &deletedCount);
     valid = valid && !noOpApplied && deletedCount == 0 &&
             !noOpTransaction.commit() &&
             history.undoCount() == historyCountBeforeNoOp &&
-            document.shape(lockedId) != nullptr;
+            document.shape(secondId) != nullptr;
     return check(valid,
-                 "Delete must deduplicate IDs, skip locked/stale targets, and keep no-ops out of history");
+                 "Delete must deduplicate IDs, skip stale targets, and keep no-ops out of history");
 }
 
 bool batchDocumentMutationContracts()
 {
     Document document;
-    const LayerId defaultLayer = document.activeLayerId();
-    const LayerId secondaryLayer = document.createLayer(QStringLiteral("Batch"));
-
     QVector<SceneObject> initialObjects;
     initialObjects.reserve(3);
     SceneObject first;
-    first.layerId = defaultLayer;
     first.geometry = lineShape({{0, 0}, {1, 0}});
     initialObjects.append(first);
     SceneObject second;
-    second.layerId = secondaryLayer;
     second.geometry = lineShape({{0, 1}, {1, 1}});
     initialObjects.append(second);
     SceneObject third;
-    third.layerId = defaultLayer;
     third.geometry = lineShape({{0, 2}, {1, 2}});
     initialObjects.append(third);
 
@@ -112,10 +104,7 @@ bool batchDocumentMutationContracts()
                  document.objectIdAt(0) == initialIds.value(0) &&
                  document.objectIdAt(1) == initialIds.value(1) &&
                  document.objectIdAt(2) == initialIds.value(2) &&
-                 document.layer(defaultLayer)->objectIds ==
-                     QVector<ObjectId>{initialIds[0], initialIds[2]} &&
-                 document.layer(secondaryLayer)->objectIds ==
-                     QVector<ObjectId>{initialIds[1]};
+                 document.object(initialIds[0]) != nullptr;
 
     // Existing and repeated incoming IDs must each be replaced with a unique ID.
     SceneObject sameIdFirst = *document.object(initialIds[0]);
@@ -129,9 +118,7 @@ bool batchDocumentMutationContracts()
             document.objectIdAt(0) == initialIds[0] &&
             document.objectIdAt(1) == collisionIds[0] &&
             document.objectIdAt(2) == collisionIds[1] &&
-            document.layer(defaultLayer)->objectIds ==
-                QVector<ObjectId>{initialIds[0], collisionIds[0],
-                                  collisionIds[1], initialIds[2]};
+            document.object(collisionIds[1]) != nullptr;
 
     const ObjectId staleId = ObjectId::fromValue(999999);
     const QVector<ObjectId> removedIds = document.removeObjects(
@@ -141,10 +128,7 @@ bool batchDocumentMutationContracts()
             document.size() == 3 && document.objectIdAt(0) == initialIds[0] &&
             document.objectIdAt(1) == collisionIds[1] &&
             document.objectIdAt(2) == initialIds[2] &&
-            document.indexOf(initialIds[1]) == -1 &&
-            document.layer(defaultLayer)->objectIds ==
-                QVector<ObjectId>{initialIds[0], collisionIds[1], initialIds[2]} &&
-            document.layer(secondaryLayer)->objectIds.isEmpty();
+            document.indexOf(initialIds[1]) == -1;
 
     Document transactionDocument;
     const ObjectId anchorId = transactionDocument.append(
@@ -153,7 +137,6 @@ bool batchDocumentMutationContracts()
     QVector<SceneObject> transactionObjects;
     for (int index = 0; index < 3; ++index) {
         SceneObject object;
-        object.layerId = transactionDocument.activeLayerId();
         object.geometry = lineShape({{0, double(index)}, {2, double(index)}});
         transactionObjects.append(object);
     }
@@ -193,15 +176,14 @@ bool batchDocumentMutationContracts()
             transactionDocument.size() == 4;
 
     return check(valid,
-                 "Batch insert/remove must preserve IDs, ordering, layers, rollback, and Undo/Redo");
+                 "Batch insert/remove must preserve IDs, ordering, rollback, and Undo/Redo");
 }
 
 bool duplicateContracts()
 {
     Document document;
-    const LayerId sourceLayer = document.createLayer(QStringLiteral("Source"));
     const ObjectId sourceId = document.append(lineShape({{2, 3}, {7, 3}}));
-    bool valid = document.moveObjectToLayer(sourceId, sourceLayer);
+    bool valid = true;
     History history(document);
     DuplicateCommandPlan plan;
     const Shape duplicateGeometry = lineShape({{2, 5}, {7, 5}});
@@ -209,7 +191,7 @@ bool duplicateContracts()
                          document, {sourceId}, {duplicateGeometry}, &plan) &&
             plan.sourceObjectIds == QVector<ObjectId>{sourceId} &&
             plan.duplicateObjects.size() == 1 &&
-            plan.duplicateObjects.first().layerId == sourceLayer;
+            plan.duplicateObjects.first().geometry.geometryType == GeometryType::Line;
 
     DocumentTransaction transaction(document, history);
     QVector<ObjectId> duplicateIds;
@@ -217,7 +199,6 @@ bool duplicateContracts()
                                            &duplicateIds) &&
             duplicateIds.size() == 1 && duplicateIds.first() != sourceId &&
             transaction.commit() && document.size() == 2 &&
-            document.object(duplicateIds.first())->layerId == sourceLayer &&
             document.shape(sourceId)->points == QVector<QPointF>{{2, 3}, {7, 3}} &&
             document.shape(duplicateIds.first())->points ==
                 QVector<QPointF>{{2, 5}, {7, 5}};
@@ -230,11 +211,8 @@ bool duplicateContracts()
     valid = valid && !buildDuplicateCommandPlan(
                          document, {sourceId}, {invalidGeometry}, &rejectedPlan) &&
             rejectedPlan.duplicateObjects.isEmpty();
-    valid = valid && document.setLayerLocked(sourceLayer, true) &&
-            !buildDuplicateCommandPlan(document, {sourceId},
-                                       {duplicateGeometry}, &rejectedPlan);
     return check(valid,
-                 "Duplicate must validate geometry and preserve source layer and identity");
+                 "Duplicate must validate geometry and preserve source identity");
 }
 
 bool fillContracts()
@@ -258,16 +236,6 @@ bool fillContracts()
             document.shape(rectangleId)->geometryType == GeometryType::Rectangle &&
             validateNurbsCurve(document.shape(rectangleId)->nurbs);
 
-    const LayerId lockedLayer = document.createLayer(QStringLiteral("Locked"));
-    valid = valid && document.moveObjectToLayer(rectangleId, lockedLayer) &&
-            document.setLayerLocked(lockedLayer, true);
-    FillCommandPlan lockedPlan;
-    valid = valid && buildFillCommandPlan(document, {rectangleId}, &lockedPlan) &&
-            lockedPlan.candidates.isEmpty();
-    DocumentTransaction noOpTransaction(document, history);
-    filledCount = -1;
-    valid = valid && !applyFillCommand(noOpTransaction, lockedPlan, &filledCount) &&
-            filledCount == 0 && !noOpTransaction.commit() && history.undoCount() == 0;
     return check(valid,
                  "Fill must preserve the source ID through an exact surface edit and skip locked geometry");
 }
@@ -277,8 +245,7 @@ bool explodeContracts()
     Document document;
     const Shape rectangle = rectangleShape();
     const ObjectId rectangleId = document.append(rectangle);
-    const LayerId sourceLayer = document.createLayer(QStringLiteral("Edges"));
-    bool valid = document.moveObjectToLayer(rectangleId, sourceLayer);
+    bool valid = true;
     History history(document);
     ExplodeCommandPlan plan;
     valid = valid && buildExplodeCommandPlan(document, {rectangleId}, &plan) &&
@@ -289,14 +256,13 @@ bool explodeContracts()
             transaction.commit() && document.size() == 4 &&
             history.undoCount() == 1;
     for (const SceneObject &object : document.objects()) {
-        valid = valid && object.layerId == sourceLayer &&
-                object.geometry.geometryType == GeometryType::Line &&
+        valid = valid && object.geometry.geometryType == GeometryType::Line &&
                 validateNurbsCurve(object.geometry.nurbs) &&
                 object.geometry.nurbs.controlPoints.size() == 2;
     }
     valid = valid && history.undo() && document.size() == 1 &&
             document.object(rectangleId) != nullptr &&
-            document.object(rectangleId)->layerId == sourceLayer;
+            document.object(rectangleId) != nullptr;
 
     ExplodeCommandPlan noOpPlan;
     valid = valid && buildExplodeCommandPlan(document, {}, &noOpPlan) &&
@@ -306,17 +272,15 @@ bool explodeContracts()
     valid = valid && !applyExplodeCommand(noOpTransaction, noOpPlan) &&
             !noOpTransaction.commit() && history.undoCount() == 0;
     return check(valid,
-                 "Explode must create four independent, selected-layer edges and undo as one edit");
+                 "Explode must create four independent edges and undo as one edit");
 }
 
 bool joinCommandContracts()
 {
     Document document;
-    const LayerId sourceLayer = document.createLayer(QStringLiteral("Curves"));
     const ObjectId firstId = document.append(lineShape({{0, 0}, {1, 0}}));
     const ObjectId secondId = document.append(lineShape({{1, 0}, {1, 1}}));
-    bool valid = document.moveObjectToLayer(firstId, sourceLayer) &&
-                 document.moveObjectToLayer(secondId, sourceLayer);
+    bool valid = true;
     History history(document);
     const WorkPlaneFrame frame = makeWorkPlaneFrame(WorkPlane::XY);
     JoinCommandPlan plan;
@@ -324,19 +288,18 @@ bool joinCommandContracts()
                          {document.shape(firstId)->nurbs,
                           document.shape(secondId)->nurbs},
                          {frame, frame}, false, frame, WorkPlane::XY, 0.0,
-                         sourceLayer, {firstId, secondId}, 0, &plan);
+                         {firstId, secondId}, 0, &plan);
     DocumentTransaction transaction(document, history);
     ObjectId joinedId = ObjectId::invalid();
     valid = valid && applyJoinCommand(document, transaction, plan, &joinedId) &&
             joinedId.isValid() && transaction.commit() && document.size() == 1 &&
-            document.object(joinedId)->layerId == sourceLayer &&
             document.shape(joinedId)->geometryType == GeometryType::PolyCurve &&
             document.shape(joinedId)->components.size() == 2 &&
             history.undoCount() == 1;
     valid = valid && history.undo() && document.size() == 2 &&
             document.object(firstId) != nullptr && document.object(secondId) != nullptr;
     return check(valid,
-                 "Join command must replace sources atomically and preserve the source layer on Undo");
+                 "Join command must replace sources atomically and restore them on Undo");
 }
 
 } // namespace

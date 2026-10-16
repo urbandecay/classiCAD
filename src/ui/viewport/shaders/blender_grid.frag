@@ -37,6 +37,7 @@ in vec2 vGridCoord;
 in vec3 vWorldPosition;
 flat in float vAlpha;
 flat in float vEmphasis;
+flat in float vFixedCoordinate;
 flat in int vLineAxis;
 flat in int vRenderMode;
 flat in vec2 vLineStart;
@@ -56,10 +57,11 @@ void main()
         color = vLineAxis == 0 ? uAxisColorX
                               : (vLineAxis == 1 ? uAxisColorY : uAxisColorZ);
     }
-    else if ((vLineAxis == 0 && uGridAxisUVisible != 0) ||
-             (vLineAxis == 1 && uGridAxisVVisible != 0)) {
-        // Blender omits a floor-grid line only when the corresponding global
-        // axis is enabled. Keep the center grid line when its axis is hidden.
+    else if (abs(vFixedCoordinate) <= 2.0e-7 &&
+             ((vLineAxis == 0 && uGridAxisUVisible != 0) ||
+              (vLineAxis == 1 && uGridAxisVVisible != 0))) {
+        // Omit only a center floor line that overlaps an enabled axis. The
+        // line orientation alone must not hide its entire grid family.
         discard;
     }
 

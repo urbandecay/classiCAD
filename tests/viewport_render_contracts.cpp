@@ -1,7 +1,5 @@
-#include "ui/viewport/line_type_style.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/viewport_depth_geometry.h"
-#include "ui/viewport/viewport_line_weight.h"
 #include "ui/viewport/viewport_render_frame.h"
 #include "ui/viewport/viewport_shading.h"
 #include "ui/viewport/viewport_scene_renderer.h"
@@ -907,7 +905,7 @@ int main(int argc, char *argv[])
         RasterWorkbenchFragmentSink *fragmentSink) {
         sortedDofRenderer.drawShape(
             painter, object.shape, orthographicDofSize, false, false, true,
-            QColor(), QString(), 0.0, object.objectId,
+            QColor(), object.objectId,
             object.geometryRevision, object.preparedDepthGeometry.data(),
             object.preparedGeometryOffset, object.displayColorSceneLinear,
             object.workbenchMaterial, object.displayName, object.libraryPath,
@@ -1233,7 +1231,7 @@ int main(int argc, char *argv[])
                 RasterWorkbenchFragmentSink *fragmentSink) {
                 perspectiveDepthRenderer.drawShape(
                     painter, object.shape, depthSize, false, false, true,
-                    QColor(Qt::white), QString(), 0.0, object.objectId,
+                    QColor(Qt::white), object.objectId,
                     object.geometryRevision,
                     object.preparedDepthGeometry.data(), {}, std::nullopt,
                     object.workbenchMaterial, QString(), QString(), {}, {},
@@ -1293,8 +1291,7 @@ int main(int argc, char *argv[])
                 RasterWorkbenchFragmentSink *fragmentSink) {
                 curveOcclusionRenderer.drawShape(
                     painter, object.shape, orthographicDofSize, false,
-                    object.selected, true, object.layerColor,
-                    object.layerLineType, object.layerLineWeightMm,
+                    object.selected, true, object.displayColor,
                     object.objectId, object.geometryRevision,
                     object.preparedDepthGeometry.data(),
                     object.preparedGeometryOffset,
@@ -1345,7 +1342,7 @@ int main(int argc, char *argv[])
             QPainter painter(image);
             curveOcclusionRenderer.drawShape(
                 painter, occludedCurve, orthographicDofSize, false, false,
-                true, QColor(Qt::black), QString(), 0.0,
+                true, QColor(Qt::black),
                 ObjectId::fromValue(20), 1,
                 usePreparedGeometry ? &occludedCurveGeometry : nullptr, {},
                 std::nullopt, std::nullopt, QStringLiteral("OccludedCurve"),
@@ -1882,7 +1879,7 @@ int main(int argc, char *argv[])
             RasterWorkbenchFragmentSink *fragmentSink) {
             layeredRenderer.drawShape(
                 painter, object.shape, orthographicDofSize, false, false,
-                true, QColor(), QString(), 0.0, object.objectId,
+                true, QColor(), object.objectId,
                 object.geometryRevision, object.preparedDepthGeometry.data(),
                 object.preparedGeometryOffset, object.displayColorSceneLinear,
                 object.workbenchMaterial, object.displayName,
@@ -2497,8 +2494,7 @@ int main(int argc, char *argv[])
                                     const ViewportRenderObject &object,
                                     RasterWorkbenchFragmentSink *fragmentSink) {
             renderer.drawShape(
-                painter, object.shape, size, false, false, true, QColor(),
-                QString(), 0.0, object.objectId, object.geometryRevision,
+                painter, object.shape, size, false, false, true, QColor(), object.objectId, object.geometryRevision,
                 object.preparedDepthGeometry.data(),
                 object.preparedGeometryOffset, object.displayColorSceneLinear,
                 object.workbenchMaterial, object.displayName,
@@ -4249,31 +4245,13 @@ int main(int argc, char *argv[])
                             premultipliedChannels[3],
                     "CPU export dither must match Blender's bottom-left RGB byte, preserve alpha and premultiplication, and leave 16-bit output unchanged");
 
-    const qreal defaultLineWidth = viewportLineWeightPixels(0.0);
-    const qreal lightLineWidth = viewportLineWeightPixels(0.13);
-    const qreal mediumLineWidth = viewportLineWeightPixels(0.25);
-    const qreal heavyLineWidth = viewportLineWeightPixels(1.0);
-    const qreal maxLineWidth = viewportLineWeightPixels(2.11);
-    passed &= check(std::abs(defaultLineWidth - 1.0) < 1.0e-9 &&
-                        std::abs(lightLineWidth - 1.0) < 1.0e-9 &&
-                        std::abs(mediumLineWidth - 1.5) < 1.0e-9 &&
-                        std::abs(heavyLineWidth - 6.0) < 1.0e-9 &&
-                        std::abs(maxLineWidth - 12.66) < 1.0e-9 &&
-                        defaultLineWidth == lightLineWidth &&
-                        lightLineWidth < mediumLineWidth &&
-                        mediumLineWidth < heavyLineWidth &&
-                        heavyLineWidth < maxLineWidth,
-                    "default and 0.13 mm must match Blender's thin outline while heavier line weights grow predictably");
-
     ViewportRenderObject splineStyleObject;
     splineStyleObject.shape.geometryType = GeometryType::Line;
-    splineStyleObject.layerLineWeightMm = 0.25;
     ViewportSceneStroke splineStyle;
     const bool splineStyleReady = makeViewportSceneStrokes(
         splineStyleObject, true, &splineStyle);
     ViewportRenderObject surfaceStyleObject;
     surfaceStyleObject.shape.geometryType = GeometryType::NurbsSurface;
-    surfaceStyleObject.layerLineWeightMm = splineStyleObject.layerLineWeightMm;
     auto boundaryGeometry = QSharedPointer<ViewportDepthGeometry>::create();
     boundaryGeometry->lineVertices << QVector3D(0.0f, 0.0f, 0.0f)
                                    << QVector3D(1.0f, 0.0f, 0.0f);
@@ -4282,10 +4260,10 @@ int main(int argc, char *argv[])
         surfaceStyleObject, true, QColor(Qt::black), boundaryGeometry,
         &surfaceOutlineStyle);
     passed &= check(splineStyleReady && surfaceOutlineReady &&
-                        std::abs(splineStyle.width -
-                                 surfaceOutlineStyle.width) < 1.0e-6f &&
+                        std::abs(splineStyle.width - 1.0f) < 1.0e-6f &&
+                        std::abs(surfaceOutlineStyle.width - 1.0f) < 1.0e-6f &&
                         !surfaceOutlineStyle.editModeWire,
-                    "surface perimeters must use the same pixel width and smooth overlay path as spline strokes");
+                    "CAD-free spline and surface outlines must use a one-pixel solid stroke");
 
     ViewportTransform surfaceOutlineCamera;
     surfaceOutlineCamera.setViewDirection({0.0, 0.0, -1.0});
@@ -4999,8 +4977,7 @@ int main(int argc, char *argv[])
         surfaceRenderer.setShadingSettings(settings);
         QPainter painter(&image);
         surfaceRenderer.drawShape(painter, shape, surfaceViewportSize,
-                                 false, selected, true, QColor(), QString(),
-                                 0.0, ObjectId::invalid(), 0, preparedGeometry,
+                                 false, selected, true, QColor(), ObjectId::invalid(), 0, preparedGeometry,
                                  Point3D{}, std::nullopt, material);
         painter.end();
         int coveredPixels = 0;
@@ -5289,7 +5266,7 @@ int main(int argc, char *argv[])
         QPainter painter(&image);
         surfaceRenderer.drawShape(
             painter, colorSourceMesh, surfaceViewportSize, false, false, true,
-            QColor(), QString(), 0.0, ObjectId::invalid(), 0, nullptr, {},
+            QColor(), ObjectId::invalid(), 0, nullptr, {},
             std::nullopt, std::nullopt, QString(), QString(),
             identityMeshObjectTransform, materials);
         painter.end();
@@ -5435,7 +5412,7 @@ int main(int argc, char *argv[])
         QPainter painter(&image);
         surfaceRenderer.drawShape(
             painter, texturedNurbsShape, surfaceViewportSize, false, false,
-            true, QColor(), QString(), 0.0, ObjectId::invalid(), 0, nullptr,
+            true, QColor(), ObjectId::invalid(), 0, nullptr,
             {}, std::nullopt, nurbsTextureMaterial);
         painter.end();
         return image;
@@ -5524,7 +5501,7 @@ int main(int argc, char *argv[])
     QPainter translucentNurbsPainter(&translucentNurbsImage);
     surfaceRenderer.drawShape(
         translucentNurbsPainter, texturedNurbsShape, surfaceViewportSize,
-        false, false, true, QColor(), QString(), 0.0,
+        false, false, true, QColor(),
         ObjectId::fromValue(1), 0,
         nullptr, {}, std::nullopt, translucentNurbsMaterial,
         QString(), QString(), {}, {}, &translucentNurbsFragments);
@@ -5599,7 +5576,7 @@ int main(int argc, char *argv[])
     QPainter udimTranslucentNurbsPainter(&udimTranslucentNurbsImage);
     surfaceRenderer.drawShape(
         udimTranslucentNurbsPainter, texturedNurbsShape, surfaceViewportSize,
-        false, false, true, QColor(), QString(), 0.0,
+        false, false, true, QColor(),
         ObjectId::fromValue(2), 0, nullptr, {}, std::nullopt,
         udimTranslucentNurbsMaterial, QString(), QString(), {}, {},
         &udimTranslucentNurbsFragments);
@@ -5715,7 +5692,7 @@ int main(int argc, char *argv[])
         QPainter translucentMeshPainter(&translucentMeshImage);
         surfaceRenderer.drawShape(
             translucentMeshPainter, translucentMeshShape,
-            surfaceViewportSize, false, false, true, QColor(), QString(), 0.0,
+            surfaceViewportSize, false, false, true, QColor(),
             ObjectId::fromValue(2), 0, nullptr, {}, std::nullopt,
             std::nullopt, QString(), QString(),
             identityMeshObjectTransform,
@@ -5765,7 +5742,7 @@ int main(int argc, char *argv[])
         &perspectiveTranslucentNurbsImage);
     perspectiveNurbsRenderer.drawShape(
         perspectiveTranslucentNurbsPainter, texturedNurbsShape,
-        surfaceViewportSize, false, false, true, QColor(), QString(), 0.0,
+        surfaceViewportSize, false, false, true, QColor(),
         ObjectId::fromValue(1), 0, nullptr, {}, std::nullopt,
         translucentNurbsMaterial, QString(), QString(), {}, {},
         &perspectiveTranslucentNurbsFragments);
@@ -5959,7 +5936,7 @@ int main(int argc, char *argv[])
         painter.setRenderHint(QPainter::TextAntialiasing, true);
         annotationRenderer.drawShape(
             painter, renderDimension, annotationSize, false, false, false,
-            QColor(220, 40, 25), QString(), 0.0);
+            QColor(220, 40, 25));
     }
     QImage linearDimensionLayer(annotationSize,
                                 QImage::Format_RGBA64_Premultiplied);
@@ -5971,7 +5948,7 @@ int main(int argc, char *argv[])
         painter.setRenderHint(QPainter::TextAntialiasing, true);
         annotationRenderer.drawShape(
             painter, renderDimension, annotationSize, false, false, false,
-            QColor(220, 40, 25), QString(), 0.0);
+            QColor(220, 40, 25));
     }
     QImage annotationDisplay(annotationSize, QImage::Format_RGBA64);
     annotationDisplay.fill(QColor(64, 64, 64, 255));
@@ -6888,9 +6865,7 @@ int main(int argc, char *argv[])
                             QPainter importedPainter(&importedDisplay);
                             importedRenderer.drawShape(
                                 importedPainter, importedObject.shape, glSize,
-                                false, false, true, importedObject.layerColor,
-                                importedObject.layerLineType,
-                                importedObject.layerLineWeightMm,
+                                false, false, true, importedObject.displayColor,
                                 importedObject.objectId,
                                 importedObject.geometryRevision, nullptr,
                                 importedObject.preparedGeometryOffset,
@@ -7150,9 +7125,7 @@ int main(int argc, char *argv[])
                             importedSurfaceRenderer.drawShape(
                                 importedSurfacePainter,
                                 importedSurfaceObject.shape, glSize, false,
-                                false, true, importedSurfaceObject.layerColor,
-                                importedSurfaceObject.layerLineType,
-                                importedSurfaceObject.layerLineWeightMm,
+                                false, true, importedSurfaceObject.displayColor,
                                 importedSurfaceObject.objectId,
                                 importedSurfaceObject.geometryRevision,
                                 importedSurfaceObject.preparedDepthGeometry.data(),
@@ -7376,9 +7349,7 @@ int main(int argc, char *argv[])
                                         painter, object.shape,
                                         surfaceViewportSize, false,
                                         object.selected, true,
-                                        object.layerColor,
-                                        object.layerLineType,
-                                        object.layerLineWeightMm,
+                                        object.displayColor,
                                         object.objectId,
                                         object.geometryRevision,
                                         object.preparedDepthGeometry.data(),
@@ -7829,7 +7800,7 @@ int main(int argc, char *argv[])
                                         qpainterAaRenderer.drawShape(
                                             surfacePainter, object.shape,
                                             glSize, false, object.selected,
-                                            true, QColor(), QString(), 0.0,
+                                            true, QColor(),
                                             object.objectId,
                                             object.geometryRevision,
                                             object.preparedDepthGeometry.data(),
@@ -7850,7 +7821,6 @@ int main(int argc, char *argv[])
                                 qpainterAaRenderer.drawShape(
                                     scenePainter, polygonCubeObject.shape,
                                     glSize, false, false, true, QColor(),
-                                    QString(), 0.0,
                                     polygonCubeObject.objectId,
                                     polygonCubeObject.geometryRevision,
                                     polygonCubeObject.preparedDepthGeometry.data(),
@@ -7929,8 +7899,7 @@ int main(int argc, char *argv[])
                                     RasterWorkbenchFragmentSink *sink) {
                                     qpainterMatcapRenderer.drawShape(
                                         surfacePainter, object.shape, glSize,
-                                        false, object.selected, true, QColor(),
-                                        QString(), 0.0, object.objectId,
+                                        false, object.selected, true, QColor(), object.objectId,
                                         object.geometryRevision,
                                         object.preparedDepthGeometry.data(), {},
                                         object.displayColorSceneLinear,
@@ -7954,8 +7923,7 @@ int main(int argc, char *argv[])
                                 QPainter::Antialiasing, false);
                             qpainterMatcapRenderer.drawShape(
                                 matcapPainter, polygonCubeObject.shape,
-                                glSize, false, false, true, QColor(),
-                                QString(), 0.0, polygonCubeObject.objectId,
+                                glSize, false, false, true, QColor(), polygonCubeObject.objectId,
                                 polygonCubeObject.geometryRevision,
                                 polygonCubeObject.preparedDepthGeometry.data(),
                                 {}, polygonCubeObject.displayColorSceneLinear,
@@ -8638,9 +8606,8 @@ int main(int argc, char *argv[])
                             QPainter qPainter(&qPainterImage);
                             linkedRandomQPainterRenderer.drawShape(
                                 qPainter, object.shape, glSize, false,
-                                object.selected, true, object.layerColor,
-                                object.layerLineType,
-                                object.layerLineWeightMm, object.objectId,
+                                object.selected, true, object.displayColor,
+                                object.objectId,
                                 object.geometryRevision,
                                 object.preparedDepthGeometry.data(),
                                 object.preparedGeometryOffset,
@@ -8758,9 +8725,7 @@ int main(int argc, char *argv[])
                                     RasterWorkbenchFragmentSink *sink) {
                                 pairedRandomQPainterRenderer.drawShape(
                                     painter, object.shape, glSize, false,
-                                    object.selected, true, object.layerColor,
-                                    object.layerLineType,
-                                    object.layerLineWeightMm,
+                                    object.selected, true, object.displayColor,
                                     object.objectId,
                                     object.geometryRevision,
                                     object.preparedDepthGeometry.data(),
@@ -9640,7 +9605,7 @@ int main(int argc, char *argv[])
                                     QPainter::Antialiasing, false);
                                 renderer.drawShape(
                                     painter, object.shape, glSize, false,
-                                    false, true, QColor(), QString(), 0.0,
+                                    false, true, QColor(),
                                     object.objectId, object.geometryRevision,
                                     object.preparedDepthGeometry.data(), {},
                                     object.displayColorSceneLinear,
@@ -9861,7 +9826,7 @@ int main(int argc, char *argv[])
                                             qpainterLightingRenderer.drawShape(
                                                 surfacePainter, object.shape,
                                                 glSize, false, object.selected,
-                                                true, QColor(), QString(), 0.0,
+                                                true, QColor(),
                                                 object.objectId,
                                                 object.geometryRevision,
                                                 object.preparedDepthGeometry.data(),
@@ -9888,7 +9853,6 @@ int main(int argc, char *argv[])
                                     qpainterLightingRenderer.drawShape(
                                         qpainter, polygonCubeObject.shape,
                                         glSize, false, false, true, QColor(),
-                                        QString(), 0.0,
                                         polygonCubeObject.objectId,
                                         polygonCubeObject.geometryRevision,
                                         polygonCubeObject.preparedDepthGeometry.data(),
@@ -10799,8 +10763,7 @@ int main(int argc, char *argv[])
                                 renderer.drawShape(
                                     painter,
                                     renderObject.shape, glSize,
-                                    false, false, true, QColor(), QString(),
-                                    0.0, renderObject.objectId,
+                                    false, false, true, QColor(), renderObject.objectId,
                                     renderObject.geometryRevision,
                                     renderObject.preparedDepthGeometry.data(), {},
                                     std::nullopt,
@@ -11672,7 +11635,7 @@ int main(int argc, char *argv[])
                         qpainterTextureRenderer.drawShape(
                             qpainterTexturePainter,
                             nurbsTextureObject.shape, glSize, false, false,
-                            true, QColor(), QString(), 0.0,
+                            true, QColor(),
                             nurbsTextureObject.objectId,
                             nurbsTextureObject.geometryRevision,
                             nurbsTextureObject.preparedDepthGeometry.data(),
@@ -11826,7 +11789,7 @@ int main(int argc, char *argv[])
                         qpainterTextureRenderer.drawShape(
                             qpainterMeshTexturePainter,
                             qpainterMeshTextureObject.shape, glSize, false,
-                            false, true, QColor(), QString(), 0.0,
+                            false, true, QColor(),
                             qpainterMeshTextureObject.objectId,
                             qpainterMeshTextureObject.geometryRevision,
                             nullptr, {}, std::nullopt, std::nullopt,
@@ -12400,8 +12363,7 @@ int main(int argc, char *argv[])
                             QPainter alphaMeshPainter(&alphaMeshDisplay);
                             qpainterTextureRenderer.drawShape(
                                 alphaMeshPainter, alphaMeshObject.shape,
-                                glSize, false, false, true, QColor(),
-                                QString(), 0.0, alphaMeshObject.objectId,
+                                glSize, false, false, true, QColor(), alphaMeshObject.objectId,
                                 alphaMeshObject.geometryRevision, nullptr, {},
                                 std::nullopt, std::nullopt,
                                 alphaMeshObject.displayName, QString(),
@@ -12586,7 +12548,7 @@ int main(int argc, char *argv[])
                         qpainterTextureRenderer.drawShape(
                             udimMeshTexturePainter,
                             udimMeshTextureObject.shape, glSize, false,
-                            false, true, QColor(), QString(), 0.0,
+                            false, true, QColor(),
                             udimMeshTextureObject.objectId,
                             udimMeshTextureObject.geometryRevision,
                             nullptr, {}, std::nullopt, std::nullopt,
@@ -12730,8 +12692,7 @@ int main(int argc, char *argv[])
                         QPainter verticalUdimPainter(&verticalUdimDisplay);
                         qpainterTextureRenderer.drawShape(
                             verticalUdimPainter, verticalUdimObject.shape,
-                            glSize, false, false, true, QColor(), QString(),
-                            0.0, verticalUdimObject.objectId,
+                            glSize, false, false, true, QColor(), verticalUdimObject.objectId,
                             verticalUdimObject.geometryRevision, nullptr, {},
                             std::nullopt, std::nullopt,
                             verticalUdimObject.displayName, QString(),
@@ -12854,7 +12815,7 @@ int main(int argc, char *argv[])
                         qpainterTextureRenderer.drawShape(
                             floatVerticalPainter,
                             floatVerticalUdimObject.shape, glSize, false,
-                            false, true, QColor(), QString(), 0.0,
+                            false, true, QColor(),
                             floatVerticalUdimObject.objectId,
                             floatVerticalUdimObject.geometryRevision, nullptr,
                             {}, std::nullopt, std::nullopt,
@@ -12932,7 +12893,7 @@ int main(int argc, char *argv[])
                         perspectiveTextureRenderer.drawShape(
                             perspectiveMeshTexturePainter,
                             perspectiveMeshTextureObject.shape, glSize, false,
-                            false, true, QColor(), QString(), 0.0,
+                            false, true, QColor(),
                             perspectiveMeshTextureObject.objectId,
                             perspectiveMeshTextureObject.geometryRevision,
                             nullptr, {}, std::nullopt, std::nullopt,
@@ -13803,7 +13764,7 @@ int main(int argc, char *argv[])
                         materialSlotsQPainterRenderer.drawShape(
                             materialSlotsQPainter,
                             materialSlotsObject.shape, glSize, false, false,
-                            true, QColor(), QString(), 0.0,
+                            true, QColor(),
                             materialSlotsObject.objectId,
                             materialSlotsObject.geometryRevision,
                             materialSlotsObject.preparedDepthGeometry.data(),
@@ -13998,8 +13959,7 @@ int main(int argc, char *argv[])
                             QPainter::Antialiasing, false);
                         studioSlotsQPainterRenderer.drawShape(
                             studioSlotsQPainter, materialSlotsObject.shape,
-                            glSize, false, false, true, QColor(), QString(),
-                            0.0, materialSlotsObject.objectId,
+                            glSize, false, false, true, QColor(), materialSlotsObject.objectId,
                             materialSlotsObject.geometryRevision,
                             materialSlotsObject.preparedDepthGeometry.data(),
                             {}, materialSlotsObject.displayColorSceneLinear,
@@ -14171,8 +14131,7 @@ int main(int argc, char *argv[])
                             QPainter::Antialiasing, false);
                         matcapSlotsQPainterRenderer.drawShape(
                             matcapSlotsQPainter, materialSlotsObject.shape,
-                            glSize, false, false, true, QColor(), QString(),
-                            0.0, materialSlotsObject.objectId,
+                            glSize, false, false, true, QColor(), materialSlotsObject.objectId,
                             materialSlotsObject.geometryRevision,
                             materialSlotsObject.preparedDepthGeometry.data(),
                             {}, materialSlotsObject.displayColorSceneLinear,
@@ -14296,7 +14255,7 @@ int main(int argc, char *argv[])
                         transparentSlotsRenderer.drawShape(
                             transparentSlotsPainter,
                             transparentSlotsObject.shape, glSize, false,
-                            false, true, QColor(), QString(), 0.0,
+                            false, true, QColor(),
                             transparentSlotsObject.objectId,
                             transparentSlotsObject.geometryRevision,
                             transparentSlotsObject.preparedDepthGeometry.data(),
@@ -14554,7 +14513,7 @@ int main(int argc, char *argv[])
                             QPainter::Antialiasing, false);
                         fourSlotRenderer.drawShape(
                             fourSlotPainter, fourSlotObject.shape, glSize,
-                            false, false, true, QColor(), QString(), 0.0,
+                            false, false, true, QColor(),
                             fourSlotObject.objectId,
                             fourSlotObject.geometryRevision,
                             fourSlotObject.preparedDepthGeometry.data(), {},
@@ -14763,8 +14722,7 @@ int main(int argc, char *argv[])
                             QPainter::Antialiasing, false);
                         fourSlotStudioRenderer.drawShape(
                             fourSlotStudioPainter, fourSlotObject.shape,
-                            glSize, false, false, true, QColor(), QString(),
-                            0.0, fourSlotObject.objectId,
+                            glSize, false, false, true, QColor(), fourSlotObject.objectId,
                             fourSlotObject.geometryRevision,
                             fourSlotObject.preparedDepthGeometry.data(), {},
                             fourSlotObject.displayColorSceneLinear,
@@ -14975,8 +14933,7 @@ int main(int argc, char *argv[])
                             QPainter::Antialiasing, false);
                         fourSlotMatcapRenderer.drawShape(
                             fourSlotMatcapPainter, fourSlotObject.shape,
-                            glSize, false, false, true, QColor(), QString(),
-                            0.0, fourSlotObject.objectId,
+                            glSize, false, false, true, QColor(), fourSlotObject.objectId,
                             fourSlotObject.geometryRevision,
                             fourSlotObject.preparedDepthGeometry.data(), {},
                             fourSlotObject.displayColorSceneLinear,
@@ -15221,7 +15178,7 @@ int main(int argc, char *argv[])
                             QPainter::Antialiasing, false);
                         fiveSlotRenderer.drawShape(
                             fiveSlotPainter, fiveSlotObject.shape, glSize,
-                            false, false, true, QColor(), QString(), 0.0,
+                            false, false, true, QColor(),
                             fiveSlotObject.objectId,
                             fiveSlotObject.geometryRevision,
                             fiveSlotObject.preparedDepthGeometry.data(), {},
@@ -15373,8 +15330,7 @@ int main(int argc, char *argv[])
                                     QPainter::Antialiasing, false);
                                 renderer.drawShape(
                                     painter, fiveSlotObject.shape, glSize,
-                                    false, false, true, QColor(), QString(),
-                                    0.0, fiveSlotObject.objectId,
+                                    false, false, true, QColor(), fiveSlotObject.objectId,
                                     fiveSlotObject.geometryRevision,
                                     fiveSlotObject.preparedDepthGeometry.data(),
                                     {}, fiveSlotObject.displayColorSceneLinear,
@@ -16023,9 +15979,8 @@ int main(int argc, char *argv[])
                                 RasterWorkbenchFragmentSink *fragmentSink) {
                                 renderer.drawShape(
                                     painter, object.shape, glSize, false,
-                                    object.selected, true, object.layerColor,
-                                    object.layerLineType,
-                                    object.layerLineWeightMm, object.objectId,
+                                    object.selected, true, object.displayColor,
+                                    object.objectId,
                                     object.geometryRevision,
                                     object.preparedDepthGeometry.data(),
                                     object.preparedGeometryOffset,
@@ -16749,7 +16704,7 @@ int main(int argc, char *argv[])
                                 RasterWorkbenchFragmentSink *fragmentSink) {
                                 qpainterCavityRenderer.drawShape(
                                     painter, object.shape, glSize, false, false,
-                                    true, QColor(), QString(), 0.0,
+                                    true, QColor(),
                                     object.objectId, object.geometryRevision,
                                     object.preparedDepthGeometry.data(),
                                     object.preparedGeometryOffset,
@@ -19524,27 +19479,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    const QStringList layerLineTypes = standardLayerLineTypes();
-    const QVector<qreal> dashedPattern = layerLineTypePattern(QStringLiteral("DASHED"));
-    const QVector<qreal> dashedHalfPattern = layerLineTypePattern(QStringLiteral("DASHED2"));
-    const QVector<qreal> dashedDoublePattern = layerLineTypePattern(QStringLiteral("DASHEDX2"));
-    const QPen dashedPen = layerLineTypePen(Qt::white, 1.0, QStringLiteral("DASHED"));
-    passed &= check(layerLineTypes.size() >= 24 &&
-                        layerLineTypes.contains(QStringLiteral("CENTER")) &&
-                        layerLineTypes.contains(QStringLiteral("DIVIDEX2")) &&
-                        layerLineTypes.contains(QStringLiteral("DOTX2")) &&
-                        canonicalLayerLineTypeName(QStringLiteral("Dash-Dot")) ==
-                            QStringLiteral("DASHDOT"),
-                    "layer linetype picker must include standard CAD pattern variants and legacy aliases");
-    passed &= check(dashedPattern.size() == 2 && dashedHalfPattern.size() == 2 &&
-                        dashedDoublePattern.size() == 2 &&
-                        qFuzzyCompare(dashedHalfPattern.first() * 2.0 + 1.0,
-                                      dashedPattern.first() + 1.0) &&
-                        qFuzzyCompare(dashedDoublePattern.first() + 1.0,
-                                      dashedPattern.first() * 2.0 + 1.0) &&
-                        dashedPen.style() == Qt::CustomDashLine,
-                    "linetype size variants must use scaled, visibly distinct custom dash patterns");
-
     ViewportSceneStroke gpuStroke;
     gpuStroke.width = 2.0f;
     const ViewportSceneStrokePattern solidGpuPattern =
@@ -19558,43 +19492,6 @@ int main(int argc, char *argv[])
     gpuStroke.lineStyle = ViewportSceneLineStyle::Dashed;
     const ViewportSceneStrokePattern highDpiDashPattern =
         viewportSceneStrokePattern(gpuStroke, gpuStroke.width * 2.0f);
-    gpuStroke.linePatternScale = 0.5f;
-    const ViewportSceneStrokePattern halfScaleDashPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
-    const LayerGpuLinePattern dashedLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DASHED2"));
-    const LayerGpuLinePattern dottedLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DOTX2"));
-    const LayerGpuLinePattern complexLayerPattern =
-        layerGpuLinePattern(QStringLiteral("CENTER"));
-    const LayerGpuLinePattern dashDotLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DASHDOT"));
-    const LayerGpuLinePattern divideLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DIVIDE"));
-    const LayerGpuLinePattern borderLayerPattern =
-        layerGpuLinePattern(QStringLiteral("BORDER"));
-    const LayerGpuLinePattern phantomLayerPattern =
-        layerGpuLinePattern(QStringLiteral("PHANTOM"));
-    const LayerGpuLinePattern doubledCenterLayerPattern =
-        layerGpuLinePattern(QStringLiteral("CENTERX2"));
-    const bool allStandardLineTypesSupported = std::all_of(
-        layerLineTypes.cbegin(), layerLineTypes.cend(),
-        [](const QString &lineType) {
-            return layerGpuLinePattern(lineType).kind !=
-                   LayerGpuLinePatternKind::Unsupported;
-        });
-    gpuStroke.lineStyle = ViewportSceneLineStyle::Pattern;
-    gpuStroke.linePatternScale = 1.0f;
-    gpuStroke.linePatternSegmentCount = complexLayerPattern.segments.size();
-    for (int segmentIndex = 0;
-         segmentIndex < gpuStroke.linePatternSegmentCount;
-         ++segmentIndex) {
-        gpuStroke.linePatternSegmentsWidthUnits[
-            static_cast<std::size_t>(segmentIndex)] =
-            static_cast<float>(complexLayerPattern.segments[segmentIndex]);
-    }
-    const ViewportSceneStrokePattern complexGpuPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
     passed &= check(solidGpuPattern.style == ViewportSceneLineStyle::Solid &&
                         solidGpuPattern.periodPixels == 0.0f &&
                         dashedGpuPattern.style == ViewportSceneLineStyle::Dashed &&
@@ -19605,30 +19502,8 @@ int main(int argc, char *argv[])
                         dottedGpuPattern.onLengthPixels == 2.0f &&
                         highDpiDashPattern.periodPixels == 40.0f &&
                         highDpiDashPattern.onLengthPixels == 28.0f &&
-                        halfScaleDashPattern.periodPixels == 10.0f &&
-                        halfScaleDashPattern.onLengthPixels == 7.0f &&
-                        dashedLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Dashed &&
-                        dashedLayerPattern.scale == 0.5 &&
-                        dottedLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Dotted &&
-                        dottedLayerPattern.scale == 2.0 &&
-                        complexLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Pattern &&
-                        dashDotLayerPattern.segments.size() == 4 &&
-                        divideLayerPattern.segments.size() == 6 &&
-                        borderLayerPattern.segments.size() == 6 &&
-                        phantomLayerPattern.segments.size() == 8 &&
-                        doubledCenterLayerPattern.segments.size() == 6 &&
-                        doubledCenterLayerPattern.segments.first() == 20.0 &&
-                        complexGpuPattern.style ==
-                            ViewportSceneLineStyle::Pattern &&
-                        complexGpuPattern.segmentCount == 6 &&
-                        complexGpuPattern.periodPixels == 36.0f &&
-                        complexGpuPattern.segmentsPixels[0] == 20.0f &&
-                        complexGpuPattern.segmentsPixels[2] == 2.0f &&
-                        allStandardLineTypesSupported,
-                    "GPU scene strokes must support every built-in layer pattern, including scaled multi-dash and dash-dot styles");
+                        highDpiDashPattern.onLengthPixels == 28.0f,
+                    "GPU scene stroke dash preview must scale with the framebuffer");
     gpuStroke.lineStyle = ViewportSceneLineStyle::Dotted;
     gpuStroke.dashed = true;
     passed &= check(effectiveViewportSceneLineStyle(gpuStroke) ==

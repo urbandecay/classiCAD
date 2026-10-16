@@ -12,9 +12,7 @@
 #include "core/geometry/polygon_mesh.h"
 #include "blender_grid_scale.h"
 #include "blender_grid_frame.h"
-#include "line_type_style.h"
 #include "viewport_depth_geometry.h"
-#include "viewport_line_weight.h"
 #include "viewport_marker_style.h"
 #include "workbench_lighting.h"
 #include "viewport_wire_color.h"
@@ -1166,13 +1164,14 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
         return;
     }
     resolvedWires.fill(Qt::transparent);
-    const auto lineCoverage = [](qreal distance, qreal wireWidth) {
-        constexpr qreal discRadius = 0.5641895835477563 * 1.05;
-        constexpr qreal smoothStart = 0.5 - discRadius;
-        constexpr qreal smoothEnd = 0.5 + discRadius;
-        const qreal halfCoverageWidth = std::max<qreal>(
+    const auto lineCoverage = [](qreal distance,
+                                 qreal wireWidth) {
+        const qreal discRadius = 0.5641895835477563 * 1.05;
+        const qreal smoothStart = 0.5 - discRadius;
+        const qreal smoothEnd = 0.5 + discRadius;
+        const qreal lineKernelSize = std::max<qreal>(
             std::abs(wireWidth) * 0.5 - 0.5, 0.0);
-        const qreal distanceFromCore = std::abs(distance) - halfCoverageWidth;
+        const qreal distanceFromCore = std::abs(distance) - lineKernelSize;
         const qreal t = std::clamp(
             (distanceFromCore - smoothStart) / (smoothEnd - smoothStart),
             0.0, 1.0);
@@ -1195,7 +1194,8 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             resolvedDepth = std::numeric_limits<qreal>::infinity();
         }
         if (center.valid) {
-            const qreal coverage = lineCoverage(center.distance, center.width);
+            const qreal coverage = lineCoverage(
+                center.distance, center.width);
             const qreal centerXrayFade = batchIt->ignoreSceneDepth &&
                     std::isfinite(targetSceneDepth) &&
                     center.depth > targetSceneDepth + std::max<qreal>(
@@ -1240,7 +1240,8 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             const qreal distance = neighbor.distance -
                 offset.x() * neighbor.normalX -
                 offset.y() * neighbor.normalY;
-            const qreal coverage = lineCoverage(distance, neighbor.width);
+            const qreal coverage = lineCoverage(
+                distance, neighbor.width);
             const qreal candidateXrayFade = batchIt->ignoreSceneDepth &&
                     std::isfinite(neighborSceneDepth) &&
                     neighbor.depth > neighborSceneDepth + sceneDepthTolerance
@@ -1265,7 +1266,8 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
                 alpha += candidateAlpha * (1.0 - alpha);
             }
         }
-        if (center.valid && center.alpha >= 1.0 && alpha > 0.0) {
+        if (center.valid && center.alpha >= 1.0 &&
+            alpha > 0.0) {
             int validNeighborCount = 0;
             for (const QPoint &offset : offsets) {
                 const int neighborX = x + offset.x();
@@ -2299,9 +2301,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  bool preview,
                                  bool selected,
                                  bool drawPreviewPoints,
-                                 const QColor &layerColor,
-                                 const QString &layerLineType,
-                                 qreal layerLineWeightMm,
+                                 const QColor &displayColor,
                                  ObjectId shapeObjectId,
                                  quint64 geometryRevision,
                                  const ViewportDepthGeometry *preparedGeometry,
@@ -2334,8 +2334,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     QColor curveColor = selected
                                   ? viewportSelectionColor()
-                                  : layerColor.isValid()
-                                        ? layerColor
+                                  : displayColor.isValid()
+                                        ? displayColor
                                         : preview
                                               ? QColor(QStringLiteral("#e6b85c"))
                                               : QColor(QStringLiteral("#000000"));
@@ -2372,11 +2372,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
         curveColor = colorForLinearAnnotation(curveColor);
     }
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
-    const qreal storedWidth = viewportLineWeightPixels(layerLineWeightMm);
-    const qreal curveWidth = preview ? 1.5 : storedWidth;
-    const QPen layerPen = selected || preview
-                              ? QPen(curveColor, curveWidth)
-                              : layerLineTypePen(curveColor, curveWidth, layerLineType);
+    const qreal curveWidth = preview ? 1.5 : 1.0;
+    const QPen layerPen(curveColor, curveWidth);
 
     const auto drawWithWireHint = [&painter, this, preview](
                                      bool editModeWire,
@@ -3768,9 +3765,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     const bool canUsePreparedCurve =
         preparedGeometry != nullptr && smoothCurveDisplay_ &&
-        (selected || preview || layerLineType.isEmpty() ||
-         layerLineType.compare(QStringLiteral("Continuous"),
-                               Qt::CaseInsensitive) == 0);
+        true;
     const auto drawCurve = [&](const Shape::NurbsCurve2D &curve,
                                const WorkPlaneFrame &frame,
                                int displayResolutionU = 0) {
@@ -3833,16 +3828,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.save();
             const qreal dimensionLineWidth =
                 selected ? 2.0 : (preview ? 1.5 : 1.25);
-            const QPen dimensionPen = selected || preview
-                                          ? QPen(curveColor,
-                                                 dimensionLineWidth,
-                                                 Qt::SolidLine,
-                                                 Qt::RoundCap,
-                                                 Qt::RoundJoin)
-                                          : layerLineTypePen(curveColor,
-                                                             dimensionLineWidth,
-                                                             layerLineType,
-                                                             Qt::RoundCap);
+            const QPen dimensionPen(curveColor, dimensionLineWidth,
+                                    Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
             painter.setPen(dimensionPen);
             for (const QLineF &line : layout.lines) {
                 painter.drawLine(line);
@@ -4238,7 +4225,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                      ? preparedGeometry : &faceGeometry,
                                  preparedOffset, preview, selected,
                                  nurbsSolidFaceReversed(shape.nurbsSolid, index),
-                                 layerColor, displayColorSceneLinear,
+                                 displayColor, displayColorSceneLinear,
                                  materialForFace(index), displayName, libraryPath,
                                  fragmentSink, opaqueSceneDepth,
                                  opaqueSceneDepthSize, nullptr);
@@ -4250,7 +4237,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  preview, selected,
                                  nurbsSolidFaceReversed(shape.nurbsSolid,
                                                         index),
-                                 layerColor, displayColorSceneLinear,
+                                 displayColor, displayColorSceneLinear,
                                  materialForFace(index), displayName, libraryPath,
                                  fragmentSink, opaqueSceneDepth,
                                  opaqueSceneDepthSize, nullptr);
@@ -4264,7 +4251,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          preview ? ObjectId::invalid() : shapeObjectId,
                          preview ? 0 : geometryRevision,
                          preparedGeometry, preparedOffset, preview, selected,
-                         false, layerColor, displayColorSceneLinear,
+                         false, displayColor, displayColorSceneLinear,
                          workbenchMaterial, displayName, libraryPath,
                          fragmentSink, opaqueSceneDepth,
                          opaqueSceneDepthSize, blenderSurfaceWireVerticesWorld,

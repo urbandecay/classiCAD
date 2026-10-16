@@ -88,7 +88,6 @@ set(CLASSICAD_COMMAND_SOURCES
     src/core/commands/explode_command.cpp
     src/core/commands/fill_command.cpp
     src/core/commands/join_command.cpp
-    src/core/commands/layer_command.cpp
     src/core/commands/mirror_command.cpp
     src/core/commands/subdivision_command.cpp
     src/core/commands/trim_erase_command.cpp
@@ -243,8 +242,6 @@ set(CLASSICAD_UI_SOURCES
     ${CLASSICAD_VIEWPORT_SUPPORT_SOURCES}
     src/ui/panels/document_grid_dialog.cpp
     src/ui/panels/collections_panel.cpp
-    src/ui/panels/layer_style_widgets.cpp
-    src/ui/panels/layers_panel.cpp
     src/ui/panels/preferences_dialog.cpp
     src/ui/panels/preferences_store.cpp
     src/ui/panels/tool_shelf.cpp
@@ -324,8 +321,6 @@ classicad_add_ui_object_module(classicad_viewport_widget_objects
 classicad_add_ui_object_module(classicad_main_window_objects
     src/ui/panels/document_grid_dialog.cpp
     src/ui/panels/collections_panel.cpp
-    src/ui/panels/layer_style_widgets.cpp
-    src/ui/panels/layers_panel.cpp
     src/ui/panels/preferences_dialog.cpp
     src/ui/panels/preferences_store.cpp
     src/ui/panels/tool_shelf.cpp

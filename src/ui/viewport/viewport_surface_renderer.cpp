@@ -5,7 +5,6 @@
 
 #include "viewport_depth_geometry.h"
 #include "blender_grid_renderer.h"
-#include "viewport_line_weight.h"
 #include "viewport_workbench_effect_scale.h"
 #include "workbench_lighting.h"
 #include "workbench_matcap_texture.h"

@@ -36,6 +36,7 @@ out vec2 vGridCoord;
 out vec3 vWorldPosition;
 flat out float vAlpha;
 flat out float vEmphasis;
+flat out float vFixedCoordinate;
 flat out int vLineAxis;
 flat out int vRenderMode;
 flat out vec2 vLineStart;
@@ -201,6 +202,7 @@ void main()
         float pixelFactorOverStep = 1.0 / max(stepSize * uZoom, 1.0e-8);
         vAlpha *= 1.0 - smoothstep(0.015625, 0.25, pixelFactorOverStep);
     }
+    vFixedCoordinate = uMode == 0 ? position[1 - line.axis] : 0.0;
     vLineAxis = line.axis;
     vRenderMode = uMode;
     vec3 axisDirection = globalAxisDirection(line.axis);

@@ -132,7 +132,6 @@ Document makeBatchCurveScene(int curveCount)
                         QPointF(80.0, y)};
         shape.nurbs = makeBezierNurbs(shape.points);
         SceneObject object;
-        object.layerId = document.activeLayerId();
         object.geometry = std::move(shape);
         objects.append(std::move(object));
     }
@@ -515,8 +514,6 @@ void benchmarkCpuRedraw(const Document &document,
                                false,
                                true,
                                QColor(QStringLiteral("#d28b45")),
-                               QStringLiteral("Continuous"),
-                               0.0,
                                object.objectId,
                                object.geometryRevision,
                                object.preparedDepthGeometry.data());
@@ -556,8 +553,6 @@ void benchmarkCpuRedraw(const Document &document,
                                false,
                                true,
                                QColor(QStringLiteral("#d28b45")),
-                               QStringLiteral("Continuous"),
-                               0.0,
                                object.objectId,
                                object.geometryRevision,
                                object.preparedDepthGeometry.data());
@@ -626,8 +621,6 @@ void benchmarkSurfaceWorkload(int surfaceCount,
                                false,
                                true,
                                QColor(QStringLiteral("#ffffff")),
-                               QStringLiteral("Continuous"),
-                               0.0,
                                object.objectId,
                                object.geometryRevision,
                                object.preparedDepthGeometry.data());

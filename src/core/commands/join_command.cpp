@@ -33,7 +33,6 @@ bool buildJoinCommandPlan(
     const WorkPlaneFrame &joinFrame,
     WorkPlane joinWorkPlane,
     qreal joinWorkPlaneOffset,
-    LayerId joinedLayerId,
     const QVector<ObjectId> &sourceObjectIds,
     int insertionIndex,
     JoinCommandPlan *plan)
@@ -91,7 +90,6 @@ bool buildJoinCommandPlan(
 
     *plan = JoinCommandPlan{};
     plan->sourceObjectIds = sourceObjectIds;
-    plan->joinedObject.layerId = joinedLayerId;
     plan->joinedObject.geometry = std::move(joined);
     plan->insertionIndex = insertionIndex;
     return true;

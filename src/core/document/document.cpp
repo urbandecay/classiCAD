@@ -27,10 +27,7 @@ bool isValidDocumentMaterial(const DocumentMaterial &material)
     return true;
 }
 
-Document::Document()
-{
-    ensureDefaultLayer();
-}
+Document::Document() = default;
 
 int Document::size() const
 {
@@ -66,11 +63,6 @@ bool Document::addMaterial(const DocumentMaterial &material)
     }
     materials_.append(material);
     return true;
-}
-
-const QVector<Layer> &Document::layers() const
-{
-    return layers_;
 }
 
 const QVector<DocumentCollection> &Document::collections() const
@@ -171,11 +163,6 @@ void Document::applyChanges(const DocumentChangeSet &changes)
     }
     if (changes.structureChanged) {
         bumpRevision(&revisions_.structure);
-    }
-    if (changes.layerPropertiesChanged || changes.visibilityChanged ||
-        !changes.layerIds.isEmpty() || !changes.collectionIds.isEmpty() ||
-        changes.structureChanged) {
-        bumpRevision(&revisions_.layer);
     }
     if (changes.collectionsChanged || !changes.collectionIds.isEmpty()) {
         bumpRevision(&revisions_.collection);
@@ -303,27 +290,23 @@ ObjectId Document::insert(int index, const Shape &shape)
 {
     SceneObject object;
     object.id = allocateObjectId();
-    object.layerId = normalizedLayerId(activeLayerId_);
     object.geometry = shape;
     return insertObject(index, object);
 }
 
 ObjectId Document::insertObject(int index, SceneObject object)
 {
-    ensureDefaultLayer();
     if (!object.id.isValid() || indexOf(object.id) >= 0) {
         object.id = allocateObjectId();
     } else {
         nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
     }
-    object.layerId = normalizedLayerId(object.layerId);
     index = std::clamp(index, 0, static_cast<int>(objects_.size()));
     objects_.insert(index, object);
     for (int objectIndex = index; objectIndex < objects_.size(); ++objectIndex) {
         objectIndices_.insert(objects_[objectIndex].id.value(), objectIndex);
     }
     objectGeometryRevisions_.insert(object.id.value(), revisionClock_);
-    rebuildLayerObjectIds();
     DocumentChangeSet changes;
     changes.addObject(object.id);
     changes.geometryChanged = true;
@@ -342,7 +325,6 @@ QVector<ObjectId> Document::insertObjects(
         return {};
     }
 
-    ensureDefaultLayer();
     index = std::clamp(index, 0, static_cast<int>(objects_.size()));
 
     QVector<SceneObject> insertedObjects;
@@ -361,7 +343,6 @@ QVector<ObjectId> Document::insertObjects(
         } else {
             nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
         }
-        object.layerId = normalizedLayerId(object.layerId);
         insertedPlacementChanged = insertedPlacementChanged ||
             object.placementTranslation.x != 0.0 ||
             object.placementTranslation.y != 0.0 ||
@@ -402,8 +383,6 @@ QVector<ObjectId> Document::insertObjects(
     for (const ObjectId id : insertedIds) {
         objectGeometryRevisions_.insert(id.value(), revisionClock_);
     }
-    rebuildLayerObjectIds();
-
     DocumentChangeSet changes;
     for (const ObjectId id : insertedIds) {
         changes.addObject(id);
@@ -441,7 +420,6 @@ bool Document::removeAt(int index)
     const Point3D removedPlacement = objects_[index].placementTranslation;
     objects_.removeAt(index);
     objectGeometryRevisions_.remove(removedId.value());
-    rebuildLayerObjectIds();
     objectIndices_.remove(removedId.value());
     for (int objectIndex = index; objectIndex < objects_.size(); ++objectIndex) {
         objectIndices_.insert(objects_[objectIndex].id.value(), objectIndex);
@@ -487,7 +465,6 @@ QVector<ObjectId> Document::removeObjects(const QVector<ObjectId> &objectIds)
                 object.placementTranslation.z != 0.0;
             removedIds.append(object.id);
             changes.addObject(object.id);
-            changes.addLayer(object.layerId);
         } else {
             remainingObjects.append(object);
         }
@@ -498,7 +475,6 @@ QVector<ObjectId> Document::removeObjects(const QVector<ObjectId> &objectIds)
         objectGeometryRevisions_.remove(id.value());
     }
     rebuildObjectIndex();
-    rebuildLayerObjectIds();
 
     changes.geometryChanged = true;
     changes.structureChanged = true;
@@ -511,16 +487,11 @@ QVector<ObjectId> Document::replaceShapes(const QVector<Shape> &shapes)
     objects_.clear();
     objectIndices_.clear();
     objectGeometryRevisions_.clear();
-    layers_.clear();
-    activeLayerId_ = LayerId::invalid();
     nextObjectValue_ = 1;
-    nextLayerValue_ = 1;
     settings_ = DocumentSettings{};
-    ensureDefaultLayer();
     DocumentChangeSet clearChanges;
     clearChanges.geometryChanged = true;
     clearChanges.structureChanged = true;
-    clearChanges.layerPropertiesChanged = true;
     clearChanges.visibilityChanged = true;
     clearChanges.placementChanged = true;
     applyChanges(clearChanges);
@@ -543,19 +514,16 @@ void Document::replaceObjects(const QVector<SceneObject> &objects)
     objects_.clear();
     objectIndices_.clear();
     objectGeometryRevisions_.clear();
-    ensureDefaultLayer();
     for (SceneObject object : objects) {
         if (!object.id.isValid() || objectIndices_.contains(object.id.value())) {
             object.id = allocateObjectId();
         } else {
             nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
         }
-        object.layerId = normalizedLayerId(object.layerId);
         const int index = objects_.size();
         objects_.append(object);
         objectIndices_.insert(object.id.value(), index);
     }
-    rebuildLayerObjectIds();
     DocumentChangeSet changes;
     changes.geometryChanged = true;
     changes.structureChanged = true;
@@ -569,43 +537,6 @@ void Document::replaceObjects(const QVector<SceneObject> &objects)
                    object.placementTranslation.z != 0.0;
         });
     applyChanges(changes);
-}
-
-LayerId Document::activeLayerId() const
-{
-    return activeLayerId_;
-}
-
-bool Document::setActiveLayer(LayerId id)
-{
-    if (!isLayerEditable(id)) {
-        return false;
-    }
-    if (activeLayerId_ == id) {
-        return true;
-    }
-    activeLayerId_ = id;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-LayerId Document::createLayer(const QString &name)
-{
-    Layer layer;
-    layer.id = allocateLayerId();
-    layer.name = name.isEmpty() ? QStringLiteral("Layer %1").arg(layer.id.value()) : name;
-    layers_.append(layer);
-    if (!activeLayerId_.isValid()) {
-        activeLayerId_ = layer.id;
-    }
-    DocumentChangeSet changes;
-    changes.addLayer(layer.id);
-    changes.structureChanged = true;
-    applyChanges(changes);
-    return layer.id;
 }
 
 const DocumentCollection *Document::collection(CollectionId id) const
@@ -757,311 +688,11 @@ bool Document::setObjectCollections(ObjectId objectId, const QVector<CollectionI
     return true;
 }
 
-bool Document::removeLayer(LayerId id)
-{
-    if (layers_.size() <= 1) {
-        return false;
-    }
-
-    const int layerIndex = [&]() {
-        for (int index = 0; index < layers_.size(); ++index) {
-            if (layers_[index].id == id) {
-                return index;
-            }
-        }
-        return -1;
-    }();
-    if (layerIndex < 0 || !layers_[layerIndex].objectIds.isEmpty()) {
-        return false;
-    }
-
-    LayerId replacement = LayerId::invalid();
-    if (activeLayerId_ == id) {
-        for (const Layer &candidate : layers_) {
-            if (candidate.id != id && candidate.visible && !candidate.frozen &&
-                !candidate.locked) {
-                replacement = candidate.id;
-                break;
-            }
-        }
-        if (!replacement.isValid()) {
-            return false;
-        }
-    }
-
-    layers_.removeAt(layerIndex);
-    if (activeLayerId_ == id) {
-        activeLayerId_ = replacement;
-    }
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.structureChanged = true;
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::renameLayer(LayerId id, const QString &name)
-{
-    Layer *candidate = mutableLayer(id);
-    const QString trimmedName = name.trimmed();
-    if (candidate == nullptr || trimmedName.isEmpty()) {
-        return false;
-    }
-
-    candidate->name = trimmedName;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::moveLayer(LayerId id, int targetIndex)
-{
-    const int sourceIndex = [&]() {
-        for (int index = 0; index < layers_.size(); ++index) {
-            if (layers_[index].id == id) {
-                return index;
-            }
-        }
-        return -1;
-    }();
-    if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= layers_.size()) {
-        return false;
-    }
-    if (sourceIndex == targetIndex) {
-        return true;
-    }
-
-    const Layer movedLayer = layers_.takeAt(sourceIndex);
-    layers_.insert(targetIndex, movedLayer);
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.structureChanged = true;
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-Layer *Document::mutableLayer(LayerId id)
-{
-    for (Layer &candidate : layers_) {
-        if (candidate.id == id) {
-            return &candidate;
-        }
-    }
-    return nullptr;
-}
-
-const Layer *Document::layer(LayerId id) const
-{
-    for (const Layer &candidate : layers_) {
-        if (candidate.id == id) {
-            return &candidate;
-        }
-    }
-    return nullptr;
-}
-
-bool Document::setLayerVisible(LayerId id, bool visible)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr) {
-        return false;
-    }
-
-    if (!visible && id == activeLayerId_) {
-        LayerId replacement = LayerId::invalid();
-        for (const Layer &other : layers_) {
-            if (other.id != id && other.visible && !other.frozen && !other.locked) {
-                replacement = other.id;
-                break;
-            }
-        }
-        if (!replacement.isValid()) {
-            return false;
-        }
-        activeLayerId_ = replacement;
-    }
-
-    candidate->visible = visible;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    changes.visibilityChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerFrozen(LayerId id, bool frozen)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr) {
-        return false;
-    }
-
-    if (frozen && id == activeLayerId_) {
-        LayerId replacement = LayerId::invalid();
-        for (const Layer &other : layers_) {
-            if (other.id != id && other.visible && !other.frozen && !other.locked) {
-                replacement = other.id;
-                break;
-            }
-        }
-        if (!replacement.isValid()) {
-            return false;
-        }
-        activeLayerId_ = replacement;
-    }
-
-    candidate->frozen = frozen;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    changes.visibilityChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerLocked(LayerId id, bool locked)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr) {
-        return false;
-    }
-
-    if (locked && id == activeLayerId_) {
-        LayerId replacement = LayerId::invalid();
-        for (const Layer &other : layers_) {
-            if (other.id != id && other.visible && !other.frozen && !other.locked) {
-                replacement = other.id;
-                break;
-            }
-        }
-        if (!replacement.isValid()) {
-            return false;
-        }
-        activeLayerId_ = replacement;
-    }
-
-    candidate->locked = locked;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    changes.visibilityChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerColor(LayerId id, const QColor &color)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr || !color.isValid()) {
-        return false;
-    }
-
-    candidate->color = color;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerLineType(LayerId id, const QString &lineType)
-{
-    Layer *candidate = mutableLayer(id);
-    const QString trimmedLineType = lineType.trimmed();
-    if (candidate == nullptr || trimmedLineType.isEmpty()) {
-        return false;
-    }
-    candidate->lineType = trimmedLineType;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerLineWeight(LayerId id, qreal lineWeightMm)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr || !std::isfinite(lineWeightMm) || lineWeightMm < 0.0 ||
-        lineWeightMm > 2.11) {
-        return false;
-    }
-    candidate->lineWeightMm = lineWeightMm;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerPlotted(LayerId id, bool plotted)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr) {
-        return false;
-    }
-    candidate->plotted = plotted;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::setLayerDescription(LayerId id, const QString &description)
-{
-    Layer *candidate = mutableLayer(id);
-    if (candidate == nullptr) {
-        return false;
-    }
-    candidate->description = description;
-    DocumentChangeSet changes;
-    changes.addLayer(id);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
-bool Document::isLayerEditable(LayerId id) const
-{
-    const Layer *candidate = layer(id);
-    return candidate != nullptr && candidate->visible && !candidate->frozen &&
-           !candidate->locked;
-}
-
-bool Document::moveObjectToLayer(ObjectId objectId, LayerId layerId)
-{
-    SceneObject *sceneObject = mutableObject(objectId);
-    if (sceneObject == nullptr || !isObjectEditable(objectId) ||
-        !isLayerEditable(layerId)) {
-        return false;
-    }
-    const LayerId oldLayerId = sceneObject->layerId;
-    if (oldLayerId == layerId) {
-        return true;
-    }
-    sceneObject->layerId = layerId;
-    rebuildLayerObjectIds();
-    DocumentChangeSet changes;
-    changes.addObject(objectId);
-    changes.addLayer(oldLayerId);
-    changes.addLayer(layerId);
-    changes.layerPropertiesChanged = true;
-    applyChanges(changes);
-    return true;
-}
-
 bool Document::isObjectVisible(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
-    const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    if (objectLayer == nullptr || !objectLayer->visible || objectLayer->frozen ||
-        sceneObject->hideViewport || sceneObject->hiddenInViewport) return false;
+    if (sceneObject == nullptr || sceneObject->hideViewport ||
+        sceneObject->hiddenInViewport) return false;
     const QString activeViewLayerKey = settings_.activeViewLayerKey.isEmpty()
         ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
     if (!activeViewLayerKey.isEmpty() &&
@@ -1149,9 +780,7 @@ bool Document::isObjectVisible(ObjectId objectId) const
 bool Document::isObjectRenderable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
-    const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    if (objectLayer == nullptr || !objectLayer->visible || objectLayer->frozen ||
-        sceneObject->hideRender) {
+    if (sceneObject == nullptr || sceneObject->hideRender) {
         return false;
     }
 
@@ -1258,47 +887,37 @@ bool Document::isObjectRenderable(ObjectId objectId) const
 bool Document::isObjectEditable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
-    const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    return objectLayer != nullptr && isObjectVisible(objectId) &&
-           !objectLayer->locked && !sceneObject->hideSelect;
+    return sceneObject != nullptr && isObjectVisible(objectId) &&
+           !sceneObject->hideSelect;
 }
 
 Document::Snapshot Document::snapshot() const
 {
-    return Snapshot{layers_, collections_, objects_, materials_, activeLayerId_,
-                    nextObjectValue_, nextLayerValue_, nextCollectionValue_, settings_};
+    return Snapshot{collections_, objects_, materials_, nextObjectValue_,
+                    nextCollectionValue_, settings_};
 }
 
 void Document::restoreSnapshot(const Snapshot &snapshot)
 {
-    layers_ = snapshot.layers;
     collections_ = snapshot.collections;
     objects_ = snapshot.objects;
     materials_ = snapshot.materials;
-    activeLayerId_ = snapshot.activeLayerId;
     nextObjectValue_ = snapshot.nextObjectValue;
-    nextLayerValue_ = snapshot.nextLayerValue;
     nextCollectionValue_ = snapshot.nextCollectionValue;
     settings_ = isValidDocumentSettings(snapshot.settings)
                     ? snapshot.settings
                     : DocumentSettings{};
-    ensureDefaultLayer();
-    rebuildLayerObjectIds();
     rebuildObjectIndex();
     objectGeometryRevisions_.clear();
     DocumentChangeSet changes;
     changes.geometryChanged = true;
     changes.structureChanged = true;
-    changes.layerPropertiesChanged = true;
     changes.collectionsChanged = true;
     changes.visibilityChanged = true;
     changes.settingsChanged = true;
     changes.placementChanged = true;
     for (const SceneObject &object : objects_) {
         changes.addObject(object.id);
-    }
-    for (const Layer &layer : layers_) {
-        changes.addLayer(layer.id);
     }
     for (const DocumentCollection &collection : collections_) {
         changes.addCollection(collection.id);
@@ -1330,14 +949,6 @@ ObjectId Document::allocateObjectId()
     return ObjectId::fromValue(nextObjectValue_++);
 }
 
-LayerId Document::allocateLayerId()
-{
-    if (nextLayerValue_ == 0) {
-        nextLayerValue_ = 1;
-    }
-    return LayerId::fromValue(nextLayerValue_++);
-}
-
 CollectionId Document::allocateCollectionId()
 {
     if (nextCollectionValue_ == 0) nextCollectionValue_ = 1;
@@ -1349,24 +960,6 @@ DocumentCollection *Document::mutableCollection(CollectionId id)
     for (DocumentCollection &candidate : collections_)
         if (candidate.id == id) return &candidate;
     return nullptr;
-}
-
-LayerId Document::normalizedLayerId(LayerId requested) const
-{
-    return layer(requested) != nullptr ? requested : activeLayerId_;
-}
-
-void Document::rebuildLayerObjectIds()
-{
-    for (Layer &layer : layers_) {
-        layer.objectIds.clear();
-    }
-    for (const SceneObject &object : objects_) {
-        Layer *objectLayer = mutableLayer(object.layerId);
-        if (objectLayer != nullptr) {
-            objectLayer->objectIds.append(object.id);
-        }
-    }
 }
 
 void Document::rebuildObjectIndex()
@@ -1396,30 +989,6 @@ void Document::noteGeometryChange(ObjectId id)
     changes.addObject(id);
     changes.geometryChanged = true;
     applyChanges(changes);
-}
-
-void Document::ensureDefaultLayer()
-{
-    if (!layers_.isEmpty()) {
-        if (layer(activeLayerId_) == nullptr) {
-            activeLayerId_ = layers_.first().id;
-        }
-        return;
-    }
-
-    Layer defaultLayer;
-    defaultLayer.id = allocateLayerId();
-    defaultLayer.name = QStringLiteral("0");
-    layers_.append(defaultLayer);
-    activeLayerId_ = defaultLayer.id;
-
-    Layer definitionPointsLayer;
-    definitionPointsLayer.id = allocateLayerId();
-    definitionPointsLayer.name = QStringLiteral("Defpoints");
-    definitionPointsLayer.color = QColor(QStringLiteral("#ffffff"));
-    definitionPointsLayer.description = QStringLiteral("Non-plot definition points");
-    definitionPointsLayer.plotted = false;
-    layers_.append(definitionPointsLayer);
 }
 
 } // namespace classiCAD

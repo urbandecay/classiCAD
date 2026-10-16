@@ -132,7 +132,7 @@ QImage render(ViewportRenderer &renderer, const Shape &shape,
     image.fill(Qt::transparent);
     QPainter painter(&image);
     renderer.drawShape(painter, shape, size, false, false, false,
-                       QColor(Qt::white), {}, 0.0, id, 1, nullptr, {},
+                       QColor(Qt::white), id, 1, nullptr, {},
                        std::nullopt, material, {}, {},
                        identityMeshObjectTransform, meshMaterials, sink);
     painter.end();
@@ -151,7 +151,7 @@ QImage renderAtDpr(ViewportRenderer &renderer, const Shape &shape,
     image.fill(Qt::transparent);
     QPainter painter(&image);
     renderer.drawShape(painter, shape, logicalSize, false, false, false,
-                       QColor(Qt::white), {}, 0.0, id, 1, nullptr, {},
+                       QColor(Qt::white), id, 1, nullptr, {},
                        std::nullopt, material, {}, {},
                        identityMeshObjectTransform, meshMaterials);
     painter.end();
@@ -302,7 +302,7 @@ int main(int argc, char **argv)
         image.fill(Qt::transparent);
         QPainter painter(&image);
         renderer.drawShape(painter, mesh, size, false, false, false,
-                           QColor(Qt::white), {}, 0.0,
+                           QColor(Qt::white),
                            ObjectId::fromValue(meshId), 1, nullptr, {},
                            std::nullopt, std::nullopt, {}, {},
                            identityMeshObjectTransform, meshMaterials,
@@ -375,7 +375,7 @@ int main(int argc, char **argv)
     {
         QPainter receiverPainter(&opaqueReceiver);
         renderer.drawShape(receiverPainter, sharedEdgeCombined, size, false,
-                           false, false, QColor(Qt::white), {}, 0.0,
+                           false, false, QColor(Qt::white),
                            ObjectId::fromValue(meshId), 1, nullptr, {},
                            std::nullopt, std::nullopt, {}, {},
                            identityMeshObjectTransform, meshMaterials);
@@ -459,7 +459,7 @@ int main(int argc, char **argv)
         image.fill(Qt::transparent);
         QPainter painter(&image);
         renderer.drawShape(painter, surface, size, false, false, false,
-                           QColor(Qt::white), {}, 0.0,
+                           QColor(Qt::white),
                            ObjectId::fromValue(surfaceId), 1, nullptr, {},
                            std::nullopt, surfaceMaterial, {}, {},
                            identityMeshObjectTransform, {}, &surfaceFragments);

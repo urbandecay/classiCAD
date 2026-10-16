@@ -306,7 +306,7 @@ bool RotateTool::commitAngle(qreal angle,
         if (edited) {
             updateAssociativeDimensions(context.document(), context.curveSampler());
             context.commitTransaction(transaction);
-            context.notifyLayersChanged();
+            context.notifyCollectionsChanged();
         }
     }
 

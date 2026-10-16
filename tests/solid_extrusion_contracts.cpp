@@ -213,7 +213,6 @@ int main(int argc, char **argv)
     faceMaterialSnapshot.materials.append(wallMaterial);
     faceMaterialDocument.restoreSnapshot(faceMaterialSnapshot);
     SceneObject materialSolidObject;
-    materialSolidObject.layerId = faceMaterialDocument.activeLayerId();
     materialSolidObject.geometry = solid;
     materialSolidObject.nurbsSolidFaceMaterialIds.insert(
         initialBaseCapId, capMaterial.id);
@@ -334,7 +333,6 @@ int main(int argc, char **argv)
     passed &= check(materializeNurbsSolidBoundary(&materializedSeed.nurbsSolid),
                     "solid face-material fallback fixture materializes boundary patches");
     SceneObject materializedObject;
-    materializedObject.layerId = faceMaterialDocument.activeLayerId();
     materializedObject.geometry = materializedSeed;
     materializedObject.nurbsSolidFaceMaterialIds.insert(
         rectangularSolid.baseCapFaceId, capMaterial.id);
@@ -485,7 +483,7 @@ int main(int argc, char **argv)
     image.fill(Qt::black);
     QPainter painter(&image);
     ViewportRenderer renderer(transform,hitTester,&cache);
-    renderer.drawShape(painter,solid,size,false,false,false,QColor(Qt::white),{},0,id,1,&depth);
+    renderer.drawShape(painter,solid,size,false,false,false,QColor(Qt::white),id,1,&depth);
     painter.end();
     bool drawn = false;
     for (int y=0; y<image.height() && !drawn; ++y)
@@ -544,12 +542,12 @@ int main(int argc, char **argv)
         freshImage.fill(Qt::black);
         QPainter cachedPainter(&cachedImage);
         renderer.drawShape(cachedPainter, first.shape, size, false, false, false,
-            QColor(Qt::white), {}, 0, first.objectId, first.geometryRevision,
+            QColor(Qt::white), first.objectId, first.geometryRevision,
             first.preparedDepthGeometry.data(), first.preparedGeometryOffset);
         cachedPainter.end();
         QPainter freshPainter(&freshImage);
         renderer.drawShape(freshPainter, first.shape, size, false, false, false,
-            QColor(Qt::white), {}, 0, first.objectId, first.geometryRevision, &fresh);
+            QColor(Qt::white), first.objectId, first.geometryRevision, &fresh);
         freshPainter.end();
         passed &= check(cachedImage == freshImage,
                         "CPU fallback must draw translated cached meshes at the correct position");

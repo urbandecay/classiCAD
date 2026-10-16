@@ -68,14 +68,14 @@ QString layerNameForImport(const ON_Layer &layer)
     return value.trimmed().isEmpty() ? QStringLiteral("Imported") : value.trimmed();
 }
 
-LayerId matchingLayer(const Document &document, const QString &name)
+CollectionId matchingCollection(const Document &document, const QString &name)
 {
-    for (const Layer &layer : document.layers()) {
-        if (layer.name.compare(name, Qt::CaseInsensitive) == 0) {
-            return layer.id;
+    for (const DocumentCollection &collection : document.collections()) {
+        if (collection.name.compare(name, Qt::CaseInsensitive) == 0) {
+            return collection.id;
         }
     }
-    return LayerId::invalid();
+    return CollectionId::invalid();
 }
 
 bool workPlaneFrameFromOpenNurbsPlane(const ON_Plane &plane,
@@ -560,7 +560,8 @@ bool importRhino3dmDocument(const QString &path,
         std::abs(model.m_settings.m_ModelUnitsAndTolerances.m_absolute_tolerance));
 
     Document candidate = *document;
-    QHash<int, LayerId> importedLayerIds;
+    QHash<int, CollectionId> importedLayerCollections;
+    QHash<int, bool> importedLayerLocks;
     ONX_ModelComponentIterator layerIterator(model, ON_ModelComponent::Type::Layer);
     for (ON_ModelComponentReference reference = layerIterator.FirstComponentReference();
          !reference.IsEmpty();
@@ -571,38 +572,16 @@ bool importRhino3dmDocument(const QString &path,
         }
 
         const QString layerName = layerNameForImport(*sourceLayer);
-        LayerId destinationLayerId = matchingLayer(candidate, layerName);
-        if (!destinationLayerId.isValid()) {
-            destinationLayerId = candidate.createLayer(layerName);
-            const ON_Color sourceColor = sourceLayer->Color();
-            candidate.setLayerColor(destinationLayerId,
-                                    QColor(sourceColor.Red(),
-                                           sourceColor.Green(),
-                                           sourceColor.Blue(),
-                                           255 - sourceColor.Alpha()));
-            candidate.setLayerVisible(destinationLayerId, sourceLayer->IsVisible());
-            candidate.setLayerLocked(destinationLayerId, sourceLayer->IsLocked());
-
-            const double plotWeight = sourceLayer->PlotWeight();
-            candidate.setLayerPlotted(destinationLayerId, plotWeight >= 0.0);
-            candidate.setLayerLineWeight(destinationLayerId,
-                                         std::clamp(plotWeight, 0.0, 2.11));
-
-            const int linePatternIndex = sourceLayer->LinetypeIndex();
-            if (linePatternIndex >= 0) {
-                const ON_ModelComponentReference pattern = model.ComponentFromIndex(
-                    ON_ModelComponent::Type::LinePattern,
-                    linePatternIndex);
-                if (const ON_ModelComponent *patternComponent = pattern.ModelComponent()) {
-                    const ON_wString patternName = patternComponent->Name();
-                    if (patternName.Array() != nullptr && patternName.Array()[0] != L'\0') {
-                        candidate.setLayerLineType(destinationLayerId,
-                                                   QString::fromWCharArray(patternName.Array()));
-                    }
-                }
-            }
+        CollectionId destinationCollectionId = matchingCollection(candidate, layerName);
+        if (!destinationCollectionId.isValid()) {
+            DocumentCollection collection;
+            collection.name = layerName;
+            collection.hideViewport = !sourceLayer->IsVisible();
+            collection.hideRender = !sourceLayer->IsVisible();
+            destinationCollectionId = candidate.insertCollection(collection);
         }
-        importedLayerIds.insert(sourceLayer->Index(), destinationLayerId);
+        importedLayerCollections.insert(sourceLayer->Index(), destinationCollectionId);
+        importedLayerLocks.insert(sourceLayer->Index(), sourceLayer->IsLocked());
     }
 
     QStringList warnings;
@@ -672,10 +651,15 @@ bool importRhino3dmDocument(const QString &path,
         }
 
         SceneObject importedObject;
-        importedObject.layerId = attributes == nullptr
-                                     ? candidate.activeLayerId()
-                                     : importedLayerIds.value(attributes->m_layer_index,
-                                                              candidate.activeLayerId());
+        if (attributes != nullptr) {
+            const CollectionId collectionId = importedLayerCollections.value(
+                attributes->m_layer_index, CollectionId::invalid());
+            if (collectionId.isValid()) {
+                importedObject.collectionIds.append(collectionId);
+            }
+            importedObject.hideSelect = importedLayerLocks.value(
+                attributes->m_layer_index, false);
+        }
         importedObject.geometry = std::move(importedShape);
         candidate.insertObject(candidate.size(), std::move(importedObject));
         ++completedReport.importedObjectCount;

@@ -70,7 +70,6 @@
 #include "viewport/viewport_gpu_surface.h"
 #include "viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "viewport/viewport_hud_renderer.h"
-#include "viewport/viewport_line_weight.h"
 #include "viewport/viewport_scene_renderer.h"
 #include "viewport/viewport_overlay.h"
 #include "viewport/viewport_erase_overlay_renderer.h"
@@ -1546,7 +1545,7 @@ struct TransientPreviewStroke {
     Point3D worldOffset;
     bool opaqueSurface = false;
     bool highlighted = false;
-    QColor layerColor;
+    QColor displayColor;
 };
 
 struct TransientPreviewPicture {
@@ -1849,8 +1848,8 @@ public:
             [this](DocumentTransaction &transaction) {
                 return session_.commitTransaction(transaction);
             });
-        toolContext_.setLayersChangedNotifier(
-            [this]() { notifyLayersChanged(); });
+        toolContext_.setCollectionsChangedNotifier(
+            [this]() { notifyCollectionsChanged(); });
         toolContext_.setSelectionChangedNotifier(
             [this]() { session_.notifySelectionChanged(); });
         toolContext_.setShapesCommitter([this](ToolId, const QVector<Shape> &shapes) {
@@ -2372,50 +2371,6 @@ public:
         return commandRouter_.execute(command, argument);
     }
 
-    QVector<ViewportLayerInfo> layerInfos() const override
-    {
-        QVector<ViewportLayerInfo> infos;
-        infos.reserve(document_.layers().size());
-        for (const Layer &layer : document_.layers()) {
-            ViewportLayerInfo info;
-            info.id = layer.id;
-            info.name = layer.name;
-            info.visible = layer.visible;
-            info.locked = layer.locked;
-            info.active = layer.id == document_.activeLayerId();
-            info.objectCount = static_cast<int>(layer.objectIds.size());
-            info.color = layer.color;
-            info.lineType = layer.lineType;
-            info.lineWeightMm = layer.lineWeightMm;
-            info.description = layer.description;
-            info.frozen = layer.frozen;
-            info.plotted = layer.plotted;
-            infos.append(info);
-        }
-        return infos;
-    }
-
-    ViewportLayerCommandResult executeLayerCommand(
-        const ViewportLayerCommandRequest &request) override
-    {
-        const LayerCommandResult result = LayerCommand::execute(
-            document_, history_, request, selectedShapeIndices_);
-        if (!result.accepted) {
-            return {};
-        }
-        if (result.changed) {
-            notifyHistoryChanged();
-            notifyLayersChanged();
-        }
-        if (result.pruneSelection) {
-            pruneSelectionToEditableLayers();
-        }
-        if (result.redraw) {
-            update();
-        }
-        return result;
-    }
-
     bool canUndo() const
     {
         return history_.canUndo();
@@ -2440,7 +2395,7 @@ public:
             documentGridSpacingInMillimeters(document_.settings()));
         resetInteractionAfterHistory();
         notifyHistoryChanged();
-        notifyLayersChanged();
+        notifyCollectionsChanged();
         DebugLog::instance().write(QStringLiteral("undo applied shapes=%1 undoRemaining=%2 redoAvailable=%3")
                                        .arg(shapes_.size())
                                        .arg(history_.undoCount())
@@ -2461,7 +2416,7 @@ public:
             documentGridSpacingInMillimeters(document_.settings()));
         resetInteractionAfterHistory();
         notifyHistoryChanged();
-        notifyLayersChanged();
+        notifyCollectionsChanged();
         DebugLog::instance().write(QStringLiteral("redo applied shapes=%1 undoAvailable=%2 redoRemaining=%3")
                                        .arg(shapes_.size())
                                        .arg(history_.undoCount())
@@ -5392,7 +5347,7 @@ public:
         }
 
         if (grabTool_.enterBasePointMode(document_)) {
-            notifyLayersChanged();
+            notifyCollectionsChanged();
         }
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
@@ -5433,7 +5388,7 @@ public:
         const bool moved = grabTool_.moved();
         if (moved) {
             document_.restoreSnapshot(grabTool_.startSnapshot());
-            notifyLayersChanged();
+            notifyCollectionsChanged();
         }
         if (hasComponentGrabTargets()) {
             componentSelections_[0] = grabOriginalVertexSelections_;
@@ -6660,7 +6615,7 @@ public:
         resetDuplicateInteraction();
         currentSnap_ = SnapResult{};
         setCursor(Qt::ArrowCursor);
-        notifyLayersChanged();
+        notifyCollectionsChanged();
         update();
         emitCoordinateUpdate();
         if (commandFinished_) {
@@ -6929,10 +6884,9 @@ public:
         }
 
         DebugLog::instance().write(
-            QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3 version=6 preset=%4 perspective=%5 zoom=%6 pan=%7 shading=%8")
+            QStringLiteral("saveUpdateSession path=%1 shapes=%2 version=6 preset=%3 perspective=%4 zoom=%5 pan=%6 shading=%7")
                 .arg(path)
                 .arg(shapes_.size())
-                .arg(document_.layers().size())
                 .arg(static_cast<int>(viewportTransform_.viewPreset()))
                 .arg(viewportTransform_.isPerspectiveEnabled())
                 .arg(zoom_, 0, 'g', 17)
@@ -7006,7 +6960,7 @@ public:
         update();
         emitCoordinateUpdate();
         notifyHistoryChanged();
-        notifyLayersChanged();
+        notifyCollectionsChanged();
 
         QStringList shapeSummaries;
         int rectangleCount = 0;
@@ -7065,13 +7019,12 @@ public:
         }
 
         DebugLog::instance().write(
-            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 rectangles=%3 squares=%4 shapeDetails=[%5] layers=%6 version=%7 preset=%8 perspective=%9 zoom=%10 pan=%11 shading=%12")
+            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 rectangles=%3 squares=%4 shapeDetails=[%5] version=%6 preset=%7 perspective=%8 zoom=%9 pan=%10 shading=%11")
                 .arg(path)
                 .arg(shapes_.size())
                 .arg(rectangleCount)
                 .arg(squareCount)
                 .arg(shapeSummaries.join(QStringLiteral("; ")))
-                .arg(document_.layers().size())
                 .arg(version)
                 .arg(static_cast<int>(viewportTransform_.viewPreset()))
                 .arg(viewportTransform_.isPerspectiveEnabled())
@@ -7466,8 +7419,7 @@ public:
                         continue;
                     annotationRenderer.drawShape(
                         annotationPainter, object.shape, outputSize, false,
-                        false, false, object.layerColor, object.layerLineType,
-                        object.layerLineWeightMm, object.objectId,
+                        false, false, object.displayColor, object.objectId,
                         object.geometryRevision);
                 }
                 annotationPainter.end();
@@ -9420,8 +9372,11 @@ protected:
         viewportRenderer_.setGridBaseStep(baseGridStep);
         BlenderGridAppearance renderGridAppearance = gridAppearance_;
         const bool overlaysVisible = viewportShadingSettings_.wireOverlaysVisible;
+        const bool hasImportedBlenderViewport =
+            !document_.settings().importedBlenderScenes.isEmpty();
         renderGridAppearance.showFloor = overlaysVisible &&
-            viewportShadingSettings_.gridFloorVisible;
+            (viewportShadingSettings_.gridFloorVisible ||
+             !hasImportedBlenderViewport);
         renderGridAppearance.showOrthographicGrid = overlaysVisible &&
             viewportShadingSettings_.orthographicGridVisible;
         renderGridAppearance.showAxisX = overlaysVisible &&
@@ -10001,9 +9956,8 @@ protected:
                            const ViewportRenderObject &object,
                            RasterWorkbenchFragmentSink *fragmentSink) {
                         drawShape(surfacePainter, object.shape, false,
-                                  object.selected, true, object.layerColor,
-                                  object.layerLineType,
-                                  object.layerLineWeightMm, object.objectId,
+                                  object.selected, true, object.displayColor,
+                                  object.objectId,
                                   object.geometryRevision,
                                   object.preparedDepthGeometry.data(),
                                   object.preparedGeometryOffset,
@@ -10386,9 +10340,7 @@ protected:
                 }
                 continue;
             }
-            const QColor &layerColor = renderObject.layerColor;
-            const QString &layerLineType = renderObject.layerLineType;
-            const qreal layerLineWeightMm = renderObject.layerLineWeightMm;
+            const QColor &displayColor = renderObject.displayColor;
             const bool selected = renderObject.selected;
             const bool scalePreview = renderObject.scalePreview;
             const bool rotatePreview = renderObject.rotatePreview;
@@ -11613,11 +11565,10 @@ protected:
                     // Keep the unselected curve components in their layer
                     // color; only the picked edge component gets the edit
                     // selection color.
-                    sceneStroke.color = layerColor.isValid()
-                                            ? layerColor
+                    sceneStroke.color = displayColor.isValid()
+                                            ? displayColor
                                             : QColor(QStringLiteral("#000000"));
-                    sceneStroke.width = static_cast<float>(
-                        viewportLineWeightPixels(layerLineWeightMm));
+                    sceneStroke.width = 1.0f;
                 }
                 const bool selectedCurveVertexOverlay =
                     showCurveEndpointVertices &&
@@ -11630,8 +11581,7 @@ protected:
                     // thickness and colors each wire from its control-point
                     // selection, instead of applying object selection color
                     // to the entire spline.
-                    sceneStroke.width = static_cast<float>(
-                        viewportLineWeightPixels(layerLineWeightMm));
+                    sceneStroke.width = 1.0f;
                     const QSet<int> linkedEndpointSelection =
                         weldedVertexSelections.value(
                             renderObject.objectId.value());
@@ -12115,8 +12065,7 @@ protected:
                         componentStroke.shape = &visibleShape;
                         componentStroke.color =
                             QColor(QStringLiteral("#ff7a00"));
-                        componentStroke.width = static_cast<float>(
-                            viewportLineWeightPixels(layerLineWeightMm));
+                        componentStroke.width = 1.0f;
                         componentStroke.smoothWireCategory =
                             ViewportSmoothWireCategory::EditMode;
                         componentStroke.editModeWire = true;
@@ -12154,9 +12103,7 @@ protected:
                           false,
                           true,
                           true,
-                          layerColor,
-                          layerLineType,
-                          layerLineWeightMm,
+                          displayColor,
                           objectId,
                           renderObject.geometryRevision,
                           renderObject.preparedDepthGeometry.data(),
@@ -12181,9 +12128,7 @@ protected:
                           false,
                           selected,
                           true,
-                          layerColor,
-                          layerLineType,
-                          layerLineWeightMm,
+                          displayColor,
                           objectId,
                           renderObject.geometryRevision,
                           renderObject.preparedDepthGeometry.data(),
@@ -12204,12 +12149,7 @@ protected:
             }
         }
 
-        const Layer *activeDrawingLayer =
-            document_.layer(document_.activeLayerId());
-        const QColor arcPreviewColor =
-            activeDrawingLayer != nullptr && activeDrawingLayer->color.isValid()
-                ? activeDrawingLayer->color
-                : QColor(QStringLiteral("#d28b45"));
+        const QColor arcPreviewColor(QStringLiteral("#d28b45"));
         if (sceneRenderer != nullptr && previewRenderer != nullptr) {
             const auto addPreviewShape =
                 [&gpuPreviewGeometry, this](const Shape &shape,
@@ -12222,7 +12162,7 @@ protected:
                                      const Point3D &worldOffset = Point3D{},
                                      bool opaqueSurface = false,
                                      bool highlighted = false,
-                                     const QColor &layerColor = QColor()) {
+                                     const QColor &displayColor = QColor()) {
                     const GeometryType type = shape.geometryType;
                     const bool supportedType =
                         type == GeometryType::Point || type == GeometryType::Line ||
@@ -12249,7 +12189,7 @@ protected:
                         {shape, color, width, controlGuide, pointDiameter,
                          dashed, pointOutline, worldOffset,
                          opaqueSurface || activeTool_ == Tool::PointExtrude,
-                         highlighted, layerColor});
+                         highlighted, displayColor});
                     return true;
                 };
 
@@ -12342,21 +12282,13 @@ protected:
                 } else {
                     const Point3D placement =
                         duplicateTool_.previewPlacementTranslations().value(index);
-                    QColor duplicateLayerColor;
-                    if (index < duplicateTool_.sourceObjects().size()) {
-                        const Layer *sourceLayer = document_.layer(
-                            duplicateTool_.sourceObjects()[index].layerId);
-                        if (sourceLayer != nullptr) {
-                            duplicateLayerColor = sourceLayer->color;
-                        }
-                    }
                     gpuDuplicatePreviewHandled[index] = addPreviewShape(
                         preview, viewportSelectionColor(), 3.5f, false, 0.0f,
                         false, false,
                         placement,
                         preview.geometryType == GeometryType::NurbsSolid ||
                             preview.geometryType == GeometryType::NurbsSurface,
-                        true, duplicateLayerColor);
+                        true);
                     if ((controlPointsVisible_ || showCurveEndpointVertices) &&
                         preview.geometryType != GeometryType::NurbsSolid &&
                         preview.geometryType != GeometryType::NurbsSurface) {
@@ -12717,14 +12649,10 @@ protected:
                 surfaceObject.preparedGeometryOffset = preview.worldOffset;
                 surfaceObject.cacheable = false;
                 surfaceObject.selected = preview.highlighted;
-                if (preview.layerColor.isValid()) {
-                    surfaceObject.layerColor = preview.layerColor;
+                if (preview.displayColor.isValid()) {
+                    surfaceObject.displayColor = preview.displayColor;
                 } else {
-                    const Layer *previewLayer =
-                        document_.layer(document_.activeLayerId());
-                    if (previewLayer != nullptr) {
-                        surfaceObject.layerColor = previewLayer->color;
-                    }
+                    surfaceObject.displayColor = QColor(QStringLiteral("#d28b45"));
                 }
                 surfaceObject.preparedDepthGeometry =
                     QSharedPointer<ViewportDepthGeometry>::create(
@@ -12945,9 +12873,8 @@ protected:
                            const ViewportRenderObject &object,
                            RasterWorkbenchFragmentSink *fragmentSink) {
                         drawShape(surfacePainter, object.shape, false,
-                                  object.selected, true, object.layerColor,
-                                  object.layerLineType,
-                                  object.layerLineWeightMm, object.objectId,
+                                  object.selected, true, object.displayColor,
+                                  object.objectId,
                                   object.geometryRevision,
                                   object.preparedDepthGeometry.data(),
                                   object.preparedGeometryOffset,
@@ -12988,9 +12915,7 @@ protected:
                     if (isSurfaceObject(renderObject)) {
                         drawShape(painter, renderObject.shape, false,
                                   renderObject.selected, true,
-                                  renderObject.layerColor,
-                                  renderObject.layerLineType,
-                                  renderObject.layerLineWeightMm,
+                                  renderObject.displayColor,
                                   renderObject.objectId,
                                   renderObject.geometryRevision,
                                   renderObject.preparedDepthGeometry.data(),
@@ -13329,6 +13254,22 @@ protected:
                 };
                 drawPictureGroup(regularPictures, true);
             }
+            // The floor grid is a color-only composite over the resolved scene.
+            // Draw it before wire overlays so its translucent grid pixels do
+            // not wash out or break committed strokes at grid intersections.
+            const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
+                overlayCamera, renderFrame.viewportSize,
+                devicePixelRatioF(), visibleSurfaceShapes, baseGridStep,
+                renderGridAppearance);
+            if (!gridDrawn) {
+                // End the native pass for QPainter's software grid fallback,
+                // then resume it before the GPU wire overlays. Keep the grid
+                // underneath committed strokes when the GPU grid path fails.
+                painter.endNativePainting();
+                drawGrid(painter);
+                drawOrigin(painter);
+                painter.beginNativePainting();
+            }
             // Selected-face highlighting is also an edit-mode overlay. Draw it
             // after resolve/history presentation against the unjittered scene
             // depth; the selectionOverlay path depth-tests without writing it.
@@ -13368,10 +13309,6 @@ protected:
                         smoothWiresOverlay_, smoothWiresEditMode_);
                 }
             }
-            const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
-                overlayCamera, renderFrame.viewportSize,
-                devicePixelRatioF(), visibleSurfaceShapes, baseGridStep,
-                renderGridAppearance);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex >= 0) {
@@ -13604,7 +13541,7 @@ protected:
                         const qreal lengthSquared =
                             delta.x() * delta.x() + delta.y() * delta.y();
                         const qreal radius = std::max<qreal>(
-                            0.5, qreal(stroke.width) * 0.5);
+                            0.0, qreal(stroke.width) * 0.5);
                         const qreal coverageRadius =
                             radius + 0.5 / fallbackDpr;
                         const int rawMinX = qFloor(
@@ -13722,6 +13659,12 @@ protected:
                         return true;
                     };
                     const auto drawPass = [&](bool frontPass, qreal fade) {
+                        const bool continuousSolidStroke =
+                            colors.size() != segments.size() &&
+                            pattern.style == ViewportSceneLineStyle::Solid;
+                        QPainterPath continuousPath;
+                        bool continuousPathOpen = false;
+                        QPointF continuousPathEnd;
                         qreal connectedPatternOffset = 0.0;
                         bool hasPrevious = false;
                         Point3D previousEnd;
@@ -13748,6 +13691,7 @@ protected:
                                 !viewportTransform_.worldPointToScreen(
                                     second, size(), &secondScreen)) {
                                 hasPrevious = false;
+                                continuousPathOpen = false;
                                 connectedPatternOffset = 0.0;
                                 continue;
                             }
@@ -13761,7 +13705,6 @@ protected:
                                 const qreal patternPosition =
                                     (connectedPatternOffset + tm * length) *
                                     fallbackDpr;
-                                if (!patternOn(patternPosition)) continue;
                                 const QPointF a = firstScreen +
                                     (secondScreen - firstScreen) * ta;
                                 const QPointF b = firstScreen +
@@ -13770,16 +13713,34 @@ protected:
                                     first.x + (second.x - first.x) * tm,
                                     first.y + (second.y - first.y) * tm,
                                     first.z + (second.z - first.z) * tm};
-                                if (!depthVisible(worldMid, a + (b - a) * 0.5,
-                                                  frontPass)) continue;
-                                QPen pen(colorAt(pointIndex, tm, fade));
-                                pen.setWidthF(std::max<qreal>(
-                                    1.0, qreal(stroke.width)));
-                                pen.setCapStyle(Qt::RoundCap);
-                                pen.setJoinStyle(Qt::RoundJoin);
-                                painter.setPen(pen);
-                                painter.drawLine(a, b);
-                                if (frontPass) {
+                                const bool visible =
+                                    patternOn(patternPosition) &&
+                                    depthVisible(worldMid,
+                                                 a + (b - a) * 0.5,
+                                                 frontPass);
+                                if (continuousSolidStroke) {
+                                    if (!visible) {
+                                        continuousPathOpen = false;
+                                    } else {
+                                        if (!continuousPathOpen ||
+                                            QLineF(continuousPathEnd, a).length() >
+                                                1.0e-4) {
+                                            continuousPath.moveTo(a);
+                                        }
+                                        continuousPath.lineTo(b);
+                                        continuousPathEnd = b;
+                                        continuousPathOpen = true;
+                                    }
+                                } else if (visible) {
+                                    QPen pen(colorAt(pointIndex, tm, fade));
+                                    pen.setWidthF(std::max<qreal>(
+                                        0.01, qreal(stroke.width)));
+                                    pen.setCapStyle(Qt::RoundCap);
+                                    pen.setJoinStyle(Qt::RoundJoin);
+                                    painter.setPen(pen);
+                                    painter.drawLine(a, b);
+                                }
+                                if (frontPass && visible) {
                                     writeStrokeDepth(first, second, ta, tb,
                                                     a, b);
                                 }
@@ -13787,6 +13748,15 @@ protected:
                             connectedPatternOffset += length;
                             previousEnd = second;
                             hasPrevious = true;
+                        }
+                        if (!continuousPath.isEmpty()) {
+                            QPen pen(colorAt(0, 0.5, fade));
+                            pen.setWidthF(std::max<qreal>(
+                                0.01, qreal(stroke.width)));
+                            pen.setCapStyle(Qt::RoundCap);
+                            pen.setJoinStyle(Qt::RoundJoin);
+                            painter.setPen(pen);
+                            painter.drawPath(continuousPath);
                         }
                     };
                     if (viewportShadingSettings_.xrayEnabled()) {
@@ -13808,15 +13778,11 @@ protected:
                     if (stroke.shape != nullptr) {
                         drawShape(painter, *stroke.shape, false,
                                   stroke.color == viewportSelectionColor(),
-                                  true, stroke.color, QString(), 0.0,
-                                  ObjectId::invalid(), 0, nullptr,
+                                  true, stroke.color, ObjectId::invalid(),
+                                  0, nullptr,
                                   stroke.worldOffset);
                     }
                 }
-            }
-            if (!gridDrawn) {
-                drawGrid(painter);
-                drawOrigin(painter);
             }
             for (const Shape *failedPicture : failedScenePicturePreviews) {
                 if (failedPicture != nullptr) {
@@ -13903,8 +13869,7 @@ protected:
                         bool sceneLinearPicturePrepared = false;
                         drawShape(
                             cameraViewPainter, object->shape, false, false,
-                            false, object->layerColor, object->layerLineType,
-                            object->layerLineWeightMm, object->objectId,
+                            false, object->displayColor, object->objectId,
                             object->geometryRevision,
                             object->preparedDepthGeometry.data(),
                             object->preparedGeometryOffset,
@@ -14050,8 +14015,7 @@ protected:
                             : QSize();
                     drawShape(
                         picturePainter, object->shape, false,
-                        object->selected, false, object->layerColor,
-                        object->layerLineType, object->layerLineWeightMm,
+                        object->selected, false, object->displayColor,
                         object->objectId, object->geometryRevision,
                         object->preparedDepthGeometry.data(),
                         object->preparedGeometryOffset,
@@ -14323,7 +14287,7 @@ protected:
                                     wireColor.alphaF() * color.w(), 0.0, 1.0));
                             }
                             QPen pen(wireColor);
-                            pen.setWidthF(std::max<qreal>(1.0, stroke.width));
+                            pen.setWidthF(std::max<qreal>(0.01, stroke.width));
                             pen.setCapStyle(Qt::RoundCap);
                             painter.setPen(pen);
                             painter.drawLine(a, b);
@@ -14623,9 +14587,7 @@ protected:
                           false,
                           selected,
                           true,
-                          renderObject.layerColor,
-                          renderObject.layerLineType,
-                          renderObject.layerLineWeightMm);
+                          renderObject.displayColor);
             }
             if (!subdivisionTool_.isActive() || objectId != subdivisionTool_.targetObjectId()) {
                 drawSubdivisionPoints(painter,
@@ -14642,8 +14604,8 @@ protected:
                 if (!gpuPreviewRendered || !gpuDuplicatePreviewHandled.value(index)) {
                     drawShape(painter,
                               duplicateTool_.previewShapes()[index],
-                              true, false, true, QColor(), QString(), 0.0,
-                              ObjectId::invalid(), 0, nullptr,
+                              true, false, true, QColor(), ObjectId::invalid(),
+                              0, nullptr,
                               duplicateTool_.previewPlacementTranslations().value(index));
                 }
             }
@@ -14794,11 +14756,8 @@ protected:
                     previewShape.geometryType == GeometryType::NurbsSurface ||
                     previewShape.geometryType == GeometryType::NurbsSolid;
                 if (surfacePreview && !gpuOpaqueExtrudePreviewRendered) {
-                    const Layer *previewLayer =
-                        document_.layer(document_.activeLayerId());
                     drawShape(painter, previewShape, false, false, false,
-                              previewLayer != nullptr ? previewLayer->color
-                                                      : QColor());
+                              QColor(QStringLiteral("#d28b45")));
                 } else if (!surfacePreview &&
                            (!gpuActiveToolPreview || !gpuPreviewRendered)) {
                     drawShape(painter, previewShape, true, false, false,
@@ -18166,16 +18125,6 @@ private:
         selection_.clear();
     }
 
-    void pruneSelectionToEditableLayers()
-    {
-        selection_.prune(document_);
-        clearSelectionDragState();
-        selection_.clearActiveControlPoint();
-        dragHistoryRecorded_ = false;
-        currentDragSnap_ = DragSnapResult{};
-        dragSnapLocked_ = false;
-    }
-
     QRectF selectionBoundsForShape(const Shape &shape,
                                    bool *hasProjectedPoints = nullptr,
                                    const Point3D &worldOffset = {}) const
@@ -19188,12 +19137,9 @@ private:
         }
     }
 
-    void notifyLayersChanged()
+    void notifyCollectionsChanged()
     {
-        session_.notifyLayersChanged();
-        if (layersChanged_) {
-            layersChanged_();
-        }
+        session_.notifyCollectionsChanged();
     }
 
     void recordGeometryChange()
@@ -19271,7 +19217,7 @@ private:
         document_.invalidateAllGeometry();
         notifyHistoryChanged();
         QTimer::singleShot(0, this, [this]() {
-            notifyLayersChanged();
+        notifyCollectionsChanged();
         });
         DebugLog::instance().write(QStringLiteral("history record shapes=%1 undoAvailable=%2 redoCleared")
                                        .arg(shapes_.size())
@@ -26094,11 +26040,7 @@ private:
 
     void drawCircleToolPreview(QPainter &painter, bool drawCurve = true)
     {
-        const Layer *activeLayer = document_.layer(document_.activeLayerId());
-        const QColor previewColor =
-            activeLayer != nullptr && activeLayer->color.isValid()
-                ? activeLayer->color
-                : QColor(QStringLiteral("#d28b45"));
+        const QColor previewColor(QStringLiteral("#d28b45"));
         const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
         const bool previewUsesSeparateFrame =
             toolPreview_.hasShape &&
@@ -26159,10 +26101,8 @@ private:
     {
         if (drawCurve) {
             if (toolPreview_.hasShape) {
-                const Layer *layer = document_.layer(document_.activeLayerId());
-                const QColor color = layer != nullptr && layer->color.isValid()
-                    ? layer->color : QColor(QStringLiteral("#000000"));
-                drawShape(painter, toolPreview_.shape, true, false, true, color);
+                drawShape(painter, toolPreview_.shape, true, false, true,
+                          QColor(QStringLiteral("#000000")));
             }
             QVector<QPointF> markers = pendingPoints_;
             if (toolPreview_.hasShape &&
@@ -26193,11 +26133,7 @@ private:
     void drawPolygonToolPreview(QPainter &painter, bool drawCurve = true)
     {
         if (drawCurve && toolPreview_.hasShape) {
-            const Layer *activeLayer = document_.layer(document_.activeLayerId());
-            const QColor previewColor =
-                activeLayer != nullptr && activeLayer->color.isValid()
-                    ? activeLayer->color
-                    : QColor(QStringLiteral("#d28b45"));
+            const QColor previewColor(QStringLiteral("#d28b45"));
             drawShape(painter, toolPreview_.shape, true, false, true,
                       previewColor);
         }
@@ -26556,9 +26492,7 @@ private:
                    bool preview,
                    bool selected = false,
                    bool drawPreviewPoints = true,
-                   const QColor &layerColor = QColor(),
-                   const QString &layerLineType = QString(),
-                   qreal layerLineWeightMm = 0.0,
+                   const QColor &displayColor = QColor(),
                    ObjectId shapeObjectId = ObjectId::invalid(),
                    quint64 geometryRevision = 0,
                    const ViewportDepthGeometry *preparedGeometry = nullptr,
@@ -26589,9 +26523,7 @@ private:
                                     preview,
                                     selected,
                                     drawPreviewPoints,
-                                    layerColor,
-                                    layerLineType,
-                                    layerLineWeightMm,
+                                    displayColor,
                                     shapeObjectId,
                                     geometryRevision,
                                     preparedGeometry, preparedOffset,

@@ -12,7 +12,7 @@ namespace classiCAD {
 
 enum class ApplicationSessionChange {
     History,
-    Layers,
+    Collections,
     Selection,
     DocumentWillBeReplaced,
     DocumentReplaced,
@@ -38,7 +38,7 @@ public:
 
     void setChangeObserver(ChangeObserver observer);
     void notifyHistoryChanged();
-    void notifyLayersChanged();
+    void notifyCollectionsChanged();
     void notifySelectionChanged();
     DocumentTransaction beginTransaction();
     bool commitTransaction(DocumentTransaction &transaction);

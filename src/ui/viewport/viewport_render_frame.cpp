@@ -222,7 +222,6 @@ ViewportRenderFrame buildViewportRenderFrame(
             // depth geometry for this snapshot instead of reusing stale data.
             entry.cacheable = false;
         }
-        const Layer *layer = document.layer(sceneObject.layerId);
         // Resolve imported Blender material slots into this render snapshot.
         // The inline slot array is only a transient viewport bridge; the
         // document's material datablocks remain the persisted source of truth.
@@ -316,9 +315,6 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.reverseSurfaceOrientation =
             sceneObject.geometry.geometryType == GeometryType::NurbsSurface &&
             !sceneObject.blenderSourceVersion.isEmpty();
-        if (layer != nullptr) {
-            entry.layerColor = layer->color;
-        }
         entry.displayColorSceneLinear = sceneObject.displayColorSceneLinear;
         entry.workbenchMaterial = sceneObject.workbenchMaterial;
         entry.hasWorkbenchMaterial = sceneObject.hasWorkbenchMaterial;
@@ -373,9 +369,6 @@ ViewportRenderFrame buildViewportRenderFrame(
                 }
             }
         }
-        entry.layerLineType = layer->lineType;
-        entry.layerLineWeightMm = layer->lineWeightMm;
-
         const bool transformObject =
             transformedIds.contains(entry.objectId.value());
         if (transformObject &&

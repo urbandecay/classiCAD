@@ -2677,11 +2677,9 @@ bool loadVignolaDocument(const QString &path,
         }
         Document restored;
         Document::Snapshot snapshot = restored.snapshot();
-        const LayerId targetLayer = snapshot.activeLayerId;
         quint64 nextObjectValue = 1;
         for (SceneObject &object : objects) {
             object.id = ObjectId::fromValue(nextObjectValue++);
-            object.layerId = targetLayer;
         }
         for (const int index : importReport.selectedObjectIndices) {
             if (index >= 0 && index < objects.size()) {

@@ -1176,7 +1176,8 @@ in ordinary free views or orthographic views is superseded by this correction.
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L306-L369).
 - The import and render-frame metadata path now carries Blender
   `Object.show_in_front` through `SceneObject` to `ViewportRenderObject`.
-  Collection membership and CAD layer visibility remain independent.
+  Blender collection membership and view-layer visibility remain part of the
+  imported scene model.
 - GPU opaque-surface support now uses per-sample in-front color, depth, normal,
   object-ID, and outline-ID attachments. The surface prepass renders opaque
   show-in-front ranges in their own depth domain and merges their actual device
@@ -1384,7 +1385,7 @@ This is the status after the first implementation pass and the team's code revie
 | Color management | Imported scenes retain display device, view transform, look, exposure, and gamma for Workbench render results. The interactive Solid/Wireframe GPU viewport uses Blender Workbench's default view transform; Blender applies scene render color settings there only for Rendered mode or when View3D Scene Lights/Scene World is enabled. classiCAD does not currently expose those View3D modes. Live GPU rendering keeps scene surfaces, transparency, and pictures in RGBA16F scene-linear color through depth of field and temporal AA, then applies exposure, the active sRGB AgX/Standard/PBR Neutral/Filmic or imported OCIO LUT, and gamma once during presentation. For an interactive Theme background, depth-clear pixels bypass the scene view transform and restore Blender's direct sRGB or gamma-2.2 gradient encoding; World backgrounds still use the scene transform. The theme-color exception is currently disabled during DOF and for camera-image pixels because those can contribute scene content at clear depth. Offscreen Workbench results now run the configured viewport AA sample mode through the same scene-linear resolve and retain the resolved float Combined payload for Radiance HDR and OpenEXR when available. The `render_aa` enum/sample mapping follows Blender 5.2.2: OFF disables AA, FXAA selects one jittered sample plus SMAA, and 5/8/11/16/32 select those TAA sample counts, matching [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L197-L225) and the render sample loop in [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L499-L535). Other non-EXR display-referred output uses RGBA16/QImage, so HDR range is lost before 16-bit PNG/TIFF writing. QPainter Solid rendering retains its CPU display-transform path. Other sRGB view/look combinations use validated Blender-baked LUTs shared by scenes with identical table bytes. AgX uses a 97³ float LUT with an analytic `log2_1p` shaper over [0, 16] (scale 64); PBR Neutral, Filmic, and imported custom LUTs use 65³ tables. Older native LUTs retain their linear [0, 2] metadata. Inputs outside each stored domain clamp to its endpoints. Standard, AgX, exposure, and gamma transforms are checked against Blender 5.2.2; gamma zero is preserved and follows Blender's `1 / FLT_EPSILON` behavior. | Partial; runtime coverage of imported render-AA override precedence and completion at each sample count, non-sRGB display devices, arbitrary OCIO configuration transfer, imported-LUT GPU precision, GPU/QPainter differences, HDR-limited non-EXR output, and broader matched render comparisons remain open |
 | Surface drawing | NURBS surfaces and solids are tessellated for display and shaded by classiCAD's custom forward GLSL renderer. Curves use the stroke path. | Different rendering architecture; visual parity remains unverified |
 | Color source | Object, Random, Material, and Custom color plus their Blender-compatible alpha sources reach filled NURBS surfaces/solids in GPU and QPainter paths. When no Workbench material is assigned, Material/Attribute/Texture use Blender's opaque default gray material; Object and Random use object display color and alpha. Blender mesh import preserves object display colors, shared materials, per-face slots, active UV maps, and image references. GPU mesh Texture mode samples the active Image Texture Node per fragment through interpolated active-UV coordinates, with repeat wrapping and linear filtering; supported external raster files are loaded with size limits and cached by path/color space. QPainter mesh Texture mode rasterizes each triangle per target sample, uses reciprocal camera-forward depth for perspective-correct UVs, and bilinearly samples external and packed images with repeat wrapping. An audit found the reciprocal weight used the camera-to-scene direction with the wrong sign, collapsing varying positive depths to the clamp; mesh and NURBS raster paths now use positive camera-forward depth. UDIM tiles now preserve Blender 5.2.2 per-tile packed bytes in native documents and sample them in GPU and QPainter mesh and NURBS paths before falling back to external tile paths; import caps packed payloads at 32 MiB total per image, and absent tiles remain magenta. GPU and QPainter NURBS Texture sample trimmed and untrimmed surfaces using tessellation parameter UVs normalized over the exact knot domains. This matches Blender 5.2.2's index-normalized UVs because Blender samples uniformly over each active parameter domain. QPainter mesh and NURBS Texture honor the imported image sRGB flag: unpremultiply PREMUL RGB as before, decode sRGB samples to scene-linear when requested, replace material RGB with valid image samples while preserving material alpha, and apply the active exposure/gamma/OCIO or built-in transform; unavailable images or UVs retain Material color. QPainter textured-mesh shading reconstructs its incident direction and normal per raster pixel: perspective samples use perspective-correct position/normal interpolation and orthographic samples use barycentric normal interpolation; corner normals are transformed by the world inverse transpose, with a flat geometric normal as fallback for invalid or absent corner data. QPainter untextured Workbench mesh triangles now rasterize per pixel using scene-linear material/object/random/custom/attribute colors, per-face roughness and metallic, interpolated corner normals, and perspective-correct incident direction. Random and Custom inputs use Blender-compatible color conversion; Attribute RGB interpolates its per-corner values perspective-correctly and uses opaque source alpha, matching Blender's vertex-color material. Raster size limits use the bounded coarse raster for oversized triangles, with less accurate detail and edge coverage. Orthographic incident direction remains constant. QPainter untextured NURBS triangles are shaded per pixel with perspective-correct interpolation of prepared smooth corner normals; when prepared normals are absent or invalid, they retain the flat geometric normal. Perspective samples reconstruct their world position, while orthographic incident direction remains constant. Textured NURBS samples use per-pixel material lighting and interpolate prepared smooth normals with perspective-correct weights; missing or invalid prepared normals fall back to flat. GPU and QPainter texture-alpha cutouts apply in color rendering for trimmed and untrimmed NURBS. GPU object-ID/outline and QPainter cavity/outline effect-alpha paths also cover trimmed and untrimmed tessellated NURBS using active-domain UVs and Blender's alpha rules. Workbench's shadow-volume pass does not apply Image Texture alpha to caster geometry; classiCAD's depth-map fallback now follows that rule. The alpha cutoff is 0.1 when enabled and is bypassed for NONE/Ignore and CHANNEL_PACKED. Packed Image Texture bytes up to 32 MiB are transported, persisted, and sampled by both paths. Missing images or UVs fall back to Material. Both renderers unpremultiply PREMUL images except at alpha 0 or 1. Blender Workbench's pinned [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60) performs UDIM lookup or regular image sampling, unpremultiplies PREMUL pixels, and discards fragments below `image_transparency_cutoff`; Workbench uses supported material display values and its active Image Texture input rather than evaluating arbitrary shader graphs. | Partial; color/effect alpha coverage is implemented for the described passes, while QPainter composition, trim tessellation, and final visual comparisons remain approximate or unverified |
-| Blender scene import | File > Import > Blender Scene invokes the pinned Blender 5.2.2 extractor and offers original or evaluated mesh mode. File > Open routes ordinary `.blend` files through evaluated mesh extraction and loads the supported result as a new document, so visible mesh modifiers are reflected in the imported snapshot; native classiCAD `.blend` files still restore their embedded authoritative snapshot. Imported polygon meshes retain geometry, custom split normals, object/material data, direct links to multiple Blender collections, collection hierarchy and global hide flags, plus per-view-layer collection-instance paths/exclusions/visibility and object hide state. Mesh loose edges are emitted as a companion CURVE item with a deterministic derived transport identity, separate from the source mesh identity. Each edge becomes a world-space degree-one NURBS component; the companion is named from the source object and its transport record carries the source object ID, while object display color, collection memberships, visibility, and per-view-layer state. Isolated vertices import as bounded, separately selectable Point items; the dated Blender mesh isolated vertex import entry below records their limits. Blender FONT objects convert their visible glyphs to baked polygon meshes in both import modes, with evaluated transforms and material assignments; original text/font/layout editability is lost and reported. Blender METABALL objects convert to their current evaluated polygon surface in both import modes, with editable metaball data and threshold settings not retained. Collection instances of FONT and META objects now use the same baked evaluated-mesh representation while retaining each instance transform and visibility. Exact Blender CURVE POLY splines import as dimension-3 degree-1 NURBS after matrix_world is applied; cyclic splines explicitly close. Each cubic Blender BEZIER span imports as a separate nonrational clamped degree-3 NURBS with its four transformed endpoint/handle points; cyclic spans include last-to-first, including the one-point cyclic loop. Blender CURVE NURBS splines preserve their weights, degree, generated knot multiplicities/domain, and cyclic wraparound control points in dimension-3 NURBS. Curves with visible bevel, extrusion, bevel-object, 2D fill, or modifier output now also import a deterministic companion mesh baked from Blender's evaluated curve, while retaining source spline data as the editable centerline. This proxy uses the current evaluated state and does not preserve its surface settings for editing. Blender SURFACE NURBS splines import as separate exact NURBS surface objects, with world-space control nets, U/V knot domains, weights, cyclic directions, per-patch identities, and assigned Workbench material values preserved. Multiple source curve splines remain components of the same imported source object. Object display name/color and collection memberships are retained. Blender parent relationships are not represented; supported child objects retain their world-space geometry/transform and now report this hierarchy loss. No curve approximation is emitted. The Collections panel selects among imported Blender view layers; selected view-layer visibility resolves each object's direct collection memberships across visible paths. Linked objects combine memberships and per-view-layer hide state. The default option preserves per-scene first-layer visibility. Collections remain independent of CAD layers. Transport identity keys use a SHA-256 namespace derived from the normalized absolute source .blend path for objects, materials, collections, scenes, view layers, and their references; moving or renaming the source project changes that namespace. Native document version 15 persists Blender camera, render-output, imported-scene, and deduplicated OCIO LUT metadata and reads versions 1–14; the scene extractor bridge accepts versions 10 through 14. Ordinary `.blend` Open and File > Import > Blender Scene now apply the selected saved `VIEW_3D` area's `SpaceView3D.shading` to the interactive viewport, with a deterministic policy when several areas exist, while `scene.display.shading` remains the scene-level render setting source and `scene.display.render_aa` remains available to offscreen results. Static file-backed Image Empties import as Picture objects with image placement and opacity; projection-specific visibility/depth rules and generated or animated images remain unsupported. | Partial; additional object types and visual/import coverage remain gaps. Cameras, lights, non-image empties, and unsupported Blender data types still have no matching classiCAD scene-object geometry type; the extractor reports these objects (the active camera's supported settings are separately retained as scene metadata). Blender Workbench Solid uses its studio-light rig rather than scene light datablocks. Adding camera/light datablocks as editable scene objects needs an explicit model/serialization/rendering contract, so they are not fabricated as points or proxy meshes. |
+| Blender scene import | File > Import > Blender Scene invokes the pinned Blender 5.2.2 extractor and offers original or evaluated mesh mode. File > Open routes ordinary `.blend` files through evaluated mesh extraction and loads the supported result as a new document, so visible mesh modifiers are reflected in the imported snapshot; native classiCAD `.blend` files still restore their embedded authoritative snapshot. Imported polygon meshes retain geometry, custom split normals, object/material data, direct links to multiple Blender collections, collection hierarchy and global hide flags, plus per-view-layer collection-instance paths/exclusions/visibility and object hide state. Mesh loose edges are emitted as a companion CURVE item with a deterministic derived transport identity, separate from the source mesh identity. Each edge becomes a world-space degree-one NURBS component; the companion is named from the source object and its transport record carries the source object ID, while object display color, collection memberships, visibility, and per-view-layer state. Isolated vertices import as bounded, separately selectable Point items; the dated Blender mesh isolated vertex import entry below records their limits. Blender FONT objects convert their visible glyphs to baked polygon meshes in both import modes, with evaluated transforms and material assignments; original text/font/layout editability is lost and reported. Blender METABALL objects convert to their current evaluated polygon surface in both import modes, with editable metaball data and threshold settings not retained. Collection instances of FONT and META objects now use the same baked evaluated-mesh representation while retaining each instance transform and visibility. Exact Blender CURVE POLY splines import as dimension-3 degree-1 NURBS after matrix_world is applied; cyclic splines explicitly close. Each cubic Blender BEZIER span imports as a separate nonrational clamped degree-3 NURBS with its four transformed endpoint/handle points; cyclic spans include last-to-first, including the one-point cyclic loop. Blender CURVE NURBS splines preserve their weights, degree, generated knot multiplicities/domain, and cyclic wraparound control points in dimension-3 NURBS. Curves with visible bevel, extrusion, bevel-object, 2D fill, or modifier output now also import a deterministic companion mesh baked from Blender's evaluated curve, while retaining source spline data as the editable centerline. This proxy uses the current evaluated state and does not preserve its surface settings for editing. Blender SURFACE NURBS splines import as separate exact NURBS surface objects, with world-space control nets, U/V knot domains, weights, cyclic directions, per-patch identities, and assigned Workbench material values preserved. Multiple source curve splines remain components of the same imported source object. Object display name/color and collection memberships are retained. Blender parent relationships are not represented; supported child objects retain their world-space geometry/transform and now report this hierarchy loss. No curve approximation is emitted. The Collections panel selects among imported Blender view layers; selected view-layer visibility resolves each object's direct collection memberships across visible paths. Linked objects combine memberships and per-view-layer hide state. The default option preserves per-scene first-layer visibility. Collections control their Blender-native membership and visibility. Transport identity keys use a SHA-256 namespace derived from the normalized absolute source .blend path for objects, materials, collections, scenes, view layers, and their references; moving or renaming the source project changes that namespace. Native document version 15 persists Blender camera, render-output, imported-scene, and deduplicated OCIO LUT metadata and reads versions 1–14; the scene extractor bridge accepts versions 10 through 14. Ordinary `.blend` Open and File > Import > Blender Scene now apply the selected saved `VIEW_3D` area's `SpaceView3D.shading` to the interactive viewport, with a deterministic policy when several areas exist, while `scene.display.shading` remains the scene-level render setting source and `scene.display.render_aa` remains available to offscreen results. Static file-backed Image Empties import as Picture objects with image placement and opacity; projection-specific visibility/depth rules and generated or animated images remain unsupported. | Partial; additional object types and visual/import coverage remain gaps. Cameras, lights, non-image empties, and unsupported Blender data types still have no matching classiCAD scene-object geometry type; the extractor reports these objects (the active camera's supported settings are separately retained as scene metadata). Blender Workbench Solid uses its studio-light rig rather than scene light datablocks. Adding camera/light datablocks as editable scene objects needs an explicit model/serialization/rendering contract, so they are not fabricated as points or proxy meshes. |
 
 **Image Empty import update (2026-10-15):** Static file-backed Blender Image
 Empties with readable still images now import through classiCAD's existing
@@ -1834,6 +1835,23 @@ wire comparison remains open.
   regressions. They have not been confirmed by a matched capture from the
   user's `.blend`; framing and missing-grid causes remain unverified until its
   exact imported settings and view are captured.
+
+**Native empty-view floor grid and theme display RGB (2026-10-16):** The live
+viewport now keeps the floor grid visible in native classiCAD documents while
+global overlays are on; imported Blender documents continue to honor their
+saved `show_floor` flag. This prevents stale native-session shading state from
+leaving only the colored axes. A second grid bug had treated each line's
+orientation as proof it overlapped a visible axis, discarding both complete
+floor-grid families. The shader now checks the line's fixed coordinate and
+discards only a center line that actually overlaps an enabled axis, matching
+Blender's axis-mask check in
+[`overlay_grid_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_grid_frag.glsl#L20-L29).
+The AA presenter also passes Linear/Radial theme background RGB through
+unchanged: the background shader has already applied its gamma-2.2
+interpolation pair, so encoding a second time caused the pale gray background
+in the user's screenshot. Single Color still gets sRGB encoding. Build passed;
+the user will check the rebuilt viewport, and matched Blender image comparison
+remains open.
 
 ### QPainter selected outline after scene DOF (2026-10-16)
 
@@ -7933,7 +7951,7 @@ resolve remain open.
   pair, uses its view-layer key for the document, and applies shading from the
   same scene. Ordinary `.blend` open reapplies selection after camera setup,
   which resets viewport selection; importing into an existing document makes
-  the imported active layer visible alongside its selection. Older extraction
+  the imported active object visible alongside its selection. Older extraction
   versions keep their first-scene/layer behavior. The C++ build passed;
   multi-scene Blender comparison remains open.
 
@@ -10291,25 +10309,116 @@ scene depth.
   made the configured dark gray appear much lighter than Blender when AA was
   enabled. Presentation now bypasses the scene transform for depth-clear
   pixels when the active background is Theme (including World mode without an
-  imported World), then applies the matching sRGB or gamma-2.2 display
-  encoding. Camera image pixels keep the scene transform. DOF disables this
+  imported World). Single Color pixels receive sRGB encoding; Linear and Radial
+  pixels already contain display RGB after the background shader's matching
+  gamma-2.2 encode/decode pair and pass through unchanged. Re-encoding those
+  gradient pixels made the background pale, so the presenter now preserves
+  their RGB values. Camera image pixels keep the scene transform. DOF disables this
   shortcut because its gather may place blurred geometry into depth-clear
   pixels. The AA history key now also tracks theme colors for the
   World-without-World fallback. C++ build passed; matched GPU captures across
   transforms, camera images, DOF, and background modes remain open.
 
-### Blender native curve-wire port (2026-10-16)
+### Composite the floor grid below committed wire strokes (2026-10-16)
 
-- Ordinary committed CAD curves now use a separate GPU program that emits
-  native one-pixel OpenGL lines, matching Blender Overlay's line primitive
-  path. The fragment stage packs the line direction and distance using
-  Blender's encoding, and the resolve uses its center-plus-four-neighbor
-  coverage and blend logic. The new offscreen capture uses the same world
-  line and Top orthographic view in Blender and classiCAD at 1920x1080.
-- Background-normalized profiles correlate at 0.99964 (RMSE 0.0154); average
-  integrated width is 1.058 px in Blender and 1.014 px in classiCAD. This is
-  close, with a measurable 4% width difference. The targeted native-line
-  checks pass. The full viewport render-contract test still fails its
-  crossing-smooth-strokes, smooth-wire-depth, and NURBS-cube expectations.
-  This GPU path does not verify the separate QPainter fallback. Build passed;
-  the GUI was not launched.
+- In the native viewport path, committed GPU strokes were drawn before the
+  floor grid. The grid is rendered in its own framebuffer and alpha-composited
+  with destination depth testing disabled, so its translucent/stippled pixels
+  could wash out a line wherever the two crossed. The grid composite now runs
+  before the selected-face and wire overlays; line depth tests still use the
+  resolved scene depth. When the GPU grid renderer fails, its QPainter fallback
+  now also runs before wire drawing, with native painting paused and resumed
+  around that fallback. The existing viewport render contract uses this same
+  grid-then-wire order. C++ build passed after both ordering fixes; a matched
+  user-side viewport comparison remains to be checked.
+
+### Remove CAD layers from the Blender parity path (2026-10-16)
+
+- Removed the AutoCAD-style CAD layer model, active-layer commands, toolbar and
+  panel, per-layer visibility/editability/style behavior, CAD line patterns and
+  weights, and layer ownership from scene objects and document transactions.
+  Blender Collections and View Layers remain the scene organization model and
+  continue to load from `.blend` files. Rhino source layers import as Blender
+  Collections. Native classiCAD JSON no longer writes CAD layer records; legacy
+  layer fields are ignored when reading. Ordinary viewport strokes now use a
+  solid one-pixel width and the imported object's display color when present.
+  The C++ build passed after updating document, import, render, and viewport
+  contracts. This removes a separate CAD styling path that could complicate
+  Blender parity, but it does not prove the reported broken line is fixed; a
+  matched runtime viewport comparison is still required.
+
+- Follow-up: removed the custom “Blender View Layer” dropdown from the
+  Collections panel. Imported scenes still use their saved/default active view
+  layer internally; the extra classiCAD selector is not part of the visible
+  viewport controls. Blender collection membership and visibility data remain
+  available for imported projects.
+- Follow-up: the QPainter fallback split solid uniform strokes into roughly
+  one-pixel pieces and antialiased each piece separately, which could produce
+  uneven coverage at the joins. It now batches each uninterrupted visible
+  stretch into one path, retaining per-piece depth checks. The C++ build passed.
+- Follow-up: the native overlay depth refresh was drawing curves and points
+  into the occluder depth before drawing those same objects as strokes. That
+  let a line hide parts of itself. The refresh now draws surfaces only,
+  including show-in-front surfaces, so mesh occlusion remains while curve and
+  point overlays do not self-occlude. The C++ build passed; a matched viewport
+  screenshot is still needed to confirm the visible result.
+- Follow-up: the first 0.85-only adjustment narrowed the antialias fringe but
+  left the solid stroke at a one-pixel core; the user's next screenshot still
+  looked too heavy. Ordinary CAD curves now use a 0.75-pixel width, and the
+  GPU direct pass, GPU single-sample resolve, prepared QPainter resolve, and
+  QPainter fallbacks all preserve subpixel width. Blender mesh wires and Edit
+  Mode edges retain their one-pixel width and 1.05 smoothing kernel. This is a
+  visual tuning away from Blender's one-pixel curve shader to address the
+  reported heavier CAD stroke. `cmake --build build -j4` passed; a matched
+  Blender comparison is still needed to confirm the visible result.
+- Follow-up: the 0.75-pixel width still produced an almost fully opaque center
+  because the smooth-wire kernel was designed around a one-pixel stroke. The
+  GPU direct pass, GPU resolve, and prepared QPainter resolve now scale only
+  smooth CAD-curve coverage by its subpixel width. Full-width Blender mesh and
+  Edit Mode wires keep their existing coverage. `cmake --build build -j4`
+  passed; the user's next rebuilt viewport comparison is still needed to
+  confirm the visible result.
+- Follow-up: the single-sample resolve's dense-wire correction also treated
+  every recorded fragment in the expanded stroke quad as opaque, including
+  the antialias fringe. A geometric-core gate alone was insufficient for
+  CAD curves. GPU and QPainter resolves now keep Blender's dense one-pixel
+  opacity boost for mesh/Edit wires and skip it for CAD curves.
+- Follow-up: compared the actual Blender 5.2.2 Solid viewport line with a
+  classiCAD GPU line render at 1920x1080 using the same screen-space endpoints.
+  A 0.75-pixel CAD stroke was too faint; a 1-pixel stroke was too heavy with
+  the expanded CAD quad. A 0.9-pixel CAD stroke with Blender's 1.05 smoothing
+  kernel and no dense-wire opacity boost gave a matching sampled coverage
+  profile (0.895 average integrated contrast in classiCAD vs. 0.888 in
+  Blender). The full classiCAD widget was also captured offscreen through its
+  QPainter fallback; the offscreen platform could not create the native
+  OpenGL widget context, so the complete live GPU viewport remains unverified.
+  `cmake --build build -j4` passed; classiCAD GUI was not launched.
+- Correction: the earlier 0.9-pixel result was a tuned approximation, not a
+  port of Blender's line path, and its comparison is not verification. Blender
+  5.2.2 draws ordinary object curve wires with native line primitives in
+  `overlay_extra_wire_vert.glsl` and `overlay_extra_wire_frag.glsl`, packs each
+  fragment's direction and signed distance with
+  `overlay_common_lib.glsl::pack_line_data`, then resolves the center and four
+  cardinal neighbors in `overlay_antialiasing.bsl.hh`. These are the pinned
+  primary sources:
+  [`overlay_extra_wire_vert.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_extra_wire_vert.glsl),
+  [`overlay_extra_wire_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_extra_wire_frag.glsl),
+  [`overlay_common_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_common_lib.glsl#L383-L410),
+  and [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L627-L904).
+- Follow-up: committed CAD curves now use a separate geometry-shader program
+  that emits native one-pixel OpenGL lines instead of expanded quads. Its
+  fragment stage ports Blender's packed direction/distance format; the resolve
+  decodes it and applies Blender's line coverage, neighbor blend ordering, and
+  dense-line correction. The offscreen comparison recreates the Blender test
+  scene's world-space line `(-5, -2, 0)` to `(5, 2, 0)` in a Top orthographic
+  view at 1920x1080. After background-normalizing in linear light, the sampled
+  line profiles have correlation 0.99964 and RMSE 0.0154; average integrated
+  coverage width is 1.058 px in Blender and 1.014 px in classiCAD. This is a
+  close result with a measurable 4% width difference, not exact pixel parity.
+  The original capture fixture reused stale cached geometry; its cache key is
+  now unique, and the native-line capture verifies visible pixels. The targeted
+  native-line checks pass. The full viewport render-contract executable still
+  exits 1 on its crossing-smooth-strokes, smooth-wire-depth, and NURBS-cube
+  expectations. The QPainter/capability fallback is separate and is not
+  covered by this native GPU line path. `cmake --build build -j4` passed;
+  classiCAD's GUI was not launched.

@@ -110,7 +110,7 @@ MirrorCommitResult MirrorTool::commitAxis(ToolContext &context)
 
     context.selection().setObjectIds(result.createdObjectIds);
     context.notifySelectionChanged();
-    context.notifyLayersChanged();
+    context.notifyCollectionsChanged();
     clearInteraction();
     context.finishTool(ToolId::Select);
     result.committed = true;

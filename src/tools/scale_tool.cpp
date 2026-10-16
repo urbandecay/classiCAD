@@ -279,7 +279,7 @@ bool ScaleTool::commitScale(qreal factor,
         if (edited) {
             updateAssociativeDimensions(context.document(), context.curveSampler());
             context.commitTransaction(transaction);
-            context.notifyLayersChanged();
+            context.notifyCollectionsChanged();
         }
     }
 

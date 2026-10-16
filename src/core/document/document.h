@@ -2,7 +2,6 @@
 
 #include "document_settings.h"
 #include "document_change_set.h"
-#include "layer.h"
 #include "document_collection.h"
 #include "scene_object.h"
 
@@ -13,9 +12,8 @@
 
 namespace classiCAD {
 
-// Document owns persistent scene objects and their layer membership. The
-// container-like shape accessors are a short-lived migration bridge for the
-// viewport; the storage and identity remain owned by this class.
+// Document owns persistent scene objects. Blender collections and view-layer
+// state are modeled independently from geometry storage.
 class Document final {
 public:
     struct RuntimeRevisions {
@@ -23,20 +21,16 @@ public:
         quint64 geometry = 1;
         quint64 placement = 1;
         quint64 structure = 1;
-        quint64 layer = 1;
         quint64 collection = 1;
         quint64 visibility = 1;
         quint64 settings = 1;
     };
 
     struct Snapshot {
-        QVector<Layer> layers;
         QVector<DocumentCollection> collections;
         QVector<SceneObject> objects;
         QVector<DocumentMaterial> materials;
-        LayerId activeLayerId = LayerId::invalid();
         quint64 nextObjectValue = 1;
-        quint64 nextLayerValue = 1;
         quint64 nextCollectionValue = 1;
         DocumentSettings settings;
     };
@@ -47,7 +41,6 @@ public:
     bool isEmpty() const;
     const QVector<SceneObject> &objects() const;
     const QVector<DocumentMaterial> &materials() const;
-    const QVector<Layer> &layers() const;
     const QVector<DocumentCollection> &collections() const;
     const DocumentSettings &settings() const;
     bool setSettings(const DocumentSettings &settings);
@@ -89,21 +82,6 @@ public:
     QVector<ObjectId> replaceShapes(const QVector<Shape> &shapes);
     void replaceObjects(const QVector<SceneObject> &objects);
 
-    LayerId activeLayerId() const;
-    bool setActiveLayer(LayerId id);
-    LayerId createLayer(const QString &name);
-    bool removeLayer(LayerId id);
-    bool renameLayer(LayerId id, const QString &name);
-    bool moveLayer(LayerId id, int targetIndex);
-    const Layer *layer(LayerId id) const;
-    bool setLayerVisible(LayerId id, bool visible);
-    bool setLayerFrozen(LayerId id, bool frozen);
-    bool setLayerLocked(LayerId id, bool locked);
-    bool setLayerColor(LayerId id, const QColor &color);
-    bool setLayerLineType(LayerId id, const QString &lineType);
-    bool setLayerLineWeight(LayerId id, qreal lineWeightMm);
-    bool setLayerPlotted(LayerId id, bool plotted);
-    bool setLayerDescription(LayerId id, const QString &description);
     const DocumentCollection *collection(CollectionId id) const;
     CollectionId createCollection(const QString &name);
     CollectionId insertCollection(DocumentCollection collection);
@@ -112,8 +90,6 @@ public:
     bool setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds);
     bool setCollectionVisibility(CollectionId id, bool hideViewport, bool hideRender);
     bool setObjectCollections(ObjectId objectId, const QVector<CollectionId> &collectionIds);
-    bool isLayerEditable(LayerId id) const;
-    bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
     bool isObjectVisible(ObjectId objectId) const;
     // Render visibility follows Blender's hide_render/excluded collection
     // state without applying viewport-only hide flags.
@@ -166,28 +142,20 @@ private:
     bool addMaterial(const DocumentMaterial &material);
 
     ObjectId allocateObjectId();
-    LayerId allocateLayerId();
     CollectionId allocateCollectionId();
-    LayerId normalizedLayerId(LayerId requested) const;
-    void rebuildLayerObjectIds();
     void rebuildObjectIndex();
     void bumpRevision(quint64 *revision);
     void noteGeometryChange(ObjectId id);
     SceneObject *mutableObject(ObjectId id);
     Shape *mutableShape(ObjectId id);
-    Layer *mutableLayer(LayerId id);
     DocumentCollection *mutableCollection(CollectionId id);
-    void ensureDefaultLayer();
 
-    QVector<Layer> layers_;
     QVector<DocumentCollection> collections_;
     QVector<SceneObject> objects_;
     QVector<DocumentMaterial> materials_;
     QHash<quint64, int> objectIndices_;
     QHash<quint64, quint64> objectGeometryRevisions_;
-    LayerId activeLayerId_ = LayerId::invalid();
     quint64 nextObjectValue_ = 1;
-    quint64 nextLayerValue_ = 1;
     quint64 nextCollectionValue_ = 1;
     DocumentSettings settings_;
     RuntimeRevisions revisions_;

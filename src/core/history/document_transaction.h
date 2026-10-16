@@ -38,10 +38,6 @@ public:
                           const Point3D &worldDelta);
     bool removeObject(ObjectId objectId);
     QVector<ObjectId> removeObjects(const QVector<ObjectId> &objectIds);
-    bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
-    bool editLayer(LayerId layerId,
-                   const std::function<void(Layer &)> &edit,
-                   bool visibilityChanged = false);
     bool setSettings(const DocumentSettings &settings);
     void replaceDocument(const Document::Snapshot &snapshot);
     void replaceObjects(const QVector<SceneObject> &objects);

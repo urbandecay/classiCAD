@@ -1,6 +1,5 @@
 #include "document_transaction.h"
 
-#include <QSet>
 #include <algorithm>
 
 #include <cmath>
@@ -48,10 +47,6 @@ ObjectId DocumentTransaction::insertObject(int index, const SceneObject &source)
         changes_.addObject(objectId);
         changes_.geometryChanged = true;
         changes_.structureChanged = true;
-        const SceneObject *sceneObject = document_.object(objectId);
-        if (sceneObject != nullptr) {
-            changes_.addLayer(sceneObject->layerId);
-        }
     }
     return objectId;
 }
@@ -66,10 +61,6 @@ QVector<ObjectId> DocumentTransaction::insertObjects(
 
     for (const ObjectId objectId : objectIds) {
         changes_.addObject(objectId);
-        const SceneObject *sceneObject = document_.object(objectId);
-        if (sceneObject != nullptr) {
-            changes_.addLayer(sceneObject->layerId);
-        }
     }
     changes_.geometryChanged = true;
     changes_.structureChanged = true;
@@ -223,12 +214,10 @@ bool DocumentTransaction::removeObject(ObjectId objectId)
     if (sceneObject == nullptr) {
         return false;
     }
-    const LayerId oldLayerId = sceneObject->layerId;
     if (!document_.remove(objectId)) {
         return false;
     }
     changes_.addObject(objectId);
-    changes_.addLayer(oldLayerId);
     changes_.geometryChanged = true;
     changes_.structureChanged = true;
     return true;
@@ -237,19 +226,6 @@ bool DocumentTransaction::removeObject(ObjectId objectId)
 QVector<ObjectId> DocumentTransaction::removeObjects(
     const QVector<ObjectId> &objectIds)
 {
-    QSet<quint64> seenLayerIds;
-    seenLayerIds.reserve(objectIds.size());
-    QVector<LayerId> oldLayerIds;
-    oldLayerIds.reserve(objectIds.size());
-    for (const ObjectId objectId : objectIds) {
-        const SceneObject *sceneObject = document_.object(objectId);
-        if (sceneObject != nullptr && sceneObject->layerId.isValid() &&
-            !seenLayerIds.contains(sceneObject->layerId.value())) {
-            seenLayerIds.insert(sceneObject->layerId.value());
-            oldLayerIds.append(sceneObject->layerId);
-        }
-    }
-
     QVector<ObjectId> removedIds = document_.removeObjects(objectIds);
     if (removedIds.isEmpty()) {
         return removedIds;
@@ -257,44 +233,9 @@ QVector<ObjectId> DocumentTransaction::removeObjects(
     for (const ObjectId objectId : removedIds) {
         changes_.addObject(objectId);
     }
-    for (const LayerId layerId : oldLayerIds) {
-        changes_.addLayer(layerId);
-    }
     changes_.geometryChanged = true;
     changes_.structureChanged = true;
     return removedIds;
-}
-
-bool DocumentTransaction::moveObjectToLayer(ObjectId objectId, LayerId layerId)
-{
-    const SceneObject *sceneObject = document_.object(objectId);
-    if (sceneObject == nullptr) {
-        return false;
-    }
-    const LayerId oldLayerId = sceneObject->layerId;
-    if (!document_.moveObjectToLayer(objectId, layerId)) {
-        return false;
-    }
-    changes_.addObject(objectId);
-    changes_.addLayer(oldLayerId);
-    changes_.addLayer(layerId);
-    changes_.layerPropertiesChanged = true;
-    return true;
-}
-
-bool DocumentTransaction::editLayer(LayerId layerId,
-                                    const std::function<void(Layer &)> &edit,
-                                    bool visibilityChanged)
-{
-    Layer *layer = document_.mutableLayer(layerId);
-    if (layer == nullptr || !edit) {
-        return false;
-    }
-    edit(*layer);
-    changes_.addLayer(layerId);
-    changes_.layerPropertiesChanged = true;
-    changes_.visibilityChanged = changes_.visibilityChanged || visibilityChanged;
-    return true;
 }
 
 bool DocumentTransaction::setSettings(const DocumentSettings &settings)
@@ -311,15 +252,11 @@ void DocumentTransaction::replaceDocument(const Document::Snapshot &snapshot)
     document_.restoreSnapshot(snapshot);
     changes_.geometryChanged = true;
     changes_.structureChanged = true;
-    changes_.layerPropertiesChanged = true;
     changes_.visibilityChanged = true;
     changes_.settingsChanged = true;
     changes_.materialsChanged = true;
     for (const SceneObject &object : snapshot.objects) {
         changes_.addObject(object.id);
-    }
-    for (const Layer &layer : snapshot.layers) {
-        changes_.addLayer(layer.id);
     }
 }
 
@@ -330,7 +267,6 @@ void DocumentTransaction::replaceObjects(const QVector<SceneObject> &objects)
     changes_.structureChanged = true;
     for (const SceneObject &object : document_.objects()) {
         changes_.addObject(object.id);
-        changes_.addLayer(object.layerId);
     }
 }
 

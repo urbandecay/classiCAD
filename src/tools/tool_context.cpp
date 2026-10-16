@@ -82,9 +82,9 @@ void ToolContext::setTransactionCommitter(TransactionCommitter committer)
     transactionCommitter_ = std::move(committer);
 }
 
-void ToolContext::setLayersChangedNotifier(ChangeNotifier notifier)
+void ToolContext::setCollectionsChangedNotifier(ChangeNotifier notifier)
 {
-    layersChangedNotifier_ = std::move(notifier);
+    collectionsChangedNotifier_ = std::move(notifier);
 }
 
 void ToolContext::setSelectionChangedNotifier(ChangeNotifier notifier)
@@ -182,10 +182,10 @@ bool ToolContext::commitTransaction(DocumentTransaction &transaction) const
                                  : transaction.commit();
 }
 
-void ToolContext::notifyLayersChanged() const
+void ToolContext::notifyCollectionsChanged() const
 {
-    if (layersChangedNotifier_) {
-        layersChangedNotifier_();
+    if (collectionsChangedNotifier_) {
+        collectionsChangedNotifier_();
     }
 }
 

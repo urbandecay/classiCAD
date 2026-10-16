@@ -82,12 +82,10 @@ struct ViewportRenderObject {
     quint64 preparedGeometryRevision = 0;
     Point3D preparedGeometryOffset;
 
-    QColor layerColor;
+    QColor displayColor;
     QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
     WorkbenchMaterialData workbenchMaterial;
     bool hasWorkbenchMaterial = false;
-    QString layerLineType;
-    qreal layerLineWeightMm = 0.0;
     // Solid surface perimeter is rendered through ViewportSceneRenderer so
     // it shares the same pixel width and antialiasing as spline strokes.
     bool outlineHandledBySceneStroke = false;

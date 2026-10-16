@@ -165,7 +165,6 @@ JoinExecutionResult JoinTool::executeJoin(qreal endpointTolerance,
     }
 
     const Shape &referenceShape = referenceObject->geometry;
-    const LayerId joinedLayerId = referenceObject->layerId;
     const WorkPlaneFrame joinFrame = shapeWorkPlaneFrame(referenceShape);
     const WorkPlane joinWorkPlane = referenceShape.workPlane;
     const qreal joinWorkPlaneOffset = referenceShape.workPlaneOffset;
@@ -290,7 +289,6 @@ JoinExecutionResult JoinTool::executeJoin(qreal endpointTolerance,
                               joinFrame,
                               joinWorkPlane,
                               joinWorkPlaneOffset,
-                              joinedLayerId,
                               selectedObjectIds_,
                               insertionIndex,
                               &plan)) {

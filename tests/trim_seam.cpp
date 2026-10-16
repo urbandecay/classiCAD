@@ -574,8 +574,6 @@ bool runEraseGeometryCases()
         ToolHarness commandHarness;
         const QVector<ObjectId> sourceIds = appendShapes(
             commandHarness.document, {circle, sourceLine});
-        const LayerId sourceLayer =
-            commandHarness.document.object(sourceIds[1])->layerId;
         DocumentTransaction transaction(commandHarness.document,
                                         commandHarness.history);
         TrimEraseCommandResult commandResult;
@@ -587,13 +585,11 @@ bool runEraseGeometryCases()
         const bool retainedIdentity =
             commandHarness.document.size() == 3 &&
             commandHarness.document.objectIdAt(1) == sourceIds[1] &&
-            commandHarness.document.objectIdAt(2) != sourceIds[1] &&
-            commandHarness.document.object(commandHarness.document.objectIdAt(2))->layerId ==
-                sourceLayer;
+            commandHarness.document.objectIdAt(2) != sourceIds[1];
         if (!applied || !retainedIdentity || commandResult.generatedPieceCount != 2 ||
             !commandHarness.history.undo() || commandHarness.document.size() != 2 ||
             commandHarness.document.objectIdAt(1) != sourceIds[1]) {
-            qWarning() << "Trim command must preserve IDs/layers and undo atomically";
+            qWarning() << "Trim command must preserve IDs and undo atomically";
             ++failures;
         }
     }

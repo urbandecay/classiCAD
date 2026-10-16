@@ -81,7 +81,7 @@ public:
     void setShapesCommitter(ShapesCommitter committer);
     void setToolFinisher(ToolFinisher finisher);
     void setTransactionCommitter(TransactionCommitter committer);
-    void setLayersChangedNotifier(ChangeNotifier notifier);
+    void setCollectionsChangedNotifier(ChangeNotifier notifier);
     void setSelectionChangedNotifier(ChangeNotifier notifier);
     void setPreviewPublisher(PreviewPublisher publisher);
     void setStatusPublisher(StatusPublisher publisher);
@@ -103,7 +103,7 @@ public:
     void finishTool(ToolId tool) const;
     DocumentTransaction beginTransaction() const;
     bool commitTransaction(DocumentTransaction &transaction) const;
-    void notifyLayersChanged() const;
+    void notifyCollectionsChanged() const;
     void notifySelectionChanged() const;
     void publishPreview(const ToolPreview &preview) const;
     void publishStatus(const ToolStatus &status) const;
@@ -134,7 +134,7 @@ private:
     ShapesCommitter shapesCommitter_;
     ToolFinisher toolFinisher_;
     TransactionCommitter transactionCommitter_;
-    ChangeNotifier layersChangedNotifier_;
+    ChangeNotifier collectionsChangedNotifier_;
     ChangeNotifier selectionChangedNotifier_;
     PreviewPublisher previewPublisher_;
     StatusPublisher statusPublisher_;

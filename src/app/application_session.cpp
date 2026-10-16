@@ -60,9 +60,9 @@ void ApplicationSession::notifyHistoryChanged()
     notify(ApplicationSessionChange::History);
 }
 
-void ApplicationSession::notifyLayersChanged()
+void ApplicationSession::notifyCollectionsChanged()
 {
-    notify(ApplicationSessionChange::Layers);
+    notify(ApplicationSessionChange::Collections);
 }
 
 void ApplicationSession::notifySelectionChanged()
@@ -84,9 +84,9 @@ bool ApplicationSession::commitTransaction(DocumentTransaction &transaction)
     if (changes.affectsPersistentDocument()) {
         notifyHistoryChanged();
     }
-    if (changes.affectsLayerPresentation() ||
+    if (changes.affectsScenePresentation() ||
         changes.objectAppearanceChanged) {
-        notifyLayersChanged();
+        notifyCollectionsChanged();
     }
     if (changes.selectionChanged) {
         notify(ApplicationSessionChange::Selection);

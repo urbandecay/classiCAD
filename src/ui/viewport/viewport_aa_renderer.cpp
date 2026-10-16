@@ -756,12 +756,15 @@ bool ViewportAaRenderer::initialize()
             } else if (uEncodeDisplay && !preserveThemeBackground) {
                 outputColor = linearToSrgb(outputColor);
             } else if (preserveThemeBackground) {
-                // The scene sample stores theme pixels in linear form. Restore
-                // their display RGB without applying the scene view transform.
+                // Single Color backgrounds were decoded with the exact sRGB
+                // transfer by the background shader. Linear and Radial
+                // backgrounds are already stored as display RGB: their
+                // gamma-2.2 encode/decode pair preserves the theme color.
+                // Encoding those pixels again here would make the background
+                // much lighter than the configured Blender theme.
                 outputColor = uThemeBackgroundSingleColor
                     ? linearToSrgb(outputColor)
-                    : pow(clamp(outputColor, 0.0, 1.0),
-                          vec3(1.0 / 2.2));
+                    : outputColor;
             }
             // Blender 5.2.2 applies render dither after the display transform
             // when converting RGBA float pixels to display bytes. gl_FragCoord
@@ -3071,7 +3074,7 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                << object.selected << object.scalePreview << object.rotatePreview
                << object.showInFront << object.outlineHandledBySceneStroke
                << object.displayName << object.libraryPath
-               << object.workbenchRandomLibraryPath << object.layerColor
+               << object.workbenchRandomLibraryPath << object.displayColor
                << object.placementTranslation.x
                << object.placementTranslation.y
                << object.placementTranslation.z

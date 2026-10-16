@@ -1,10 +1,8 @@
 #pragma once
 
 #include "app/command_router.h"
-#include "core/document/layer_id.h"
 #include "core/document/object_id.h"
 #include "core/document/document_settings.h"
-#include "core/commands/layer_command.h"
 #include "core/geometry/arc_mode.h"
 #include "core/geometry/work_plane.h"
 #include "core/tool_id.h"
@@ -32,31 +30,11 @@ class ApplicationSession;
 using ViewportCommand = ApplicationCommand;
 using ViewportCommandResult = ApplicationCommandResult;
 
-using ViewportLayerCommand = LayerCommandOperation;
-using ViewportLayerCommandRequest = LayerCommandRequest;
-using ViewportLayerCommandResult = LayerCommandResult;
-
-struct ViewportLayerInfo {
-    LayerId id = LayerId::invalid();
-    QString name;
-    bool visible = true;
-    bool locked = false;
-    bool active = false;
-    int objectCount = 0;
-    QColor color = QColor(QStringLiteral("#000000"));
-    QString lineType = QStringLiteral("Continuous");
-    qreal lineWeightMm = 0.0;
-    QString description;
-    bool frozen = false;
-    bool plotted = true;
-};
-
 struct ViewportUiCallbacks {
     std::function<void(const QString &)> coordinateUpdate;
     std::function<void(const QString &)> toolStatusUpdate;
     std::function<void(ToolId)> commandFinished;
     std::function<void()> historyChanged;
-    std::function<void()> layersChanged;
     std::function<void(const QString &)> subdivisionStatusUpdate;
     std::function<void(const QString &)> joinStatusUpdate;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate;
@@ -85,9 +63,6 @@ public:
                                        QString *errorMessage = nullptr) = 0;
     virtual ViewportCommandResult executeCommand(ViewportCommand command,
                                                   int argument = 0) = 0;
-    virtual QVector<ViewportLayerInfo> layerInfos() const = 0;
-    virtual ViewportLayerCommandResult executeLayerCommand(
-        const ViewportLayerCommandRequest &request) = 0;
     virtual bool canUndo() const = 0;
     virtual bool canRedo() const = 0;
     virtual void setArcMode(ArcMode mode) = 0;
@@ -198,7 +173,6 @@ public:
         toolStatusUpdate_ = callbacks.toolStatusUpdate;
         commandFinished_ = callbacks.commandFinished;
         historyChanged_ = callbacks.historyChanged;
-        layersChanged_ = callbacks.layersChanged;
         subdivisionStatusUpdate_ = callbacks.subdivisionStatusUpdate;
         joinStatusUpdate_ = callbacks.joinStatusUpdate;
         viewStateUpdate_ = callbacks.viewStateUpdate;
@@ -210,7 +184,6 @@ protected:
     std::function<void(const QString &)> toolStatusUpdate_;
     std::function<void(ToolId)> commandFinished_;
     std::function<void()> historyChanged_;
-    std::function<void()> layersChanged_;
     std::function<void(const QString &)> subdivisionStatusUpdate_;
     std::function<void(const QString &)> joinStatusUpdate_;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate_;

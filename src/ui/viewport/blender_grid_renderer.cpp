@@ -1084,9 +1084,13 @@ bool BlenderGridRenderer::renderUnjitteredSceneDepthToCurrentFramebuffer(
     glDepthMask(GL_TRUE);
     glClearDepth(1.0);
     glClear(GL_DEPTH_BUFFER_BIT);
-    drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
+    // This refreshed depth buffer is consumed by overlay stroke and image
+    // passes. Curves and points are drawn by those overlays themselves;
+    // including them here can make each wire test against its own depth and
+    // leave gaps along a single line. Keep solid surfaces as occluders.
+    drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
     drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
-                                visibleSceneShapes);
+                                visibleSceneShapes, true);
 
     glColorMask(previousColorMask[0], previousColorMask[1],
                 previousColorMask[2], previousColorMask[3]);

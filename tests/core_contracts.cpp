@@ -1,5 +1,4 @@
 #include "core/document/document.h"
-#include "core/document/layer_id.h"
 #include "core/document/object_id.h"
 #include "core/document/selection_model.h"
 #include "core/geometry/circle_construction.h"
@@ -758,12 +757,9 @@ int main(int argc, char **argv)
                     "PolyCurve legacy value must remain eight");
 
     const ObjectId objectId = ObjectId::fromValue(42);
-    const LayerId layerId = LayerId::fromValue(42);
     passed &= check(objectId.isValid() && objectId.value() == 42,
                     "object IDs must preserve their stable value");
-    passed &= check(layerId.isValid() && layerId.value() == 42,
-                    "layer IDs must preserve their stable value");
-    passed &= check(ObjectId::invalid() != objectId && LayerId::invalid() != layerId,
+    passed &= check(ObjectId::invalid() != objectId,
                     "zero IDs must remain the invalid sentinel");
 
     const NurbsCurve2D line = makeDegreeOneNurbs({QPointF(0.0, 0.0), QPointF(10.0, 0.0)});
@@ -1429,25 +1425,11 @@ int main(int argc, char **argv)
                     "serialized curves with non-positive weights must be rejected");
 
     Document document;
-    passed &= check(document.layers().size() == 2 &&
-                        document.layers().first().name == QStringLiteral("0") &&
-                        document.layers().last().name == QStringLiteral("Defpoints") &&
-                        !document.layers().last().plotted,
-                    "new drawings must start with layer 0 and a non-plot Defpoints layer");
-    const LayerId sketchLayer = document.createLayer(QStringLiteral("Sketch"));
     const ObjectId lineObject = document.append(lineShape);
     const ObjectId circleObject = document.append(circle);
     passed &= check(document.indexOf(lineObject) == 0 &&
                         document.indexOf(circleObject) == 1,
                     "document must own objects in insertion order");
-    passed &= check(document.moveObjectToLayer(circleObject, sketchLayer) &&
-                        document.layer(sketchLayer)->objectIds.contains(circleObject),
-                    "document must maintain layer object membership");
-    passed &= check(document.setLayerLocked(sketchLayer, true) &&
-                        !document.isObjectEditable(circleObject) &&
-                        document.isObjectEditable(lineObject),
-                    "layer locking must affect object editability");
-
     const Document::Snapshot documentSnapshot = document.snapshot();
     document.remove(lineObject);
     passed &= check(document.indexOf(circleObject) == 0,
@@ -1456,7 +1438,6 @@ int main(int argc, char **argv)
     passed &= check(document.indexOf(lineObject) == 0 &&
                         document.indexOf(circleObject) == 1,
                     "document snapshots must restore stable object identities");
-    document.setLayerLocked(sketchLayer, false);
 
     SelectionModel selection;
     selection.setObjectIds({lineObject, circleObject}, circleObject);
@@ -1471,80 +1452,30 @@ int main(int argc, char **argv)
                         selection.primaryObjectId() == circleObject,
                     "selection model must prune deleted object IDs");
     selection.setActiveControlPoint(circleObject, 2);
-    document.setLayerLocked(sketchLayer, true);
     selection.prune(document);
-    passed &= check(selection.objectIds().isEmpty() &&
-                        !selection.primaryObjectId().isValid() &&
-                        !selection.activeControlPoint().isValid(),
-                    "selection model must prune objects made uneditable by a locked layer");
+    passed &= check(selection.objectIds() == QVector<ObjectId>{circleObject} &&
+                        selection.primaryObjectId() == circleObject,
+                    "selection model must retain existing editable objects");
 
-    Document layerDocument;
+    Document settingsDocument;
     DocumentSettings persistedGridSettings;
     persistedGridSettings.lengthUnit = DocumentLengthUnit::Inch;
     persistedGridSettings.gridSpacing = 0.25;
-    passed &= check(layerDocument.setSettings(persistedGridSettings) &&
-                        std::abs(documentGridSpacingInMillimeters(layerDocument.settings()) -
+    passed &= check(settingsDocument.setSettings(persistedGridSettings) &&
+                        std::abs(documentGridSpacingInMillimeters(settingsDocument.settings()) -
                                  6.35) < 1.0e-12,
                     "document grid spacing must convert the chosen length unit to canonical millimeters");
-    const LayerId layeredSketch = layerDocument.createLayer(QStringLiteral("Sketch"));
-    const LayerId layeredConstruction =
-        layerDocument.createLayer(QStringLiteral("Construction"));
-    const QColor sketchLayerColor(QStringLiteral("#56aaff"));
-    const ObjectId layeredObject = layerDocument.append(lineShape);
-    passed &= check(layerDocument.moveObjectToLayer(layeredObject, layeredSketch) &&
-                        layerDocument.setLayerColor(layeredSketch, sketchLayerColor) &&
-                        layerDocument.setLayerLineType(layeredSketch,
-                                                       QStringLiteral("Dashed")) &&
-                        layerDocument.setLayerLineWeight(layeredSketch, 0.35) &&
-                        layerDocument.setLayerPlotted(layeredSketch, false) &&
-                        layerDocument.setLayerDescription(layeredSketch,
-                                                          QStringLiteral("Sketch geometry")) &&
-                        layerDocument.renameLayer(layeredSketch, QStringLiteral("Sketch Curves")) &&
-                        layerDocument.moveLayer(layeredConstruction, 0),
-                    "document must support stable layer rename and reorder operations");
-    passed &= check(layerDocument.setActiveLayer(layeredConstruction) &&
-                        layerDocument.activeLayerId() == layeredConstruction,
-                    "document must track an editable active layer");
-    passed &= check(layerDocument.setLayerVisible(layeredSketch, false) &&
-                        !layerDocument.isObjectVisible(layeredObject) &&
-                        !layerDocument.isObjectEditable(layeredObject),
-                    "layer visibility must filter object visibility and editability");
-    passed &= check(layerDocument.setLayerVisible(layeredSketch, true) &&
-                        layerDocument.setLayerLocked(layeredSketch, true) &&
-                        !layerDocument.isObjectEditable(layeredObject) &&
-                        !layerDocument.moveObjectToLayer(layeredObject, layeredConstruction),
-                    "layer locking must prevent object movement from a locked layer");
-    passed &= check(layerDocument.setLayerFrozen(layeredSketch, true) &&
-                        !layerDocument.isObjectVisible(layeredObject) &&
-                        !layerDocument.isObjectEditable(layeredObject) &&
-                        !layerDocument.setLayerLineWeight(layeredSketch, 2.5),
-                    "frozen layers must hide and protect their geometry and reject invalid lineweights");
-
-    const QJsonObject serializedDocument = documentToJson(layerDocument);
-    Document restoredLayerDocument;
+    const ObjectId settingsObject = settingsDocument.append(lineShape);
+    const QJsonObject serializedDocument = documentToJson(settingsDocument);
+    Document restoredSettingsDocument;
     QString documentError;
     passed &= check(documentFromJson(serializedDocument,
-                                     &restoredLayerDocument,
+                                     &restoredSettingsDocument,
                                      &documentError) &&
                         documentError.isEmpty() &&
-                        restoredLayerDocument.activeLayerId() == layeredConstruction &&
-                        restoredLayerDocument.object(layeredObject) != nullptr &&
-                        restoredLayerDocument.object(layeredObject)->layerId == layeredSketch &&
-                        restoredLayerDocument.layer(layeredSketch) != nullptr &&
-                        restoredLayerDocument.layer(layeredSketch)->name ==
-                            QStringLiteral("Sketch Curves") &&
-                        restoredLayerDocument.layer(layeredSketch)->color == sketchLayerColor &&
-                        restoredLayerDocument.layer(layeredSketch)->lineType ==
-                            QStringLiteral("Dashed") &&
-                        qFuzzyCompare(restoredLayerDocument.layer(layeredSketch)->lineWeightMm + 1.0,
-                                      1.35) &&
-                        restoredLayerDocument.layer(layeredSketch)->description ==
-                            QStringLiteral("Sketch geometry") &&
-                        restoredLayerDocument.layer(layeredSketch)->frozen &&
-                        !restoredLayerDocument.layer(layeredSketch)->plotted &&
-                        restoredLayerDocument.layer(layeredSketch)->locked &&
-                        restoredLayerDocument.settings() == persistedGridSettings,
-                    "document serialization must preserve layers, object membership, and explicit unit/grid settings");
+                        restoredSettingsDocument.object(settingsObject) != nullptr &&
+                        restoredSettingsDocument.settings() == persistedGridSettings,
+                    "document serialization must preserve objects and explicit unit/grid settings");
 
     QJsonObject versionThreeDocument = serializedDocument;
     versionThreeDocument.insert(QStringLiteral("version"), 3);
@@ -1555,48 +1486,24 @@ int main(int argc, char **argv)
                         restoredVersionThreeDocument.settings() == DocumentSettings{},
                     "version-3 documents must load with the previous millimeter grid defaults");
 
-    QJsonObject versionOneDocument = serializedDocument;
-    versionOneDocument.insert(QStringLiteral("version"), 1);
-    QJsonArray versionOneLayers;
-    for (const QJsonValue &layerValue : serializedDocument.value(QStringLiteral("layers")).toArray()) {
-        QJsonObject versionOneLayer = layerValue.toObject();
-        versionOneLayer.remove(QStringLiteral("color"));
-        versionOneLayers.append(versionOneLayer);
+    QJsonObject legacyLayerDocument = serializedDocument;
+    legacyLayerDocument.insert(QStringLiteral("version"), 22);
+    legacyLayerDocument.insert(QStringLiteral("activeLayerId"), 1);
+    legacyLayerDocument.insert(QStringLiteral("layers"), QJsonArray{QJsonObject{
+        {QStringLiteral("id"), 1}, {QStringLiteral("name"), QStringLiteral("0")}}});
+    QJsonArray legacyObjects = legacyLayerDocument.value(QStringLiteral("objects")).toArray();
+    if (!legacyObjects.isEmpty()) {
+        QJsonObject legacyObject = legacyObjects.first().toObject();
+        legacyObject.insert(QStringLiteral("layerId"), 1);
+        legacyObjects[0] = legacyObject;
+        legacyLayerDocument.insert(QStringLiteral("objects"), legacyObjects);
     }
-    versionOneDocument.insert(QStringLiteral("layers"), versionOneLayers);
-    Document restoredVersionOneDocument;
-    passed &= check(documentFromJson(versionOneDocument,
-                                     &restoredVersionOneDocument,
+    Document restoredLegacyDocument;
+    passed &= check(documentFromJson(legacyLayerDocument, &restoredLegacyDocument,
                                      &documentError) &&
-                        restoredVersionOneDocument.layer(layeredSketch) != nullptr &&
-                        restoredVersionOneDocument.layer(layeredSketch)->color ==
-                            QColor(QStringLiteral("#d28b45")),
-                    "version-1 drawings must load with the legacy default layer color");
-
-    QJsonObject versionTwoDocument = serializedDocument;
-    versionTwoDocument.insert(QStringLiteral("version"), 2);
-    QJsonArray versionTwoLayers;
-    for (const QJsonValue &layerValue : serializedDocument.value(QStringLiteral("layers")).toArray()) {
-        QJsonObject versionTwoLayer = layerValue.toObject();
-        versionTwoLayer.remove(QStringLiteral("lineType"));
-        versionTwoLayer.remove(QStringLiteral("lineWeightMm"));
-        versionTwoLayer.remove(QStringLiteral("description"));
-        versionTwoLayer.remove(QStringLiteral("frozen"));
-        versionTwoLayer.remove(QStringLiteral("plotted"));
-        versionTwoLayers.append(versionTwoLayer);
-    }
-    versionTwoDocument.insert(QStringLiteral("layers"), versionTwoLayers);
-    Document restoredVersionTwoDocument;
-    passed &= check(documentFromJson(versionTwoDocument,
-                                     &restoredVersionTwoDocument,
-                                     &documentError) &&
-                        restoredVersionTwoDocument.layer(layeredSketch) != nullptr &&
-                        restoredVersionTwoDocument.layer(layeredSketch)->color ==
-                            sketchLayerColor &&
-                        restoredVersionTwoDocument.layer(layeredSketch)->lineType ==
-                            QStringLiteral("Continuous") &&
-                        !restoredVersionTwoDocument.layer(layeredSketch)->frozen,
-                    "version-2 drawings must retain color and receive defaults for new layer properties");
+                        restoredLegacyDocument.object(settingsObject) != nullptr &&
+                        restoredLegacyDocument.settings() == persistedGridSettings,
+                    "legacy CAD layer fields must be ignored while loading document geometry and settings");
 
     Document historyDocument;
     History history(historyDocument);

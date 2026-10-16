@@ -8,9 +8,7 @@
 #include "core/geometry/nurbs_curve.h"
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/shape_mapping.h"
-#include "line_type_style.h"
 #include "viewport_depth_geometry.h"
-#include "viewport_line_weight.h"
 #include "viewport_marker_style.h"
 #include "viewport_render_frame.h"
 #include "viewport_shading.h"
@@ -486,14 +484,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
         geometryType == GeometryType::Nurbs ||
         geometryType == GeometryType::NurbsSurface ||
         geometryType == GeometryType::NurbsSolid;
-    const LayerGpuLinePattern layerPattern =
-        layerGpuLinePattern(object.layerLineType);
     const bool nativeStroke =
         strokeType &&
-        ((geometryType == GeometryType::Point ||
-          geometryType == GeometryType::PointCloud) || object.selected ||
-         object.scalePreview || object.rotatePreview ||
-         layerPattern.kind != LayerGpuLinePatternKind::Unsupported) &&
         (geometryType != GeometryType::Arc || validateNurbsCurve(shape.nurbs)) &&
         (geometryType != GeometryType::Circle ||
          validateNurbsCurve(shape.nurbs)) &&
@@ -568,33 +560,6 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
     sceneStroke->preparedDepthGeometry = object.preparedDepthGeometry;
     sceneStroke->worldOffset = object.preparedGeometryOffset;
 
-    if (!highlighted) {
-        switch (layerPattern.kind) {
-        case LayerGpuLinePatternKind::Dashed:
-            sceneStroke->lineStyle = ViewportSceneLineStyle::Dashed;
-            break;
-        case LayerGpuLinePatternKind::Dotted:
-            sceneStroke->lineStyle = ViewportSceneLineStyle::Dotted;
-            break;
-        case LayerGpuLinePatternKind::Pattern:
-            sceneStroke->lineStyle = ViewportSceneLineStyle::Pattern;
-            break;
-        case LayerGpuLinePatternKind::Solid:
-        case LayerGpuLinePatternKind::Unsupported:
-        default:
-            sceneStroke->lineStyle = ViewportSceneLineStyle::Solid;
-            break;
-        }
-        sceneStroke->linePatternScale = static_cast<float>(layerPattern.scale);
-        sceneStroke->linePatternSegmentCount = std::min(
-            static_cast<int>(layerPattern.segments.size()),
-            static_cast<int>(sceneStroke->linePatternSegmentsWidthUnits.size()));
-        for (int index = 0; index < sceneStroke->linePatternSegmentCount; ++index) {
-            sceneStroke->linePatternSegmentsWidthUnits[
-                static_cast<std::size_t>(index)] =
-                static_cast<float>(layerPattern.segments[index]);
-        }
-    }
     return true;
 }
 
@@ -805,8 +770,7 @@ bool makeViewportSurfaceOutlineStroke(
                                                 : QColor(Qt::black);
     *sceneStroke = {nullptr,
                     color,
-                    static_cast<float>(viewportLineWeightPixels(
-                        object.layerLineWeightMm)),
+                    1.0f,
                     false};
     sceneStroke->objectId = object.objectId;
     sceneStroke->cacheableGeometry = false;
@@ -1701,7 +1665,7 @@ bool ViewportSceneRenderer::draw(
             "uWorldOffset", QVector3D(stroke.worldOffset.x,
                                        stroke.worldOffset.y,
                                        stroke.worldOffset.z));
-        if (nextProgram == &program_) {
+        if (nextProgram != &pointProgram_) {
             const bool smoothWire =
                 stroke.smoothWireCategory ==
                         ViewportSmoothWireCategory::EditMode

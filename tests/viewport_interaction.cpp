@@ -2,7 +2,6 @@
 #include "ui/viewport/blender_grid_renderer.h"
 #include "ui/viewport/viewport_gpu_surface.h"
 #include "ui/viewport/viewport_depth_geometry.h"
-#include "ui/viewport/line_type_style.h"
 #include "ui/viewport/viewport_surface_renderer.h"
 #include "ui/viewport/navigation_controller.h"
 
@@ -2242,10 +2241,10 @@ int main(int argc, char **argv)
         source.append(point);
         Shape upperPoint = point;
         upperPoint.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 20.0);
-        const ObjectId upperId = source.append(upperPoint);
-        const LayerId targetLayer = source.createLayer(QStringLiteral("Snap target"));
-        source.moveObjectToLayer(upperId, targetLayer);
-        source.setLayerLocked(targetLayer, true);
+        SceneObject upperObject;
+        upperObject.geometry = upperPoint;
+        upperObject.hideSelect = true;
+        source.insertObject(source.size(), upperObject);
         ProjectViewportCameraSettings camera;
         camera.storedInProject = camera.view.storedInProject = true;
         camera.view.perspective = true;
@@ -2347,10 +2346,10 @@ int main(int argc, char **argv)
                 target.geometryType = GeometryType::Point;
                 target.points = {{anchor.x, anchor.y}};
                 target.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 20.0);
-                const auto targetId = source.append(target);
-                const auto targetLayer = source.createLayer(QStringLiteral("Snap target"));
-                source.moveObjectToLayer(targetId, targetLayer);
-                source.setLayerLocked(targetLayer, true);
+                SceneObject targetObject;
+                targetObject.geometry = target;
+                targetObject.hideSelect = true;
+                source.insertObject(source.size(), targetObject);
             }
             const int sourceCount = mode == 0 || mode == 3 ? 1 : 2;
             QString error;
@@ -3424,20 +3423,6 @@ int main(int argc, char **argv)
     passed &= check(viewport->viewPreset() == ViewportViewPreset::Custom,
                     "Shift plus the configured pan button must orbit the actual viewport camera");
 
-    const QColor rectangleLayerColor(36, 180, 220);
-    ViewportLayerCommandRequest rectangleColorRequest;
-    rectangleColorRequest.command = ViewportLayerCommand::SetColor;
-    QColor previousRectangleLayerColor;
-    for (const ViewportLayerInfo &layer : viewport->layerInfos()) {
-        if (layer.active) {
-            rectangleColorRequest.layerId = layer.id;
-            previousRectangleLayerColor = layer.color;
-            break;
-        }
-    }
-    rectangleColorRequest.color = rectangleLayerColor;
-    passed &= check(viewport->executeLayerCommand(rectangleColorRequest).accepted,
-                    "rectangle preview test must configure a distinct active layer color");
     const QImage beforeRectangle = captureViewport(viewport.get());
     viewport->setTool(ToolId::Rectangle);
     const QPointF rectangleStart(170.0, 290.0);
@@ -3458,11 +3443,8 @@ int main(int argc, char **argv)
     application.processEvents();
     const QImage rectanglePreview = captureViewport(viewport.get());
     saveGridCapture(QStringLiteral("rectangle-preview"), rectanglePreview);
-    if (QApplication::platformName() == QStringLiteral("xcb")) {
-        passed &= check(pixelsNearColor(rectanglePreview, rectangleLayerColor, 45) >
-                            pixelsNearColor(beforeRectangle, rectangleLayerColor, 45) + 20,
-                        "rectangle preview must use the active layer color in the native OpenGL viewport");
-    }
+    passed &= check(rectanglePreview != beforeRectangle,
+                    "rectangle preview must change the viewport frame");
     sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleWidth,
               Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     sendMouse(viewport.get(), QEvent::MouseButtonRelease, rectangleWidth,
@@ -3470,10 +3452,6 @@ int main(int argc, char **argv)
     viewport->setTool(ToolId::Select);
     application.processEvents();
     const QImage afterRectangle = captureViewport(viewport.get());
-    const QColor xrayLayerColor(
-        (rectangleLayerColor.red() + 55) / 2,
-        (rectangleLayerColor.green() + 55) / 2,
-        (rectangleLayerColor.blue() + 55) / 2);
     const auto orangePixels = [](const QImage &image) {
         int count = 0;
         for (int y = 0; y < image.height(); ++y) {
@@ -3486,12 +3464,8 @@ int main(int argc, char **argv)
         }
         return count;
     };
-    passed &= check(afterRectangle != beforeRectangle &&
-                        pixelsNearColor(afterRectangle, xrayLayerColor, 45) >
-                            pixelsNearColor(beforeRectangle, xrayLayerColor, 45) + 25,
-                    "committed X-Ray rectangle stroke must keep the active layer tint after viewport rendering");
-    rectangleColorRequest.color = previousRectangleLayerColor;
-    viewport->executeLayerCommand(rectangleColorRequest);
+    passed &= check(afterRectangle != beforeRectangle,
+                    "committed rectangle stroke must remain visible after viewport rendering");
 
     QTemporaryDir pictureDirectory;
     QImage pictureImage(64, 64, QImage::Format_ARGB32);
@@ -3690,158 +3664,64 @@ int main(int argc, char **argv)
                             "hardware-only viewport run must not use a software OpenGL renderer");
         }
 
-        const QSize gpuPatternSize(640, 480);
-        const QStringList gpuLayerLineTypes = standardLayerLineTypes();
-        QVector<Shape> gpuPatternShapes;
-        QVector<ViewportSceneStroke> gpuPatternStrokes;
-        QVector<qreal> gpuPatternWorldY;
-        gpuPatternShapes.reserve(gpuLayerLineTypes.size());
-        gpuPatternStrokes.reserve(gpuLayerLineTypes.size());
-        gpuPatternWorldY.reserve(gpuLayerLineTypes.size());
+        const QSize gpuPictureSize(640, 480);
         ViewportTransform gpuPatternTransform;
         gpuPatternTransform.setCameraPreferences(blenderCameraPreferences);
-        for (int index = 0; index < gpuLayerLineTypes.size(); ++index) {
-            const qreal rowY = 78.0 + index * 13.0;
-            Shape line;
-            line.geometryType = GeometryType::Line;
-            line.workPlane = WorkPlane::XY;
-            line.points = {
-                gpuPatternTransform.screenToWorld(QPointF(60.0, rowY),
-                                                  gpuPatternSize),
-                gpuPatternTransform.screenToWorld(QPointF(580.0, rowY),
-                                                  gpuPatternSize),
-            };
-            gpuPatternWorldY.append(line.points[0].y());
-            gpuPatternShapes.append(std::move(line));
-
-            const LayerGpuLinePattern layerPattern =
-                layerGpuLinePattern(gpuLayerLineTypes[index]);
-            ViewportSceneStroke stroke;
-            stroke.shape = &gpuPatternShapes.back();
-            stroke.color = QColor(245, 222, 112);
-            stroke.width = 2.0f;
-            stroke.linePatternScale = static_cast<float>(layerPattern.scale);
-            switch (layerPattern.kind) {
-            case LayerGpuLinePatternKind::Dashed:
-                stroke.lineStyle = ViewportSceneLineStyle::Dashed;
-                break;
-            case LayerGpuLinePatternKind::Dotted:
-                stroke.lineStyle = ViewportSceneLineStyle::Dotted;
-                break;
-            case LayerGpuLinePatternKind::Pattern:
-                stroke.lineStyle = ViewportSceneLineStyle::Pattern;
-                stroke.linePatternSegmentCount = static_cast<int>(
-                    layerPattern.segments.size());
-                for (int segmentIndex = 0;
-                     segmentIndex < stroke.linePatternSegmentCount;
-                     ++segmentIndex) {
-                    stroke.linePatternSegmentsWidthUnits[
-                        static_cast<std::size_t>(segmentIndex)] =
-                        static_cast<float>(layerPattern.segments[segmentIndex]);
-                }
-                break;
-            case LayerGpuLinePatternKind::Solid:
-            case LayerGpuLinePatternKind::Unsupported:
-                stroke.lineStyle = ViewportSceneLineStyle::Solid;
-                break;
-            }
-            gpuPatternStrokes.append(stroke);
-        }
-
         Shape gpuPicture;
         gpuPicture.geometryType = GeometryType::Picture;
         gpuPicture.workPlane = WorkPlane::XY;
         gpuPicture.points = {
             gpuPatternTransform.screenToWorld(QPointF(18.0, 18.0),
-                                              gpuPatternSize),
+                                              gpuPictureSize),
             gpuPatternTransform.screenToWorld(QPointF(54.0, 18.0),
-                                              gpuPatternSize),
+                                              gpuPictureSize),
             gpuPatternTransform.screenToWorld(QPointF(54.0, 54.0),
-                                              gpuPatternSize),
+                                              gpuPictureSize),
             gpuPatternTransform.screenToWorld(QPointF(18.0, 54.0),
-                                              gpuPatternSize),
+                                              gpuPictureSize),
         };
         gpuPicture.pictureImage = pictureImage;
         ViewportGpuSurface gpuSceneProbe;
-        gpuSceneProbe.resize(gpuPatternSize);
+        gpuSceneProbe.resize(gpuPictureSize);
         bool gpuPictureDrawSucceeded = false;
-        bool gpuPatternDrawSucceeded = false;
         gpuSceneProbe.setDrawCallback(
             [&gpuPicture,
              &gpuPictureDrawSucceeded,
-             &gpuPatternDrawSucceeded,
-             &gpuPatternStrokes,
              &gpuPatternTransform,
-             &gpuPatternSize](QPainter &painter,
+             &gpuPictureSize](QPainter &painter,
                              BlenderGridRenderer &,
                              ViewportSceneRenderer &sceneRenderer,
                              ViewportSceneRenderer &,
                              ViewportControlPointRenderer &,
                              ViewportSurfaceRenderer &) {
-                painter.fillRect(QRect(QPoint(0, 0), gpuPatternSize),
+                painter.fillRect(QRect(QPoint(0, 0), gpuPictureSize),
                                  QColor(34, 34, 34));
                 painter.beginNativePainting();
                 gpuPictureDrawSucceeded = sceneRenderer.drawPicture(
-                    gpuPicture, gpuPatternTransform, gpuPatternSize, 1.0, 1.0f);
-                gpuPatternDrawSucceeded = sceneRenderer.draw(
-                    gpuPatternStrokes, gpuPatternTransform, gpuPatternSize, 1.0);
+                    gpuPicture, gpuPatternTransform, gpuPictureSize, 1.0, 1.0f);
                 painter.endNativePainting();
             });
         gpuSceneProbe.show();
         application.processEvents();
         const QImage gpuSceneProbeImage = gpuSceneProbe.grabFramebuffer();
-        saveGridCapture(QStringLiteral("stage7-gpu-picture-and-layer-styles"),
+        saveGridCapture(QStringLiteral("stage7-gpu-picture"),
                         gpuSceneProbeImage);
         const QColor gpuPictureRed = gpuSceneProbeImage.pixelColor(28, 28);
         const QColor gpuPictureBlue = gpuSceneProbeImage.pixelColor(28, 44);
         const QColor gpuPictureYellow = gpuSceneProbeImage.pixelColor(44, 44);
         const QColor gpuPictureTransparent = gpuSceneProbeImage.pixelColor(44, 28);
-        const int solidStylePixelCount = [&]() {
-            const QPointF screenPoint = gpuPatternTransform.workPlaneToScreen(
-                QPointF(0.0, gpuPatternWorldY.first()),
-                gpuPatternSize,
-                WorkPlane::XY);
-            int count = 0;
-            const int row = qRound(screenPoint.y());
-            for (int x = 60; x < 580; ++x) {
-                const QColor pixel = gpuSceneProbeImage.pixelColor(x, row);
-                count += pixel.red() > 180 && pixel.green() > 150 &&
-                         pixel.blue() < 170;
-            }
-            return count;
-        }();
-        bool allGpuPatternsVisible = solidStylePixelCount > 400;
-        bool patternedStylesHaveGaps = true;
-        for (int index = 1; index < gpuPatternWorldY.size(); ++index) {
-            const QPointF screenPoint = gpuPatternTransform.workPlaneToScreen(
-                QPointF(0.0, gpuPatternWorldY[index]),
-                gpuPatternSize,
-                WorkPlane::XY);
-            const int row = qRound(screenPoint.y());
-            int count = 0;
-            for (int x = 60; x < 580; ++x) {
-                const QColor pixel = gpuSceneProbeImage.pixelColor(x, row);
-                count += pixel.red() > 180 && pixel.green() > 150 &&
-                         pixel.blue() < 170;
-            }
-            allGpuPatternsVisible &= count > 10;
-            patternedStylesHaveGaps &= count < solidStylePixelCount - 10;
-        }
         const QColor gpuPictureBackground(34, 34, 34);
         const bool transparentPictureKeepsBackground =
             std::abs(gpuPictureTransparent.red() - gpuPictureBackground.red()) <= 8 &&
             std::abs(gpuPictureTransparent.green() - gpuPictureBackground.green()) <= 8 &&
             std::abs(gpuPictureTransparent.blue() - gpuPictureBackground.blue()) <= 8;
         passed &= check(gpuSceneProbe.isValid() && gpuPictureDrawSucceeded &&
-                            gpuPatternDrawSucceeded &&
                             gpuPictureRed.red() > gpuPictureRed.green() + 60 &&
                             gpuPictureBlue.blue() > gpuPictureBlue.red() + 60 &&
                             gpuPictureYellow.red() > 150 &&
                             gpuPictureYellow.green() > 150 &&
                             transparentPictureKeepsBackground,
                         "native picture shader must draw committed RGBA pixels and preserve transparent areas");
-        passed &= check(allGpuPatternsVisible && patternedStylesHaveGaps,
-                        "native stroke shader must visibly draw every built-in CAD layer line style with the expected gaps");
         gpuSceneProbe.hide();
 
         BlenderGridRenderer gridRenderer;
@@ -4069,11 +3949,6 @@ int main(int argc, char **argv)
         if (qEnvironmentVariableIsSet("CLASSICAD_RUN_LARGE_GPU_CHECKS")) {
             constexpr int largeSceneStrokeCount = 1500;
             Document largeGpuDocument;
-            const LayerId largeSceneLayer = largeGpuDocument.activeLayerId();
-            largeGpuDocument.setLayerLineType(largeSceneLayer,
-                                              QStringLiteral("Continuous"));
-            largeGpuDocument.setLayerColor(largeSceneLayer,
-                                           QColor(245, 222, 112));
             for (int index = 0; index < largeSceneStrokeCount; ++index) {
                 const qreal y = -240.0 +
                                 480.0 * index /

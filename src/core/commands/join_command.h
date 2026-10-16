@@ -19,7 +19,6 @@ bool buildJoinCommandPlan(
     const WorkPlaneFrame &joinFrame,
     WorkPlane joinWorkPlane,
     qreal joinWorkPlaneOffset,
-    LayerId joinedLayerId,
     const QVector<ObjectId> &sourceObjectIds,
     int insertionIndex,
     JoinCommandPlan *plan);

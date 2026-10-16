@@ -1,6 +1,5 @@
 #pragma once
 
-#include "layer_id.h"
 #include "collection_id.h"
 #include "object_id.h"
 
@@ -13,12 +12,10 @@ namespace classiCAD {
 // caches need to invalidate.
 struct DocumentChangeSet {
     QVector<ObjectId> objectIds;
-    QVector<LayerId> layerIds;
     QVector<CollectionId> collectionIds;
     bool geometryChanged = false;
     bool placementChanged = false;
     bool structureChanged = false;
-    bool layerPropertiesChanged = false;
     bool visibilityChanged = false;
     bool settingsChanged = false;
     bool objectAppearanceChanged = false;
@@ -28,9 +25,9 @@ struct DocumentChangeSet {
 
     bool isEmpty() const
     {
-        return objectIds.isEmpty() && layerIds.isEmpty() && collectionIds.isEmpty() &&
+        return objectIds.isEmpty() && collectionIds.isEmpty() &&
                !geometryChanged && !placementChanged && !structureChanged &&
-               !layerPropertiesChanged && !visibilityChanged &&
+               !visibilityChanged &&
                !settingsChanged && !objectAppearanceChanged &&
                !materialsChanged && !collectionsChanged &&
                !selectionChanged;
@@ -39,14 +36,13 @@ struct DocumentChangeSet {
     bool affectsPersistentDocument() const
     {
         return geometryChanged || placementChanged || structureChanged ||
-               layerPropertiesChanged || visibilityChanged || settingsChanged ||
+               visibilityChanged || settingsChanged ||
                objectAppearanceChanged || materialsChanged || collectionsChanged;
     }
 
-    bool affectsLayerPresentation() const
+    bool affectsScenePresentation() const
     {
-        return structureChanged || layerPropertiesChanged ||
-               visibilityChanged || collectionsChanged || !layerIds.isEmpty() ||
+        return structureChanged || visibilityChanged || collectionsChanged ||
                !collectionIds.isEmpty() || settingsChanged;
     }
 
@@ -55,14 +51,6 @@ struct DocumentChangeSet {
         if (id.isValid() && !objectIdValues_.contains(id.value())) {
             objectIdValues_.insert(id.value());
             objectIds.append(id);
-        }
-    }
-
-    void addLayer(LayerId id)
-    {
-        if (id.isValid() && !layerIdValues_.contains(id.value())) {
-            layerIdValues_.insert(id.value());
-            layerIds.append(id);
         }
     }
 
@@ -76,7 +64,6 @@ struct DocumentChangeSet {
 
 private:
     QSet<quint64> objectIdValues_;
-    QSet<quint64> layerIdValues_;
     QSet<quint64> collectionIdValues_;
 };
 

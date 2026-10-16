@@ -73,19 +73,16 @@ int main(int argc, char **argv)
     bool passed = true;
 
     Document source;
-    const LayerId drawingLayer = source.createLayer(QStringLiteral("Drawing"));
-    passed &= check(drawingLayer.isValid() && source.setActiveLayer(drawingLayer),
-                    "test document must be able to create and activate a layer");
-    source.setLayerColor(drawingLayer, QColor(QStringLiteral("#629fd1")));
-    source.setLayerLineType(drawingLayer, QStringLiteral("DASHED"));
-    source.setLayerLineWeight(drawingLayer, 0.35);
-    source.setLayerDescription(drawingLayer, QStringLiteral("round-trip test layer"));
+    const CollectionId drawingCollection = source.createCollection(QStringLiteral("Drawing"));
+    passed &= check(drawingCollection.isValid(),
+                    "test document must be able to create a Blender collection");
 
     Shape circle;
     circle.geometryType = GeometryType::Circle;
     circle.points = {QPointF(12.0, -4.0), QPointF(22.0, -4.0)};
     circle.nurbs = makeCircleNurbs(circle.points);
     const ObjectId circleId = source.append(circle);
+    source.setObjectCollections(circleId, {drawingCollection});
 
     Shape line;
     line.geometryType = GeometryType::Line;
@@ -93,7 +90,8 @@ int main(int argc, char **argv)
     line.nurbs = makeDegreeOneNurbs(line.points);
     line.workPlane = WorkPlane::XZ;
     line.workPlaneOffset = 2.5;
-    source.append(line);
+    const ObjectId lineId = source.append(line);
+    source.setObjectCollections(lineId, {drawingCollection});
 
     Shape dimension;
     dimension.geometryType = GeometryType::LinearDimension;
@@ -109,7 +107,8 @@ int main(int argc, char **argv)
                                  0,
                                  -1,
                                  0.75}};
-    source.append(dimension);
+    const ObjectId dimensionId = source.append(dimension);
+    source.setObjectCollections(dimensionId, {drawingCollection});
 
     Shape picture;
     picture.geometryType = GeometryType::Picture;
@@ -119,7 +118,8 @@ int main(int argc, char **argv)
                       QPointF(-12.0, 3.0)};
     picture.pictureImage = QImage(4, 2, QImage::Format_ARGB32);
     picture.pictureImage.fill(QColor(QStringLiteral("#4c86b8")));
-    source.append(picture);
+    const ObjectId pictureId = source.append(picture);
+    source.setObjectCollections(pictureId, {drawingCollection});
 
     Shape solid;
     solid.geometryType = GeometryType::NurbsSolid;
@@ -138,7 +138,7 @@ int main(int argc, char **argv)
     materialSnapshot.materials.append(wallMaterial);
     source.restoreSnapshot(materialSnapshot);
     SceneObject solidObject;
-    solidObject.layerId = source.activeLayerId();
+    solidObject.collectionIds = {drawingCollection};
     solidObject.geometry = solid;
     solidObject.nurbsSolidFaceMaterialIds.insert(
         solid.nurbsSolid.baseCapFaceId, capMaterial.id);
@@ -338,15 +338,24 @@ int main(int argc, char **argv)
                         !importReport.warningMessage.isEmpty(),
                     "Rhino import must explicitly report skipped non-planar geometry");
 
-    const Layer *importedLayer = nullptr;
-    for (const Layer &layer : importTarget.layers()) {
-        if (layer.name == QStringLiteral("Imported Layer")) {
-            importedLayer = &layer;
+    const DocumentCollection *importedCollection = nullptr;
+    for (const DocumentCollection &collection : importTarget.collections()) {
+        if (collection.name == QStringLiteral("Imported Layer")) {
+            importedCollection = &collection;
             break;
         }
     }
-    passed &= check(importedLayer != nullptr && importedLayer->color == QColor(40, 120, 210),
-                    "Rhino import must preserve source layer names and colors");
+    passed &= check(importedCollection != nullptr,
+                    "Rhino import must preserve source layer names as collection names");
+    bool importedObjectsUseCollection = false;
+    if (importedCollection != nullptr) {
+        for (const SceneObject &object : importTarget.objects()) {
+            importedObjectsUseCollection = importedObjectsUseCollection ||
+                object.collectionIds.contains(importedCollection->id);
+        }
+    }
+    passed &= check(importedObjectsUseCollection,
+                    "Rhino import must assign imported objects to their source-layer collection");
 
     bool foundRationalCurve = false;
     bool foundScaledPoint = false;

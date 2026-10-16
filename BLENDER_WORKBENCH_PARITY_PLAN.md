@@ -9995,3 +9995,14 @@ scene depth.
   ObjectId-only HSV color. The resulting wire color continues to bypass the
   Workbench scene color transform, as Blender's wire overlay does. Build passed;
   no matched Blender wire-color image comparison has been run.
+
+### SMAA luma edge weights (2026-10-16)
+
+- GPU SMAA edge detection now uses Blender's Rec.709 luma weights for RGB and
+  ignores alpha, matching Blender 5.2.2's shared SMAA library default. Alpha-only
+  transitions therefore no longer create false SMAA edges. The Workbench call
+  is in
+  [`workbench_effect_smaa_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_smaa_frag.glsl#L16-L19),
+  and the weight definition is in
+  [`gpu_shader_smaa_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/shaders/common/gpu_shader_smaa_lib.glsl#L696-L725).
+  Build passed; matched SMAA edge captures remain open.

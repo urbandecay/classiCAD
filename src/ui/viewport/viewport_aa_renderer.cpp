@@ -277,7 +277,7 @@ QByteArray smaaShaderPreamble(int stage)
         "#define SMAA_PRESET_HIGH\n"
         "#define SMAA_NO_DISCARD\n"
         "#define SMAA_RT_METRICS viewport_metrics\n"
-        "#define SMAA_LUMA_WEIGHT vec4(1.0f, 1.0f, 1.0f, 1.0f)\n"
+        "#define SMAA_LUMA_WEIGHT vec4(0.2126f, 0.7152f, 0.0722f, 0.0f)\n"
         "uniform vec4 viewport_metrics;\n"
         "#define SMAA_STAGE ");
     source += QByteArray::number(stage);

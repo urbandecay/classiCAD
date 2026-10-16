@@ -3870,7 +3870,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             return false;
         }
         const float normalizedDepth = clip.z() / clip.w() * 0.5f + 0.5f;
-        return normalizedDepth <= 1.0e-6f;
+        // Blender's cavity kernel skips only the exact near-plane depth
+        // sample (zero); positive depth values, however close to zero, still
+        // run World SSAO. Keep the clip-coordinate validity guard above while
+        // matching that depth test here.
+        return normalizedDepth <= 0.0f;
     };
     QVector<float> factors(width * height, 1.0f);
     const float ridge = std::max(0.0f,

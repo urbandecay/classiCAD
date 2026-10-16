@@ -10090,6 +10090,18 @@ scene depth.
   cavity attachments while keeping transparent surfaces out of cavity input.
   Build passed; matched in-front cavity captures remain open.
 
+### QPainter cavity near-plane cutoff (2026-10-16)
+
+- The software World/Both cavity path now skips SSAO only for receivers at or
+  behind normalized depth zero, after retaining the existing finite clip
+  checks. It previously skipped every receiver up through depth `1e-6`, while
+  Blender 5.2.2's cavity kernel skips only depth values exactly at zero (and
+  background depth one). Positive samples very close to the near plane now
+  receive the same SSAO evaluation as ordinary visible samples. This only
+  affects the narrow near-plane range; matched cavity captures remain open.
+  Blender reference:
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L463-L469).
+
 ### QPainter preserves in-front shadow factors at coverage edges (2026-10-16)
 
 - The bounded scene-linear compositor now retains regular and in-front opaque

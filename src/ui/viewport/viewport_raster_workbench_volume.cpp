@@ -12,17 +12,26 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <unordered_set>
+#include <map>
 
 namespace classiCAD {
 namespace {
 
 constexpr std::uint64_t kMaxDenseVoxels = 16ull * 1024ull * 1024ull;
 constexpr qsizetype kMaxSamples = 1'000'000;
+constexpr std::size_t kMaxSliceCandidateTests = 8'000'000;
+const std::array<QPointF, 4> kSliceSubpixelOffsets{{
+    QPointF(0.25, 0.25), QPointF(0.75, 0.25),
+    QPointF(0.25, 0.75), QPointF(0.75, 0.75)}};
 
 struct Vec3 { double x, y, z; };
 struct Vertex { QPointF screen; Vec3 grid; double cameraDepth; double projectionDepth; };
 struct SliceVertex { Vec3 world; Vec3 grid; double cameraDepth; };
+struct SliceCoverageAccumulator {
+    unsigned char sampleMask = 0;
+    std::array<double, 4> density{};
+    std::array<double, 4> cameraDepth{};
+};
 
 Vec3 mapPoint(const ScalarVolumeMatrix &m, Vec3 p)
 {
@@ -91,9 +100,8 @@ float sampleDensity(const QVector<float> &data, int nx, int ny, int nz,
 bool rasterTriangle(const std::array<Vertex,3> &v, qreal dpr,
                     int width, int height, const QVector<float> &dense,
                     int nx,int ny,int nz,const ScalarVolume3D &volume,
-                    QVector<RasterWorkbenchVolumeSliceSample> *out,
-                    std::unordered_set<std::uint64_t> *seen,
-                    float stepWorld)
+                    std::map<std::uint64_t, SliceCoverageAccumulator> *coverage,
+                    std::size_t *candidateTests)
 {
     std::array<QPointF,3> p;
     for(int i=0;i<3;++i) p[i]=v[i].screen*dpr;
@@ -105,7 +113,14 @@ bool rasterTriangle(const std::array<Vertex,3> &v, qreal dpr,
     const int minY=std::max(0,int(std::floor(std::min({p[0].y(),p[1].y(),p[2].y()}))));
     const int maxY=std::min(height-1,int(std::ceil(std::max({p[0].y(),p[1].y(),p[2].y()}))));
     for(int y=minY;y<=maxY;++y) for(int x=minX;x<=maxX;++x) {
-        const double sx=x+0.5, sy=y+0.5;
+      if (candidateTests == nullptr ||
+          *candidateTests > kMaxSliceCandidateTests -
+                                kSliceSubpixelOffsets.size()) return false;
+      *candidateTests += kSliceSubpixelOffsets.size();
+      for (int sampleIndex = 0; sampleIndex < int(kSliceSubpixelOffsets.size());
+           ++sampleIndex) {
+        const double sx=x+kSliceSubpixelOffsets[sampleIndex].x();
+        const double sy=y+kSliceSubpixelOffsets[sampleIndex].y();
         const double b0=((p[1].x()-sx)*(p[2].y()-sy)-(p[1].y()-sy)*(p[2].x()-sx))/area;
         const double b1=((p[2].x()-sx)*(p[0].y()-sy)-(p[2].y()-sy)*(p[0].x()-sx))/area;
         const double b2=1.0-b0-b1;
@@ -118,14 +133,19 @@ bool rasterTriangle(const std::array<Vertex,3> &v, qreal dpr,
                w0*v[0].grid.y+w1*v[1].grid.y+w2*v[2].grid.y,
                w0*v[0].grid.z+w1*v[1].grid.z+w2*v[2].grid.z};
         const std::uint64_t key=std::uint64_t(y)*std::uint64_t(width)+std::uint64_t(x);
-        if(!seen->insert(key).second) continue;
-        if(out->size()>=kMaxSamples) return false;
+        auto [accumulatorIterator, inserted] = coverage->try_emplace(key);
+        if (inserted && coverage->size() >
+                            static_cast<std::size_t>(kMaxSamples)) return false;
+        SliceCoverageAccumulator &accumulator = accumulatorIterator->second;
+        const unsigned char sampleBit = static_cast<unsigned char>(1u << sampleIndex);
+        if (accumulator.sampleMask & sampleBit) continue;
         const double depth=w0*v[0].cameraDepth+w1*v[1].cameraDepth+w2*v[2].cameraDepth;
-        RasterWorkbenchVolumeSliceSample sample;
-        sample.x=x; sample.y=y; sample.cameraDepth=float(depth);
-        sample.density=sampleDensity(dense,nx,ny,nz,volume.interpolationMethod,g,volume);
-        sample.sliceStepWorld=stepWorld;
-        out->append(sample);
+        accumulator.sampleMask = static_cast<unsigned char>(
+            accumulator.sampleMask | sampleBit);
+        accumulator.cameraDepth[static_cast<std::size_t>(sampleIndex)] = depth;
+        accumulator.density[static_cast<std::size_t>(sampleIndex)] =
+            sampleDensity(dense,nx,ny,nz,volume.interpolationMethod,g,volume);
+      }
     }
     return true;
 }
@@ -227,7 +247,8 @@ bool rasterWorkbenchVolumeSliceSamples(
     const qint64 height = qRound64(heightPixels);
     if (width <= 0 || height <= 0 ||
         width > kMaximumRasterPixels / height) return false;
-    std::unordered_set<std::uint64_t> seen;
+    std::map<std::uint64_t, SliceCoverageAccumulator> coverage;
+    std::size_t candidateTests = 0;
     const double nearDepth=std::max(1.0e-9,camera.cameraPreferences().clipStart);
     const auto rasterClippedTriangle=[&](const std::array<SliceVertex,3> &triangle) {
         std::array<SliceVertex,4> clipped{};
@@ -264,12 +285,41 @@ bool rasterWorkbenchVolumeSliceSamples(
         }
         for(int i=1;i+1<clippedCount;++i){
             if(!rasterTriangle({projectedVertices[0],projectedVertices[i],projectedVertices[i+1]},
-                               devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,samples,&seen,step))return false;
+                               devicePixelRatio,int(width),int(height),dense,nx,ny,nz,v,
+                               &coverage,&candidateTests))return false;
         }
         return true;
     };
     const std::array<SliceVertex,3> t0{vertices[0],vertices[1],vertices[3]}, t1{vertices[0],vertices[3],vertices[2]};
     if(!rasterClippedTriangle(t0)||!rasterClippedTriangle(t1)){samples->clear();return false;}
+    if (coverage.size() > static_cast<std::size_t>(kMaxSamples)) {
+        samples->clear();
+        return false;
+    }
+    samples->reserve(static_cast<qsizetype>(std::min(
+        coverage.size() * kSliceSubpixelOffsets.size(),
+        static_cast<std::size_t>(kMaxSamples))));
+    for (const auto &[key, accumulator] : coverage) {
+        for (int sampleIndex = 0;
+             sampleIndex < int(kSliceSubpixelOffsets.size()); ++sampleIndex) {
+            if ((accumulator.sampleMask &
+                 static_cast<unsigned char>(1u << sampleIndex)) == 0) continue;
+            if (samples->size() >= kMaxSamples) {
+                samples->clear();
+                return false;
+            }
+            RasterWorkbenchVolumeSliceSample sample;
+            sample.x = static_cast<int>(key % static_cast<std::uint64_t>(width));
+            sample.y = static_cast<int>(key / static_cast<std::uint64_t>(width));
+            sample.cameraDepth = static_cast<float>(
+                accumulator.cameraDepth[static_cast<std::size_t>(sampleIndex)]);
+            sample.density = static_cast<float>(
+                accumulator.density[static_cast<std::size_t>(sampleIndex)]);
+            sample.sliceStepWorld = step;
+            sample.sampleIndex = sampleIndex;
+            samples->append(sample);
+        }
+    }
     return !samples->isEmpty();
 }
 

@@ -857,6 +857,7 @@ bool compositeRasterWorkbenchSurfaces(
     struct VolumeSlicePixel {
         float depth = 0.0f;
         int objectOrder = 0;
+        int sampleIndex = -1;
         RasterWorkbenchLinearPixel color;
         bool depthPreClipped = false;
     };
@@ -931,7 +932,8 @@ bool compositeRasterWorkbenchSurfaces(
             if (sample.x < 0 || sample.x >= width || sample.y < 0 ||
                 sample.y >= height || !std::isfinite(sample.cameraDepth) ||
                 !std::isfinite(sample.density) ||
-                !std::isfinite(sample.sliceStepWorld)) continue;
+                !std::isfinite(sample.sliceStepWorld) ||
+                sample.sampleIndex < 0 || sample.sampleIndex >= 4) continue;
             const float density = sample.density * densityScale;
             const float extinction = std::max(density, 1.0e-4f);
             const float alpha = 1.0f - std::exp(
@@ -940,6 +942,7 @@ bool compositeRasterWorkbenchSurfaces(
             VolumeSlicePixel pixel;
             pixel.depth = sample.cameraDepth;
             pixel.objectOrder = objectOrder;
+            pixel.sampleIndex = sample.sampleIndex;
             pixel.color = {baseColor.x() * alpha * scatterScale * 0.25f,
                            baseColor.y() * alpha * scatterScale * 0.25f,
                            baseColor.z() * alpha * scatterScale * 0.25f,
@@ -965,16 +968,26 @@ bool compositeRasterWorkbenchSurfaces(
             occlusionDepth = std::min(occlusionDepth, opaqueDepth);
         if (std::isfinite(transparentDepth))
             occlusionDepth = std::min(occlusionDepth, transparentDepth);
-        for (const VolumeSlicePixel &slice : slices) {
-            if (!slice.depthPreClipped && slice.depth >= occlusionDepth)
-                continue;
-            const float remain = 1.0f - slice.color.alpha;
-            base = {slice.color.red + base.red * remain,
-                    slice.color.green + base.green * remain,
-                    slice.color.blue + base.blue * remain,
-                    slice.color.alpha + base.alpha * remain};
+        RasterWorkbenchLinearPixel average{};
+        for (int sampleIndex = 0; sampleIndex < 4; ++sampleIndex) {
+            RasterWorkbenchLinearPixel subsample = base;
+            for (const VolumeSlicePixel &slice : slices) {
+                if (slice.sampleIndex >= 0 &&
+                    slice.sampleIndex != sampleIndex) continue;
+                if (!slice.depthPreClipped && slice.depth >= occlusionDepth)
+                    continue;
+                const float remain = 1.0f - slice.color.alpha;
+                subsample = {slice.color.red + subsample.red * remain,
+                             slice.color.green + subsample.green * remain,
+                             slice.color.blue + subsample.blue * remain,
+                             slice.color.alpha + subsample.alpha * remain};
+            }
+            average.red += subsample.red * 0.25f;
+            average.green += subsample.green * 0.25f;
+            average.blue += subsample.blue * 0.25f;
+            average.alpha += subsample.alpha * 0.25f;
         }
-        return base;
+        return average;
     };
     constexpr std::size_t kMaximumVolumeRayIntegrationSamples = 4'000'000;
     const auto appendRayMarchSamples = [&](const QVector<float> &sceneDepth,

@@ -18,6 +18,8 @@ struct RasterWorkbenchVolumeSliceSample {
     float cameraDepth = 0.0f;
     float density = 0.0f;
     float sliceStepWorld = 0.0f;
+    // Index of the quarter-pixel sample; absent samples are transparent.
+    int sampleIndex = 0;
 };
 
 // One physically bounded ray-marched scalar-volume contribution per pixel.

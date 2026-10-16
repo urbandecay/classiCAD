@@ -5159,6 +5159,20 @@ resolve remain open.
   per volume, and 4M aggregate integration samples per composition;
   multiple/vector grids, animation, and larger bounds remain unsupported.
 
+### QPainter scalar-volume slice subpixel coverage (2026-10-15)
+
+- Slice triangles now sample four quarter-pixel locations and retain each
+  covered sample's density and camera depth. Each sample runs its own
+  Beer–Lambert opacity and regular-scene depth check before the four resolved
+  colors are averaged, avoiding a nonlinear density average at heterogeneous
+  slice edges. A per-pixel candidate-work cap bounds large projected triangles
+  at eight million subpixel tests; retained samples remain capped at one
+  million. This reduces center-sample edge stair-stepping for oblique and thin
+  slices, while remaining a four-sample approximation of Blender's
+  per-fragment volume shader. `cmake --build build -j4` passed. Matched
+  Blender slice captures remain open. Blender reference:
+  [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L1607-L1675).
+
 ### QPainter scalar-volume object composition order (2026-10-14)
 
 - Per-pixel QPainter volume contributions now follow the incoming scalar-volume

@@ -5110,7 +5110,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         const RasterWorkbenchDofTap &tap = dofKernel[kernelIndex];
                         const qreal sx = x + gatherOriginOffset.x() +
                                          tap.position.x() * radius;
-                        const qreal sy = y + gatherOriginOffset.y() +
+                        // Blender's blur kernel uses bottom-up texture Y;
+                        // the retained QPainter mip images are top-down.
+                        // Reverse both jitter and aperture offsets when
+                        // mapping them into the CPU image coordinates.
+                        const qreal sy = y - gatherOriginOffset.y() -
                                          tap.position.y() * radius;
                         // Blender chooses the source-color mip from its
                         // prepared half-resolution CoC texture. Keep the

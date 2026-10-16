@@ -10081,6 +10081,16 @@ scene depth.
   the same visible-depth selection. Build passed; matched in-front DOF captures
   remain open.
 
+### QPainter DOF vertical gather coordinates (2026-10-16)
+
+- The software depth-of-field gather now reverses the vertical aperture and
+  jitter offsets when sampling its top-down CPU mip images. Blender's kernel
+  coordinates are bottom-up texture Y, so adding their Y offsets directly to
+  QPainter rows mirrored the bokeh pattern vertically. The horizontal gather,
+  kernel shape, weights, and sample budget are unchanged. Blender reference:
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L408-L421).
+  Build passed; matched QPainter DOF captures remain open.
+
 ### QPainter cavity uses combined in-front depth (2026-10-16)
 
 - The software cavity resolve now builds its opaque depth/normal samples from

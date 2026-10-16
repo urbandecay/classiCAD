@@ -9047,14 +9047,20 @@ resolve remain open.
   is reversed. C++ build passed; a matched reflected-mesh Blender capture has
   not been run.
 
-### QPainter software shadow texture cutouts (2026-10-15)
+### QPainter software shadow texture-alpha correction (2026-10-15)
 
-- Software shadow-map casters now carry the same per-triangle texture alpha
-  data as the QPainter receiver raster. The light-map pass interpolates UVs
-  across each caster triangle and skips texels below the existing 0.1 alpha
-  cutoff, including supported packed, float, and UDIM image data. Alpha modes
-  that Blender ignores remain solid casters. C++ build passed; a matched
-  cutout-shadow comparison has not been run.
+- A later audit found that a recent change had made QPainter discard shadow-map
+  caster texels below the color pass's 0.1 texture-alpha cutoff. Blender's
+  Workbench shadow pass draws geometry-based shadow volumes and never samples
+  image UV alpha. That software shadow-map cutoff has been removed; QPainter,
+  the GPU shadow-volume path, and the GPU depth-map fallback now cast complete
+  triangles through texture holes. Color, cavity, and outline alpha cutouts
+  remain active in their own passes. Blender source references are
+  [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L1720-L1790)
+  and
+  [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh).
+  The software shadow algorithm remains an approximation; matched cutout-shadow
+  comparison has not been run.
 
 ### Saved Blender viewport shading mode (2026-10-15)
 

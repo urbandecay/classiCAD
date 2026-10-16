@@ -73,8 +73,9 @@ import. `font_objects_meshed` counts evaluated FONT objects included in
 
 Each scene record contains `workbench_shading`, copied from Blender 5.2.2
 `Scene.display.shading` plus its enclosing `SceneDisplay` values. It carries
-`SceneDisplay.viewport_aa` separately from render AA, plus the Solid light and
-studio-light selection, color/background modes and colors,
+`SceneDisplay.viewport_aa` separately from render AA (`OFF`, `FXAA`, or 5, 8,
+11, 16, or 32 samples), plus the Solid light and studio-light selection,
+color/background modes and colors,
 shadow/cavity/curvature/outline/specular controls, world-space lighting,
 backface culling, X-Ray, camera DOF, light direction, and scene AO/shadow
 controls. Its `unsupported` array names source settings that classiCAD does not

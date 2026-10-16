@@ -1658,8 +1658,8 @@ bool ViewportSceneRenderer::draw(
             // do not layer the generic constant nudge on top. Edit Mode edges
             // keep their separate fixed offset regardless of smoothing.
             const bool depthBiasEnabled =
-                stroke.smoothWireCategory == ViewportSmoothWireCategory::EditMode ||
-                (smoothOverlayWires && !stroke.blenderMeshWire);
+                stroke.smoothWireCategory ==
+                ViewportSmoothWireCategory::EditMode;
             boundProgram->setUniformValue(
                 "uDepthBias", depthTest && depthBiasEnabled ? 1.0e-5f : 0.0f);
             // Antialias coverage has the same color-space meaning for curve

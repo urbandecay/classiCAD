@@ -966,6 +966,14 @@ QJsonObject shapeToJson(const Shape &shape)
         object.insert(QStringLiteral("pictureImageDepth"), pictureDepth);
         object.insert(QStringLiteral("pictureCameraViewOnly"),
                       shape.pictureCameraViewOnly);
+        if (shape.pictureCameraLocalCorners.size() == 4) {
+            QJsonArray localCorners;
+            for (const Point3D &corner : shape.pictureCameraLocalCorners) {
+                localCorners.append(QJsonArray{corner.x, corner.y, corner.z});
+            }
+            object.insert(QStringLiteral("pictureCameraLocalCorners"),
+                          localCorners);
+        }
         object.insert(QStringLiteral("pictureColorSceneLinear"),
                       QJsonArray{shape.pictureColorSceneLinear.x(),
                                  shape.pictureColorSceneLinear.y(),
@@ -1152,6 +1160,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     bool pictureShowOrthographic = true;
     bool pictureOnlyAxisAligned = false;
     bool pictureCameraViewOnly = false;
+    QVector<Point3D> pictureCameraLocalCorners;
     PictureImageSide pictureImageSide = PictureImageSide::Both;
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
     QVector4D pictureColorSceneLinear(1.0f, 1.0f, 1.0f, 1.0f);
@@ -1184,6 +1193,25 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             !readBoolean(QStringLiteral("pictureCameraViewOnly"), false,
                          &pictureCameraViewOnly)) {
             return false;
+        }
+        const QJsonValue cameraLocalCornersValue = object.value(
+            QStringLiteral("pictureCameraLocalCorners"));
+        if (!cameraLocalCornersValue.isUndefined()) {
+            if (!cameraLocalCornersValue.isArray() ||
+                cameraLocalCornersValue.toArray().size() != 4) return false;
+            for (const QJsonValue &cornerValue :
+                 cameraLocalCornersValue.toArray()) {
+                if (!cornerValue.isArray() ||
+                    cornerValue.toArray().size() != 3) return false;
+                const QJsonArray coordinates = cornerValue.toArray();
+                for (const QJsonValue &coordinate : coordinates) {
+                    if (!coordinate.isDouble() ||
+                        !std::isfinite(coordinate.toDouble())) return false;
+                }
+                pictureCameraLocalCorners.append(
+                    {coordinates[0].toDouble(), coordinates[1].toDouble(),
+                     coordinates[2].toDouble()});
+            }
         }
         const QJsonValue pictureColorValue =
             object.value(QStringLiteral("pictureColorSceneLinear"));
@@ -1562,6 +1590,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureShowOrthographic = pictureShowOrthographic;
     shape->pictureOnlyAxisAligned = pictureOnlyAxisAligned;
     shape->pictureCameraViewOnly = pictureCameraViewOnly;
+    shape->pictureCameraLocalCorners = pictureCameraLocalCorners;
     shape->pictureImageSide = pictureImageSide;
     shape->pictureImageDepth = pictureImageDepth;
     shape->pictureColorSceneLinear = pictureColorSceneLinear;

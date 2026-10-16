@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 24
+BRIDGE_FORMAT_VERSION = 25
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -979,6 +979,10 @@ def extract_camera_background_images(scene, packed_payload_budget,
                                   for collection in camera.users_collection]
         item["picture_corners_world"] = [vector_values(point)
                                           for point in corners_world]
+        camera_world_inverse = evaluated.matrix_world.inverted_safe()
+        item["picture_camera_local_corners"] = [
+            vector_values(camera_world_inverse @ point)
+            for point in corners_world]
         item["picture_camera_view_only"] = True
         item["picture_use_alpha_blend"] = True
         item["empty_image_depth"] = picture_depth

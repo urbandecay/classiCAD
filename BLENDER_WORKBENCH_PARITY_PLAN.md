@@ -9132,5 +9132,9 @@ resolve remain open.
   setting through their synthetic Image Empty source. The transformed images
   still composite as overlays after the main scene transform, so transparent
   image edges can differ from Blender's scene-linear alpha-under compositing.
-  The extractor bridge is version 24. C++ build passed; matched image captures
-  have not been run.
+  Camera background quads also retain their source camera-local corners;
+  viewport render snapshots rebuild the image frame from the current camera
+  view so later camera-view movement carries the background with it. Camera
+  object scale remains outside this remapping approximation. The extractor
+  bridge is version 25. C++ build passed; matched image captures have not been
+  run.

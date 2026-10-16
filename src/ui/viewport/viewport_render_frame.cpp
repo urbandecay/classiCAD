@@ -5,6 +5,7 @@
 #include "core/document/document.h"
 #include "core/document/workbench_material_adapter.h"
 #include "core/geometry/geometry_transform.h"
+#include "core/geometry/shape_mapping.h"
 
 #include <QSet>
 
@@ -13,6 +14,67 @@
 namespace classiCAD {
 
 namespace {
+
+void remapCameraBackgroundPicture(Shape *shape,
+                                  const ViewportTransform &camera,
+                                  const QSize &viewportSize)
+{
+    if (shape == nullptr ||
+        shape->geometryType != GeometryType::Picture ||
+        !shape->pictureCameraViewOnly ||
+        shape->pictureCameraLocalCorners.size() != 4 ||
+        !camera.cameraState().cameraView || viewportSize.isEmpty()) {
+        return;
+    }
+    const Point3D cameraPosition = camera.cameraPosition(viewportSize);
+    Point3D forward = camera.viewDirection();
+    Point3D up = camera.viewUp();
+    QVector3D forwardVector(float(forward.x), float(forward.y),
+                            float(forward.z));
+    QVector3D upVector(float(up.x), float(up.y), float(up.z));
+    if (forwardVector.lengthSquared() <= 1.0e-16f ||
+        upVector.lengthSquared() <= 1.0e-16f) {
+        return;
+    }
+    forwardVector.normalize();
+    upVector.normalize();
+    QVector3D rightVector =
+        QVector3D::crossProduct(forwardVector, upVector);
+    if (rightVector.lengthSquared() <= 1.0e-16f) return;
+    rightVector.normalize();
+
+    QVector<Point3D> worldCorners;
+    worldCorners.reserve(4);
+    for (const Point3D &local : shape->pictureCameraLocalCorners) {
+        const QVector3D world =
+            QVector3D(float(cameraPosition.x), float(cameraPosition.y),
+                      float(cameraPosition.z)) +
+            rightVector * float(local.x) + upVector * float(local.y) +
+            forwardVector * float(-local.z);
+        if (!std::isfinite(world.x()) || !std::isfinite(world.y()) ||
+            !std::isfinite(world.z())) {
+            return;
+        }
+        worldCorners.append({world.x(), world.y(), world.z()});
+    }
+    const QVector3D edgeX(float(worldCorners[1].x - worldCorners[0].x),
+                          float(worldCorners[1].y - worldCorners[0].y),
+                          float(worldCorners[1].z - worldCorners[0].z));
+    const QVector3D edgeY(float(worldCorners[0].x - worldCorners[3].x),
+                          float(worldCorners[0].y - worldCorners[3].y),
+                          float(worldCorners[0].z - worldCorners[3].z));
+    const QVector3D normal = QVector3D::crossProduct(edgeX, edgeY);
+    const WorkPlaneFrame frame = makeWorkPlaneFrameFromNormal(
+        worldCorners[0], {normal.x(), normal.y(), normal.z()},
+        {edgeX.x(), edgeX.y(), edgeX.z()});
+    if (!isValidWorkPlaneFrame(frame)) return;
+    shape->workPlaneFrame = frame;
+    shape->points.clear();
+    shape->points.reserve(worldCorners.size());
+    for (const Point3D &corner : worldCorners) {
+        shape->points.append(worldPointToWorkPlaneFrame(corner, frame));
+    }
+}
 
 } // namespace
 
@@ -104,6 +166,7 @@ ViewportRenderFrame buildViewportRenderFrame(
 
         ViewportRenderObject entry;
         entry.shape = sceneObject.geometry;
+        remapCameraBackgroundPicture(&entry.shape, camera, viewportSize);
         const Layer *layer = document.layer(sceneObject.layerId);
         // Resolve imported Blender material slots into this render snapshot.
         // The inline slot array is only a transient viewport bridge; the

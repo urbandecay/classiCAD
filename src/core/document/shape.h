@@ -75,6 +75,9 @@ struct Shape {
     // Blender camera background images are viewport-only and appear solely
     // while viewing their imported scene camera.
     bool pictureCameraViewOnly = false;
+    // Camera background image corners in the source camera's local space.
+    // The viewport render snapshot remaps these to its current camera frame.
+    QVector<Point3D> pictureCameraLocalCorners;
     // Blender Image Empties can request the scene's view transform when
     // displayed. Camera background images use the same image property.
     bool pictureUseViewTransform = false;

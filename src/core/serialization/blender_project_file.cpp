@@ -2151,6 +2151,25 @@ bool parseBlenderPictureItem(
         QStringLiteral("show_empty_image_only_axis_aligned")).toBool(false);
     result.geometry.pictureCameraViewOnly = item.value(
         QStringLiteral("picture_camera_view_only")).toBool(false);
+    const QJsonArray cameraLocalCorners = item.value(
+        QStringLiteral("picture_camera_local_corners")).toArray();
+    if (!cameraLocalCorners.isEmpty()) {
+        if (cameraLocalCorners.size() != 4) {
+            setError(errorMessage,
+                     QStringLiteral("camera-relative Image Empty corners are invalid"));
+            return false;
+        }
+        for (const QJsonValue &cornerValue : cameraLocalCorners) {
+            QVector<double> xyz;
+            if (!jsonNumberArray(cornerValue, 3, &xyz)) {
+                setError(errorMessage,
+                         QStringLiteral("camera-relative Image Empty corner is invalid"));
+                return false;
+            }
+            result.geometry.pictureCameraLocalCorners.append(
+                {xyz[0], xyz[1], xyz[2]});
+        }
+    }
     const QString imageSide = item.value(
         QStringLiteral("empty_image_side")).toString(
             QStringLiteral("DOUBLE_SIDED"));

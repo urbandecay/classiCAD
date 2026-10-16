@@ -9594,3 +9594,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   with selection outlines disabled without indexing an unallocated selection
   buffer. This is a fallback correctness fix; it does not change rendered
   pixels when selection outlines are enabled.
+
+### QPainter DOF uses regular-scene depth (2026-10-16)
+
+- QPainter's camera depth-of-field gather now derives circle of confusion,
+  center depth, and covered-pixel regions from regular scene surfaces and
+  regular scene curves. `showInFront` objects still contribute their already
+  composited color, but their separate depth no longer changes the DOF blur.
+- Blender 5.2.2 runs Workbench DOF before the later overlay-depth pass and
+  supplies the regular scene depth texture to the DOF effect in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L457-L465)
+  and
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc).
+  Build passed; matched `showInFront` DOF captures remain open.

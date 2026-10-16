@@ -4458,11 +4458,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const int depthX = std::clamp(
                         static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                         0, width - 1);
-                    const RasterSample &sample =
-                        samples[depthY * width + depthX];
-                    if (sample.objectId != 0 ||
-                        std::isfinite(visibleCurveDepthAt(x, y, false)) ||
-                        std::isfinite(visibleCurveDepthAt(x, y, true))) {
+                    const bool hasRegularSurfaceDepth = std::isfinite(
+                        regularDofDepth[depthY * width + depthX]);
+                    if (hasRegularSurfaceDepth ||
+                        std::isfinite(visibleCurveDepthAt(x, y, false))) {
                         dofCoverage[qsizetype(y) * outputWidth + x] = 1;
                     }
                 }
@@ -4551,15 +4550,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int depthY = std::clamp(
                     static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
                     0, height - 1);
-                const RasterSample &sample = samples[depthY * width + depthX];
-                const float inFrontCurveDepth =
-                    visibleCurveDepthAt(x, y, true);
-                const float curveDepth = std::isfinite(inFrontCurveDepth)
-                    ? inFrontCurveDepth : visibleCurveDepthAt(x, y, false);
+                const float curveDepth = visibleCurveDepthAt(x, y, false);
+                const float regularSurfaceDepth =
+                    regularDofDepth[depthY * width + depthX];
                 const qreal z = std::isfinite(curveDepth)
                     ? curveDepth
-                    : sample.objectId != 0
-                        ? sample.depth : cameraOptics.clipEnd;
+                    : std::isfinite(regularSurfaceDepth)
+                        ? regularSurfaceDepth : cameraOptics.clipEnd;
                 if (!std::isfinite(z) || z <= 0.0) return 0.0f;
                 const qreal coc = 0.5 *
                     (focal * focal /
@@ -4777,8 +4774,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const int depthX = std::clamp(
                         static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                         0, width - 1);
-                    const RasterSample &center = samples[depthY * width + depthX];
-                    const bool backgroundCenter = center.objectId == 0;
+                    const qreal centerCurveDepth =
+                        visibleCurveDepthAt(x, y, false);
+                    const float regularSurfaceDepth =
+                        regularDofDepth[depthY * width + depthX];
+                    const bool hasRegularCenter =
+                        std::isfinite(centerCurveDepth) ||
+                        std::isfinite(regularSurfaceDepth);
+                    const bool backgroundCenter = !hasRegularCenter;
                     const qsizetype pixelIndex =
                         qsizetype(y) * outputWidth + x;
                     if (backgroundCenter && dofCoverage[pixelIndex] == 0)
@@ -4787,8 +4790,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     // depth sample represents the far plane, allowing a
                     // nearby out-of-focus foreground surface to contribute
                     // blur beyond its silhouette.
-                    const qreal z = backgroundCenter
-                        ? cameraOptics.clipEnd : center.depth;
+                    const qreal z = std::isfinite(centerCurveDepth)
+                        ? centerCurveDepth
+                        : backgroundCenter
+                            ? cameraOptics.clipEnd : regularSurfaceDepth;
                     if (!std::isfinite(z) || z <= 0.0) continue;
                     // Blender's aperture radius is 0.5 * focal / f-stop;
                     // multiplying by focal / focus-distance produces this

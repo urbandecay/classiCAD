@@ -7303,7 +7303,7 @@ public:
              &renderCamera, transparentFilm,
              combinedUsesPremultipliedAlpha,
              useSceneWorldBackground, noSceneWorldBackground,
-             sceneWorldColor](
+             sceneWorldColor, usingSceneCamera](
                 const QSize &pixelSize, ViewportAaRenderer &aa,
                 BlenderGridRenderer &grid,
                 ViewportSceneRenderer &scene,
@@ -7315,7 +7315,10 @@ public:
                                    renderCamera.cameraPreferences(),
                                    renderCamera.isPerspectiveEnabled(),
                                    projectionClipRange.nearPlane,
-                                   projectionClipRange.farPlane);
+                                   projectionClipRange.farPlane,
+                                   1.0,
+                                   usingSceneCamera ||
+                                       renderCamera.cameraState().cameraView);
                 aa.setDisplayTransform(settings, true,
                                        combinedUsesPremultipliedAlpha);
                 if (!transparentFilm && !noSceneWorldBackground) {
@@ -13033,7 +13036,8 @@ protected:
                     projectionClipRange.farPlane,
                     importedCameraFrameTextureScale(
                         document_, renderFrame.camera,
-                        renderFrame.viewportSize));
+                        renderFrame.viewportSize),
+                    renderFrame.camera.cameraState().cameraView);
                 aaRenderer->setDisplayTransform(renderShadingSettings, true);
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),
@@ -13767,7 +13771,8 @@ protected:
                 importedCameraFrameTextureScale(
                     document_, renderFrame.camera,
                     renderFrame.viewportSize),
-                smoothWiresOverlay_);
+                smoothWiresOverlay_,
+                renderFrame.camera.cameraState().cameraView);
             const qint64 sceneLinearTargetPixels =
                 qint64(committedSceneLayer.width()) *
                 committedSceneLayer.height();

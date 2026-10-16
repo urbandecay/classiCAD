@@ -340,7 +340,8 @@ void ViewportAaRenderer::setDepthOfField(
     bool perspectiveView,
     qreal projectionClipStart,
     qreal projectionClipEnd,
-    qreal cameraFrameSensorScale)
+    qreal cameraFrameSensorScale,
+    bool sceneCameraView)
 {
     depthOfFieldOptics_ = optics;
     if (std::isfinite(cameraFrameSensorScale) &&
@@ -353,7 +354,8 @@ void ViewportAaRenderer::setDepthOfField(
     // free perspective viewport has tightened its far plane for precision.
     depthOfFieldOptics_.clipStart = projectionClipStart;
     depthOfFieldOptics_.clipEnd = projectionClipEnd;
-    depthOfFieldEnabled_ = enabled && optics.sceneCameraEnabled;
+    depthOfFieldEnabled_ = enabled && optics.sceneCameraEnabled &&
+                           sceneCameraView;
     depthOfFieldPerspective_ = perspectiveView;
 }
 

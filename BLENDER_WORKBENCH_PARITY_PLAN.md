@@ -9946,3 +9946,17 @@ moves them after scene effects and depth-tests them against the retained scene.
   Blender 5.2.2 uses it while evaluating curve samples in
   [`curve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/curve.cc#L3457-L3611).
   Build passed; matched curve-display captures remain open.
+
+### Depth of field requires the scene camera view (2026-10-16)
+
+- GPU and QPainter Workbench depth of field now requires both an enabled
+  camera DOF setting and an active scene-camera view. The explicit offscreen
+  scene-camera render path also enables it when a scene camera is supplied.
+  Free perspective viewport navigation no longer inherits DOF merely because
+  the imported scene camera has DOF enabled. Blender 5.2.2 selects a camera
+  object only for a render camera or `RV3D_CAMOB`, then checks that camera's
+  DOF flag in
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L109-L113)
+  and [#L235-L236](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L235-L236).
+  Build passed; matched camera-view and free-perspective DOF captures remain
+  open.

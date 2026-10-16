@@ -237,7 +237,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QVector<float> *committedInFrontCurveDepth = nullptr,
                                  const QSize &committedCurveDepthSize = {},
                                  qreal cameraFrameSensorScale = 1.0,
-                                 bool smoothWiresOverlay = true);
+                                 bool smoothWiresOverlay = true,
+                                 bool sceneCameraView = true);
 
 // Render surface objects into temporary color layers, use their display
 // tessellation to depth-test opaque coverage, then accumulate visible partial

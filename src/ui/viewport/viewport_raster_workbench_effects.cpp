@@ -2416,7 +2416,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QVector<float> *committedInFrontCurveDepth,
                                  const QSize &committedCurveDepthSize,
                                  qreal cameraFrameSensorScale,
-                                 bool smoothWiresOverlay)
+                                 bool smoothWiresOverlay,
+                                 bool sceneCameraView)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     const bool selectedOutlineEnabled =
@@ -2440,7 +2441,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
     const bool perspective = transform.isPerspectiveEnabled();
     const bool depthOfFieldEnabled = settings.depthOfField && !xrayEnabled &&
-                                     cameraOptics.sceneCameraEnabled;
+                                     cameraOptics.sceneCameraEnabled &&
+                                     sceneCameraView;
 
     const int outputWidth = colorImage->width();
     const int outputHeight = colorImage->height();

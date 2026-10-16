@@ -9931,7 +9931,7 @@ protected:
                                   object.meshMaterials, fragmentSink,
                                   object.nurbsSolidFaceMaterials);
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels,
-                    false, scalarVolumeDrawObjects);
+                    true, scalarVolumeDrawObjects);
                 if (rasterSurfaceBatchRendered) {
                     for (quint64 objectId : deferredPictureCandidates) {
                         rasterDeferredPictureObjectIds.insert(objectId);

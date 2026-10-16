@@ -786,8 +786,7 @@ bool compositeRasterWorkbenchSurfaces(
         const ViewportDepthGeometry *preparedGeometry =
             object.preparedDepthGeometry.data();
         if (preparedGeometry == nullptr) {
-            if (!allowFragmentGeneratedDepth || surfaceLayers != nullptr ||
-                shadingSettings.cavity) {
+            if (!allowFragmentGeneratedDepth || shadingSettings.cavity) {
                 return false;
             }
             continue;

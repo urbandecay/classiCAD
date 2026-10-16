@@ -9679,6 +9679,17 @@ moves them after scene effects and depth-tests them against the retained scene.
   Blender-equivalent scene-linear filtering. Build passed; matched captures
   remain open.
 
+### QPainter generated-depth scene-linear transparency (2026-10-16)
+
+- The regular QPainter Solid compositor now uses captured fragment depths
+  when an object has no prepared depth mesh, allowing eligible scenes to keep
+  weighted scene-linear transparency and later effects. It retains the
+  painter fallback if fragment capture is empty, and still declines this route
+  when cavity needs prepared surface geometry for its normal/depth inputs.
+  This removes one route into display-space source-over blending without
+  changing the one-million-pixel buffer limit. Build passed; matched
+  unsupported-geometry transparency captures remain open.
+
 ### QPainter selected-outline boundary depth pairing (2026-10-16)
 
 - Selected-outline occlusion now compares the selected side's depth with

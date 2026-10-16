@@ -9156,3 +9156,14 @@ resolve remain open.
   their local width and offsets with the live focal-length preference, keeping
   them aligned to the camera frame after a lens change. The extractor bridge
   is version 26. C++ build passed; matched image captures have not been run.
+
+### Empty active-layer fallback for Workbench render settings (2026-10-16)
+
+- When an imported document has no active view-layer key, Workbench render
+  setup now selects the first imported scene's first view layer, matching the
+  importer's existing fallback. Before this fix, the render-settings loop
+  treated every scene as active and later scenes could overwrite `render_aa`,
+  color management, background, and output settings. The extractor assigns
+  view-layer keys that include the scene ID, so the fallback key selects only
+  that default scene. The C++ build passed; no matched multi-scene render
+  comparison has been run.

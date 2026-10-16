@@ -6904,8 +6904,19 @@ public:
         if (gpuSurface_ == nullptr || outputSize.isEmpty()) {
             return result;
         }
-        const QString activeLayerKey =
+        QString activeLayerKey =
             document_.settings().activeViewLayerKey;
+        if (activeLayerKey.isEmpty()) {
+            for (const QJsonValue &sceneValue :
+                 document_.settings().importedBlenderScenes) {
+                const QJsonArray viewLayers = sceneValue.toObject().value(
+                    QStringLiteral("view_layers")).toArray();
+                if (viewLayers.isEmpty()) continue;
+                activeLayerKey = viewLayers.first().toObject().value(
+                    QStringLiteral("key")).toString();
+                if (!activeLayerKey.isEmpty()) break;
+            }
+        }
         int renderAntiAliasingMode = -1;
         bool renderUseBorder = false;
         bool renderCropToBorder = false;
@@ -6920,7 +6931,7 @@ public:
         for (const QJsonValue &sceneValue :
              document_.settings().importedBlenderScenes) {
             const QJsonObject scene = sceneValue.toObject();
-            bool activeScene = activeLayerKey.isEmpty();
+            bool activeScene = false;
             for (const QJsonValue &layerValue :
                  scene.value(QStringLiteral("view_layers")).toArray()) {
                 if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
@@ -6938,9 +6949,8 @@ public:
             for (const QJsonValue &layerValue :
                  scene.value(QStringLiteral("view_layers")).toArray()) {
                 const QJsonObject layer = layerValue.toObject();
-                if (activeLayerKey.isEmpty() ||
-                    layer.value(QStringLiteral("key")).toString() ==
-                        activeLayerKey) {
+                if (layer.value(QStringLiteral("key")).toString() ==
+                    activeLayerKey) {
                     importedCombinedPassAvailable = layer.value(
                         QStringLiteral("use_pass_combined")).toBool(true);
                     importedDepthPassAvailable = layer.value(

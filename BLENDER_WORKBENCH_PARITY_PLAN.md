@@ -5335,7 +5335,12 @@ resolve remain open.
   result at termination. Orthographic rays also offset near/far clipping by
   the ray origin's camera-relative depth, matching Blender's depth endpoint
   when the ray starts on the view plane instead of at the camera.
-  The production contract checks
+  A later source audit found that both ray-marchers omitted Blender's `pi`
+  multiplier on scattering. Blender binds a unit shadow texture for ordinary
+  Volume objects, so that multiplier combines with the isotropic `1/(4*pi)`
+  phase function to produce a net `1/4`. The GPU shader and QPainter ray
+  marcher now use that net factor. The QPainter slice path already used `1/4`.
+  The C++ build passed. The production contract checks
   visible output and increased contribution at higher density. Matched Blender
   output and comprehensive depth/occlusion combinations remain open.
 - Validation: full `cmake --build build -j4` passed with the source dependency

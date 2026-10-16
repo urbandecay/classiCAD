@@ -1972,7 +1972,9 @@ bool ViewportSurfaceRenderer::initialize()
         uniform vec3 uBoundsMin;
         uniform vec3 uGridSize;
         uniform vec3 uBaseColor;
-        const float kIsotropicPhaseFunction = 0.07957747154594767;
+        // Blender's unit volume-shadow texture contributes pi before its
+        // isotropic 1/(4*pi) phase function, leaving a net factor of 1/4.
+        const float kIsotropicPhaseFunction = 0.25;
         uniform float uDensityScale;
         uniform bool uUseSlice;
         uniform int uSliceAxis;

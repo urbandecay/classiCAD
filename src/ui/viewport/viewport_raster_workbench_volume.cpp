@@ -20,7 +20,9 @@ namespace {
 constexpr std::uint64_t kMaxDenseVoxels = 16ull * 1024ull * 1024ull;
 constexpr qsizetype kMaxSamples = 1'000'000;
 constexpr std::size_t kMaxSliceCandidateTests = 8'000'000;
-constexpr float kIsotropicPhaseFunction = 1.0f / (4.0f * 3.14159265358979323846f);
+// Blender multiplies volume scattering by pi for its unit shadow texture,
+// then applies the isotropic 1/(4*pi) phase function. Keep the net 1/4 here.
+constexpr float kIsotropicPhaseFunction = 0.25f;
 const std::array<QPointF, 4> kSliceSubpixelOffsets{{
     QPointF(0.25, 0.25), QPointF(0.75, 0.25),
     QPointF(0.25, 0.75), QPointF(0.75, 0.75)}};

@@ -28,6 +28,9 @@ struct ViewportDepthGeometry {
     // QVector3D is a GPU upload format and is too lossy for large CAD scenes.
     QVector<Point3D> preciseLineVertices;
     QVector<QVector3D> pointVertices;
+    // World-space point cloud radii aligned with pointVertices. Ordinary CAD
+    // point markers store zero and keep their fixed pixel diameter.
+    QVector<float> pointWorldRadii;
     // Keep component identity matching in double precision as well; GPU point
     // coordinates are not precise enough to distinguish small CAD features.
     QVector<Point3D> precisePointVertices;

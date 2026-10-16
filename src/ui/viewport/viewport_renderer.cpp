@@ -3799,14 +3799,44 @@ void ViewportRenderer::drawShape(QPainter &painter,
                validatePointCloud(shape.pointCloud)) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(curveColor);
-        const qreal radius = kViewportPointVertexMarkerDiameterPixels * 0.5;
-        for (const Point3D &sourcePoint : shape.pointCloud.positions) {
+        const Point3D direction = transform_.viewDirection();
+        const Point3D up = transform_.viewUp();
+        Point3D viewRight{direction.y * up.z - direction.z * up.y,
+                          direction.z * up.x - direction.x * up.z,
+                          direction.x * up.y - direction.y * up.x};
+        const qreal rightLength = std::sqrt(
+            viewRight.x * viewRight.x + viewRight.y * viewRight.y +
+            viewRight.z * viewRight.z);
+        if (rightLength > 1.0e-12) {
+            viewRight.x /= rightLength;
+            viewRight.y /= rightLength;
+            viewRight.z /= rightLength;
+        }
+        for (qsizetype index = 0;
+             index < shape.pointCloud.positions.size(); ++index) {
+            const Point3D &sourcePoint = shape.pointCloud.positions[index];
             Point3D worldPoint{sourcePoint.x + preparedOffset.x,
                                sourcePoint.y + preparedOffset.y,
                                sourcePoint.z + preparedOffset.z};
             QPointF screenPoint;
             if (transform_.worldPointToScreenUnclipped(
                     worldPoint, viewportSize, &screenPoint)) {
+                const qreal worldRadius = shape.pointCloud.radii[index];
+                qreal radius = kViewportPointVertexMarkerDiameterPixels * 0.5;
+                if (worldRadius > 0.0 && rightLength > 1.0e-12) {
+                    const Point3D edgePoint{
+                        worldPoint.x + viewRight.x * worldRadius,
+                        worldPoint.y + viewRight.y * worldRadius,
+                        worldPoint.z + viewRight.z * worldRadius};
+                    QPointF edgeScreen;
+                    if (transform_.worldPointToScreenUnclipped(
+                            edgePoint, viewportSize, &edgeScreen)) {
+                        radius = std::clamp(
+                            std::hypot(edgeScreen.x() - screenPoint.x(),
+                                       edgeScreen.y() - screenPoint.y()),
+                            radius, 2048.0);
+                    }
+                }
                 painter.drawEllipse(screenPoint, radius, radius);
             }
         }

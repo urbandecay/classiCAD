@@ -927,6 +927,7 @@ void appendShapeDepthGeometry(const Shape &shape,
             if (!shape.points.isEmpty()) {
                 geometry.pointVertices.append(asVector(shapePointToWorld(
                     shape, shape.points.first())));
+                geometry.pointWorldRadii.append(0.0f);
             }
             return;
         }
@@ -935,9 +936,13 @@ void appendShapeDepthGeometry(const Shape &shape,
                 geometry.pointVertices.reserve(shape.pointCloud.positions.size());
                 geometry.precisePointVertices.reserve(
                     shape.pointCloud.positions.size());
-                for (const Point3D &point : shape.pointCloud.positions) {
+                for (qsizetype index = 0;
+                     index < shape.pointCloud.positions.size(); ++index) {
+                    const Point3D &point = shape.pointCloud.positions[index];
                     geometry.pointVertices.append(asVector(point));
                     geometry.precisePointVertices.append(point);
+                    geometry.pointWorldRadii.append(
+                        static_cast<float>(shape.pointCloud.radii[index]));
                 }
             }
             return;
@@ -1066,6 +1071,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(
             geometry.lineVertices += prepared.lineVertices;
             geometry.preciseLineVertices += prepared.preciseLineVertices;
             geometry.pointVertices += prepared.pointVertices;
+            geometry.pointWorldRadii += prepared.pointWorldRadii;
             geometry.surfaceVertices += prepared.surfaceVertices;
             geometry.surfaceNormals += prepared.surfaceNormals;
             geometry.surfaceTextureCoordinates +=
@@ -1078,6 +1084,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(
         geometry.lineVertices += prepared.lineVertices;
         geometry.preciseLineVertices += prepared.preciseLineVertices;
         geometry.pointVertices += prepared.pointVertices;
+        geometry.pointWorldRadii += prepared.pointWorldRadii;
         geometry.surfaceVertices += prepared.surfaceVertices;
         geometry.surfaceNormals += prepared.surfaceNormals;
         geometry.surfaceTextureCoordinates +=

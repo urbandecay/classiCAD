@@ -542,6 +542,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
          geometryType == GeometryType::PointCloud)
             ? static_cast<float>(kViewportPointVertexMarkerDiameterPixels)
             : 0.0f};
+    sceneStroke->worldSizedPoints =
+        geometryType == GeometryType::PointCloud;
     sceneStroke->objectId = object.objectId;
     sceneStroke->editModeWire = geometryType == GeometryType::NurbsSurface ||
                                 geometryType == GeometryType::NurbsSolid;
@@ -828,6 +830,9 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
         if (lineWireOffsetBuffer_.isCreated()) {
             lineWireOffsetBuffer_.destroy();
         }
+        if (pointRadiusBuffer_.isCreated()) {
+            pointRadiusBuffer_.destroy();
+        }
         if (vertexArray_.isCreated()) {
             vertexArray_.destroy();
         }
@@ -912,7 +917,8 @@ bool ViewportSceneRenderer::initialize()
             QStringLiteral(":/classiCAD/shaders/scene_point.frag")) ||
         !pointProgram_.link() || !vertexArray_.create() ||
         !vertexBuffer_.create() || !patternOffsetBuffer_.create() ||
-        !lineColorBuffer_.create() || !lineWireOffsetBuffer_.create()) {
+        !lineColorBuffer_.create() || !lineWireOffsetBuffer_.create() ||
+        !pointRadiusBuffer_.create()) {
         qWarning().noquote() << "Viewport scene stroke shader setup failed:"
                              << program_.log() << pointProgram_.log();
         return false;
@@ -1205,6 +1211,7 @@ bool ViewportSceneRenderer::draw(
         }
         keyStream << quint8(stroke.controlGuide ? 1 : 0);
         keyStream << quint8(stroke.pointDiameter > 0.0f ? 1 : 0);
+        keyStream << quint8(stroke.worldSizedPoints ? 1 : 0);
         keyStream << quint32(stroke.lineVertexColors.size());
         for (const QVector4D &color : stroke.lineVertexColors) {
             keyStream << color.x() << color.y() << color.z() << color.w();
@@ -1222,11 +1229,13 @@ bool ViewportSceneRenderer::draw(
         cachedVertices_.clear();
         cachedLineColors_.clear();
         cachedLineWireOffsets_.clear();
+        cachedPointWorldRadii_.clear();
         cachedPatternOffsets_.clear();
         strokeRanges_.reserve(strokes.size());
         for (int strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
             const ViewportSceneStroke &stroke = strokes[strokeIndex];
             QVector<QVector3D> generatedVertices;
+            QVector<float> generatedPointRadii;
             const QVector<QVector3D> *vertices = nullptr;
             if (stroke.controlGuide && stroke.shape != nullptr) {
                 generatedVertices = controlGuideVertices(*stroke.shape);
@@ -1237,17 +1246,32 @@ bool ViewportSceneRenderer::draw(
                 vertices = stroke.pointDiameter > 0.0f
                                ? &geometry.pointVertices
                                : &geometry.lineVertices;
+                if (stroke.pointDiameter > 0.0f) {
+                    generatedPointRadii = geometry.pointWorldRadii;
+                }
             } else if (stroke.shape != nullptr) {
                 const ViewportDepthGeometry geometry =
                     buildViewportDepthGeometry(*stroke.shape);
                 generatedVertices = stroke.pointDiameter > 0.0f
                                        ? geometry.pointVertices
                                        : geometry.lineVertices;
+                if (stroke.pointDiameter > 0.0f) {
+                    generatedPointRadii = geometry.pointWorldRadii;
+                }
                 vertices = &generatedVertices;
             }
             const int first = cachedVertices_.size();
             if (vertices != nullptr) {
                 cachedVertices_ += *vertices;
+                if (stroke.pointDiameter > 0.0f) {
+                    if (generatedPointRadii.size() == vertices->size()) {
+                        cachedPointWorldRadii_ += generatedPointRadii;
+                    } else {
+                        for (int vertex = 0; vertex < vertices->size(); ++vertex) {
+                            cachedPointWorldRadii_.append(0.0f);
+                        }
+                    }
+                }
                 if (stroke.pointDiameter <= 0.0f &&
                     stroke.lineVertexColors.size() == vertices->size()) {
                     cachedLineColors_ += stroke.lineVertexColors;
@@ -1538,6 +1562,17 @@ bool ViewportSceneRenderer::draw(
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, sizeof(QVector3D), nullptr);
     lineWireOffsetBuffer_.release();
+    if (geometryChanged) {
+        pointRadiusBuffer_.bind();
+        pointRadiusBuffer_.allocate(
+            cachedPointWorldRadii_.constData(),
+            static_cast<int>(cachedPointWorldRadii_.size() * sizeof(float)));
+        pointRadiusBuffer_.release();
+    }
+    pointRadiusBuffer_.bind();
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+    pointRadiusBuffer_.release();
     QOpenGLShaderProgram *boundProgram = nullptr;
     for (int index = 0; index < strokes.size(); ++index) {
         const ViewportSceneStroke &stroke = strokes[index];
@@ -1605,6 +1640,10 @@ bool ViewportSceneRenderer::draw(
         if (stroke.pointDiameter > 0.0f) {
             boundProgram->setUniformValue("uPointSize",
                                           stroke.pointDiameter * float(dpr));
+            boundProgram->setUniformValue(
+                "uUseWorldPointRadius", stroke.worldSizedPoints ? 1 : 0);
+            boundProgram->setUniformValue(
+                "uViewportHeight", static_cast<float>(pixelSize.height()));
             boundProgram->setUniformValue("uPointOutline",
                                           stroke.pointOutline);
             glDrawArrays(GL_POINTS, range.first, range.second);

@@ -7934,8 +7934,9 @@ resolve remain open.
 - The grouped data is serialized natively and participates in scene rendering,
   radius-aware click picking, center-based box selection, snapping, transforms,
   and duplication.
-  Current display markers still use a fixed screen size and object color, so
-  Workbench's variable point radii and point colors are not yet reproduced.
+  GPU markers and the QPainter fallback now project each world radius into a
+  screen-space disk. Point colors still use object color, and the raster path
+  uses flat disks rather than Workbench's shaded point surfaces.
   Blender fixture and matched viewport comparisons have not been run.
 
 - Non-image Blender Empty display icons are reported as viewport overlays with

@@ -88,6 +88,8 @@ struct ViewportSceneStroke {
     // stroke's uniform color; varying endpoint colors produce Blender-style
     // edit-wire fades along a whole edge.
     QVector<QVector4D> lineVertexColors;
+    // Render GL_POINTS using per-vertex world radii (Blender Point Clouds).
+    bool worldSizedPoints = false;
     // Per-endpoint screen-plane normal nudge for Blender mesh wire overlays.
     // The GPU path applies this in clip space; the QPainter fallback applies
     // the equivalent half-pixel displacement in logical screen coordinates.
@@ -268,6 +270,7 @@ private:
     QOpenGLBuffer patternOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer lineColorBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer lineWireOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer pointRadiusBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<QString, PictureTexture> pictureTextures_;
@@ -293,6 +296,7 @@ private:
     QVector<QVector3D> cachedVertices_;
     QVector<QVector4D> cachedLineColors_;
     QVector<QVector3D> cachedLineWireOffsets_;
+    QVector<float> cachedPointWorldRadii_;
     QVector<float> cachedPatternOffsets_;
     bool initializationAttempted_ = false;
     bool initialized_ = false;

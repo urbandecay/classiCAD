@@ -9521,6 +9521,20 @@ moves them after scene effects and depth-tests them against the retained scene.
   X-Ray hidden contours, the GPU stroke-failure fallback, and matched captures
   remain open. Build passed.
 
+### GPU selected outlines ignore Image Texture alpha (2026-10-16)
+
+- The shared-depth GPU path now builds selected-outline IDs from selected
+  geometry without sampling Image Texture alpha. Its visible outline resolve
+  compares each selected boundary sample with scene depth, while the hidden
+  resolve keeps its existing 35% opacity. Workbench color, material alpha,
+  depth, and effect-ID passes still apply their existing alpha rules. This
+  brings the GPU selected-outline path in line with the geometry-only overlay
+  prepass used by Blender 5.2.2.
+- The dedicated mask currently covers regular selected ranges when shared
+  scene depth is available. `showInFront` selected ranges, the no-shared-depth
+  fallback, and matched texture-cutout captures remain open. Build passed; the
+  viewport was not launched.
+
 ### GPU selected-outline smoothing and high-DPI width (2026-10-16)
 
 - The selected-object outline resolve now follows classiCAD's Overlay Smooth

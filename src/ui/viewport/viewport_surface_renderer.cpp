@@ -2471,6 +2471,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform vec4 uOutlineColor;
         uniform float uUiScale;
         uniform bool uSelectionOutlineOnly;
+        uniform bool uVisibleSelectionOutlineOnly;
         uniform bool uHiddenSelectionOutlineOnly;
         uniform bool uSmoothSelectionOutline;
         uniform bool uThickSelectionOutline;
@@ -2500,17 +2501,19 @@ bool ViewportSurfaceRenderer::initialize()
             if (uHiddenSelectionOutlineOnly) {
                 ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
                                              ivec2(0, 1), ivec2(0, -1));
-                uint ids[4] = uint[4](cardinalIds.x, cardinalIds.y,
-                                      cardinalIds.z, cardinalIds.w);
                 bool centerSelected = (centerId & 0x80000000u) != 0u;
                 float hiddenCoverage = 0.0;
                 for (int i = 0; i < 4; ++i) {
-                    bool neighborSelected = (ids[i] & 0x80000000u) != 0u;
+                    bool neighborSelected = (cardinalIds[i] & 0x80000000u) != 0u;
                     bool objectBoundary = centerSelected != neighborSelected ||
-                        (centerSelected && neighborSelected && centerId != ids[i]);
+                        (centerSelected && neighborSelected &&
+                         centerId != cardinalIds[i]);
                     if (!objectBoundary) continue;
+                    ivec2 sampleOffset = offsets[i] *
+                        int(max(round(uUiScale), 1.0));
                     ivec2 selectedPixel = centerSelected
-                        ? pixel : clamp(pixel + offsets[i], ivec2(0), size - 1);
+                        ? pixel : clamp(pixel + sampleOffset,
+                                        ivec2(0), size - 1);
                     float selectedDepth = texelFetch(
                         uSelectedDepth, selectedPixel, 0).r;
                     float sceneDepth = texelFetch(uSceneDepth, selectedPixel, 0).r;
@@ -2521,6 +2524,48 @@ bool ViewportSurfaceRenderer::initialize()
                 if (hiddenCoverage <= 0.0) discard;
                 fragmentColor = vec4(uOutlineColor.rgb,
                     uOutlineColor.a * hiddenCoverage * 0.35);
+                return;
+            }
+            if (uVisibleSelectionOutlineOnly) {
+                ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
+                                             ivec2(0, 1), ivec2(0, -1));
+                bool centerSelected = (centerId & 0x80000000u) != 0u;
+                float visibleCoverage = 0.0;
+                for (int ring = 1; ring <= 2; ++ring) {
+                    uvec4 ringIds = ring == 1 ? cardinalIds : uvec4(
+                        texture(uObjectIdBuffer, uv + 2.0 * dx).r,
+                        texture(uObjectIdBuffer, uv - 2.0 * dx).r,
+                        texture(uObjectIdBuffer, uv + 2.0 * dy).r,
+                        texture(uObjectIdBuffer, uv - 2.0 * dy).r);
+                    for (int i = 0; i < 4; ++i) {
+                        bool neighborSelected =
+                            (ringIds[i] & 0x80000000u) != 0u;
+                        bool objectBoundary = centerSelected != neighborSelected ||
+                            (centerSelected && neighborSelected &&
+                             centerId != ringIds[i]);
+                        if (!objectBoundary) continue;
+                        ivec2 sampleOffset = offsets[i] * ring *
+                            int(max(round(uUiScale), 1.0));
+                        ivec2 selectedPixel = centerSelected
+                            ? pixel : clamp(pixel + sampleOffset,
+                                            ivec2(0), size - 1);
+                        float selectedDepth = texelFetch(
+                            uSelectedDepth, selectedPixel, 0).r;
+                        float sceneDepth = texelFetch(
+                            uSceneDepth, selectedPixel, 0).r;
+                        if (selectedDepth <= sceneDepth + 1.0e-6) {
+                            visibleCoverage += ring == 1 ? 0.25 : 0.0;
+                            if (ring == 2) visibleCoverage = 0.25;
+                        }
+                    }
+                    if (ring == 1 && visibleCoverage > 0.0) break;
+                    if (ring == 2 && !uThickSelectionOutline) break;
+                }
+                if (visibleCoverage <= 0.0) discard;
+                float selectionOpacity = uSmoothSelectionOutline
+                    ? visibleCoverage : 1.0;
+                fragmentColor = vec4(uOutlineColor.rgb,
+                    uOutlineColor.a * selectionOpacity);
                 return;
             }
             if (uSelectionOutlineOnly) {
@@ -8448,15 +8493,6 @@ bool ViewportSurfaceRenderer::draw(
                             range.outlineHandledBySceneStroke) {
                             continue;
                         }
-                        const QString alphaMode =
-                            range.workbenchMaterial.textureImageAlphaMode;
-                        const bool ignoreTextureAlpha =
-                            alphaMode.compare(QStringLiteral("NONE"),
-                                              Qt::CaseInsensitive) == 0 ||
-                            alphaMode.compare(QStringLiteral("IGNORE"),
-                                              Qt::CaseInsensitive) == 0 ||
-                            alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
-                                              Qt::CaseInsensitive) == 0;
                         const bool textureColorEnabled =
                             settings.colorMode == ViewportColorMode::Texture &&
                             range.useTextureColor;
@@ -8479,9 +8515,9 @@ bool ViewportSurfaceRenderer::draw(
                             : UdimTextureSet{};
                         objectIdProgram_.setUniformValue(
                             "uUseTextureAlphaMask",
-                            imageTexture != 0 || udimTexture.imageArray != 0);
+                            false);
                         objectIdProgram_.setUniformValue(
-                            "uTextureAlphaCutoff", !ignoreTextureAlpha);
+                            "uTextureAlphaCutoff", false);
                         objectIdProgram_.setUniformValue(
                             "uUseUdimImage", udimTexture.imageArray != 0);
                         objectIdProgram_.setUniformValue(
@@ -8649,6 +8685,7 @@ bool ViewportSurfaceRenderer::draw(
             const auto drawOutlineColor = [&](const QColor &sourceColor,
                                               bool selectionOnly,
                                               bool hiddenOnly = false,
+                                              bool visibleOnly = false,
                                               bool xrayWireSelection = false) {
                 QVector3D color(sourceColor.redF(), sourceColor.greenF(),
                                 sourceColor.blueF());
@@ -8659,6 +8696,8 @@ bool ViewportSurfaceRenderer::draw(
                     "uOutlineColor", QVector4D(color, sourceColor.alphaF()));
                 outlineProgram_.setUniformValue("uSelectionOutlineOnly",
                                                 selectionOnly);
+                outlineProgram_.setUniformValue(
+                    "uVisibleSelectionOutlineOnly", visibleOnly);
                 outlineProgram_.setUniformValue(
                     "uHiddenSelectionOutlineOnly", hiddenOnly);
                 outlineProgram_.setUniformValue(
@@ -8677,12 +8716,30 @@ bool ViewportSurfaceRenderer::draw(
                 drawOutlineColor(settings.outlineColor, false);
             }
             if (selectedOutlineRequested) {
-                if (xraySelectedOutlineReady) {
+                if (hiddenSelectedOutlineReady) {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, selectedOutlineIdTexture_);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  selectedOutlineDepthTexture_);
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D, outlineSceneDepthTexture_);
+                    glActiveTexture(GL_TEXTURE0);
+                    drawOutlineColor(settings.themeActiveObjectColor, true,
+                                     false, true);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  useSharedOutlineIds
+                                      ? workbenchOutlineIdTexture_
+                                      : objectIdTexture_);
+                } else if (xraySelectedOutlineReady) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, selectedOutlineIdTexture_);
+                    drawOutlineColor(settings.themeActiveObjectColor, true,
+                                     false, false, true);
+                } else {
+                    drawOutlineColor(settings.themeActiveObjectColor, true);
                 }
-                drawOutlineColor(settings.themeActiveObjectColor, true,
-                                 false, xraySelectedOutlineReady);
                 if (xraySelectedOutlineReady) {
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D,

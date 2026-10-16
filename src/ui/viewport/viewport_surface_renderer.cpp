@@ -8343,14 +8343,17 @@ bool ViewportSurfaceRenderer::draw(
                         ? ensureUdimTexture(range.textureImageTiles,
                                             range.textureImageSrgb)
                         : UdimTextureSet{};
+                    const bool useOutlineTextureAlpha = !range.selected;
                     glUniform1i(
                         objectIdProgram_.uniformLocation(
                             "uUseTextureAlphaMask"),
-                        imageTexture != 0 || udimTexture.imageArray != 0);
+                        useOutlineTextureAlpha &&
+                            (imageTexture != 0 ||
+                             udimTexture.imageArray != 0));
                     glUniform1i(
                         objectIdProgram_.uniformLocation(
                             "uTextureAlphaCutoff"),
-                        !ignoreTextureAlpha);
+                        useOutlineTextureAlpha && !ignoreTextureAlpha);
                     objectIdProgram_.setUniformValue(
                         "uUseUdimImage", udimTexture.imageArray != 0);
                     objectIdProgram_.setUniformValue(

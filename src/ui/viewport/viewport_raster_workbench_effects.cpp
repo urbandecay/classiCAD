@@ -2574,6 +2574,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const bool rasterizeSelectedMeshEdges =
             selectedOutlineEnabled && xrayEnabled && object.selected &&
             object.shape.geometryType == GeometryType::PolygonMesh;
+        const bool needsSelectedOutlineGeometry =
+            selectedOutlineEnabled && object.selected;
         const bool perFaceMaterialAlpha =
             (object.shape.geometryType == GeometryType::PolygonMesh ||
              object.shape.geometryType == GeometryType::NurbsSolid) &&
@@ -2582,7 +2584,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
              settings.colorMode == ViewportColorMode::Texture);
         if (!perFaceMaterialAlpha &&
             objectSourceAlpha(object, settings.colorMode) <= 0.0f &&
-            !shadowEnabled && !rasterizeSelectedMeshEdges) {
+            !shadowEnabled && !rasterizeSelectedMeshEdges &&
+            !needsSelectedOutlineGeometry) {
             continue;
         }
         const float objectAlpha = perFaceMaterialAlpha
@@ -3115,7 +3118,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             // Zero-alpha material geometry is still a Blender shadow caster,
             // but it must not become a visible receiver or depth sample here.
             if (triangleSourceAlpha <= 0.0f &&
-                !rasterWorkbenchOutlineEnabled) {
+                !rasterWorkbenchOutlineEnabled &&
+                !needsSelectedOutlineGeometry) {
                 continue;
             }
             const QPointF p0 = screen[0] * dpr;
@@ -3210,8 +3214,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         target.sourceAlpha = triangleSourceAlpha;
                     };
                     const float sourceAlpha = triangleSourceAlpha;
-                    if (selectedOutlineEnabled && object.selected &&
-                        sourceAlpha > 0.0f &&
+                    if (needsSelectedOutlineGeometry &&
                         !rasterizeSelectedMeshEdges) {
                         QVector<RasterOutlineSample> &domainSelectedOutline =
                             object.showInFront ? inFrontSelectedOutlineSamples

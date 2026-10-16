@@ -9557,3 +9557,17 @@ moves them after scene effects and depth-tests them against the retained scene.
   and
   [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1327).
   Build passed; matched QPainter outline captures remain open.
+
+### QPainter selected outlines for transparent surfaces (2026-10-16)
+
+- The raster fallback now keeps selected surface geometry in the outline ID
+  pass when its object, material, or sampled texture alpha is zero. Fill alpha
+  no longer decides whether the selected shape can produce an outline. The
+  outline still uses the existing depth and `showInFront` domains; matched
+  transparent-material and texture-cutout captures remain open.
+- Blender 5.2.2 submits selected mesh geometry in the separate overlay outline
+  prepass and resolves its IDs/depth independently of Workbench material
+  shading in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L863-L920)
+  and [#L982-L997](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L982-L997).
+  Build passed; visual parity remains unverified.

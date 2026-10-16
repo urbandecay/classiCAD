@@ -581,6 +581,34 @@ Point3D rotatePointAboutAxis(const Point3D &point,
     return rotatePoint(point, pivot, axis, angle);
 }
 
+Point3D mirrorPointAcrossWorkPlaneLine(const Point3D &point,
+                                       const QPointF &axisStart,
+                                       const QPointF &axisEnd,
+                                       const WorkPlaneFrame &axisFrame)
+{
+    if (!isValidWorkPlaneFrame(axisFrame)) {
+        return point;
+    }
+    const QPointF axis = axisEnd - axisStart;
+    const qreal axisLength = std::hypot(axis.x(), axis.y());
+    if (!std::isfinite(axisLength) || axisLength <= 1.0e-12) {
+        return point;
+    }
+
+    const QPointF unitNormal(-axis.y() / axisLength,
+                             axis.x() / axisLength);
+    const QPointF local = worldPointToWorkPlaneFrame(point, axisFrame);
+    const qreal depth = signedDistanceFromWorkPlaneFrame(point, axisFrame);
+    const qreal signedDistance =
+        QPointF::dotProduct(local - axisStart, unitNormal);
+    const QPointF mirroredLocal = local - unitNormal * (2.0 * signedDistance);
+    Point3D mirrored = workPlaneFramePointToWorld(mirroredLocal, axisFrame);
+    mirrored.x += axisFrame.normal.x * depth;
+    mirrored.y += axisFrame.normal.y * depth;
+    mirrored.z += axisFrame.normal.z * depth;
+    return mirrored;
+}
+
 Point3D scalePointInFrame(const Point3D &point,
                           const QPointF &base,
                           const QPointF &axisDirection,

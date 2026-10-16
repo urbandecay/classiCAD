@@ -2,6 +2,7 @@
 
 #include "core/commands/mirror_command.h"
 #include "core/document/selection_model.h"
+#include "services/dimensions/dimension_association.h"
 #include "tool_context.h"
 
 namespace classiCAD {
@@ -31,12 +32,21 @@ bool MirrorTool::handleMousePress(const ToolInput &input, ToolContext &context)
     }
 
     if (!interactionState_.hasAxisStart) {
-        interactionState_.axisStart = input.worldPosition;
+        interactionState_.axisFrame = isValidWorkPlaneFrame(input.workPlaneFrame)
+                                          ? input.workPlaneFrame
+                                          : makeWorkPlaneFrame(WorkPlane::XY, 0.0);
+        interactionState_.axisStart = isComponentEdit()
+                                          ? input.positionInFrame(
+                                                interactionState_.axisFrame)
+                                          : input.worldPosition;
         interactionState_.hasAxisStart = true;
         status_.text = QStringLiteral("Mirror: choose the axis direction");
         status_.canCommit = false;
     } else {
-        interactionState_.axisEnd = input.worldPosition;
+        interactionState_.axisEnd = isComponentEdit()
+                                        ? input.positionInFrame(
+                                              interactionState_.axisFrame)
+                                        : input.worldPosition;
         interactionState_.hasCompleteAxis = true;
         status_.text = QStringLiteral("Mirror: axis ready");
         status_.canCommit = true;
@@ -91,14 +101,28 @@ MirrorCommitResult MirrorTool::commitAxis(ToolContext &context)
     }
 
     result.sourceCount = interactionState_.sourceObjectIds.size();
+    result.componentEdit = isComponentEdit();
+    for (auto target = interactionState_.controlPointIndices.cbegin();
+         target != interactionState_.controlPointIndices.cend(); ++target) {
+        result.controlPointCount += target.value().size();
+    }
     result.axisStart = interactionState_.axisStart;
     result.axisEnd = interactionState_.axisEnd;
     DocumentTransaction transaction = context.beginTransaction();
-    if (!MirrorCommand::apply(context.document(), transaction,
-                              interactionState_.sourceObjectIds,
-                              interactionState_.axisStart,
-                              interactionState_.axisEnd,
-                              &result.createdObjectIds)) {
+    const bool applied = result.componentEdit
+        ? MirrorCommand::applyControlPoints(
+              context.document(), transaction,
+              interactionState_.sourceObjectIds,
+              interactionState_.controlPointIndices,
+              interactionState_.axisStart,
+              interactionState_.axisEnd,
+              interactionState_.axisFrame)
+        : MirrorCommand::apply(context.document(), transaction,
+                               interactionState_.sourceObjectIds,
+                               interactionState_.axisStart,
+                               interactionState_.axisEnd,
+                               &result.createdObjectIds);
+    if (!applied) {
         rejectAxisEndpoint();
         result.createdObjectIds.clear();
         return result;
@@ -108,8 +132,12 @@ MirrorCommitResult MirrorTool::commitAxis(ToolContext &context)
         return result;
     }
 
-    context.selection().setObjectIds(result.createdObjectIds);
-    context.notifySelectionChanged();
+    if (result.componentEdit) {
+        updateAssociativeDimensions(context.document(), context.curveSampler());
+    } else {
+        context.selection().setObjectIds(result.createdObjectIds);
+        context.notifySelectionChanged();
+    }
     context.notifyCollectionsChanged();
     clearInteraction();
     context.finishTool(ToolId::Select);
@@ -147,6 +175,12 @@ void MirrorTool::setSourceObjectIds(const QVector<ObjectId> &objectIds)
     interactionState_.sourceObjectIds = objectIds;
 }
 
+void MirrorTool::setComponentControlPointTargets(
+    const QHash<quint64, QSet<int>> &controlPointIndices)
+{
+    interactionState_.controlPointIndices = controlPointIndices;
+}
+
 void MirrorTool::clearInteraction()
 {
     interactionState_ = InteractionState{};
@@ -176,6 +210,21 @@ const QPointF &MirrorTool::axisStart() const
 const QPointF &MirrorTool::axisEnd() const
 {
     return interactionState_.axisEnd;
+}
+
+const WorkPlaneFrame &MirrorTool::axisFrame() const
+{
+    return interactionState_.axisFrame;
+}
+
+bool MirrorTool::isComponentEdit() const
+{
+    return !interactionState_.controlPointIndices.isEmpty();
+}
+
+const QHash<quint64, QSet<int>> &MirrorTool::controlPointIndices() const
+{
+    return interactionState_.controlPointIndices;
 }
 
 const QVector<ObjectId> &MirrorTool::sourceObjectIds() const

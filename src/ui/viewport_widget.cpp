@@ -5245,21 +5245,28 @@ public:
 
     bool beginMirror()
     {
+        QHash<quint64, QSet<int>> controlPointTargets;
+        QVector<ObjectId> selected;
         if (interactionMode_ == ViewportInteractionMode::Edit) {
-            DebugLog::instance().write(
-                QStringLiteral("beginMirror ignored in Edit Mode: component mirroring is not implemented"));
-            return false;
-        }
-
-        QVector<ObjectId> selected = selectedShapeIndices_;
-        if (selectedShapeIndex_.isValid() &&
-            !selected.contains(selectedShapeIndex_)) {
-            selected.append(selectedShapeIndex_);
+            controlPointTargets = selectedTransformControlPointTargets();
+            if (controlPointTargets.isEmpty()) {
+                DebugLog::instance().write(
+                    QStringLiteral("beginMirror ignored in Edit Mode: no supported selected components"));
+                return false;
+            }
+            selected = controlPointTargetObjectIds(controlPointTargets);
+        } else {
+            selected = selectedShapeIndices_;
+            if (selectedShapeIndex_.isValid() &&
+                !selected.contains(selectedShapeIndex_)) {
+                selected.append(selectedShapeIndex_);
+            }
         }
 
         QVector<ObjectId> validSelection;
         for (const ObjectId objectId : selected) {
-            if (document_.isObjectEditable(objectId) && !validSelection.contains(objectId)) {
+            if (document_.isObjectEditable(objectId) &&
+                !validSelection.contains(objectId)) {
                 validSelection.append(objectId);
             }
         }
@@ -5270,6 +5277,7 @@ public:
 
         setTool(Tool::Mirror);
         mirrorTool_.setSourceObjectIds(validSelection);
+        mirrorTool_.setComponentControlPointTargets(controlPointTargets);
         pendingPoints_.clear();
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
@@ -5277,6 +5285,51 @@ public:
         DebugLog::instance().write(QStringLiteral("beginMirror shapes=%1")
                                        .arg(mirrorTool_.sourceObjectIds().size()));
         return true;
+    }
+
+    QPointF mirrorAxisEndInCapturedFrame() const
+    {
+        const WorkPlaneFrame &currentFrame = viewportTransform_.workPlaneFrame();
+        if (!mirrorTool_.isComponentEdit() ||
+            !isValidWorkPlaneFrame(currentFrame) ||
+            !isValidWorkPlaneFrame(mirrorTool_.axisFrame())) {
+            return cursorWorld_;
+        }
+        const Point3D cursorWorld =
+            workPlaneFramePointToWorld(cursorWorld_, currentFrame);
+        return worldPointToWorkPlaneFrame(cursorWorld,
+                                          mirrorTool_.axisFrame());
+    }
+
+    bool makeMirroredComponentPreview(ObjectId objectId,
+                                      const QPointF &axisEnd,
+                                      Shape *mirroredShape) const
+    {
+        if (mirroredShape == nullptr) {
+            return false;
+        }
+        const Shape *sourceShape = document_.shape(objectId);
+        const SceneObject *sourceObject = document_.object(objectId);
+        const auto targets = mirrorTool_.controlPointIndices().constFind(
+            objectId.value());
+        if (sourceShape == nullptr || sourceObject == nullptr ||
+            targets == mirrorTool_.controlPointIndices().cend() ||
+            targets->isEmpty()) {
+            return false;
+        }
+        *mirroredShape = *sourceShape;
+        const Point3D placement = sourceObject->placementTranslation;
+        if ((placement.x != 0.0 || placement.y != 0.0 || placement.z != 0.0) &&
+            !bakeShapePlacementTranslation(mirroredShape, placement)) {
+            return false;
+        }
+        return transformShapeControlPoints(
+            mirroredShape, targets.value(),
+            [axisStart = mirrorTool_.axisStart(), axisEnd,
+             axisFrame = mirrorTool_.axisFrame()](const Point3D &point) {
+                return mirrorPointAcrossWorkPlaneLine(
+                    point, axisStart, axisEnd, axisFrame);
+            });
     }
 
     bool grabObjectWorldBoundsCenter(ObjectId objectId,
@@ -13082,6 +13135,8 @@ protected:
 
             if (activeTool_ == Tool::Mirror && mirrorTool_.hasAxisStart() &&
                 cursorValid_) {
+                const QPointF mirrorAxisEnd =
+                    mirrorAxisEndInCapturedFrame();
                 for (const ObjectId objectId : mirrorTool_.sourceObjectIds()) {
                     const int shapeIndex = objectIndex(objectId);
                     if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
@@ -13089,6 +13144,20 @@ protected:
                         continue;
                     }
                     Shape mirroredShape;
+                    if (mirrorTool_.isComponentEdit()) {
+                        if (makeMirroredComponentPreview(
+                                objectId, mirrorAxisEnd, &mirroredShape) &&
+                            addPreviewShape(mirroredShape,
+                                            viewportSelectionColor(),
+                                            3.5f,
+                                            false,
+                                            0.0f,
+                                            false,
+                                            false)) {
+                            gpuMirrorPreviewHandled.append(objectId);
+                        }
+                        continue;
+                    }
                     Shape sourceShape = shapes_[shapeIndex];
                     const SceneObject *sourceObject = document_.object(objectId);
                     if (sourceObject != nullptr &&
@@ -15926,15 +15995,21 @@ protected:
                         mirrorTool_.takeLastCommitResult();
                     if (result.sourceCount > 0) {
                         const QString message = result.committed
-                                                    ? QStringLiteral("mirror committed sourceCount=%1 copyCount=%2 axis=%3->%4")
-                                                          .arg(result.sourceCount)
-                                                          .arg(result.createdObjectIds.size())
-                                                          .arg(pointText(result.axisStart),
-                                                               pointText(result.axisEnd))
-                                                    : QStringLiteral("mirror rejected axis=%1->%2 objects=%3")
-                                                          .arg(pointText(result.axisStart),
-                                                               pointText(result.axisEnd))
-                                                          .arg(result.sourceCount);
+                            ? (result.componentEdit
+                                   ? QStringLiteral("mirror committed editObjects=%1 controlPoints=%2 axis=%3->%4")
+                                         .arg(result.sourceCount)
+                                         .arg(result.controlPointCount)
+                                         .arg(pointText(result.axisStart),
+                                              pointText(result.axisEnd))
+                                   : QStringLiteral("mirror committed sourceCount=%1 copyCount=%2 axis=%3->%4")
+                                         .arg(result.sourceCount)
+                                         .arg(result.createdObjectIds.size())
+                                         .arg(pointText(result.axisStart),
+                                              pointText(result.axisEnd)))
+                            : QStringLiteral("mirror rejected axis=%1->%2 objects=%3")
+                                  .arg(pointText(result.axisStart),
+                                       pointText(result.axisEnd))
+                                  .arg(result.sourceCount);
                         DebugLog::instance().write(message);
                     }
                 } else if (dispatchedTool == Tool::Scale) {
@@ -26610,11 +26685,21 @@ private:
         }
 
         const QPointF axisStart = mirrorTool_.axisStart();
-        const QPointF axisEnd = cursorWorld_;
+        const QPointF axisEnd = mirrorAxisEndInCapturedFrame();
         for (const ObjectId objectId : mirrorTool_.sourceObjectIds()) {
             const int shapeIndex = objectIndex(objectId);
             if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
                 !document_.isObjectVisible(objectId)) {
+                continue;
+            }
+
+            if (mirrorTool_.isComponentEdit()) {
+                Shape mirroredShape;
+                if (makeMirroredComponentPreview(objectId, axisEnd,
+                                                 &mirroredShape) &&
+                    !gpuHandledObjects.contains(objectId)) {
+                    drawShape(painter, mirroredShape, true, false, false);
+                }
                 continue;
             }
 

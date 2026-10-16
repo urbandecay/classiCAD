@@ -63,6 +63,13 @@ Point3D rotatePointAboutAxis(const Point3D &point,
                              const Point3D &axis,
                              qreal angle);
 
+// Reflects a world point across a line expressed in a workplane. The mirror
+// plane contains the line and the workplane normal, preserving normal depth.
+Point3D mirrorPointAcrossWorkPlaneLine(const Point3D &point,
+                                       const QPointF &axisStart,
+                                       const QPointF &axisEnd,
+                                       const WorkPlaneFrame &axisFrame);
+
 Point3D scalePointInFrame(const Point3D &point,
                           const QPointF &base,
                           const QPointF &axisDirection,

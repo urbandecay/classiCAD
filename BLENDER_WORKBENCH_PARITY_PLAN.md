@@ -3937,11 +3937,19 @@ face, a nonplanar or higher-order surface patch, or a trimmed surface boundary
 does not start the corresponding face/edge Extrude. An empty or unsupported
 component selection never falls back to extruding the whole object.
 Polygon-mesh component work remains deferred.
-Edit Mode's custom Mirror command is unavailable because it currently only
-mirrors whole objects. Partial surface CV deletion, individual solid-face
-deletion, exact active/selected outlines, mode-specific overlay visibility,
-Blender's Shift/Ctrl digit selection extensions, and matched GPU/QPainter
-captures remain open. The mode port is not signed off as full Blender parity.
+Edit Mode Mirror now reflects only the selected NURBS control-point targets in
+place. Vertex selections mirror their CVs, curve Edge selections mirror the
+selected spline's CVs, and a selected NURBS surface patch mirrors its CV net.
+The reflection is computed in world space from the two-click axis and the
+workplane captured at the first point; object placement is baked once. The
+existing CAD two-click arbitrary-line interaction remains in place, so
+Blender's transform-orientation, pivot, and axis-key interaction is not yet
+ported. NURBS solid component mirroring remains unsupported because its faces
+are derived from the exact base surface and extrusion vector. Partial surface
+CV deletion, individual solid-face deletion, exact active/selected outlines,
+mode-specific overlay visibility, Blender's Shift/Ctrl digit selection
+extensions, and matched GPU/QPainter captures remain open. The mode port is
+not signed off as full Blender parity.
 
 Port Blender 5.2.2's interaction behavior into the existing scene and geometry
 model, without importing Blender's architecture:

@@ -1,7 +1,9 @@
 #include "mirror_command.h"
 
+#include "core/commands/transform_command.h"
 #include "core/geometry/geometry_transform.h"
 
+#include <cmath>
 #include <utility>
 
 namespace classiCAD {
@@ -62,6 +64,44 @@ bool MirrorCommand::apply(const Document &document,
         *createdObjectIds = std::move(createdIds);
     }
     return true;
+}
+
+bool MirrorCommand::applyControlPoints(
+    Document &document,
+    DocumentTransaction &transaction,
+    const QVector<ObjectId> &sourceObjectIds,
+    const QHash<quint64, QSet<int>> &controlPointIndices,
+    const QPointF &axisStart,
+    const QPointF &axisEnd,
+    const WorkPlaneFrame &axisFrame,
+    int *editedObjectCount)
+{
+    if (editedObjectCount != nullptr) {
+        *editedObjectCount = 0;
+    }
+    const QPointF axis = axisEnd - axisStart;
+    if (controlPointIndices.isEmpty() ||
+        std::hypot(axis.x(), axis.y()) <= 1.0e-12 ||
+        !isValidWorkPlaneFrame(axisFrame)) {
+        return false;
+    }
+
+    return TransformCommand::applyPerObject(
+        document, transaction, sourceObjectIds,
+        [&controlPointIndices, &axisStart, &axisEnd, &axisFrame](
+            ObjectId objectId, Shape &shape) {
+            const auto targets = controlPointIndices.constFind(objectId.value());
+            if (targets == controlPointIndices.cend() || targets->isEmpty()) {
+                return;
+            }
+            transformShapeControlPoints(
+                &shape, targets.value(),
+                [&axisStart, &axisEnd, &axisFrame](const Point3D &point) {
+                    return mirrorPointAcrossWorkPlaneLine(
+                        point, axisStart, axisEnd, axisFrame);
+                });
+        },
+        editedObjectCount);
 }
 
 } // namespace classiCAD

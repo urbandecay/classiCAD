@@ -3,13 +3,18 @@
 #include "tool.h"
 #include "core/document/object_id.h"
 
+#include <QHash>
+#include <QSet>
+
 namespace classiCAD {
 
 class ToolContext;
 
 struct MirrorCommitResult {
     bool committed = false;
+    bool componentEdit = false;
     int sourceCount = 0;
+    int controlPointCount = 0;
     QVector<ObjectId> createdObjectIds;
     QPointF axisStart;
     QPointF axisEnd;
@@ -19,6 +24,8 @@ class MirrorTool final : public InteractionTool {
 public:
     struct InteractionState {
         QVector<ObjectId> sourceObjectIds;
+        QHash<quint64, QSet<int>> controlPointIndices;
+        WorkPlaneFrame axisFrame;
         QPointF axisStart{0.0, 0.0};
         QPointF axisEnd{0.0, 0.0};
         bool hasAxisStart = false;
@@ -37,12 +44,17 @@ public:
     void cancel(ToolContext &context) override;
     ToolStatus status() const override;
     void setSourceObjectIds(const QVector<ObjectId> &objectIds);
+    void setComponentControlPointTargets(
+        const QHash<quint64, QSet<int>> &controlPointIndices);
     void clearInteraction();
     void rejectAxisEndpoint();
     bool hasAxisStart() const;
     bool hasCompleteAxis() const;
     const QPointF &axisStart() const;
     const QPointF &axisEnd() const;
+    const WorkPlaneFrame &axisFrame() const;
+    bool isComponentEdit() const;
+    const QHash<quint64, QSet<int>> &controlPointIndices() const;
     const QVector<ObjectId> &sourceObjectIds() const;
 
 private:

@@ -15,7 +15,7 @@ namespace classiCAD {
 
 namespace {
 
-void remapCameraBackgroundPicture(Shape *shape,
+bool remapCameraBackgroundPicture(Shape *shape,
                                   const ViewportTransform &camera,
                                   const QSize &viewportSize)
 {
@@ -24,7 +24,7 @@ void remapCameraBackgroundPicture(Shape *shape,
         !shape->pictureCameraViewOnly ||
         shape->pictureCameraLocalCorners.size() != 4 ||
         !camera.cameraState().cameraView || viewportSize.isEmpty()) {
-        return;
+        return false;
     }
     const Point3D cameraPosition = camera.cameraPosition(viewportSize);
     Point3D forward = camera.viewDirection();
@@ -34,13 +34,13 @@ void remapCameraBackgroundPicture(Shape *shape,
     QVector3D upVector(float(up.x), float(up.y), float(up.z));
     if (forwardVector.lengthSquared() <= 1.0e-16f ||
         upVector.lengthSquared() <= 1.0e-16f) {
-        return;
+        return false;
     }
     forwardVector.normalize();
     upVector.normalize();
     QVector3D rightVector =
         QVector3D::crossProduct(forwardVector, upVector);
-    if (rightVector.lengthSquared() <= 1.0e-16f) return;
+    if (rightVector.lengthSquared() <= 1.0e-16f) return false;
     rightVector.normalize();
 
     QVector<Point3D> worldCorners;
@@ -53,7 +53,7 @@ void remapCameraBackgroundPicture(Shape *shape,
             forwardVector * float(-local.z);
         if (!std::isfinite(world.x()) || !std::isfinite(world.y()) ||
             !std::isfinite(world.z())) {
-            return;
+            return false;
         }
         worldCorners.append({world.x(), world.y(), world.z()});
     }
@@ -67,13 +67,14 @@ void remapCameraBackgroundPicture(Shape *shape,
     const WorkPlaneFrame frame = makeWorkPlaneFrameFromNormal(
         worldCorners[0], {normal.x(), normal.y(), normal.z()},
         {edgeX.x(), edgeX.y(), edgeX.z()});
-    if (!isValidWorkPlaneFrame(frame)) return;
+    if (!isValidWorkPlaneFrame(frame)) return false;
     shape->workPlaneFrame = frame;
     shape->points.clear();
     shape->points.reserve(worldCorners.size());
     for (const Point3D &corner : worldCorners) {
         shape->points.append(worldPointToWorkPlaneFrame(corner, frame));
     }
+    return true;
 }
 
 } // namespace
@@ -166,7 +167,14 @@ ViewportRenderFrame buildViewportRenderFrame(
 
         ViewportRenderObject entry;
         entry.shape = sceneObject.geometry;
-        remapCameraBackgroundPicture(&entry.shape, camera, viewportSize);
+        const bool cameraBackgroundRemapped = remapCameraBackgroundPicture(
+            &entry.shape, camera, viewportSize);
+        if (cameraBackgroundRemapped) {
+            // Its world-space shape changes with the current camera frame,
+            // while the document geometry revision does not. Build matching
+            // depth geometry for this snapshot instead of reusing stale data.
+            entry.cacheable = false;
+        }
         const Layer *layer = document.layer(sceneObject.layerId);
         // Resolve imported Blender material slots into this render snapshot.
         // The inline slot array is only a transient viewport bridge; the

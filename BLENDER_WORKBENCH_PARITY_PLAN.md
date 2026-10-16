@@ -9136,7 +9136,8 @@ resolve remain open.
   image edges can differ from Blender's scene-linear alpha-under compositing.
   Camera background quads also retain their source camera-local corners;
   viewport render snapshots rebuild the image frame from the current camera
-  view so later camera-view movement carries the background with it. Camera
-  object scale remains outside this remapping approximation. The extractor
-  bridge is version 25. C++ build passed; matched image captures have not been
-  run.
+  view so later camera-view movement carries the background with it. Remapped
+  pictures bypass the geometry cache so their depth shape updates along with
+  the camera. Camera object scale remains outside this remapping approximation.
+  The extractor bridge is version 25. C++ build passed; matched image captures
+  have not been run.

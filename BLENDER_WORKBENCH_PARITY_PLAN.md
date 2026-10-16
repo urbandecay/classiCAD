@@ -9149,7 +9149,23 @@ resolve remain open.
   transform is applied. Camera background images use the same
   setting through their synthetic Image Empty source. The transformed images
   still composite as overlays after the main scene transform, so transparent
-  image edges can differ from Blender's scene-linear alpha-under compositing.
+  image edges can differ from Blender's scene-linear compositing. The pinned
+  Blender 5.2.2 source has two camera-background routes when View as Render is
+  enabled: BACK images use alpha-under, while FRONT images use alpha-over in
+  the scene render framebuffer. Both happen after Workbench's DOF and AA scene
+  passes but before the final display transform. Ordinary Image Empties remain
+  in the later overlay output pass. classiCAD currently sends its synthetic
+  camera images through the same post-transform picture overlay as ordinary
+  Image Empties, so both camera depth modes can differ at transparent edges
+  and under nonlinear color transforms. Matching this needs a post-AA,
+  scene-linear camera-image composition point in both the GPU and QPainter
+  paths; drawing into the jittered scene sample would incorrectly make camera
+  images participate in scene DOF/AA. Blender's pass split is in
+  [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L821-L825)
+  and its later image output pass is at
+  [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L908-L916);
+  Workbench completes DOF and anti-aliasing before that overlay engine draw in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L457-L465).
   Camera background quads also retain their source camera-local corners;
   viewport render snapshots rebuild the image frame from the current camera
   view so later camera-view movement carries the background with it. Remapped

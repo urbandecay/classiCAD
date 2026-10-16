@@ -11971,12 +11971,16 @@ protected:
                     sceneStroke.color =
                         viewportShadingSettings_.themeWireColor;
                 }
-                // Blender's visible Overlay wire pass writes depth. Limit
-                // that behavior to committed Solid CAD wires; guides,
-                // component overlays, and transform previews remain no-write.
+                // Blender's visible Overlay wire pass writes depth for
+                // committed curve wires in both Solid and Wireframe. Keep
+                // guides, surface component overlays, points, and transform
+                // previews in their separate no-write paths.
                 sceneStroke.writeDepth =
-                    viewportShadingSettings_.mode ==
-                        ViewportShadingMode::Solid &&
+                    (viewportShadingSettings_.mode ==
+                         ViewportShadingMode::Solid ||
+                     viewportShadingSettings_.mode ==
+                         ViewportShadingMode::Wireframe) &&
+                    isViewportCurveStrokeType(visibleShape.geometryType) &&
                     !scalePreview && !rotatePreview &&
                     sceneStroke.pointDiameter <= 0.0f;
                 if (controlPointsVisible_ && controlGuide.shape != nullptr) {

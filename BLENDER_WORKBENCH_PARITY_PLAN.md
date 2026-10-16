@@ -9773,6 +9773,18 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L98-L112)
   and [#L210-L225](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L210-L225).
 
+### Write depth for committed curve wires in Wireframe (2026-10-16)
+
+- Committed CAD curve strokes now write depth in both Solid and Wireframe
+  modes. This lets later strokes be occluded by earlier curve geometry, like
+  Blender's visible overlay wire pass. Guides, point markers, surface edit
+  overlays, and transform previews stay outside this depth-writing path.
+  Build passed; matched overlapping-curve captures remain open.
+- Blender 5.2.2 enables depth writes in its overlay wire pass and submits
+  legacy curve geometry there in
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L68-L74)
+  and [#L125-L142](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L125-L142).
+
 ### QPainter opaque normal precision for Studio and MatCap (2026-10-16)
 
 - QPainter now applies Blender's sphere-map normal encode/decode round trip,

@@ -81,7 +81,8 @@ std::array<RasterWorkbenchDofTap, 49> rasterWorkbenchDofKernel(
 // Blender 5.2.2's per-pixel DOF gather-origin jitter, mapped to the
 // QPainter target's top-down pixel coordinates with temporal offset zero.
 QPointF rasterWorkbenchDofGatherOriginOffset(
-    int x, int y, int targetHeight, float centerCocPixels) noexcept;
+    int x, int y, int targetWidth, int targetHeight,
+    float centerCocPixels) noexcept;
 
 struct RasterWorkbenchDofPrefilter {
     float nearCoc = 0.0f;

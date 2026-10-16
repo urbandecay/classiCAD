@@ -9960,3 +9960,17 @@ moves them after scene effects and composites them under scene alpha.
   and [#L235-L236](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L235-L236).
   Build passed; matched camera-view and free-perspective DOF captures remain
   open.
+
+### QPainter DOF jitter uses half-resolution coordinates (2026-10-16)
+
+- The software DOF path gathers at full output resolution, but Blender's
+  gather shader generates its blue-noise and interleaved-gradient jitter from
+  `gl_FragCoord` in the half-resolution blur target. QPainter now maps each
+  output pixel to its corresponding half-resolution pixel before evaluating
+  those noise values. The jitter remains a full-resolution pixel offset, and
+  temporal offset stays zero because QPainter does not accumulate frames.
+- Blender allocates the gather target at half the viewport resolution in
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L102-L116)
+  and reads the blue-noise/IGN coordinates from the blur pass in
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L370-L415).
+  Build passed; matched QPainter DOF captures remain open.

@@ -562,17 +562,23 @@ std::array<RasterWorkbenchDofTap, 49> rasterWorkbenchDofKernel(
 }
 
 QPointF rasterWorkbenchDofGatherOriginOffset(
-    int x, int y, int targetHeight, float centerCocPixels) noexcept
+    int x, int y, int targetWidth, int targetHeight,
+    float centerCocPixels) noexcept
 {
-    if (targetHeight <= 0 || !std::isfinite(centerCocPixels) ||
+    if (targetWidth <= 0 || targetHeight <= 0 ||
+        !std::isfinite(centerCocPixels) ||
         centerCocPixels <= 0.0f) {
         return {};
     }
 
     constexpr float tau = 6.28318530718f;
-    const int noiseY = targetHeight - 1 - y;
-    const float blueNoise = rasterCavityNoise(x, noiseY, 1);
-    const float pixelX = static_cast<float>(x) + 0.5f;
+    const int halfWidth = std::max(targetWidth / 2, 1);
+    const int halfHeight = std::max(targetHeight / 2, 1);
+    const int halfX = std::clamp(x / 2, 0, halfWidth - 1);
+    const int halfYTopDown = std::clamp(y / 2, 0, halfHeight - 1);
+    const int noiseY = halfHeight - 1 - halfYTopDown;
+    const float blueNoise = rasterCavityNoise(halfX, noiseY, 1);
+    const float pixelX = static_cast<float>(halfX) + 0.5f;
     const float pixelY = static_cast<float>(noiseY) + 0.5f;
     const float gradient = 0.06711056f * pixelX + 0.00583715f * pixelY;
     const float ign = std::fmod(
@@ -4926,7 +4932,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     dofMixes[pixelIndex] = static_cast<float>(mix);
                     const QPointF gatherOriginOffset =
                         rasterWorkbenchDofGatherOriginOffset(
-                            x, y, outputHeight, static_cast<float>(radius));
+                            x, y, outputWidth, outputHeight,
+                            static_cast<float>(radius));
                     qreal red = 0.0, green = 0.0, blue = 0.0, alpha = 0.0;
                     qreal totalWeight = 0.0;
                     for (int tapIndex = 0; tapIndex < dofTapCount; ++tapIndex) {

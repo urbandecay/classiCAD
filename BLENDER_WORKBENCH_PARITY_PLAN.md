@@ -9397,6 +9397,19 @@ moves them after scene effects and depth-tests them against the retained scene.
   aspect fit; offscreen rendering outside an interactive camera view keeps a
   factor of one. Matched camera-view DOF captures remain open.
 
+### Global Z grid axis outside fixed orthographic views (2026-10-16)
+
+- Perspective and user/oblique orthographic grid frames now enable each saved
+  global X/Y/Z axis independently of the XY floor plane. The GPU path already
+  projects global axes separately from the floor grid; QPainter now also draws
+  the Z axis through the world origin and clips it to the view depth range.
+  Fixed Top/Front/Right-style views still show only axes lying in their plane.
+- Blender 5.2.2 selects the global axis flags for perspective and user views in
+  [`overlay_grid.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_grid.hh#L216-L224)
+  and decodes axes as global XYZ directions in
+  [`overlay_grid_vert.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_grid_vert.glsl#L44-L58).
+  Build passed; matched perspective and oblique grid captures remain open.
+
 ### GPU X-Ray outline equal-depth ownership (2026-10-16)
 
 - The private GPU outline-ID pass now uses `LEQUAL` when X-Ray is enabled, so

@@ -81,6 +81,9 @@ BlenderGridFrame resolveBlenderGridFrame(const ViewportTransform &transform,
                       : WorkPlane::XY;
     frame.planeOffset = 0.0;
     setVisiblePlaneAxes(&frame);
+    if (!frame.fixedAxisOrthographic) {
+        frame.visibleAxes = {{true, true, true}};
+    }
     const Point3D planeOrigin = workPlanePointToWorld({}, frame.plane,
                                                        frame.planeOffset);
 

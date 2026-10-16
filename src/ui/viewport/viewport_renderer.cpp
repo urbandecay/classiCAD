@@ -1526,6 +1526,35 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
                                                                viewportSize);
     const WorkPlane plane = gridFrame.plane;
     const qreal planeOffset = gridFrame.planeOffset;
+    const auto drawGlobalNormalAxis = [&]() {
+        if (gridFrame.fixedAxisOrthographic ||
+            !gridAppearance_.showAxisZ) {
+            return;
+        }
+        const Point3D cameraPosition =
+            transform_.cameraPosition(viewportSize);
+        const qreal clipEnd = transform_.cameraPreferences().clipEnd;
+        if (!std::isfinite(clipEnd) || clipEnd <= 0.0) return;
+        const qreal extent = std::abs(cameraPosition.z) + 2.0 * clipEnd;
+        Point3D start{0.0, 0.0, -extent};
+        Point3D end{0.0, 0.0, extent};
+        if (!clipWorkbenchSegmentToViewDepth(transform_, viewportSize,
+                                             &start, &end)) {
+            return;
+        }
+        QPointF screenStart;
+        QPointF screenEnd;
+        if (!transform_.worldPointToScreenUnclipped(
+                start, viewportSize, &screenStart) ||
+            !transform_.worldPointToScreenUnclipped(
+                end, viewportSize, &screenEnd)) {
+            return;
+        }
+        QColor color = gridAppearance_.axisZColor;
+        color.setAlphaF(color.alphaF() * gridAppearance_.opacity);
+        painter.setPen(QPen(color, 1.25));
+        painter.drawLine(screenStart, screenEnd);
+    };
     QPointF corners[4];
     const QPointF screenCorners[] = {{0.0, 0.0},
                                      {static_cast<qreal>(viewportSize.width()), 0.0},
@@ -1635,6 +1664,7 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
                           vAxisBins,
                           vColor,
                           vOpacity);
+        drawGlobalNormalAxis();
         painter.restore();
         return;
     }
@@ -1680,6 +1710,7 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
         painter.drawLine(projectGridPoint(QPointF(0.0, minimumV)),
                          projectGridPoint(QPointF(0.0, maximumV)));
     }
+    drawGlobalNormalAxis();
     painter.restore();
 }
 

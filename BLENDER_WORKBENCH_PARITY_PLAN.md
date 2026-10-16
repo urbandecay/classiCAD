@@ -9055,3 +9055,12 @@ resolve remain open.
   cutoff, including supported packed, float, and UDIM image data. Alpha modes
   that Blender ignores remain solid casters. C++ build passed; a matched
   cutout-shadow comparison has not been run.
+
+### Saved Blender viewport shading mode (2026-10-15)
+
+- The saved `VIEW_3D` shading record now includes Blender's `space.shading.type`.
+  Import applies `WIREFRAME` and `SOLID` to classiCAD's matching viewport modes;
+  `MATERIAL` and `RENDERED` remain unsupported and are reported while the
+  viewport keeps its Solid fallback. Older extraction records without the
+  field continue to default to Solid. The scene extractor bridge is version
+  22. C++ build passed; matched mode captures have not been run.

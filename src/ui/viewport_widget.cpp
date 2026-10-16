@@ -7396,6 +7396,16 @@ public:
         }
 
         ViewportShadingSettings settings;
+        const QString viewportShadingType =
+            source.value(QStringLiteral("viewport_shading_type")).toString();
+        if (viewportShadingType == QLatin1String("WIREFRAME")) {
+            settings.mode = ViewportShadingMode::Wireframe;
+        } else if (viewportShadingType == QLatin1String("SOLID")) {
+            settings.mode = ViewportShadingMode::Solid;
+        } else if (!viewportShadingType.isEmpty()) {
+            unsupported.append(QStringLiteral("viewport_shading_type (%1; only Solid and Wireframe are supported)")
+                                   .arg(viewportShadingType));
+        }
         const auto parseColor = [&source, &unsupported](const QString &key,
                                                         QColor *destination) {
             if (destination == nullptr) return;

@@ -512,8 +512,8 @@ std::array<RasterWorkbenchDofTap, 49> rasterWorkbenchDofKernel(
     std::array<RasterWorkbenchDofTap, 49> samples{};
     std::size_t sampleIndex = 0;
     for (int ring = 0; ring <= kernelRadius; ++ring) {
-        for (int x = -kernelRadius; x <= kernelRadius; ++x) {
-            for (int y = -kernelRadius; y <= kernelRadius; ++y) {
+        for (int y = -kernelRadius; y <= kernelRadius; ++y) {
+            for (int x = -kernelRadius; x <= kernelRadius; ++x) {
                 if (std::abs(x) > ring || std::abs(y) > ring ||
                     (std::abs(x) < ring && std::abs(y) < ring)) {
                     continue;

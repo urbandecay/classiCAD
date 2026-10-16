@@ -2816,7 +2816,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 22 && bridgeVersion != 23 && bridgeVersion != 24 &&
          bridgeVersion != 25 && bridgeVersion != 26 && bridgeVersion != 27 &&
          bridgeVersion != 28 && bridgeVersion != 29 &&
-         bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32)) {
+         bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
+         bridgeVersion != 33)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3332,6 +3333,13 @@ bool importBlenderScene(const QString &path,
             warnings.append(QStringLiteral("A Blender scene record has missing identity or an unexpected object type and was skipped"));
             continue;
         }
+        if (bridgeVersion >= 33 &&
+            !item.value(QStringLiteral("visibility")).toObject()
+                 .value(QStringLiteral("hide_surface_pick")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender object surface-pick state is invalid"));
+            return false;
+        }
         if (importedIds.contains(objectId)) {
             const auto existingIndex = importedIndexBySourceId.constFind(objectId);
             if (existingIndex != importedIndexBySourceId.cend()) {
@@ -3395,6 +3403,11 @@ bool importBlenderScene(const QString &path,
             warnings.append(QStringLiteral("%1: object skipped: %2")
                                 .arg(blenderItemLabel(item), itemError));
             continue;
+        }
+        if (bridgeVersion >= 33) {
+            sceneObject.hideSurfacePick =
+                item.value(QStringLiteral("visibility")).toObject()
+                    .value(QStringLiteral("hide_surface_pick")).toBool();
         }
         sceneObject.blenderSourceVersion =
             source.value(QStringLiteral("blender_version")).toString();

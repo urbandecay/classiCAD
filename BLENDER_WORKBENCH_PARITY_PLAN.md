@@ -9568,6 +9568,26 @@ resolve remain open.
   and base evaluation at lines 2230–2253. C++ build passed; no GUI comparison
   was run.
 
+### Blender surface-picking restrictions (2026-10-16)
+
+- Blender scene extraction now retains `Object.hide_surface_pick`; bridge
+  version 33 requires the value while earlier bridges default it to `false`.
+  Native document version 25 stores it and reads versions 1–24 with the
+  default. Surface hits and surface-only depth picking now skip restricted
+  pictures, NURBS surfaces, solids, and mesh faces. NURBS tessellation wires,
+  picture borders, and mesh edges remain pickable, and the regular render
+  depth path is unchanged. GPU component picking and CPU/GPU navigation depth
+  omit the restricted surface from their depth prepass.
+- Blender's overlay prepass skips these surfaces for selection/depth while
+  continuing the object's other overlay paths. Blender's face-ray snap
+  callback also skips them; its separate nearest/element snap callbacks do
+  not apply that same guard, so classiCAD's nearest and endpoint snap
+  candidates remain unchanged. References:
+  [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L522-L530),
+  [`transform_snap_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/transform/transform_snap_object.cc#L3181-L3203),
+  and the [Object API](https://docs.blender.org/api/5.2/bpy.types.Object.html).
+  The C++ build passed; no GUI or matched viewport comparison was run.
+
 ### GPU scene curves in Workbench Depth of Field (2026-10-15)
 
 - **Correction (2026-10-16):** The earlier entry treated legacy curve wire

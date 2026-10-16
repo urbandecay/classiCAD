@@ -114,6 +114,9 @@ struct SceneObject {
     bool hideRender = false;
     bool hiddenInViewport = false;
     bool hideSelect = false;
+    // Blender Object.hide_surface_pick: keep the object visible, but remove
+    // its surface from selection and depth-picking passes.
+    bool hideSurfacePick = false;
     // Blender Object.show_in_front: draw this object through other geometry.
     bool showInFront = false;
     // Blender object-level Solid wire overlays.

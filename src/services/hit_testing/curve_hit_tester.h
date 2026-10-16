@@ -30,7 +30,8 @@ public:
                           const QSize &viewportSize,
                           ObjectId objectId = ObjectId::invalid(),
                           quint64 geometryRevision = 0,
-                          const Point3D &worldOffset = {}) const;
+                          const Point3D &worldOffset = {},
+                          bool includeSurfaceHit = true) const;
 
     qreal distanceToNurbsCurve(const QPointF &screenPosition,
                                const Shape::NurbsCurve2D &curve,
@@ -47,7 +48,8 @@ public:
                                  quint64 geometryRevision = 0,
                                  int faceIndex = 0,
                                  const Point3D &worldOffset = {},
-                                 const PreparedNurbsSurfaceTessellation::Options &options = {}) const;
+                                 const PreparedNurbsSurfaceTessellation::Options &options = {},
+                                 bool includeSurfaceHit = true) const;
 
     int hitTestShape(const Document &document,
                      const QPointF &screenPosition,

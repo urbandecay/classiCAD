@@ -541,7 +541,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       const QSize &viewportSize,
                                       ObjectId objectId,
                                       quint64 geometryRevision,
-                                      const Point3D &worldOffset) const
+                                      const Point3D &worldOffset,
+                                      bool includeSurfaceHit) const
 {
     const WorkPlaneFrame shapeFrame = shapeWorkPlaneFrame(shape);
     if (shape.geometryType == GeometryType::NurbsSolid) {
@@ -555,7 +556,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                 !bounds.adjusted(-12, -12, 12, 12).contains(screenPosition)) continue;
             closest = std::min(closest, distanceToNurbsSurface(
                 screenPosition, faces[index], transform, viewportSize,
-                objectId, geometryRevision, index, worldOffset));
+                objectId, geometryRevision, index, worldOffset, {},
+                includeSurfaceHit));
         }
         return closest;
     }
@@ -578,7 +580,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       geometryRevision,
                                       0,
                                       worldOffset,
-                                      displayOptions);
+                                      displayOptions,
+                                      includeSurfaceHit);
     }
     if (isDimensionGeometryType(shape.geometryType)) {
         return distanceToDimensionLayout(
@@ -726,7 +729,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         for (const QPointF &vertex : vertices) {
             frame.append(transform.worldToScreen(vertex, viewportSize));
         }
-        if (frame.containsPoint(screenPosition, Qt::OddEvenFill)) {
+        if (includeSurfaceHit &&
+            frame.containsPoint(screenPosition, Qt::OddEvenFill)) {
             // The bitmap's face must remain selectable, but vector geometry
             // drawn over it should win when the cursor is actually on a curve.
             return 8.0;
@@ -781,7 +785,8 @@ qreal CurveHitTester::distanceToNurbsSurface(
     quint64 geometryRevision,
     int faceIndex,
     const Point3D &worldOffset,
-    const PreparedNurbsSurfaceTessellation::Options &options) const
+    const PreparedNurbsSurfaceTessellation::Options &options,
+    bool includeSurfaceHit) const
 {
     PreparedNurbsSurfaceTessellation localTessellation;
     QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
@@ -820,6 +825,9 @@ qreal CurveHitTester::distanceToNurbsSurface(
             previous = screenPoint;
             havePrevious = true;
         }
+    }
+    if (!includeSurfaceHit) {
+        return distance;
     }
     for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
          tessellation->triangles()) {
@@ -1022,7 +1030,9 @@ int CurveHitTester::hitTestShape(const Document &document,
                                                viewportSize,
                                                objectId,
                                                document.objectGeometryRevision(objectId),
-                                               worldOffset);
+                                               worldOffset,
+                                               sceneObject == nullptr ||
+                                                   !sceneObject->hideSurfacePick);
         if (distance <= closestDistance) {
             closestDistance = distance;
             closestShape = index;
@@ -1176,15 +1186,22 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
     qreal nearestScreenDistance = hitRadiusPixels;
     bool found = false;
     for (int index = 0; index < document.size(); ++index) {
-        if (!document.isObjectVisible(document.objectIdAt(index))) {
+        const ObjectId objectId = document.objectIdAt(index);
+        if (!document.isObjectVisible(objectId)) {
             continue;
         }
         const Shape &shape = document[index];
+        const SceneObject *sceneObject = document.object(objectId);
+        if (sceneObject != nullptr && sceneObject->hideSurfacePick &&
+            (shape.geometryType == GeometryType::Picture ||
+             shape.geometryType == GeometryType::NurbsSurface ||
+             shape.geometryType == GeometryType::NurbsSolid ||
+             shape.geometryType == GeometryType::PolygonMesh)) {
+            continue;
+        }
         ViewportTransform shapeTransform = transform;
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         shapeTransform.setWorkPlaneFrame(frame);
-        const ObjectId objectId = document.objectIdAt(index);
-        const SceneObject *sceneObject = document.object(objectId);
         const Point3D worldOffset = sceneObject != nullptr
                                         ? sceneObject->placementTranslation
                                         : Point3D{};
@@ -1404,8 +1421,11 @@ bool CurveHitTester::hitTestVisibleSurface(
             continue;
         }
         const Shape &shape = document[objectIndex];
+        const SceneObject *sceneObject = document.object(objectId);
+        if (sceneObject != nullptr && sceneObject->hideSurfacePick) {
+            continue;
+        }
         if (shape.geometryType == GeometryType::Picture) {
-            const SceneObject *sceneObject = document.object(objectId);
             WorkPlaneFrame placedFrame = shapeWorkPlaneFrame(shape);
             if (sceneObject != nullptr) {
                 placedFrame.origin.x += sceneObject->placementTranslation.x;
@@ -1453,7 +1473,6 @@ bool CurveHitTester::hitTestVisibleSurface(
             continue;
         }
 
-        const SceneObject *sceneObject = document.object(objectId);
         const Point3D worldOffset = sceneObject != nullptr
                                         ? sceneObject->placementTranslation
                                         : Point3D{};

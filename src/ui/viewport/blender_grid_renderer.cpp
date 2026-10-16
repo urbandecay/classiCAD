@@ -31,6 +31,29 @@ constexpr int kOrthographicGridLineCount = 301;
 constexpr int kGridLevelsDrawn = 3;
 constexpr int kPerspectiveGridIterations = 4;
 
+QVector<ViewportRenderObject> sceneSurfacePickOccluders(
+    const QVector<ViewportRenderObject> &sceneObjects)
+{
+    // The shared pick-depth builder uses these types only for face depth.
+    // Excluding one removes its occlusion contribution, not its separate
+    // object or wire picking paths.
+    QVector<ViewportRenderObject> occluders;
+    occluders.reserve(sceneObjects.size());
+    for (const ViewportRenderObject &object : sceneObjects) {
+        const GeometryType type = object.shape.geometryType;
+        const bool hasSurfaceDepth =
+            type == GeometryType::Picture ||
+            type == GeometryType::NurbsSurface ||
+            type == GeometryType::NurbsSolid ||
+            type == GeometryType::PolygonMesh;
+        if (object.hideSurfacePick && hasSurfaceDepth) {
+            continue;
+        }
+        occluders.append(object);
+    }
+    return occluders;
+}
+
 QVector3D asVector(const Point3D &point)
 {
     return {static_cast<float>(point.x),
@@ -1119,7 +1142,9 @@ bool BlenderGridRenderer::pickScenePoint(
         return false;
     }
 
-    updateSceneDepthGeometry(visibleSceneShapes);
+    const QVector<ViewportRenderObject> pickSceneShapes =
+        sceneSurfacePickOccluders(visibleSceneShapes);
+    updateSceneDepthGeometry(pickSceneShapes);
     if (sceneDepthLineVertexCount_ == 0 &&
         sceneDepthSurfaceVertexCount_ == 0 &&
         sceneDepthPointVertexCount_ == 0) {
@@ -1166,7 +1191,7 @@ bool BlenderGridRenderer::pickScenePoint(
     glClear(GL_DEPTH_BUFFER_BIT);
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
     drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
-                                visibleSceneShapes);
+                                pickSceneShapes);
 
     // Match the CPU hit tolerance while reading only a tiny block on demand,
     // once when orbit begins. This keeps navigation frames free of readback.
@@ -1275,7 +1300,9 @@ bool BlenderGridRenderer::pickComponentElement(
         return false;
     }
 
-    updateSceneDepthGeometry(visibleSceneShapes);
+    const QVector<ViewportRenderObject> pickSceneShapes =
+        sceneSurfacePickOccluders(visibleSceneShapes);
+    updateSceneDepthGeometry(pickSceneShapes);
     if (sceneDepthSurfaceVertexCount_ == 0) {
         return false;
     }
@@ -1426,7 +1453,7 @@ bool BlenderGridRenderer::pickComponentElement(
     // writes component IDs only where the corresponding edit element is visible.
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
     drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
-                                visibleSceneShapes, true);
+                                pickSceneShapes, true);
     if (!componentPickProgram_.bind()) {
         restoreState();
         return false;
@@ -1552,7 +1579,10 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
         return false;
     }
 
-    updateSceneDepthGeometry(visibleSceneShapes);
+    const QVector<ViewportRenderObject> pickSceneShapes = depthTest
+        ? sceneSurfacePickOccluders(visibleSceneShapes)
+        : visibleSceneShapes;
+    updateSceneDepthGeometry(pickSceneShapes);
     const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     const QSize pixelSize(qRound(viewportSize.width() * dpr),
                           qRound(viewportSize.height() * dpr));
@@ -1689,7 +1719,7 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
     if (depthTest && sceneDepthSurfaceVertexCount_ > 0) {
         drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
         drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
-                                    visibleSceneShapes, true);
+                                    pickSceneShapes, true);
     }
     if (!componentPickProgram_.bind()) {
         restoreState();

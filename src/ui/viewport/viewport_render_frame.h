@@ -92,6 +92,7 @@ struct ViewportRenderObject {
     bool selected = false;
     bool active = false;
     bool showInFront = false;
+    bool hideSurfacePick = false;
     bool showWire = false;
     bool showAllEdges = false;
     bool wireDisplay = false;

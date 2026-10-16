@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 24);
+    serialized.insert(QStringLiteral("version"), 25);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -467,6 +467,8 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
         serializedObject.insert(QStringLiteral("hideSelect"), sceneObject.hideSelect);
+        serializedObject.insert(QStringLiteral("hideSurfacePick"),
+                                sceneObject.hideSurfacePick);
         serializedObject.insert(QStringLiteral("showInFront"), sceneObject.showInFront);
         serializedObject.insert(QStringLiteral("showWire"), sceneObject.showWire);
         serializedObject.insert(QStringLiteral("showAllEdges"), sceneObject.showAllEdges);
@@ -626,7 +628,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 24) {
+    if (version < 1 || version > 25) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1112,6 +1114,7 @@ bool documentFromJson(const QJsonValue &value,
         bool hideRender = false;
         bool hiddenInViewport = false;
         bool hideSelect = false;
+        bool hideSurfacePick = false;
         QJsonObject viewLayerHidden;
         QString defaultViewLayerKey;
         if (version >= 10) {
@@ -1160,6 +1163,15 @@ bool documentFromJson(const QJsonValue &value,
                 }
                 defaultViewLayerKey = key.toString();
             }
+        }
+        if (version >= 25) {
+            if (!serializedObject.value(QStringLiteral("hideSurfacePick")).isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid scene object surface-pick state"));
+                return false;
+            }
+            hideSurfacePick =
+                serializedObject.value(QStringLiteral("hideSurfacePick")).toBool();
         }
 
         if (shape.geometryType == GeometryType::PolygonMesh) {
@@ -1272,6 +1284,7 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.hideRender = hideRender;
         sceneObject.hiddenInViewport = hiddenInViewport;
         sceneObject.hideSelect = hideSelect;
+        sceneObject.hideSurfacePick = hideSurfacePick;
         if (version >= 19) {
             if (!serializedObject.value(QStringLiteral("showInFront")).isBool()) {
                 setError(errorMessage, QStringLiteral("invalid object in-front state"));

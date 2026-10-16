@@ -25067,8 +25067,11 @@ private:
                     polygon.append(projected);
                 }
                 if (!valid) continue;
-                qreal distance = polygon.containsPoint(screenPosition, Qt::OddEvenFill)
-                                     ? 0.0 : std::numeric_limits<qreal>::infinity();
+                qreal distance =
+                    !object->hideSurfacePick &&
+                            polygon.containsPoint(screenPosition,
+                                                  Qt::OddEvenFill)
+                        ? 0.0 : std::numeric_limits<qreal>::infinity();
                 for (int i = 0; i < polygon.size(); ++i) {
                     distance = qMin(distance, curveHitTester_.distanceToSegment(
                         screenPosition, polygon[i], polygon[(i + 1) % polygon.size()]));

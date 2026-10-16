@@ -270,6 +270,7 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.selected = selectedIds.contains(entry.objectId.value());
         entry.active = input.primarySelectedObjectId == entry.objectId;
         entry.showInFront = sceneObject.showInFront;
+        entry.hideSurfacePick = sceneObject.hideSurfacePick;
         entry.showWire = sceneObject.showWire;
         entry.showAllEdges = sceneObject.showAllEdges;
         entry.wireDisplay = sceneObject.wireDisplay;

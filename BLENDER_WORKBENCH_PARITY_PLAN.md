@@ -10116,8 +10116,11 @@ scene depth.
   and Custom colors. Selected NURBS surface and solid fills also receive the
   same scene-linear selection tint as the GPU path. The prior mesh selection
   branch replaced the fill with a flat color, and the surface renderer ignored
-  selection. QPainter now applies Blender's 51/255 orange selection mix to
-  shaded scene-linear color, matching the GPU selection tint path.
+  selection. Direct QPainter draws apply the existing 51/255 orange selection
+  mix after the view transform in display-linear space. The bounded
+  scene-linear compositor still bakes that tint into captured fragments before
+  cavity and shadows; matching the GPU's later selection-mask resolve remains
+  open for effect-enabled selected fills.
   Blender keeps Attribute shading on selected objects in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2045).
   Build passed; matched selected-Attribute Blender captures remain open.

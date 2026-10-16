@@ -3458,7 +3458,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.specularLighting,
                             shadingSettings_.matcapFlipX);
                     }
-                    if (triangle.selected) {
+                    if (triangle.selected &&
+                        (preserveSceneLinearPictureOutput ||
+                         fragmentSink != nullptr)) {
                         shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
                                        editSelectionLinear * editSelectionMix;
                     }
@@ -3493,13 +3495,22 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             meshViewDirection, shadedLinear, pixelAlpha,
                             shapeObjectId, transform_);
                     }
-                    const QVector3D displayColor =
+                    QVector3D displayColor =
                         workbenchSceneLinearToDisplaySrgb(
                             shadedLinear, shadingSettings_.colorTransform,
                             shadingSettings_.colorExposure,
                             shadingSettings_.colorGamma,
                             shadingSettings_.colorLutData,
                             shadingSettings_.colorLutMetadata);
+                    if (triangle.selected &&
+                        !preserveSceneLinearPictureOutput &&
+                        fragmentSink == nullptr) {
+                        const QVector3D displayLinear =
+                            workbenchSrgbToSceneLinear(displayColor);
+                        displayColor = workbenchSceneLinearToSrgb(
+                            displayLinear * (1.0f - editSelectionMix) +
+                            editSelectionLinear * editSelectionMix);
+                    }
                     const quint64 pixelKey =
                         static_cast<quint64>(qFloor(py)) *
                             static_cast<quint64>(meshDeviceWidth) +
@@ -3564,12 +3575,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 QColor fallbackColor = triangle.color;
                 if (triangle.useWorkbenchColor) {
                     QVector3D sceneLinearColor = triangle.sceneLinearColor;
-                    if (triangle.selected) {
+                    if (triangle.selected &&
+                        (preserveSceneLinearPictureOutput ||
+                         fragmentSink != nullptr)) {
                         sceneLinearColor = sceneLinearColor *
                                 (1.0f - editSelectionMix) +
                             editSelectionLinear * editSelectionMix;
                     }
-                    const QVector3D displayColor =
+                    QVector3D displayColor =
                         workbenchSceneLinearToDisplaySrgb(
                             sceneLinearColor,
                             shadingSettings_.colorTransform,
@@ -3577,6 +3590,15 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.colorGamma,
                             shadingSettings_.colorLutData,
                             shadingSettings_.colorLutMetadata);
+                    if (triangle.selected &&
+                        !preserveSceneLinearPictureOutput &&
+                        fragmentSink == nullptr) {
+                        const QVector3D displayLinear =
+                            workbenchSrgbToSceneLinear(displayColor);
+                        displayColor = workbenchSceneLinearToSrgb(
+                            displayLinear * (1.0f - editSelectionMix) +
+                            editSelectionLinear * editSelectionMix);
+                    }
                     fallbackColor = QColor::fromRgbF(
                         std::clamp(qreal(displayColor.x()), 0.0, 1.0),
                         std::clamp(qreal(displayColor.y()), 0.0, 1.0),
@@ -5488,18 +5510,25 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     shadingSettings_.specularLighting,
                     shadingSettings_.matcapFlipX);
             }
-            if (selected && !preview) {
+            if (selected && !preview && fragmentSink != nullptr) {
                 shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
                                editSelectionLinear * editSelectionMix;
             }
             if (resolvedSceneLinear != nullptr) {
                 *resolvedSceneLinear = shadedLinear;
             }
-            const QVector3D shaded = workbenchSceneLinearToDisplaySrgb(
+            QVector3D shaded = workbenchSceneLinearToDisplaySrgb(
                 shadedLinear, shadingSettings_.colorTransform,
                 shadingSettings_.colorExposure, shadingSettings_.colorGamma,
                 shadingSettings_.colorLutData,
                 shadingSettings_.colorLutMetadata);
+            if (selected && !preview && fragmentSink == nullptr) {
+                const QVector3D displayLinear =
+                    workbenchSrgbToSceneLinear(shaded);
+                shaded = workbenchSceneLinearToSrgb(
+                    displayLinear * (1.0f - editSelectionMix) +
+                    editSelectionLinear * editSelectionMix);
+            }
             QColor color = baseColor;
             color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
             color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));

@@ -9141,5 +9141,7 @@ resolve remain open.
   the camera. When Blender scenes share visible collections, the viewport also
   filters camera backgrounds by the active scene's camera so images from a
   different scene cannot appear in the same camera view. Camera object scale
-  remains outside this remapping approximation. The extractor bridge is
-  version 25. C++ build passed; matched image captures have not been run.
+  remains outside this remapping approximation. Camera backgrounds now scale
+  their local width and offsets with the live focal-length preference, keeping
+  them aligned to the camera frame after a lens change. The extractor bridge
+  is version 26. C++ build passed; matched image captures have not been run.

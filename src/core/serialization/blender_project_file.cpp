@@ -2151,6 +2151,14 @@ bool parseBlenderPictureItem(
         QStringLiteral("show_empty_image_only_axis_aligned")).toBool(false);
     result.geometry.pictureCameraViewOnly = item.value(
         QStringLiteral("picture_camera_view_only")).toBool(false);
+    const QJsonValue cameraSourceLens = item.value(
+        QStringLiteral("picture_camera_source_lens_millimeters"));
+    if (cameraSourceLens.isDouble() &&
+        std::isfinite(cameraSourceLens.toDouble()) &&
+        cameraSourceLens.toDouble() > 0.0) {
+        result.geometry.pictureCameraSourceFocalLengthMillimeters =
+            cameraSourceLens.toDouble();
+    }
     const QJsonArray cameraLocalCorners = item.value(
         QStringLiteral("picture_camera_local_corners")).toArray();
     if (!cameraLocalCorners.isEmpty()) {
@@ -2775,7 +2783,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
          bridgeVersion != 16 && bridgeVersion != 17 && bridgeVersion != 18 &&
          bridgeVersion != 19 && bridgeVersion != 20 && bridgeVersion != 21 &&
-         bridgeVersion != 22 && bridgeVersion != 23)) {
+         bridgeVersion != 22 && bridgeVersion != 23 && bridgeVersion != 24 &&
+         bridgeVersion != 25 && bridgeVersion != 26)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

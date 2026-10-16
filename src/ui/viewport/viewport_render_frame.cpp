@@ -72,11 +72,20 @@ bool remapCameraBackgroundPicture(Shape *shape,
 
     QVector<Point3D> worldCorners;
     worldCorners.reserve(4);
+    const qreal sourceLens =
+        shape->pictureCameraSourceFocalLengthMillimeters;
+    const qreal currentLens = camera.cameraPreferences().focalLengthMillimeters;
+    const qreal frameScale = camera.isPerspectiveEnabled() &&
+        std::isfinite(sourceLens) && sourceLens > 0.0 &&
+        std::isfinite(currentLens) && currentLens > 0.0
+            ? sourceLens / currentLens
+            : 1.0;
     for (const Point3D &local : shape->pictureCameraLocalCorners) {
         const QVector3D world =
             QVector3D(float(cameraPosition.x), float(cameraPosition.y),
                       float(cameraPosition.z)) +
-            rightVector * float(local.x) + upVector * float(local.y) +
+            rightVector * float(local.x * frameScale) +
+            upVector * float(local.y * frameScale) +
             forwardVector * float(-local.z);
         if (!std::isfinite(world.x()) || !std::isfinite(world.y()) ||
             !std::isfinite(world.z())) {

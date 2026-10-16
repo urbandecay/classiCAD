@@ -966,6 +966,10 @@ QJsonObject shapeToJson(const Shape &shape)
         object.insert(QStringLiteral("pictureImageDepth"), pictureDepth);
         object.insert(QStringLiteral("pictureCameraViewOnly"),
                       shape.pictureCameraViewOnly);
+        if (shape.pictureCameraSourceFocalLengthMillimeters > 0.0) {
+            object.insert(QStringLiteral("pictureCameraSourceFocalLengthMillimeters"),
+                          shape.pictureCameraSourceFocalLengthMillimeters);
+        }
         if (shape.pictureCameraLocalCorners.size() == 4) {
             QJsonArray localCorners;
             for (const Point3D &corner : shape.pictureCameraLocalCorners) {
@@ -1160,6 +1164,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     bool pictureShowOrthographic = true;
     bool pictureOnlyAxisAligned = false;
     bool pictureCameraViewOnly = false;
+    qreal pictureCameraSourceFocalLengthMillimeters = 0.0;
     QVector<Point3D> pictureCameraLocalCorners;
     PictureImageSide pictureImageSide = PictureImageSide::Both;
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
@@ -1193,6 +1198,16 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             !readBoolean(QStringLiteral("pictureCameraViewOnly"), false,
                          &pictureCameraViewOnly)) {
             return false;
+        }
+        const QJsonValue sourceLens = object.value(
+            QStringLiteral("pictureCameraSourceFocalLengthMillimeters"));
+        if (!sourceLens.isUndefined()) {
+            if (!sourceLens.isDouble() ||
+                !std::isfinite(sourceLens.toDouble()) ||
+                sourceLens.toDouble() <= 0.0) {
+                return false;
+            }
+            pictureCameraSourceFocalLengthMillimeters = sourceLens.toDouble();
         }
         const QJsonValue cameraLocalCornersValue = object.value(
             QStringLiteral("pictureCameraLocalCorners"));
@@ -1590,6 +1605,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureShowOrthographic = pictureShowOrthographic;
     shape->pictureOnlyAxisAligned = pictureOnlyAxisAligned;
     shape->pictureCameraViewOnly = pictureCameraViewOnly;
+    shape->pictureCameraSourceFocalLengthMillimeters =
+        pictureCameraSourceFocalLengthMillimeters;
     shape->pictureCameraLocalCorners = pictureCameraLocalCorners;
     shape->pictureImageSide = pictureImageSide;
     shape->pictureImageDepth = pictureImageDepth;

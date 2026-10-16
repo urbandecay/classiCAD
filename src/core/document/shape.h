@@ -78,6 +78,9 @@ struct Shape {
     // Camera background image corners in the source camera's local space.
     // The viewport render snapshot remaps these to its current camera frame.
     QVector<Point3D> pictureCameraLocalCorners;
+    // Lens used to size the source camera frame. A live focal-length change
+    // scales camera-background offsets and dimensions with that frame.
+    qreal pictureCameraSourceFocalLengthMillimeters = 0.0;
     // Blender Image Empties can request the scene's view transform when
     // displayed. Camera background images use the same image property.
     bool pictureUseViewTransform = false;

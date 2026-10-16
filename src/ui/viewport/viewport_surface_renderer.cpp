@@ -4622,22 +4622,19 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
         -inwardFarClipPlane.z() / farPlaneNormalLength);
     const float farPlaneOffset =
         inwardFarClipPlane.w() / farPlaneNormalLength;
-    // Blender's lightDirection is the direction light rays travel. Shadow
-    // volumes extend toward the light source, opposite that ray direction.
-    const QVector3D extrusionDirection = -lightDirection;
-    const float extrusionFarPlaneDot =
-        QVector3D::dotProduct(extrusionDirection, farPlaneNormal);
+    const float lightFarPlaneDot =
+        QVector3D::dotProduct(lightDirection, farPlaneNormal);
     const auto extrudeToFarPlane = [&](const QVector3D &position) {
         float extrusionDistance = 1.0e5f;
-        if (extrusionFarPlaneDot > 0.0f) {
+        if (lightFarPlaneDot > 0.0f) {
             const float signedDistance =
                 QVector3D::dotProduct(farPlaneNormal, position) -
                 farPlaneOffset;
-            extrusionDistance = -signedDistance / extrusionFarPlaneDot;
+            extrusionDistance = -signedDistance / lightFarPlaneDot;
             // Keep the cap just inside the far plane, matching Blender.
             extrusionDistance -= 1.0e-3f;
         }
-        return position + extrusionDirection * extrusionDistance;
+        return position + lightDirection * extrusionDistance;
     };
 
     QVector<QVector3D> volumeVertices;

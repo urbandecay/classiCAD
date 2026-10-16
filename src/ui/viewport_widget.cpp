@@ -2655,17 +2655,40 @@ public:
             const int activeFamily = geometryFamily(selection_.primaryObjectId());
             if (activeFamily == 0) {
                 notifyViewportControlsChanged();
+                if (toolStatusUpdate_) {
+                    const Shape *activeShape =
+                        document_.shape(selection_.primaryObjectId());
+                    const QString message =
+                        activeShape != nullptr &&
+                                activeShape->geometryType ==
+                                    GeometryType::PolygonMesh
+                            ? QStringLiteral(
+                                  "Polygon mesh Edit Mode is not available yet")
+                            : selection_.objectIds().isEmpty()
+                                  ? QStringLiteral(
+                                        "Select an editable curve, point, surface, or solid first")
+                                  : QStringLiteral(
+                                        "The selected object cannot enter Edit Mode");
+                    toolStatusUpdate_(message);
+                }
                 return false;
             }
             editObjectIds_.clear();
+            bool skippedIncompatibleSelection = false;
             for (const ObjectId objectId : selection_.objectIds()) {
                 if (geometryFamily(objectId) == activeFamily) {
                     editObjectIds_.insert(objectId.value());
+                } else {
+                    skippedIncompatibleSelection = true;
                 }
             }
             if (editObjectIds_.isEmpty()) {
                 notifyViewportControlsChanged();
                 return false;
+            }
+            if (skippedIncompatibleSelection && toolStatusUpdate_) {
+                toolStatusUpdate_(QStringLiteral(
+                    "Only selected objects compatible with the active object entered Edit Mode"));
             }
             if (activeFamily == 1 &&
                 componentSelectionMode_ == ComponentSelectionMode::Face) {

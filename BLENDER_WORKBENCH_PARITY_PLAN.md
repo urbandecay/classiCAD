@@ -3897,8 +3897,10 @@ starts in Object Mode, has an Object/Edit selector and a Tab toggle when no
 modal drag is active, selects whole objects in Object Mode, and selects
 components in Edit Mode. The active CAD tool does not block Tab; the tangent
 circle tool gets first chance to consume its own Tab command. Entering Edit Mode
-requires a selected editable object and selects
-its existing control geometry when it has no retained component selection.
+requires a selected editable object and reports when no supported selection is
+available. Incompatible selected objects are left out of the edit set and
+reported in the status bar. Entering Edit Mode selects existing control
+geometry when it has no retained component selection.
 Returning to Object Mode preserves the component caches without allowing them
 to affect object transforms, point extrusion, or object duplication.
 

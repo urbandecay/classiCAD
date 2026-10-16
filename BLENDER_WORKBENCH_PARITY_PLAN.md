@@ -10090,3 +10090,12 @@ scene depth.
   front receiver's shadow to regular color showing through that edge. The
   legacy painter fallback remains approximate. Build passed; matched
   in-front-shadow captures remain open.
+
+### GPU cavity snapshots merged in-front depth (2026-10-16)
+
+- The GPU cavity depth snapshot is now copied after the in-front depth merge
+  while that framebuffer still has its depth attachment. The later opaque
+  coverage pass detaches that attachment, so the old copy read an incomplete
+  source and silently kept regular-only depth beside merged normals. A failed
+  snapshot now disables the affected shared prepass instead of marking stale
+  depth ready. Build passed; matched in-front cavity captures remain open.

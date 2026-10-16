@@ -3558,7 +3558,8 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
 
 bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
     const ViewportRenderTargets &targets, bool mergeColor, bool mergeNormal,
-    bool mergeMaterial, bool mergeShadowMask, bool captureOpaqueCoverage)
+    bool mergeMaterial, bool mergeShadowMask, bool captureOpaqueCoverage,
+    bool snapshotMergedDepth)
 {
     if (targets.frontDepthTexture == 0 ||
         targets.frontMaterialDataTexture == 0 ||
@@ -3677,6 +3678,38 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
         frontMergeProgram_.setUniformValue("uCaptureOpaqueCoverage", false);
         outlineVertexArray_.bind();
         glDrawArrays(GL_TRIANGLES, 0, 3);
+        if (snapshotMergedDepth) {
+            bool depthCopyComplete = cavityDepthFramebuffer_ != 0;
+            GLint currentReadFramebuffer = 0;
+            GLint currentDrawFramebuffer = 0;
+            if (depthCopyComplete) {
+                glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                              &currentReadFramebuffer);
+                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,
+                              &currentDrawFramebuffer);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  frontMergeFramebuffer_);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  cavityDepthFramebuffer_);
+                depthCopyComplete =
+                    glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) ==
+                        GL_FRAMEBUFFER_COMPLETE &&
+                    glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) ==
+                        GL_FRAMEBUFFER_COMPLETE;
+                if (depthCopyComplete) {
+                    glBlitFramebuffer(0, 0, targets.pixelSize.width(),
+                                      targets.pixelSize.height(), 0, 0,
+                                      targets.pixelSize.width(),
+                                      targets.pixelSize.height(),
+                                      GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+                }
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  static_cast<GLuint>(currentReadFramebuffer));
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  static_cast<GLuint>(currentDrawFramebuffer));
+            }
+            complete = complete && depthCopyComplete;
+        }
         if (captureOpaqueCoverage) {
             // Capture the opaque-only domain in a color-only pass so the
             // fullscreen copy cannot overwrite main scene depth or G-buffer
@@ -6384,26 +6417,9 @@ bool ViewportSurfaceRenderer::draw(
                 &frontPrepassDrewGeometry);
             if (frontPrepassReady) {
                 frontPrepassReady = mergeWorkbenchFrontAttachments(
-                    *sharedTargets, false, true, false, false, true);
-                if (ssaoEnabled) {
-                    const QSize frontPixelSize = sharedTargets->pixelSize;
-                    GLint previousRead = 0;
-                    GLint previousDraw = 0;
-                    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
-                    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
-                    glBindFramebuffer(GL_READ_FRAMEBUFFER,
-                                      frontMergeFramebuffer_);
-                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
-                                      cavityDepthFramebuffer_);
-                    glBlitFramebuffer(0, 0, frontPixelSize.width(),
-                                      frontPixelSize.height(), 0, 0,
-                                      frontPixelSize.width(),
-                                      frontPixelSize.height(),
-                                      GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-                    glBindFramebuffer(GL_READ_FRAMEBUFFER,
-                                      static_cast<GLuint>(previousRead));
-                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
-                                      static_cast<GLuint>(previousDraw));
+                    *sharedTargets, false, true, false, false, true,
+                    ssaoEnabled);
+                if (frontPrepassReady && ssaoEnabled) {
                     snapshotDepthReady = true;
                 }
             }

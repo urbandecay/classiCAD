@@ -8771,3 +8771,12 @@ resolve remain open.
   and [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L888-L995).
   `cmake --build build -j4` passed after moving Back images to the final
   overlay stage. Matched Blender Image Empty comparisons remain open.
+
+### Blender generated Image Empty import (2026-10-15)
+
+- Still Image Empties backed by Blender-generated pixel buffers now use the
+  existing Picture import and viewport path. The extractor packages their
+  pixels as bounded PNG data and also preserves the scene-linear float payload
+  used by the image color pipeline. Generated images share the existing 32 MiB
+  packed-payload budget and 16M pixel cap. Sequence, movie, and tiled Image
+  Empties remain unsupported; no matched Blender comparison has been run.

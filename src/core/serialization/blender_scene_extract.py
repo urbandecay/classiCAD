@@ -661,13 +661,17 @@ def extract_image_empty(obj, scene, packed_payload_budget,
             str(getattr(evaluated, "empty_display_type", "")) != "IMAGE"):
         return None, ""
     image = getattr(obj, "data", None)
-    if image is None or str(getattr(image, "source", "")) != "FILE":
-        return None, "only still file-backed Image Empties are supported"
+    if image is None:
+        return None, "Image Empty has no image data"
+    image_source = str(getattr(image, "source", ""))
+    if image_source not in {"FILE", "GENERATED"}:
+        return None, "only still file-backed or generated Image Empties are supported"
     width, height = (int(value) for value in image.size[:2])
     if width <= 0 or height <= 0 or width * height > 16_777_216:
         return None, "Image Empty has missing or oversized image dimensions"
-    filepath = bpy.path.abspath(
+    filepath = (bpy.path.abspath(
         image.filepath, library=getattr(image, "library", None))
+        if image_source == "FILE" else "")
     source_exists = bool(filepath and os.path.isfile(filepath))
     packed_data = b""
     packed_file = getattr(image, "packed_file", None)
@@ -681,6 +685,41 @@ def extract_image_empty(obj, scene, packed_payload_budget,
                 packed_payload_budget["bytes"] += len(packed_data)
             else:
                 packed_data = b""
+    if image_source == "GENERATED":
+        try:
+            pixels = image.pixels[:]
+            expected_components = width * height * 4
+            if len(pixels) != expected_components:
+                raise ValueError("Blender did not expose a complete RGBA pixel array")
+            png_rows = bytearray()
+            for y in range(height):
+                png_rows.append(0)
+                # Blender's pixel buffer starts at the lower-left; PNG rows
+                # start at the upper-left.
+                row_offset = (height - 1 - y) * width * 4
+                for component in pixels[row_offset:row_offset + width * 4]:
+                    value = float(component)
+                    if not math.isfinite(value):
+                        raise ValueError("generated image has non-finite pixels")
+                    png_rows.append(max(0, min(255, int(value * 255.0 + 0.5))))
+
+            def png_chunk(kind, payload):
+                chunk = kind + payload
+                return (struct.pack(">I", len(payload)) + chunk +
+                        struct.pack(">I", zlib.crc32(chunk) & 0xffffffff))
+
+            packed_data = (b"\x89PNG\r\n\x1a\n" +
+                           png_chunk(b"IHDR", struct.pack(
+                               ">2I5B", width, height, 8, 6, 0, 0, 0)) +
+                           png_chunk(b"IDAT", zlib.compress(bytes(png_rows))) +
+                           png_chunk(b"IEND", b""))
+        except Exception as error:
+            return None, "generated Image Empty pixels could not be encoded: " + str(error)
+        if (len(packed_data) > MAX_PACKED_IMAGE_BYTES or
+                packed_payload_budget["bytes"] + len(packed_data) >
+                MAX_PACKED_IMAGE_BYTES):
+            return None, "generated Image Empty exceeds the aggregate 32 MiB transport limit"
+        packed_payload_budget["bytes"] += len(packed_data)
     if not packed_data and not source_exists:
         if packed_file is not None:
             return None, "packed Image Empty exceeds or exhausts the 32 MiB aggregate transport limit and has no available source path"

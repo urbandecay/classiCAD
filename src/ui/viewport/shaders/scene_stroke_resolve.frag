@@ -140,33 +140,39 @@ void main()
                                                    centerDepth);
     }
 
-    for (int index = 0; index < 4; ++index) {
-        ivec2 offset = offsets[index];
-        ivec2 neighborPixel = pixel + offset;
-        if (!pixelInViewport(neighborPixel)) {
-            continue;
-        }
-        vec4 neighborRecord = fetchLineRecord(neighborPixel);
-        if (neighborRecord.w == 0.0) {
-            continue;
-        }
+    // Blender skips its neighbor gather for a hard-edged wire when the
+    // center pixel already lies within one pixel of the line. Missing center
+    // records have the cleared distance zero and take the same early-out.
+    bool gatherNeighbors = centerRecord.w > 0.0 || centerRecord.z > 1.0;
+    if (gatherNeighbors) {
+        for (int index = 0; index < 4; ++index) {
+            ivec2 offset = offsets[index];
+            ivec2 neighborPixel = pixel + offset;
+            if (!pixelInViewport(neighborPixel)) {
+                continue;
+            }
+            vec4 neighborRecord = fetchLineRecord(neighborPixel);
+            if (neighborRecord.w == 0.0) {
+                continue;
+            }
 
-        float distanceToLine = neighborDistance(neighborRecord, offset);
-        float coverage = lineCoverage(distanceToLine, neighborRecord.w);
-        float neighborDepth = correctedMeshWireDepth(
-            neighborPixel, neighborRecord,
-            texelFetch(uCandidateDepth, neighborPixel, 0).r);
-        float neighborFade = xrayFadeForSample(neighborPixel, neighborDepth);
-        blendNeighbor(resolvedLineColor, resolvedLineDepth,
-                      texelFetch(uLineColor, neighborPixel, 0) * neighborFade,
-                      neighborDepth, coverage);
+            float distanceToLine = neighborDistance(neighborRecord, offset);
+            float coverage = lineCoverage(distanceToLine, neighborRecord.w);
+            float neighborDepth = correctedMeshWireDepth(
+                neighborPixel, neighborRecord,
+                texelFetch(uCandidateDepth, neighborPixel, 0).r);
+            float neighborFade = xrayFadeForSample(neighborPixel, neighborDepth);
+            blendNeighbor(resolvedLineColor, resolvedLineDepth,
+                          texelFetch(uLineColor, neighborPixel, 0) * neighborFade,
+                          neighborDepth, coverage);
+        }
     }
 
     // Blender first folds the four neighboring line samples into the center
     // overlay sample, then applies its dense one-pixel-wire correction to
     // that overlay color. The gate uses the original center wire alpha before
     // any line coverage or neighbor blending.
-    if (centerRecord.w != 0.0) {
+    if (gatherNeighbors && centerRecord.w != 0.0) {
         int validNeighborCount = 0;
         for (int index = 0; index < 4; ++index) {
             ivec2 neighborPixel = pixel + offsets[index];

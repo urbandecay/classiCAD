@@ -9856,3 +9856,14 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L142-L145)
   and its shared volume-step integration at [#L244-L251](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L244-L251).
   Build passed; matched volume images remain open.
+
+### GPU hard-wire resolve neighbor guard (2026-10-16)
+
+- With Smooth Wires disabled, the GPU wire resolve now skips neighbor gathering
+  when the center pixel is within Blender's one-pixel early-out threshold.
+  This prevents adjacent candidate pixels from growing a hard-edged wire;
+  the center wire itself still composites normally. Smooth Wires keeps its
+  neighbor coverage resolve.
+- Blender 5.2.2 takes this early return before collecting neighboring pixels
+  in [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L129-L145).
+  Build passed; runtime GPU and matched wire images remain open.

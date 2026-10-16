@@ -4559,9 +4559,18 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                          tap.position.x() * radius;
                         const qreal sy = y + gatherOriginOffset.y() +
                                          tap.position.y() * radius;
+                        // Blender chooses the source-color mip from its
+                        // prepared half-resolution CoC texture. Keep the
+                        // QPainter gather on that same CoC signal instead of
+                        // re-reading full-resolution depth at the tap.
+                        const FilteredDofPixel tapCoC =
+                            sampleDofMip(sx, sy, 0.0f);
+                        const float signedTapCoc =
+                            tapCoC.nearCoc > tapCoC.farCoc
+                                ? tapCoC.nearCoc : -tapCoC.farCoc;
                         const FilteredDofPixel sample = sampleDofMip(
                             sx, sy, rasterWorkbenchDofMipLod(
-                                sourceCocAt(sx, sy),
+                                signedTapCoc,
                                 static_cast<float>(radius)));
                         const float signedCoc = sample.nearCoc > sample.farCoc
                             ? sample.nearCoc : -sample.farCoc;

@@ -9374,6 +9374,17 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`workbench_effect_dof_downsample_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_downsample_frag.glsl#L369-L399).
   Build passed; matched near/far DOF captures remain open.
 
+### QPainter DOF tap mip selection from prepared CoC (2026-10-16)
+
+- QPainter now selects each gather tap's source-color mip from the bilinearly
+  sampled near/far CoC in its prepared half-resolution pyramid. It previously
+  recomputed CoC from full-resolution retained depth, which could choose a
+  different mip around depth edges. Blender prepares half-resolution CoC in
+  [`workbench_effect_dof_prepare_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_prepare_frag.glsl#L32-L57)
+  and samples that texture to choose the gather mip in
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L39-L54).
+  Build passed; matched DOF captures remain open.
+
 ### GPU X-Ray outline equal-depth ownership (2026-10-16)
 
 - The private GPU outline-ID pass now uses `LEQUAL` when X-Ray is enabled, so

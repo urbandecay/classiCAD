@@ -5213,7 +5213,9 @@ resolve remain open.
   the world-space step as the length of the per-axis spacing vector.
   QPainter marcher now sets remaining transmittance to zero when it reaches
   Blender's 0.01 early-stop threshold, matching the shader's fully opaque
-  result at termination.
+  result at termination. Orthographic rays also offset near/far clipping by
+  the ray origin's camera-relative depth, matching Blender's depth endpoint
+  when the ray starts on the view plane instead of at the camera.
   The production contract checks
   visible output and increased contribution at higher density. Matched Blender
   output and comprehensive depth/occlusion combinations remain open.

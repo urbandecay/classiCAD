@@ -543,9 +543,17 @@ bool rasterWorkbenchVolumeRaySamples(
                     QVector3D(float(viewDirection.x), float(viewDirection.y),
                               float(viewDirection.z))),
                 1.0e-6f);
-            const double clipT = depthLimit / depthPerWorldT;
-            const double nearClipT = camera.cameraPreferences().clipStart /
-                                     depthPerWorldT;
+            const float rayOriginCameraDepth = -QVector3D::dotProduct(
+                rayOrigin - QVector3D(float(cameraPosition.x),
+                                      float(cameraPosition.y),
+                                      float(cameraPosition.z)),
+                QVector3D(float(viewDirection.x), float(viewDirection.y),
+                          float(viewDirection.z)));
+            const double clipT =
+                (depthLimit - rayOriginCameraDepth) / depthPerWorldT;
+            const double nearClipT =
+                (camera.cameraPreferences().clipStart -
+                 rayOriginCameraDepth) / depthPerWorldT;
             nearT = std::max(nearT, nearClipT);
             farT = std::min(farT, clipT);
             if (farT <= nearT) continue;

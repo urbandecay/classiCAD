@@ -4044,18 +4044,23 @@ Edit Mode's Select tool and the supported NURBS point/curve/surface targets.
 NURBS solid component mirroring remains unsupported because its faces are
 derived from the exact base surface and extrusion vector. Trimmed-surface
 deletion, exact post-delete results for imported nonuniform
-knots, individual solid-face deletion, exact active/selected outlines, other
-mode-specific overlay details, Blender's Shift-digit simultaneous selection
-modes, and matched GPU/QPainter captures remain open. Ctrl+1/2/3 now
+knots, individual solid-face deletion, exact active/selected outlines, and
+other mode-specific overlay details remain open. Shift+1/2 and Shift-clicking
+the component-mode toolbar now toggle
+simultaneous control-point/vertex and spline/edge selection for curve-family
+Edit Mode. Click and marquee picking, both selection overlays, A/Alt+A/Ctrl+I,
+transforms, deletion, duplication, and extrusion read the enabled domains
+together. This adapts Blender's multi-select behavior to classiCAD's curve
+mapping; it does not reproduce Blender's native NURBS keymap. Shift+3
+combinations and combined vertex/edge/face selection on NURBS surfaces or
+solids remain open. Matched GPU/QPainter captures remain unverified. Ctrl+1/2/3 now
 adapts Blender's mesh-mode expand/contract transfer to the requested
 CV/spline/patch mapping: switching to a higher component mode includes
 components touching selected lower-mode components; switching to a lower mode
 keeps components only when all their incident higher-mode components are
 selected. This is a classiCAD NURBS adaptation: Blender 5.2.2 binds the Ctrl
 variants to mesh selection operators, while its curve Edit Mode keymap has no
-corresponding 1/2/3 selection modes. Shift+digits remains unported because
-classiCAD currently stores one active selection mode; simultaneous modes need
-selection, rendering, and operation support across multiple domains.
+corresponding 1/2/3 selection modes.
 Control-point
 visibility now defaults on in Edit Mode, while a saved preference to hide it
 is preserved. Edit-only control cages, component highlights, and solid face

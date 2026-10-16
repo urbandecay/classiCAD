@@ -1574,7 +1574,7 @@ private:
             }
         };
         viewportCallbacks.viewportControlsChanged =
-            [this](int interactionMode, int componentMode,
+            [this](int interactionMode, int,
                    bool xrayEnabled, bool wireframeEnabled) {
                 if (interactionModeComboBox_ != nullptr) {
                     const int index = interactionModeComboBox_->findData(
@@ -1602,9 +1602,17 @@ private:
                         viewport_->controlPointsVisible());
                 }
                 if (componentModeButtonGroup_ != nullptr) {
-                    if (QAbstractButton *button =
-                            componentModeButtonGroup_->button(componentMode)) {
-                        button->setChecked(true);
+                    if (viewport_ != nullptr) {
+                        const int activeModes =
+                            viewport_->componentSelectionModesMask();
+                        for (QAbstractButton *button :
+                             componentModeButtonGroup_->buttons()) {
+                            const int mode =
+                                componentModeButtonGroup_->id(button);
+                            button->setChecked(
+                                mode >= 0 && mode < 3 &&
+                                (activeModes & (1 << mode)) != 0);
+                        }
                     }
                 }
                 if (xrayToggleButton_ != nullptr) {
@@ -1757,14 +1765,14 @@ private:
         osnapLane_->addSeparator();
 
         componentModeButtonGroup_ = new QButtonGroup(this);
-        componentModeButtonGroup_->setExclusive(true);
+        componentModeButtonGroup_->setExclusive(false);
         const std::array<QString, 3> componentModeIcons{
             QStringLiteral(":/blender-shading/selection_vertex.png"),
             QStringLiteral(":/blender-shading/selection_edge.png"),
             QStringLiteral(":/blender-shading/selection_face.png")};
         const std::array<QString, 3> componentModeTips{
-            QStringLiteral("Vertex Select (1)"),
-            QStringLiteral("Edge Select (2)"),
+            QStringLiteral("Vertex Select (1; Shift+1 toggles curve multi-select)"),
+            QStringLiteral("Edge Select (2; Shift+2 toggles curve multi-select)"),
             QStringLiteral("Face Select (3)")};
         for (int index = 0; index < 3; ++index) {
             auto *button = new QToolButton(osnapLane_);
@@ -1776,8 +1784,18 @@ private:
             button->setToolTip(componentModeTips[index]);
             componentModeButtonGroup_->addButton(button, index);
             osnapLane_->addWidget(button);
-            connect(button, &QToolButton::clicked, this, [this, index]() {
-                viewport_->setComponentSelectionMode(index);
+            connect(button, &QToolButton::clicked, this,
+                    [this, button, index]() {
+                if (button->isChecked()) {
+                    if (QApplication::keyboardModifiers().testFlag(
+                            Qt::ShiftModifier)) {
+                        viewport_->toggleComponentSelectionMode(index);
+                    } else {
+                        viewport_->setComponentSelectionMode(index);
+                    }
+                } else {
+                    viewport_->toggleComponentSelectionMode(index);
+                }
             });
         }
         osnapLane_->addSeparator();

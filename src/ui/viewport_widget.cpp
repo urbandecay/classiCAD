@@ -1253,6 +1253,97 @@ bool applyImportedCameraViewFraming(ViewportTransform *transform,
     return true;
 }
 
+void drawImportedCameraPassepartout(const Document &document,
+                                    const QSize &viewportSize,
+                                    const ViewportTransform &transform,
+                                    QPainter &painter)
+{
+    if (viewportSize.isEmpty() || !transform.cameraState().cameraView) return;
+
+    const QString activeLayer = document.settings().activeViewLayerKey;
+    QJsonObject camera;
+    QJsonObject renderOutput;
+    for (const QJsonValue &sceneValue :
+         document.settings().importedBlenderScenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = activeLayer.isEmpty();
+        if (!activeLayer.isEmpty()) {
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")) ==
+                    activeLayer) {
+                    matchesActiveLayer = true;
+                    break;
+                }
+            }
+        }
+        if (!matchesActiveLayer) continue;
+        camera = scene.value(QStringLiteral("active_camera")).toObject();
+        renderOutput = scene.value(QStringLiteral("render_output")).toObject();
+        break;
+    }
+    if (!camera.value(QStringLiteral("show_passepartout")).toBool(false))
+        return;
+    const qreal alpha = camera.value(QStringLiteral("passepartout_alpha"))
+                            .toDouble(0.5);
+    if (!std::isfinite(alpha) || alpha <= 0.0) return;
+
+    const qreal resolutionX = renderOutput.value(
+        QStringLiteral("resolution_x")).toDouble(1920.0);
+    const qreal resolutionY = renderOutput.value(
+        QStringLiteral("resolution_y")).toDouble(1080.0);
+    const qreal pixelAspectX = renderOutput.value(
+        QStringLiteral("pixel_aspect_x")).toDouble(1.0);
+    const qreal pixelAspectY = renderOutput.value(
+        QStringLiteral("pixel_aspect_y")).toDouble(1.0);
+    if (!std::isfinite(resolutionX) || resolutionX <= 0.0 ||
+        !std::isfinite(resolutionY) || resolutionY <= 0.0 ||
+        !std::isfinite(pixelAspectX) || pixelAspectX <= 0.0 ||
+        !std::isfinite(pixelAspectY) || pixelAspectY <= 0.0) {
+        return;
+    }
+    const qreal cameraAspect = resolutionX * pixelAspectX /
+                               (resolutionY * pixelAspectY);
+    const ViewportCameraState cameraState = transform.cameraState();
+    const qreal zoomBase = std::sqrt(2.0) + cameraState.cameraZoom / 50.0;
+    const qreal frameZoom = zoomBase * zoomBase / 2.0;
+    if (!std::isfinite(cameraAspect) || cameraAspect <= 0.0 ||
+        !std::isfinite(frameZoom) || frameZoom <= 0.0) {
+        return;
+    }
+
+    const qreal viewportAspect = qreal(viewportSize.width()) /
+                                 viewportSize.height();
+    qreal frameWidth = viewportSize.width();
+    qreal frameHeight = viewportSize.height();
+    if (viewportAspect > cameraAspect) {
+        frameWidth = frameHeight * cameraAspect;
+    } else {
+        frameHeight = frameWidth / cameraAspect;
+    }
+    frameWidth *= frameZoom;
+    frameHeight *= frameZoom;
+    const QPointF frameCenter(
+        viewportSize.width() * 0.5 + cameraState.cameraOffsetX *
+            frameZoom * viewportSize.width(),
+        viewportSize.height() * 0.5 + cameraState.cameraOffsetY *
+            frameZoom * viewportSize.height());
+    const QRectF cameraFrame(frameCenter.x() - frameWidth * 0.5,
+                             frameCenter.y() - frameHeight * 0.5,
+                             frameWidth, frameHeight);
+
+    QPainterPath outsideFrame;
+    outsideFrame.setFillRule(Qt::OddEvenFill);
+    outsideFrame.addRect(QRectF(QPointF(0.0, 0.0), QSizeF(viewportSize)));
+    outsideFrame.addRect(cameraFrame);
+    painter.save();
+    painter.setClipRect(QRectF(QPointF(0.0, 0.0), QSizeF(viewportSize)));
+    painter.fillPath(outsideFrame,
+                     QColor(0, 0, 0,
+                            qRound(std::clamp(alpha, 0.0, 1.0) * 255.0)));
+    painter.restore();
+}
+
 bool applyImportedRenderColorManagement(
     const Document &document, ViewportShadingSettings *settings)
 {
@@ -14462,6 +14553,8 @@ protected:
                                               selectionBoxStartPosition(),
                                               selectionBoxCurrentPosition());
         }
+        drawImportedCameraPassepartout(
+            document_, size(), viewportTransform_, painter);
         ViewportHudState hudState;
         hudState.activeTool = activeTool_;
         hudState.arcMode = arcState().mode;

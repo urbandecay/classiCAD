@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 26
+BRIDGE_FORMAT_VERSION = 27
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1071,6 +1071,9 @@ def scene_camera_record(scene, depsgraph=None):
         "object_type": "CAMERA",
         "matrix_world": matrix_values(evaluated.matrix_world),
         "camera_type": data.type,
+        "show_passepartout": bool(getattr(data, "show_passepartout", False)),
+        "passepartout_alpha": finite_number(
+            getattr(data, "passepartout_alpha", 0.5)),
         "lens_millimeters": finite_number(data.lens),
         "sensor_fit": data.sensor_fit,
         "sensor_width_millimeters": finite_number(data.sensor_width),

@@ -8766,6 +8766,121 @@ bool ViewportSurfaceRenderer::draw(
                 glActiveTexture(GL_TEXTURE0);
                 drawOutlineColor(settings.themeActiveObjectColor, false, true);
             }
+            if (hiddenSelectedOutlineReady && sharedTargets != nullptr &&
+                sharedTargets->frontDepthTexture != 0) {
+                GLint savedReadFramebuffer = 0;
+                GLint savedDrawFramebuffer = 0;
+                GLint savedViewport[4] = {};
+                glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                              &savedReadFramebuffer);
+                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,
+                              &savedDrawFramebuffer);
+                glGetIntegerv(GL_VIEWPORT, savedViewport);
+
+                GLuint frontDepthFramebuffer = 0;
+                glGenFramebuffers(1, &frontDepthFramebuffer);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  frontDepthFramebuffer);
+                glFramebufferTexture2D(GL_READ_FRAMEBUFFER,
+                                       GL_DEPTH_STENCIL_ATTACHMENT,
+                                       GL_TEXTURE_2D,
+                                       sharedTargets->frontDepthTexture, 0);
+                glReadBuffer(GL_NONE);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  outlineSceneDepthFramebuffer_);
+                glDrawBuffer(GL_NONE);
+                const bool frontDepthReady =
+                    glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) ==
+                        GL_FRAMEBUFFER_COMPLETE &&
+                    glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) ==
+                        GL_FRAMEBUFFER_COMPLETE;
+                if (frontDepthReady) {
+                    glBlitFramebuffer(
+                        0, 0, pixelSize.width(), pixelSize.height(),
+                        0, 0, pixelSize.width(), pixelSize.height(),
+                        GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+                    glBindFramebuffer(GL_FRAMEBUFFER,
+                                      selectedOutlineFramebuffer_);
+                    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glDepthMask(GL_TRUE);
+                    glEnable(GL_DEPTH_TEST);
+                    glDepthFunc(GL_LESS);
+                    glDisable(GL_BLEND);
+                    if (settings.backfaceCulling) {
+                        glEnable(GL_CULL_FACE);
+                        glCullFace(GL_BACK);
+                    } else {
+                        glDisable(GL_CULL_FACE);
+                    }
+                    const GLuint emptyId = 0;
+                    glClearBufferuiv(GL_COLOR, 0, &emptyId);
+                    glClearDepth(1.0);
+                    glClear(GL_DEPTH_BUFFER_BIT);
+                    objectIdProgram_.bind();
+                    objectIdProgram_.setUniformValue(
+                        "uViewProjection",
+                        viewportViewProjection(transform, viewportSize));
+                    objectIdProgram_.setUniformValue(
+                        "uUseTextureAlphaMask", false);
+                    objectIdProgram_.setUniformValue(
+                        "uTextureAlphaCutoff", false);
+                    objectIdProgram_.setUniformValue("uUseUdimImage", false);
+                    vertexArray_.bind();
+                    vertexBuffer_.bind();
+                    for (const DrawRange &range : ranges_) {
+                        if (range.count <= 0 || !range.selected ||
+                            !range.showInFront ||
+                            range.outlineHandledBySceneStroke) {
+                            continue;
+                        }
+                        glUniform1ui(
+                            objectIdProgram_.uniformLocation("uObjectId"),
+                            range.effectObjectId | 0x80000000u);
+                        objectIdProgram_.setUniformValue(
+                            "uWorldOffset",
+                            QVector3D(static_cast<float>(range.offset.x),
+                                      static_cast<float>(range.offset.y),
+                                      static_cast<float>(range.offset.z)));
+                        glDrawArrays(GL_TRIANGLES, range.first, range.count);
+                    }
+                    vertexBuffer_.release();
+                    vertexArray_.release();
+                    objectIdProgram_.release();
+                }
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  static_cast<GLuint>(savedReadFramebuffer));
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  static_cast<GLuint>(savedDrawFramebuffer));
+                glViewport(savedViewport[0], savedViewport[1],
+                           savedViewport[2], savedViewport[3]);
+                glDeleteFramebuffers(1, &frontDepthFramebuffer);
+
+                if (frontDepthReady) {
+                    glDisable(GL_DEPTH_TEST);
+                    glDepthMask(GL_FALSE);
+                    glDisable(GL_CULL_FACE);
+                    glEnable(GL_BLEND);
+                    glBlendFuncSeparate(
+                        GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  selectedOutlineIdTexture_);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  selectedOutlineDepthTexture_);
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D,
+                                  outlineSceneDepthTexture_);
+                    glActiveTexture(GL_TEXTURE0);
+                    drawOutlineColor(settings.themeActiveObjectColor, true,
+                                     false, true);
+                    drawOutlineColor(settings.themeActiveObjectColor, false,
+                                     true);
+                }
+            }
             outlineVertexArray_.release();
             outlineProgram_.release();
             glBindTexture(GL_TEXTURE_2D,

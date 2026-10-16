@@ -9531,10 +9531,13 @@ moves them after scene effects and depth-tests them against the retained scene.
   brings the GPU selected-outline path in line with the geometry-only overlay
   prepass used by Blender 5.2.2.
 - The dedicated mask currently covers regular selected ranges when shared
-  scene depth is available. The object-ID fallback also ignores texture alpha
-  for selected ranges while keeping alpha masking on unselected ranges.
-  Shared-depth `showInFront` selected ranges and matched texture-cutout
-  captures remain open. Build passed; the viewport was not launched.
+  scene depth is available. Selected `showInFront` ranges now use a separate
+  selected ID/depth draw resolved against the front-domain depth, so the
+  front-depth rules do not interfere with regular selected geometry. The
+  object-ID fallback also ignores texture alpha for selected ranges while
+  keeping alpha masking on unselected ranges. Matched texture-cutout and
+  `showInFront` captures remain open. Build passed; the viewport was not
+  launched.
 
 ### GPU selected-outline smoothing and high-DPI width (2026-10-16)
 

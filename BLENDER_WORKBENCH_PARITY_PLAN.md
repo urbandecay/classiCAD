@@ -9384,11 +9384,11 @@ moves them after scene effects and depth-tests them against the retained scene.
 
 ### QPainter zero-alpha outline depth (2026-10-16)
 
-- QPainter's outline ID buffer now records zero-alpha material surfaces that
-  survive Image Texture cutout, while leaving those surfaces out of visible
-  scene color and cavity/shadow receivers. This lets a transparent foreground
-  surface block a rear object's outline, matching Blender's separate
-  transparent-depth pass.
+- QPainter now retains zero-alpha material surfaces that survive Image Texture
+  cutout in its scene-depth and outline inputs, while leaving those surfaces
+  out of visible scene color and cavity/shadow receivers. This lets transparent
+  foreground surfaces block rear outlines and supply DOF/overlay depth, matching
+  Blender's separate transparent-depth pass.
 - Blender 5.2.2 submits transparent depth with the opaque pipeline and writes
   IDs/depth in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1438-L1453).

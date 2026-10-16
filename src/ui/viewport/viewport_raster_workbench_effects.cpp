@@ -3062,12 +3062,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             outlineSample.objectId = id;
                         }
                     }
-                    // Blender's transparent-depth pass writes the outline ID
-                    // for zero-alpha material surfaces, while the color pass
-                    // leaves them invisible. Keep this depth only in the
-                    // separate outline domain.
-                    if (sourceAlpha <= 0.0f) continue;
+                    // Blender's transparent-depth pass retains zero-alpha
+                    // material surfaces for effects and overlay occlusion,
+                    // while the color pass leaves them invisible.
                     writeNearest(sample);
+                    if (sourceAlpha <= 0.0f) continue;
                     if ((cavityEnabled || shadowEnabled) &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {
                         QVector<RasterSample> &domainOpaqueSamples =

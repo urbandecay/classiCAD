@@ -3174,9 +3174,9 @@ stops. A high-contrast 101×101 contract checks every row against that equation
 within one display code value; the existing full-frame CPU/GPU comparison
 continues to cover Single, Linear, and Radial backgrounds at 1× DPR and Radial
 at 2× DPR. This improves consistency when the native background shader cannot
-draw; the scene-linear QPainter compositor continues to decode sRGB endpoints
-with the exact transfer function described above. The direct-display formula
-is in
+draw. The scene-linear QPainter compositor now uses Blender's gamma-2.2
+interpolation for Linear and Radial gradients and keeps the existing exact
+sRGB decode for Single Color. The direct-display formula is in
 [`viewport_background.frag`](src/ui/viewport/shaders/viewport_background.frag);
 the scene-linear comparison remains tied to Blender's 5.2.2 Workbench
 background behavior documented in the Theme integration entry above.

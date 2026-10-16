@@ -12874,7 +12874,57 @@ protected:
             bool dofCurveStrokesDrawn = false;
             bool sceneDrawn = true;
             bool surfacesDrawn = true;
+            bool cameraViewAsRenderImagesComposited = false;
+            const auto hasCameraViewAsRenderLayer = [&](bool inFront) {
+                return std::any_of(
+                    gpuPreviewPictures.cbegin(), gpuPreviewPictures.cend(),
+                    [&](const TransientPreviewPicture &preview) {
+                        if (preview.sceneShapeIndex < 0 ||
+                            !preview.image.pictureCameraViewOnly ||
+                            !preview.image.pictureUseViewTransform) {
+                            return false;
+                        }
+                        const bool pictureInFront = preview.showInFront ||
+                            preview.image.pictureImageDepth ==
+                                PictureImageDepth::Front;
+                        return pictureInFront == inFront;
+                    });
+            };
+            const auto drawCameraViewAsRenderLayer = [&](bool inFront) {
+                if (aaRenderer == nullptr) {
+                    return false;
+                }
+                const bool hasPictures =
+                    hasCameraViewAsRenderLayer(inFront);
+                if (!hasPictures) {
+                    aaRenderer->clearCameraImageLayer(inFront);
+                    return true;
+                }
+                if (sceneRenderer == nullptr ||
+                    !aaRenderer->beginCameraImageLayer(inFront)) return false;
+                bool rendered = true;
+                for (const TransientPreviewPicture &preview :
+                     gpuPreviewPictures) {
+                    if (preview.sceneShapeIndex < 0 ||
+                        !preview.image.pictureCameraViewOnly ||
+                        !preview.image.pictureUseViewTransform) {
+                        continue;
+                    }
+                    const bool pictureInFront = preview.showInFront ||
+                        preview.image.pictureImageDepth ==
+                            PictureImageDepth::Front;
+                    if (pictureInFront != inFront) continue;
+                    rendered = sceneRenderer->drawPicture(
+                        preview.image, overlayCamera,
+                        renderFrame.viewportSize, devicePixelRatioF(),
+                        preview.opacity, true, false, false, nullptr) &&
+                        rendered;
+                }
+                aaRenderer->endCameraImageLayer();
+                return rendered;
+            };
             if (aaRenderer != nullptr) {
+                aaRenderer->setCameraImageLayersEnabled(false);
                 // Component tint changes the scene color. Image Empties,
                 // tool previews, strokes, cages, selection overlays and the
                 // grid are later overlay passes and do not reset accumulation.
@@ -12927,6 +12977,16 @@ protected:
                         devicePixelRatioF(), viewportShadingSettings_,
                         viewportWorldColorSceneLinear, themeBackground_, true);
                 } else if (aaRenderer->hasCachedHistory()) {
+                    const bool backLayerReady =
+                        drawCameraViewAsRenderLayer(false);
+                    const bool frontLayerReady =
+                        drawCameraViewAsRenderLayer(true);
+                    cameraViewAsRenderImagesComposited =
+                        (hasCameraViewAsRenderLayer(false) ||
+                         hasCameraViewAsRenderLayer(true)) &&
+                        backLayerReady && frontLayerReady;
+                    aaRenderer->setCameraImageLayersEnabled(
+                        cameraViewAsRenderImagesComposited);
                     aaRenderer->presentCachedHistory();
                     cachedScenePresented = true;
                 } else {
@@ -13001,6 +13061,18 @@ protected:
             }
 
             if (aaSceneSampleActive) {
+                if (!nativeSurfacePassFailed) {
+                    const bool backLayerReady =
+                        drawCameraViewAsRenderLayer(false);
+                    const bool frontLayerReady =
+                        drawCameraViewAsRenderLayer(true);
+                    cameraViewAsRenderImagesComposited =
+                        (hasCameraViewAsRenderLayer(false) ||
+                         hasCameraViewAsRenderLayer(true)) &&
+                        backLayerReady && frontLayerReady;
+                }
+                aaRenderer->setCameraImageLayersEnabled(
+                    cameraViewAsRenderImagesComposited);
                 aaNeedsAnotherSample = aaRenderer->finishSceneSample();
                 if (aaNeedsAnotherSample) {
                     update();
@@ -13091,6 +13163,12 @@ protected:
                     bool depthTest) {
                     for (const TransientPreviewPicture *preview : pictures) {
                         if (preview == nullptr) continue;
+                        if (cameraViewAsRenderImagesComposited &&
+                            preview->sceneShapeIndex >= 0 &&
+                            preview->image.pictureCameraViewOnly &&
+                            preview->image.pictureUseViewTransform) {
+                            continue;
+                        }
                         if (!sceneRenderer->drawPicture(
                                 preview->image, overlayCamera,
                                 renderFrame.viewportSize, devicePixelRatioF(),
@@ -13268,6 +13346,12 @@ protected:
             if (sceneRenderer != nullptr) {
                 for (const TransientPreviewPicture *preview : frontPictures) {
                     if (preview == nullptr) continue;
+                    if (cameraViewAsRenderImagesComposited &&
+                        preview->sceneShapeIndex >= 0 &&
+                        preview->image.pictureCameraViewOnly &&
+                        preview->image.pictureUseViewTransform) {
+                        continue;
+                    }
                     if (!sceneRenderer->drawPicture(
                             preview->image, overlayCamera,
                             renderFrame.viewportSize, devicePixelRatioF(),
@@ -13283,6 +13367,12 @@ protected:
             if (sceneRenderer != nullptr) {
                 for (const TransientPreviewPicture *preview : backPictures) {
                     if (preview == nullptr) continue;
+                    if (cameraViewAsRenderImagesComposited &&
+                        preview->sceneShapeIndex >= 0 &&
+                        preview->image.pictureCameraViewOnly &&
+                        preview->image.pictureUseViewTransform) {
+                        continue;
+                    }
                     if (!sceneRenderer->drawPicture(
                             preview->image, overlayCamera,
                             renderFrame.viewportSize, devicePixelRatioF(),

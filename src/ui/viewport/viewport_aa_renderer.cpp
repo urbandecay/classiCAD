@@ -514,6 +514,10 @@ bool ViewportAaRenderer::initialize()
         in vec2 vUv;
         uniform sampler2D uSource;
         uniform sampler2D uDepth;
+        uniform sampler2D uCameraBack;
+        uniform sampler2D uCameraFront;
+        uniform bool uUseCameraBack;
+        uniform bool uUseCameraFront;
         uniform bool uUseDepthOfField;
         uniform bool uPerspective;
         uniform vec2 uNearFar;
@@ -574,6 +578,20 @@ bool ViewportAaRenderer::initialize()
         float median3(float a, float b, float c)
         {
             return max(min(a, b), min(max(a, b), c));
+        }
+        vec4 sourceOverScene(vec4 scene, vec4 overlay)
+        {
+            vec3 scenePremultiplied = uPremultipliedAlpha
+                ? scene.rgb : scene.rgb * scene.a;
+            vec3 resultPremultiplied = overlay.rgb +
+                scenePremultiplied * (1.0 - overlay.a);
+            float resultAlpha = overlay.a + scene.a * (1.0 - overlay.a);
+            vec3 resultRgb = uPremultipliedAlpha
+                ? resultPremultiplied
+                : (resultAlpha > 1.0e-8
+                       ? resultPremultiplied / resultAlpha
+                       : vec3(0.0));
+            return vec4(resultRgb, resultAlpha);
         }
         vec4 dofGather(vec2 uv)
         {
@@ -675,6 +693,24 @@ bool ViewportAaRenderer::initialize()
         void main()
         {
             vec4 source = uUseDepthOfField ? dofGather(vUv) : texture(uSource, vUv);
+            if (uUseCameraBack || uUseCameraFront) {
+                // Camera BACK images use a scene-depth-tested layer. This
+                // places them over the viewport background while leaving
+                // covered scene pixels in front. FRONT images then blend
+                // over the completed scene, matching Blender's pass order.
+                if (uUseCameraBack) {
+                    vec4 backImage = texture(uCameraBack, vUv);
+                    float sceneDepth = texture(uDepth, vUv).r;
+                    if (sceneDepth < 0.999999) {
+                        backImage = vec4(0.0);
+                    }
+                    source = sourceOverScene(source, backImage);
+                }
+                if (uUseCameraFront) {
+                    vec4 frontImage = texture(uCameraFront, vUv);
+                    source = sourceOverScene(source, frontImage);
+                }
+            }
             vec3 outputColor = source.rgb;
             bool predivide = uPremultipliedAlpha && uApplyViewTransform;
             if (predivide) {
@@ -1055,6 +1091,10 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteFramebuffers(1, &historyFramebuffer_);
         historyFramebuffer_ = 0;
     }
+    const GLuint cameraLayerFramebuffers[] = {
+        cameraBackFramebuffer_, cameraFrontFramebuffer_};
+    glDeleteFramebuffers(2, cameraLayerFramebuffers);
+    cameraBackFramebuffer_ = cameraFrontFramebuffer_ = 0;
     if (sceneFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &sceneFramebuffer_);
         sceneFramebuffer_ = 0;
@@ -1135,6 +1175,10 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteTextures(1, &historyColorTexture_);
         historyColorTexture_ = 0;
     }
+    const GLuint cameraLayerTextures[] = {
+        cameraBackColorTexture_, cameraFrontColorTexture_};
+    glDeleteTextures(2, cameraLayerTextures);
+    cameraBackColorTexture_ = cameraFrontColorTexture_ = 0;
     if (resolvedColorTexture_ != 0) {
         glDeleteTextures(1, &resolvedColorTexture_);
         resolvedColorTexture_ = 0;
@@ -2081,6 +2125,136 @@ bool ViewportAaRenderer::sceneSampleActive() const noexcept
     return sceneSampleActive_;
 }
 
+bool ViewportAaRenderer::beginCameraImageLayer(bool inFront)
+{
+    if (!initialized_ || targetSize_.isEmpty() || cameraImageLayerActive_ ||
+        QOpenGLContext::currentContext() == nullptr) {
+        return false;
+    }
+    GLuint &framebuffer = inFront ? cameraFrontFramebuffer_
+                                  : cameraBackFramebuffer_;
+    GLuint &texture = inFront ? cameraFrontColorTexture_
+                              : cameraBackColorTexture_;
+    GLint previousFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousTexture = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    if (texture == 0) {
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+                     targetSize_.width(), targetSize_.height(), 0,
+                     GL_RGBA, GL_HALF_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    if (framebuffer == 0) glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, texture, 0);
+    const GLenum drawBuffer = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &drawBuffer);
+    const bool complete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    if (!complete) return false;
+
+    cameraLayerPreviousReadFramebuffer_ =
+        static_cast<GLuint>(previousReadFramebuffer);
+    cameraLayerPreviousDrawFramebuffer_ =
+        static_cast<GLuint>(previousFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, cameraLayerPreviousViewport_);
+    cameraLayerPreviousBlend_ = glIsEnabled(GL_BLEND);
+    cameraLayerPreviousDepthTest_ = glIsEnabled(GL_DEPTH_TEST);
+    cameraLayerPreviousScissor_ = glIsEnabled(GL_SCISSOR_TEST);
+    cameraLayerPreviousFramebufferSrgb_ = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &cameraLayerPreviousDepthMask_);
+    glGetBooleanv(GL_COLOR_WRITEMASK, cameraLayerPreviousColorMask_);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB,
+                  &cameraLayerPreviousBlendEquationRgb_);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA,
+                  &cameraLayerPreviousBlendEquationAlpha_);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &cameraLayerPreviousBlendSourceRgb_);
+    glGetIntegerv(GL_BLEND_DST_RGB,
+                  &cameraLayerPreviousBlendDestinationRgb_);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &cameraLayerPreviousBlendSourceAlpha_);
+    glGetIntegerv(GL_BLEND_DST_ALPHA,
+                  &cameraLayerPreviousBlendDestinationAlpha_);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glViewport(0, 0, targetSize_.width(), targetSize_.height());
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_FALSE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    const GLfloat clearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    glClearBufferfv(GL_COLOR, 0, clearColor);
+    cameraImageLayerActive_ = true;
+    return true;
+}
+
+void ViewportAaRenderer::endCameraImageLayer()
+{
+    if (!cameraImageLayerActive_) return;
+    cameraImageLayerActive_ = false;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      cameraLayerPreviousReadFramebuffer_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      cameraLayerPreviousDrawFramebuffer_);
+    glViewport(cameraLayerPreviousViewport_[0],
+               cameraLayerPreviousViewport_[1],
+               cameraLayerPreviousViewport_[2],
+               cameraLayerPreviousViewport_[3]);
+    glBlendEquationSeparate(
+        static_cast<GLenum>(cameraLayerPreviousBlendEquationRgb_),
+        static_cast<GLenum>(cameraLayerPreviousBlendEquationAlpha_));
+    glBlendFuncSeparate(
+        static_cast<GLenum>(cameraLayerPreviousBlendSourceRgb_),
+        static_cast<GLenum>(cameraLayerPreviousBlendDestinationRgb_),
+        static_cast<GLenum>(cameraLayerPreviousBlendSourceAlpha_),
+        static_cast<GLenum>(cameraLayerPreviousBlendDestinationAlpha_));
+    glDepthMask(cameraLayerPreviousDepthMask_);
+    glColorMask(cameraLayerPreviousColorMask_[0],
+                cameraLayerPreviousColorMask_[1],
+                cameraLayerPreviousColorMask_[2],
+                cameraLayerPreviousColorMask_[3]);
+    if (cameraLayerPreviousBlend_) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+    if (cameraLayerPreviousDepthTest_) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (cameraLayerPreviousScissor_) glEnable(GL_SCISSOR_TEST);
+    else glDisable(GL_SCISSOR_TEST);
+    if (cameraLayerPreviousFramebufferSrgb_) glEnable(GL_FRAMEBUFFER_SRGB);
+    else glDisable(GL_FRAMEBUFFER_SRGB);
+}
+
+void ViewportAaRenderer::clearCameraImageLayer(bool inFront)
+{
+    const GLuint framebuffer = inFront ? cameraFrontFramebuffer_
+                                        : cameraBackFramebuffer_;
+    const GLuint texture = inFront ? cameraFrontColorTexture_
+                                    : cameraBackColorTexture_;
+    if (framebuffer == 0 || texture == 0 ||
+        !beginCameraImageLayer(inFront)) {
+        return;
+    }
+    endCameraImageLayer();
+}
+
 void ViewportAaRenderer::applyInFrontOverlayDepth()
 {
     if (frontOpaqueOverlayMaskTexture_ == 0 || depthTexture_ == 0 ||
@@ -2299,6 +2473,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture = 0;
     GLint previousDepthTexture = 0;
+    GLint previousCameraBackTexture = 0;
+    GLint previousCameraFrontTexture = 0;
     GLint previousDisplayLutTexture = 0;
     const GLboolean previousBlend = glIsEnabled(GL_BLEND);
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -2315,6 +2491,10 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
     glActiveTexture(GL_TEXTURE1);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousDepthTexture);
+    glActiveTexture(GL_TEXTURE4);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousCameraBackTexture);
+    glActiveTexture(GL_TEXTURE5);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousCameraFrontTexture);
     const bool transformAvailable = sourceIsSceneLinear_ &&
         displaySettings_.colorTransform != 1 && ensureDisplayTransformTexture();
     glActiveTexture(GL_TEXTURE3);
@@ -2333,6 +2513,20 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, depthTexture_);
     presentProgram_.setUniformValue("uDepth", 1);
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, cameraBackColorTexture_);
+    presentProgram_.setUniformValue("uCameraBack", 4);
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, cameraFrontColorTexture_);
+    presentProgram_.setUniformValue("uCameraFront", 5);
+    presentProgram_.setUniformValue(
+        "uUseCameraBack", cameraImageLayersEnabled_ &&
+                              sourceIsSceneLinear_ &&
+                              cameraBackColorTexture_ != 0);
+    presentProgram_.setUniformValue(
+        "uUseCameraFront", cameraImageLayersEnabled_ &&
+                               sourceIsSceneLinear_ &&
+                               cameraFrontColorTexture_ != 0);
     presentProgram_.setUniformValue(
         "uUseDepthOfField", applyDepthOfField && depthOfFieldEnabled_ &&
                                 depthTexture_ != 0);
@@ -2407,6 +2601,12 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousDepthTexture));
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D,
+                  static_cast<GLuint>(previousCameraBackTexture));
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D,
+                  static_cast<GLuint>(previousCameraFrontTexture));
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_3D,
                   static_cast<GLuint>(previousDisplayLutTexture));

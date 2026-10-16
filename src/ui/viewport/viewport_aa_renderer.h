@@ -56,6 +56,18 @@ public:
     const ViewportTransform &sampleCamera() const noexcept;
     bool sceneSampleActive() const noexcept;
 
+    // Camera View-as-Render images are composed after scene effects and AA,
+    // but before the display transform. Render each depth domain into its
+    // own transparent scene-linear layer; those layers are never accumulated
+    // into AA history.
+    bool beginCameraImageLayer(bool inFront);
+    void endCameraImageLayer();
+    void clearCameraImageLayer(bool inFront);
+    void setCameraImageLayersEnabled(bool enabled) noexcept
+    {
+        cameraImageLayersEnabled_ = enabled;
+    }
+
     // Resolve the current scene sample, present it into Qt's framebuffer, and
     // restore sample depth for later overlays. The return says whether idle
     // accumulation needs another viewport redraw.
@@ -120,6 +132,28 @@ private:
     GLuint frontFramebuffer_ = 0;
     GLuint historyFramebuffer_ = 0;
     GLuint historyColorTexture_ = 0;
+    GLuint cameraBackFramebuffer_ = 0;
+    GLuint cameraBackColorTexture_ = 0;
+    GLuint cameraFrontFramebuffer_ = 0;
+    GLuint cameraFrontColorTexture_ = 0;
+    GLuint cameraLayerPreviousDrawFramebuffer_ = 0;
+    GLuint cameraLayerPreviousReadFramebuffer_ = 0;
+    GLint cameraLayerPreviousViewport_[4] = {};
+    GLboolean cameraLayerPreviousBlend_ = GL_FALSE;
+    GLboolean cameraLayerPreviousDepthTest_ = GL_FALSE;
+    GLboolean cameraLayerPreviousScissor_ = GL_FALSE;
+    GLboolean cameraLayerPreviousFramebufferSrgb_ = GL_FALSE;
+    GLboolean cameraLayerPreviousDepthMask_ = GL_TRUE;
+    GLboolean cameraLayerPreviousColorMask_[4] = {
+        GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLint cameraLayerPreviousBlendEquationRgb_ = GL_FUNC_ADD;
+    GLint cameraLayerPreviousBlendEquationAlpha_ = GL_FUNC_ADD;
+    GLint cameraLayerPreviousBlendSourceRgb_ = GL_ONE;
+    GLint cameraLayerPreviousBlendDestinationRgb_ = GL_ZERO;
+    GLint cameraLayerPreviousBlendSourceAlpha_ = GL_ONE;
+    GLint cameraLayerPreviousBlendDestinationAlpha_ = GL_ZERO;
+    bool cameraImageLayerActive_ = false;
+    bool cameraImageLayersEnabled_ = false;
     GLuint resolveFramebuffer_ = 0;
     GLuint resolvedColorTexture_ = 0;
     GLuint depthOfFieldFramebuffer_ = 0;

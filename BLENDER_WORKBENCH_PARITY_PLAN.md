@@ -9166,20 +9166,14 @@ resolve remain open.
   metadata so changing a transform cannot reuse stale pretransformed pixels.
   Scene-linear image payloads retain their HDR values until the selected
   transform is applied. Camera background images use the same
-  setting through their synthetic Image Empty source. The transformed images
-  still composite as overlays after the main scene transform, so transparent
-  image edges can differ from Blender's scene-linear compositing. The pinned
+  setting through their synthetic Image Empty source. The pinned
   Blender 5.2.2 source has two camera-background routes when View as Render is
   enabled: BACK images use alpha-under, while FRONT images use alpha-over in
   the scene render framebuffer. Both happen after Workbench's DOF and AA scene
   passes but before the final display transform. Ordinary Image Empties remain
-  in the later overlay output pass. classiCAD currently sends its synthetic
-  camera images through the same post-transform picture overlay as ordinary
-  Image Empties, so both camera depth modes can differ at transparent edges
-  and under nonlinear color transforms. Matching this needs a post-AA,
-  scene-linear camera-image composition point in both the GPU and QPainter
-  paths; drawing into the jittered scene sample would incorrectly make camera
-  images participate in scene DOF/AA. Blender's pass split is in
+  in the later overlay output pass. Before this update, classiCAD sent its
+  synthetic camera images through the same post-transform picture overlay as
+  ordinary Image Empties. Blender's pass split is in
   [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L821-L825)
   and its later image output pass is at
   [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L908-L916);
@@ -9196,6 +9190,16 @@ resolve remain open.
   their local width and offsets with the live focal-length preference, keeping
   them aligned to the camera frame after a lens change. The extractor bridge
   is version 26. C++ build passed; matched image captures have not been run.
+
+**GPU camera-image scene-linear composition (2026-10-16):** Camera-only image
+shapes with View as Render enabled now draw into separate transparent linear
+layers after the scene's DOF and AA resolve. Back images are masked by resolved
+scene depth; Front images composite after Back. The presentation shader blends
+both layers before applying the Workbench display transform, and the layers
+stay outside cached AA history so they are rebuilt on each viewport redraw.
+The QPainter fallback still uses its display-referred image path, and
+transparent scene/image interaction remains approximate. Build passed; runtime
+GPU and matched Blender comparisons remain unverified.
 
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 

@@ -9395,3 +9395,15 @@ moves them after scene effects and depth-tests them against the retained scene.
   The same image-texture cutoff remains active in
   [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429).
   Build passed; matched zero-alpha outline captures remain open.
+
+### Transparent Image Empty sort order (2026-10-16)
+
+- Transparent QPainter Image Empty groups now draw far-to-near using positive
+  camera-forward depth, so nearer image cards blend over farther cards.
+  Invalid projected centers remain at the end of the stable sort. Opaque
+  depth-writing cards retain their depth-test behavior.
+- Blender 5.2.2 puts blended images in sortable overlay passes and sorts them
+  by camera distance in
+  [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1054-L1057),
+  [#L1572-L1615](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1572-L1615).
+  Build passed; matched overlapping-image captures remain open.

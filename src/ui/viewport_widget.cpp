@@ -13144,7 +13144,7 @@ protected:
                                 const QVector<QPointF> corners =
                                     pictureFrameCorners(entry->image);
                                 if (corners.size() != 4) {
-                                    return std::numeric_limits<qreal>::infinity();
+                                    return -std::numeric_limits<qreal>::infinity();
                                 }
                                 QPointF center;
                                 for (const QPointF &corner : corners) {
@@ -13163,9 +13163,9 @@ protected:
                                         viewDirection.z);
                                 return std::isfinite(value)
                                            ? value
-                                           : std::numeric_limits<qreal>::infinity();
+                                           : -std::numeric_limits<qreal>::infinity();
                             };
-                            return depth(left) < depth(right);
+                            return depth(left) > depth(right);
                         });
                 };
                 sortFarToNear(&regularPictures);

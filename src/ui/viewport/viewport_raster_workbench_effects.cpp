@@ -1460,7 +1460,7 @@ bool compositeRasterWorkbenchSurfaces(
                     ? frontTransparentOutlineIds
                     : regularTransparentOutlineIds;
                 if (outlineDepth[index] == noDepth ||
-                    fragment.cameraDepth > outlineDepth[index]) {
+                    fragment.cameraDepth < outlineDepth[index]) {
                     outlineDepth[index] = fragment.cameraDepth;
                     outlineIds[static_cast<std::size_t>(index)] =
                         object.objectId.value();
@@ -1984,7 +1984,7 @@ bool compositeRasterWorkbenchSurfaces(
                 ? frontTransparentOutlineIds
                 : regularTransparentOutlineIds;
             if (outlineDepth[index] == noDepth ||
-                fragment.cameraDepth > outlineDepth[index]) {
+                fragment.cameraDepth < outlineDepth[index]) {
                 outlineDepth[index] = fragment.cameraDepth;
                 outlineIds[static_cast<std::size_t>(index)] =
                     object.objectId.value();

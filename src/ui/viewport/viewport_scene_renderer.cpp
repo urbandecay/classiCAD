@@ -516,8 +516,17 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
 
     const bool highlighted =
         object.selected || object.scalePreview || object.rotatePreview;
-    const qreal storedWidth =
-        viewportLineWeightPixels(object.layerLineWeightMm);
+    const bool cadCurveStroke =
+        geometryType == GeometryType::Line ||
+        geometryType == GeometryType::Rectangle ||
+        geometryType == GeometryType::Polygon ||
+        geometryType == GeometryType::Circle ||
+        geometryType == GeometryType::Ellipse ||
+        geometryType == GeometryType::Arc ||
+        geometryType == GeometryType::PolyCurve ||
+        geometryType == GeometryType::Bezier ||
+        geometryType == GeometryType::Nurbs;
+    const qreal storedWidth = 1.0;
     if (controlGuide != nullptr &&
         (geometryType == GeometryType::Bezier ||
          geometryType == GeometryType::Nurbs)) {
@@ -534,8 +543,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
     *sceneStroke = {
         &shape,
         highlighted ? viewportSelectionColor()
-                    : object.layerColor.isValid()
-                          ? object.layerColor
+                    : object.displayColor.isValid()
+                          ? object.displayColor
                           : QColor(QStringLiteral("#000000")),
         static_cast<float>(storedWidth),
         false,
@@ -545,6 +554,7 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
             : 0.0f};
     sceneStroke->worldSizedPoints =
         geometryType == GeometryType::PointCloud;
+    sceneStroke->blenderCurveWire = cadCurveStroke;
     sceneStroke->objectId = object.objectId;
     sceneStroke->editModeWire = geometryType == GeometryType::NurbsSurface ||
                                 geometryType == GeometryType::NurbsSolid;
@@ -886,6 +896,7 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
             strokeResolveVertexArray_.destroy();
         }
         program_.removeAllShaders();
+        blenderCurveWireProgram_.removeAllShaders();
         pointProgram_.removeAllShaders();
         pictureProgram_.removeAllShaders();
         overlayProgram_.removeAllShaders();
@@ -910,6 +921,16 @@ bool ViewportSceneRenderer::initialize()
             QOpenGLShader::Fragment,
             QStringLiteral(":/classiCAD/shaders/scene_stroke.frag")) ||
         !program_.link() ||
+        !blenderCurveWireProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Vertex,
+            QStringLiteral(":/classiCAD/shaders/scene_stroke.vert")) ||
+        !blenderCurveWireProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Geometry,
+            QStringLiteral(":/classiCAD/shaders/scene_curve_wire.geom")) ||
+        !blenderCurveWireProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Fragment,
+            QStringLiteral(":/classiCAD/shaders/scene_stroke.frag")) ||
+        !blenderCurveWireProgram_.link() ||
         !pointProgram_.addShaderFromSourceFile(
             QOpenGLShader::Vertex,
             QStringLiteral(":/classiCAD/shaders/scene_point.vert")) ||
@@ -921,7 +942,9 @@ bool ViewportSceneRenderer::initialize()
         !lineColorBuffer_.create() || !lineWireOffsetBuffer_.create() ||
         !pointRadiusBuffer_.create()) {
         qWarning().noquote() << "Viewport scene stroke shader setup failed:"
-                             << program_.log() << pointProgram_.log();
+                             << program_.log()
+                             << blenderCurveWireProgram_.log()
+                             << pointProgram_.log();
         return false;
     }
     initialized_ = true;
@@ -1522,6 +1545,8 @@ bool ViewportSceneRenderer::draw(
 
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    GLfloat previousLineWidth = 1.0f;
+    glGetFloatv(GL_LINE_WIDTH, &previousLineWidth);
     GLboolean previousDepthMask = GL_TRUE;
     GLint previousDepthFunction = GL_LESS;
     GLint previousBlendSourceRgb = GL_ONE;
@@ -1644,14 +1669,15 @@ bool ViewportSceneRenderer::draw(
         }
         glDepthMask(depthTest && stroke.writeDepth ? GL_TRUE : GL_FALSE);
         QOpenGLShaderProgram *nextProgram = stroke.pointDiameter > 0.0f
-                                                ? &pointProgram_ : &program_;
+            ? &pointProgram_
+            : stroke.blenderCurveWire ? &blenderCurveWireProgram_ : &program_;
         if (nextProgram != boundProgram) {
             if (boundProgram != nullptr) {
                 boundProgram->release();
             }
             nextProgram->bind();
             nextProgram->setUniformValue("uViewProjection", viewProjection);
-            if (nextProgram == &program_) {
+            if (nextProgram != &pointProgram_) {
                 nextProgram->setUniformValue(
                     "uViewportSize",
                     QVector2D(pixelSize.width(), pixelSize.height()));
@@ -1687,15 +1713,24 @@ bool ViewportSceneRenderer::draw(
             boundProgram->setUniformValue(
                 "uBlenderMeshWire", stroke.blenderMeshWire ? 1 : 0);
             boundProgram->setUniformValue(
+                "uBlenderCurveWire", stroke.blenderCurveWire ? 1 : 0);
+            boundProgram->setUniformValue(
                 "uBlenderMeshWireNdcOffset",
                 stroke.blenderMeshWire ? blenderMeshWireNdcOffsetFactor : 0.0f);
             boundProgram->setUniformValue(
                 "uCorrectMeshWireDepth",
-                strokeResolveActive && !isolatedDepthActive &&
+                nextProgram == &program_ && strokeResolveActive &&
+                        !isolatedDepthActive &&
                         smoothOverlayWires && smoothWire &&
                         stroke.blenderMeshWire
                     ? 1
                     : 0);
+            if (nextProgram == &blenderCurveWireProgram_) {
+                boundProgram->setUniformValue("uBlenderMeshWire", 0);
+                boundProgram->setUniformValue("uBlenderCurveWire", 1);
+                boundProgram->setUniformValue("uEditModeWire", 0);
+                boundProgram->setUniformValue("uCorrectMeshWireDepth", 0);
+            }
         }
         boundProgram->setUniformValue(
             "uColor", QVector4D(stroke.color.redF(), stroke.color.greenF(),
@@ -1756,6 +1791,7 @@ bool ViewportSceneRenderer::draw(
                         next.editModeWire != stroke.editModeWire ||
                         next.smoothWireCategory != stroke.smoothWireCategory ||
                         next.blenderMeshWire != stroke.blenderMeshWire ||
+                        next.blenderCurveWire != stroke.blenderCurveWire ||
                         next.writeDepth != stroke.writeDepth ||
                         QVector3D(next.worldOffset.x, next.worldOffset.y, next.worldOffset.z) != offset ||
                         viewportSceneStrokePattern(next, widthPixels).style !=
@@ -1776,6 +1812,11 @@ bool ViewportSceneRenderer::draw(
                 boundProgram->setUniformValueArray(
                     "uPatternSegments", pattern.segmentsPixels.data(),
                     pattern.segmentCount, 1);
+            }
+            if (nextProgram == &blenderCurveWireProgram_) {
+                // Blender's Overlay curve batch uses one-pixel GL lines and
+                // resolves smoothing from their rasterized fragments.
+                glLineWidth(1.0f);
             }
             glDrawArrays(GL_LINES, range.first, count);
             index = last;
@@ -1869,6 +1910,7 @@ bool ViewportSceneRenderer::draw(
         }
     }
     glDisable(GL_PROGRAM_POINT_SIZE);
+    glLineWidth(previousLineWidth);
     glDepthMask(previousDepthMask);
     glDepthFunc(static_cast<GLenum>(previousDepthFunction));
     if (previousDepthTest) {

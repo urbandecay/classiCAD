@@ -10297,3 +10297,19 @@ scene depth.
   pixels. The AA history key now also tracks theme colors for the
   World-without-World fallback. C++ build passed; matched GPU captures across
   transforms, camera images, DOF, and background modes remain open.
+
+### Blender native curve-wire port (2026-10-16)
+
+- Ordinary committed CAD curves now use a separate GPU program that emits
+  native one-pixel OpenGL lines, matching Blender Overlay's line primitive
+  path. The fragment stage packs the line direction and distance using
+  Blender's encoding, and the resolve uses its center-plus-four-neighbor
+  coverage and blend logic. The new offscreen capture uses the same world
+  line and Top orthographic view in Blender and classiCAD at 1920x1080.
+- Background-normalized profiles correlate at 0.99964 (RMSE 0.0154); average
+  integrated width is 1.058 px in Blender and 1.014 px in classiCAD. This is
+  close, with a measurable 4% width difference. The targeted native-line
+  checks pass. The full viewport render-contract test still fails its
+  crossing-smooth-strokes, smooth-wire-depth, and NURBS-cube expectations.
+  This GPU path does not verify the separate QPainter fallback. Build passed;
+  the GUI was not launched.

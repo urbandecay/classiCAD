@@ -1,4 +1,5 @@
-/* SPDX-FileCopyrightText: 2026 classiCAD contributors
+/* SPDX-FileCopyrightText: 2019-2023 Blender Authors
+ * SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #version 330 core
 
@@ -14,9 +15,6 @@ uniform float uXrayHiddenFade;
 
 layout(location = 0) out vec4 fragmentColor;
 
-const float kDiscRadius = 0.5641895835477563 * 1.05;
-const float kLineSmoothStart = 0.5 - kDiscRadius;
-const float kLineSmoothEnd = 0.5 + kDiscRadius;
 const float kNoLineDistance = 1.0e10;
 
 bool pixelInViewport(ivec2 pixel)
@@ -39,17 +37,46 @@ vec4 fetchLineRecord(ivec2 pixel)
     return texelFetch(uLineRecord, pixel, 0);
 }
 
+bool isNativeCurveWirePixel(ivec2 pixel)
+{
+    float kind = texelFetch(uLineWireFlag, pixel, 0).r;
+    return kind > 0.2 && kind < 0.3;
+}
+
+vec4 decodeBlenderOverlayLineData(vec4 packedRecord)
+{
+    // Blender overlay_antialiasing.bsl.hh::Line::decode.
+    return vec4(packedRecord.xy * 2.0 - 1.0,
+                (packedRecord.z - 0.1) * 4.0 - 2.0,
+                packedRecord.w);
+}
+
+vec4 fetchDecodedLineRecord(ivec2 pixel)
+{
+    vec4 record = fetchLineRecord(pixel);
+    return isNativeCurveWirePixel(pixel)
+        ? decodeBlenderOverlayLineData(record)
+        : record;
+}
+
 float lineCoverage(float distanceToLine, float signedWidth)
 {
-    float halfCoverageWidth = max(abs(signedWidth) * 0.5 - 0.5, 0.0);
-    float distanceFromCore = abs(distanceToLine) - halfCoverageWidth;
+    // Blender's theme pixel size becomes the signed stroke width here. For
+    // the committed curve overlay that is one device pixel, so its kernel is
+    // 1/2 - 1/2 == 0.
+    float lineKernelSize = max(abs(signedWidth) * 0.5 - 0.5, 0.0);
+    float distanceFromCore = abs(distanceToLine) - lineKernelSize;
     if (signedWidth > 0.0) {
+        float discRadius = 0.5641895835477563 * 1.05;
+        float smoothStart = 0.5 - discRadius;
+        float smoothEnd = 0.5 + discRadius;
         // Blender's smoothstep uses reversed endpoints. This equivalent form
         // keeps the interpolation endpoints ordered for GLSL implementations.
-        return 1.0 - smoothstep(kLineSmoothStart, kLineSmoothEnd,
-                                distanceFromCore);
+        float coverage = 1.0 - smoothstep(smoothStart, smoothEnd,
+                                          distanceFromCore);
+        return coverage;
     }
-    return step(-0.5, halfCoverageWidth - abs(distanceToLine));
+    return step(-0.5, lineKernelSize - abs(distanceToLine));
 }
 
 float neighborDistance(vec4 record, ivec2 offset)
@@ -88,8 +115,9 @@ void blendNeighbor(inout vec4 targetColor,
 
 float correctedMeshWireDepth(ivec2 pixel, vec4 record, float wireDepth)
 {
+    float lineWireKind = texelFetch(uLineWireFlag, pixel, 0).r;
     if (uIgnoreSceneDepth != 0 || record.w <= 0.0 ||
-        texelFetch(uLineWireFlag, pixel, 0).r < 0.5) {
+        lineWireKind < 0.75) {
         return wireDepth;
     }
 
@@ -122,14 +150,13 @@ void main()
     const ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
                                      ivec2(0, 1), ivec2(0, -1));
 
-    vec4 centerRecord = fetchLineRecord(pixel);
+    vec4 centerRecord = fetchDecodedLineRecord(pixel);
     vec4 resolvedLineColor = vec4(0.0);
     float resolvedLineDepth = uIgnoreSceneDepth != 0 ? 1.0 : sceneDepth;
     vec4 centerRasterColor = vec4(0.0);
     if (centerRecord.w != 0.0) {
         centerRasterColor = texelFetch(uLineColor, pixel, 0);
-        float centerCoverage =
-            lineCoverage(centerRecord.z, centerRecord.w);
+        float centerCoverage = lineCoverage(centerRecord.z, centerRecord.w);
         float centerDepth = texelFetch(uCandidateDepth, pixel, 0).r;
         resolvedLineColor = centerRasterColor * centerCoverage *
                             xrayFadeForSample(pixel, centerDepth);
@@ -140,10 +167,26 @@ void main()
                                                    centerDepth);
     }
 
-    // Blender skips its neighbor gather for a hard-edged wire when the
-    // center pixel already lies within one pixel of the line. Missing center
-    // records have the cleared distance zero and take the same early-out.
+    bool centerIsNativeCurveWire = isNativeCurveWirePixel(pixel);
+    // Blender gathers neighboring pixels in Smooth Wires mode. Native GL
+    // curve lines only record pixels owned by the one-pixel line rasterizer,
+    // so an empty center must still gather an adjacent curve fragment. Keep
+    // the expanded-quad behavior unchanged for the other existing stroke
+    // classes.
     bool gatherNeighbors = centerRecord.w > 0.0 || centerRecord.z > 1.0;
+    if (!gatherNeighbors && !centerIsNativeCurveWire) {
+        for (int index = 0; index < 4; ++index) {
+            ivec2 neighborPixel = pixel + offsets[index];
+            float neighborWireKind = pixelInViewport(neighborPixel)
+                ? texelFetch(uLineWireFlag, neighborPixel, 0).r
+                : 0.0;
+            if (neighborWireKind > 0.2 && neighborWireKind < 0.3 &&
+                fetchLineRecord(neighborPixel).w > 0.0) {
+                gatherNeighbors = true;
+                break;
+            }
+        }
+    }
     if (gatherNeighbors) {
         for (int index = 0; index < 4; ++index) {
             ivec2 offset = offsets[index];
@@ -151,13 +194,14 @@ void main()
             if (!pixelInViewport(neighborPixel)) {
                 continue;
             }
-            vec4 neighborRecord = fetchLineRecord(neighborPixel);
+            vec4 neighborRecord = fetchDecodedLineRecord(neighborPixel);
             if (neighborRecord.w == 0.0) {
                 continue;
             }
 
             float distanceToLine = neighborDistance(neighborRecord, offset);
-            float coverage = lineCoverage(distanceToLine, neighborRecord.w);
+            float coverage = lineCoverage(distanceToLine,
+                                          neighborRecord.w);
             float neighborDepth = correctedMeshWireDepth(
                 neighborPixel, neighborRecord,
                 texelFetch(uCandidateDepth, neighborPixel, 0).r);
@@ -186,8 +230,10 @@ void main()
             }
         }
         float lineKernelSize = abs(centerRecord.w) * 0.5 - 0.5;
-        if (centerRasterColor.a >= 1.0 &&
-            resolvedLineColor.a > 0.0 && lineKernelSize < 0.45 &&
+        // Match Blender's original center-alpha gate and four raw neighbor
+        // validity checks after composing the overlay samples.
+        if (centerRasterColor.a >= 1.0 && resolvedLineColor.a > 0.0 &&
+            lineKernelSize < 0.45 &&
             validNeighborCount > 2) {
             float blend = clamp(float(validNeighborCount) * 0.5 - 1.0,
                                 0.0, 1.0);

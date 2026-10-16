@@ -18675,6 +18675,133 @@ int main(int argc, char *argv[])
                                                  int(wireRawPixel[0])) <= 1,
                                     "curve and surface-outline antialias pixels must match edit-wire linear blending");
 
+                    ViewportSceneStroke blenderCurveWire = editWire;
+                    blenderCurveWire.width = 1.0f;
+                    blenderCurveWire.writeDepth = true;
+                    blenderCurveWire.blenderCurveWire = true;
+                    wireFramebuffer.bind();
+                    functions.glViewport(0, 0, glSize.width(), glSize.height());
+                    functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                    functions.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    functions.glClearColor(128.0f / 255.0f,
+                                           128.0f / 255.0f,
+                                           128.0f / 255.0f, 1.0f);
+                    functions.glClearDepth(1.0);
+                    functions.glClear(GL_COLOR_BUFFER_BIT |
+                                      GL_DEPTH_BUFFER_BIT);
+                    bool blenderCurveResolveUsed = false;
+                    const bool blenderCurveWireDrawSucceeded =
+                        linePointsValid && wireRenderer.draw(
+                            {blenderCurveWire}, wireTransform, glSize, 1.0,
+                            true, 1.0, true, true, false,
+                            &blenderCurveResolveUsed);
+                    functions.glFinish();
+                    unsigned char blenderCurveWirePixels[5 * 5 * 4] = {};
+                    functions.glReadPixels(298, 237, 5, 5, GL_RGBA,
+                                          GL_UNSIGNED_BYTE,
+                                          blenderCurveWirePixels);
+                    unsigned char blenderCurveWireMinimum = 255;
+                    for (int pixelIndex = 0; pixelIndex < 25; ++pixelIndex) {
+                        blenderCurveWireMinimum = std::min(
+                            blenderCurveWireMinimum,
+                            blenderCurveWirePixels[pixelIndex * 4]);
+                    }
+                    const GLenum blenderCurveWireError = functions.glGetError();
+                    if (!blenderCurveWireDrawSucceeded ||
+                        !blenderCurveResolveUsed ||
+                        blenderCurveWireError != GL_NO_ERROR) {
+                        qWarning() << "Blender-style curve-wire diagnostic"
+                                   << "draw=" << blenderCurveWireDrawSucceeded
+                                   << "resolve=" << blenderCurveResolveUsed
+                                   << "minimum region pixel="
+                                   << blenderCurveWireMinimum
+                                   << "GL error=" << blenderCurveWireError;
+                    }
+                    passed &= check(blenderCurveWireDrawSucceeded &&
+                                        blenderCurveResolveUsed &&
+                                        blenderCurveWireError == GL_NO_ERROR,
+                                    "committed Blender-style curve wires must draw through native one-pixel rasterization and the neighbor resolve");
+
+                    const QString blenderCurveCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_BLENDER_CURVE_WIRE_CAPTURE");
+                    bool blenderCurveCaptureSaved =
+                        blenderCurveCapturePath.isEmpty();
+                    if (!blenderCurveCapturePath.isEmpty()) {
+                        const QSize captureSize(1920, 1080);
+                        QOpenGLFramebufferObjectFormat captureFormat;
+                        captureFormat.setAttachment(
+                            QOpenGLFramebufferObject::CombinedDepthStencil);
+                        captureFormat.setInternalTextureFormat(GL_SRGB8_ALPHA8);
+                        QOpenGLFramebufferObject captureFramebuffer(
+                            captureSize, captureFormat);
+                        // Recreate the actual Blender reference scene: an
+                        // orthographic Top view of a world-space line from
+                        // (-5, -2, 0) to (5, 2, 0). Calibrate only its view
+                        // scale to the measured reference projection so the
+                        // geometry and camera remain the same in both apps.
+                        ViewportTransform captureTransform;
+                        captureTransform.setViewPreset(
+                            ViewportViewPreset::Top);
+                        captureTransform.setPerspectiveEnabled(false);
+                        constexpr qreal referencePixelsPerWorldUnit = 95.2;
+                        const qreal currentCaptureScale =
+                            captureTransform.viewScalePixelsPerWorldUnit(
+                                captureSize);
+                        captureTransform.zoom() *=
+                            referencePixelsPerWorldUnit / currentCaptureScale;
+                        ViewportDepthGeometry captureGeometry;
+                        captureGeometry.lineVertices = {
+                            QVector3D(-5.0f, -2.0f, 0.0f),
+                            QVector3D(5.0f, 2.0f, 0.0f)};
+                        ViewportSceneStroke captureStroke;
+                        captureStroke.color = Qt::black;
+                        captureStroke.width = 1.0f;
+                        captureStroke.writeDepth = true;
+                        captureStroke.blenderCurveWire = true;
+                        captureStroke.geometryCacheKey =
+                            QByteArrayLiteral("blender-curve-wire-capture");
+                        captureStroke.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                std::move(captureGeometry));
+                        if (captureFramebuffer.isValid()) {
+                            captureFramebuffer.bind();
+                            functions.glViewport(0, 0, captureSize.width(),
+                                                 captureSize.height());
+                            functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                            functions.glClearColor(51.0f / 255.0f,
+                                                   51.0f / 255.0f,
+                                                   51.0f / 255.0f, 1.0f);
+                            functions.glClearDepth(1.0);
+                            functions.glClear(GL_COLOR_BUFFER_BIT |
+                                              GL_DEPTH_BUFFER_BIT);
+                            bool captureResolveUsed = false;
+                            const bool captureRendered = wireRenderer.draw(
+                                {captureStroke}, captureTransform, captureSize,
+                                1.0, true, 1.0, true, true, false,
+                                &captureResolveUsed);
+                            const QImage captureImage =
+                                captureFramebuffer.toImage();
+                            int captureLineMinimum = 255;
+                            for (int y = 538; y < 543; ++y) {
+                                for (int x = 958; x < 963; ++x) {
+                                    captureLineMinimum = std::min(
+                                        captureLineMinimum,
+                                        captureImage.pixelColor(x, y).red());
+                                }
+                            }
+                            const int captureBackgroundPixel =
+                                captureImage.pixelColor(40, 40).red();
+                            blenderCurveCaptureSaved = captureRendered &&
+                                captureResolveUsed && !captureImage.isNull() &&
+                                captureLineMinimum + 10 <
+                                    captureBackgroundPixel &&
+                                captureImage.save(blenderCurveCapturePath);
+                        }
+                    }
+                    passed &= check(blenderCurveCaptureSaved,
+                                    "the matched Blender-style curve-wire capture must save when requested");
+
                     QOpenGLFramebufferObjectFormat sceneLinearStrokeFormat;
                     sceneLinearStrokeFormat.setAttachment(
                         QOpenGLFramebufferObject::CombinedDepthStencil);

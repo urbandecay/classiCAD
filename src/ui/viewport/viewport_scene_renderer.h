@@ -76,6 +76,9 @@ struct ViewportSceneStroke {
     // Marks Blender mesh wire-over-Solid strokes for the ordinary QPainter
     // fallback, which does not replay the complete GPU scene-stroke list.
     bool blenderMeshWire = false;
+    // Marks committed CAD curve edges rendered with Blender's Overlay curve
+    // wire rasterization and smooth-wire resolve rules.
+    bool blenderCurveWire = false;
     // Determines which Smooth Wires preference controls coverage. This is
     // independent from editModeWire, which selects the geometry/color style.
     ViewportSmoothWireCategory smoothWireCategory =
@@ -262,6 +265,7 @@ private:
     bool initializePicture();
 
     QOpenGLShaderProgram program_;
+    QOpenGLShaderProgram blenderCurveWireProgram_;
     QOpenGLShaderProgram pointProgram_;
     QOpenGLShaderProgram pictureProgram_;
     QOpenGLShaderProgram overlayProgram_;

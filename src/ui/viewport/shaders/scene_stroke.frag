@@ -1,4 +1,5 @@
-/* SPDX-FileCopyrightText: 2026 classiCAD contributors
+/* SPDX-FileCopyrightText: 2019-2022 Blender Authors
+ * SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #version 330 core
 
@@ -18,6 +19,7 @@ uniform int uLinearDisplayBlend;
 uniform int uRecordLine;
 uniform int uIgnoreSceneDepth;
 uniform int uBlenderMeshWire;
+uniform int uBlenderCurveWire;
 uniform int uCorrectMeshWireDepth;
 uniform sampler2D uSceneDepth;
 smooth in vec4 gEdgeColor;
@@ -27,6 +29,7 @@ flat in vec4 gStartColor;
 flat in vec4 gEndColor;
 noperspective in vec2 vStrokePosition;
 flat in vec2 gStrokeDirection;
+flat in vec2 gLineStartPixels;
 layout(location = 0) out vec4 fragmentColor;
 layout(location = 1) out vec4 lineRecord;
 layout(location = 2) out float candidateDepth;
@@ -39,6 +42,15 @@ vec3 srgbToLinear(vec3 color)
     return mix(high, low, lessThanEqual(color, vec3(0.04045)));
 }
 
+// Blender overlay_common_lib.glsl::pack_line_data encodes the perpendicular
+// and signed distance in normalized RGB. The native-curve resolve decodes
+// these values using Blender's overlay_antialiasing.bsl.hh rules.
+vec3 packBlenderOverlayLineData(vec2 direction, float distanceToLine)
+{
+    return vec3(direction * 0.5 + 0.5,
+                distanceToLine * 0.25 + 0.5 + 0.1);
+}
+
 void main()
 {
     // Writing gl_FragDepth disables early depth testing. Keep the original
@@ -46,8 +58,16 @@ void main()
     // Blender's neighbor-depth rule can admit fragments that would otherwise
     // be rejected against the scene surface.
     gl_FragDepth = gl_FragCoord.z;
+    float strokeDistance = uBlenderCurveWire != 0
+                               ? dot(gStrokeDirection,
+                                     gl_FragCoord.xy - gLineStartPixels)
+                               : vStrokePosition.y;
     float coverage;
-    if (uLineStyle == 2) {
+    if (uBlenderCurveWire != 0) {
+        // Blender's curve wire pass writes fully covered native GL line
+        // fragments. Smooth coverage is applied later from neighbor records.
+        coverage = 1.0;
+    } else if (uLineStyle == 2) {
         float patternPosition = vStrokePosition.x + gPatternOffsetPixels;
         float dotCenter = floor(max(patternPosition, 0.0) /
                                     uPatternPeriod + 0.5) * uPatternPeriod;
@@ -108,22 +128,27 @@ void main()
                                  0.0, 1.0);
             }
         } else {
-            float distanceFromStroke = abs(vStrokePosition.y);
+            float distanceFromStroke = abs(strokeDistance);
             if (uBlenderMeshWire == 0) {
                 float beyond = max(max(-vStrokePosition.x,
                                        vStrokePosition.x - vLength), 0.0);
                 distanceFromStroke =
-                    length(vec2(beyond, vStrokePosition.y));
+                    length(vec2(beyond, strokeDistance));
             }
             if (uSmoothWire != 0) {
                 // Smooth Blender mesh wires use the perpendicular line
-                // distance; CAD curves retain their rounded end coverage.
+                // distance; generic CAD strokes retain rounded end coverage.
                 const float inverseSqrtPi = 0.5641895835477563;
-                const float discRadius = inverseSqrtPi * 1.05;
-                const float smoothStart = 0.5 - discRadius;
-                const float smoothEnd = 0.5 + discRadius;
+                float kernelScale = 1.05;
+                float discRadius = inverseSqrtPi * kernelScale;
+                float smoothStart = 0.5 - discRadius;
+                float smoothEnd = 0.5 + discRadius;
+                float halfCoverageWidth =
+                    (uBlenderMeshWire != 0 || uBlenderCurveWire != 0)
+                    ? max(uWidth * 0.5 - 0.5, 0.0)
+                    : uWidth * 0.5 - 0.5;
                 float edgeDistance = distanceFromStroke -
-                    max(uWidth * 0.5 - 0.5, 0.0);
+                                     halfCoverageWidth;
                 coverage = 1.0 -
                            smoothstep(smoothStart, smoothEnd, edgeDistance);
             } else {
@@ -137,6 +162,12 @@ void main()
                 uPatternOnLength) {
             discard;
         }
+    }
+    if (uBlenderCurveWire != 0 && uRecordLine == 0) {
+        // Without Blender's fullscreen neighbor resolve, keep the same native
+        // one-pixel GL line fragments. Do not synthesize a thicker or more
+        // transparent stroke from a distance-based approximation.
+        coverage = 1.0;
     }
     if (coverage <= 0.0 &&
         !(uRecordLine != 0 && uSmoothWire != 0)) {
@@ -197,10 +228,19 @@ void main()
     float alpha = uColor.a * edgeColor.a;
     if (uRecordLine != 0) {
         fragmentColor = vec4(strokeColor * edgeColor.rgb * alpha, alpha);
-        lineRecord = vec4(gStrokeDirection, vStrokePosition.y,
-                          (uSmoothWire != 0 ? 1.0 : -1.0) * uWidth);
+        lineRecord = uBlenderCurveWire != 0
+            ? vec4(packBlenderOverlayLineData(gStrokeDirection,
+                                              strokeDistance),
+                   (uSmoothWire != 0 ? 1.0 : -1.0) * uWidth)
+            : vec4(gStrokeDirection, strokeDistance,
+                   (uSmoothWire != 0 ? 1.0 : -1.0) * uWidth);
         candidateDepth = gl_FragDepth;
-        lineWireFlag = uBlenderMeshWire != 0 ? 1.0 : 0.0;
+        // The target is R8: 0 generic strokes, .25 native Blender-style CAD
+        // curve wires, .5 edit wires, and 1 Blender mesh wires.
+        lineWireFlag = uBlenderMeshWire != 0 ? 1.0
+                       : uEditModeWire != 0 ? 0.5
+                       : uBlenderCurveWire != 0 ? 0.25
+                                                : 0.0;
         return;
     }
     lineWireFlag = 0.0;

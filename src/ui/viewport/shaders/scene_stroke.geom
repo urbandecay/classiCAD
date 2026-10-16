@@ -1,4 +1,5 @@
-/* SPDX-FileCopyrightText: 2026 classiCAD contributors
+/* SPDX-FileCopyrightText: 2019-2023 Blender Authors
+ * SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #version 330 core
 
@@ -10,13 +11,16 @@ uniform float uWidth;
 uniform float uDepthBias;
 uniform int uEditModeWire;
 uniform int uBlenderMeshWire;
+uniform int uBlenderCurveWire;
 uniform int uSmoothWire;
+uniform int uRecordLine;
 smooth out vec4 gEdgeColor;
 flat out float vLength;
 flat out float gPatternOffsetPixels;
 flat out vec4 gStartColor;
 flat out vec4 gEndColor;
 flat out vec2 gStrokeDirection;
+flat out vec2 gLineStartPixels;
 noperspective out vec2 vStrokePosition;
 in float vPatternOffsetPixels[];
 in vec4 vEndpointColor[];
@@ -58,6 +62,8 @@ void main()
     vec2 tangent = screenDelta / lengthPixels;
     vec2 normal = vec2(-tangent.y, tangent.x);
     gStrokeDirection = normal;
+    gLineStartPixels =
+        (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
     if (uEditModeWire != 0) {
         // Blender expands along the minor screen axis, with no end caps.
         float halfSize = uWidth * 0.5 + (uSmoothWire != 0 ? 0.5 : 0.0);
@@ -72,6 +78,8 @@ void main()
                 gStartColor = colorA;
                 gEndColor = colorB;
                 gEdgeColor = endpoint == 0 ? colorA : colorB;
+                gLineStartPixels =
+                    (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
                 vStrokePosition = vec2(float(endpoint) * lengthPixels,
                                        sign * halfSize);
                 gl_Position = position + vec4(sign * offset * 2.0 /
@@ -98,6 +106,8 @@ void main()
                 gStartColor = colorA;
                 gEndColor = colorB;
                 gEdgeColor = endpoint == 0 ? colorA : colorB;
+                gLineStartPixels =
+                    (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
                 vStrokePosition = vec2(float(endpoint) * lengthPixels,
                                        sign * halfSize);
                 gl_Position = position + vec4(sign * offset * 2.0 /
@@ -114,6 +124,7 @@ void main()
     gPatternOffsetPixels = patternOffset;
     gStartColor = colorA;
     gEndColor = colorB;
+    gLineStartPixels = (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
     vStrokePosition = vec2(-radius, radius);
     gl_Position = a + vec4((normal - tangent) * radius * 2.0 /
                                 uViewportSize * a.w, 0.0, 0.0);
@@ -123,6 +134,7 @@ void main()
     gPatternOffsetPixels = patternOffset;
     gStartColor = colorA;
     gEndColor = colorB;
+    gLineStartPixels = (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
     vStrokePosition = vec2(-radius, -radius);
     gl_Position = a + vec4((-normal - tangent) * radius * 2.0 /
                                 uViewportSize * a.w, 0.0, 0.0);
@@ -132,6 +144,7 @@ void main()
     gPatternOffsetPixels = patternOffset;
     gStartColor = colorA;
     gEndColor = colorB;
+    gLineStartPixels = (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
     vStrokePosition = vec2(lengthPixels + radius, radius);
     gl_Position = b + vec4((normal + tangent) * radius * 2.0 /
                                 uViewportSize * b.w, 0.0, 0.0);
@@ -141,6 +154,7 @@ void main()
     gPatternOffsetPixels = patternOffset;
     gStartColor = colorA;
     gEndColor = colorB;
+    gLineStartPixels = (a.xy / a.w * 0.5 + 0.5) * uViewportSize;
     vStrokePosition = vec2(lengthPixels + radius, -radius);
     gl_Position = b + vec4((-normal + tangent) * radius * 2.0 /
                                 uViewportSize * b.w, 0.0, 0.0);

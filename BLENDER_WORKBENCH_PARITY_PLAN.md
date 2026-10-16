@@ -7935,8 +7935,9 @@ resolve remain open.
   radius-aware click picking and box selection, snapping, transforms,
   and duplication.
   GPU markers and the QPainter fallback now project each world radius into a
-  screen-space disk. Point colors still use object color, and the raster path
-  uses flat disks rather than Workbench's shaded point surfaces.
+  screen-space disk; both paths use a one-pixel minimum diameter. Point colors
+  still use object color, and the raster path uses flat disks rather than
+  Workbench's shaded point surfaces.
   Box selection uses projected point footprints for crossing and full
   containment. This follows the visible geometry, but Blender's exact
   Workbench box-selection behavior has not been source-verified. Blender

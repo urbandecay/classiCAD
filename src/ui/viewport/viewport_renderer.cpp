@@ -3822,7 +3822,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (transform_.worldPointToScreenUnclipped(
                     worldPoint, viewportSize, &screenPoint)) {
                 const qreal worldRadius = shape.pointCloud.radii[index];
-                qreal radius = kViewportPointVertexMarkerDiameterPixels * 0.5;
+                // Workbench point clouds use their stored radius. Match the
+                // GPU point shader's one-pixel minimum diameter instead of
+                // the larger fixed marker used for ordinary CAD points.
+                qreal radius = 0.5;
                 if (worldRadius > 0.0 && rightLength > 1.0e-12) {
                     const Point3D edgePoint{
                         worldPoint.x + viewRight.x * worldRadius,
@@ -3834,7 +3837,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         radius = std::clamp(
                             std::hypot(edgeScreen.x() - screenPoint.x(),
                                        edgeScreen.y() - screenPoint.y()),
-                            radius, 2048.0);
+                            0.5, 2048.0);
                     }
                 }
                 painter.drawEllipse(screenPoint, radius, radius);

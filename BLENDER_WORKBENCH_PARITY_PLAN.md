@@ -129,23 +129,21 @@ diagnostic output still use the forward route. The C++ build and offscreen
 `viewport_render_contracts` pass with an active OpenGL context; matched output
 validation remains open.
 
-**Deferred selection-tint update (2026-10-13):** Selected opaque ranges can now
-use the material resolve. The G-buffer payload preserves Blender's Flat,
-Studio roughness/metallic, and MatCap face-orientation data while carrying a
-selected marker in otherwise unused payload values. The resolve applies the
-same orange theme tint and 51/255 mix after lighting and cavity. This also
-survives the existing `showInFront` material-data merge. Preview and selection
-overlay draws remain on their existing path. The C++ build and offscreen
-`viewport_render_contracts` pass with an active OpenGL context. Matched visual
-comparison remains open.
+**Historical selection-fill tint implementation (2026-10-13; corrected
+2026-10-16):** An earlier port added orange tint to selected object fills in
+the GPU and QPainter paths. A source review of Blender 5.2.2 confirmed that
+Workbench shades those fills from their normal material inputs and renders
+selection as an outline overlay. The fill tint was therefore incorrect and has
+been removed. Historical notes below about selected-fill tint are superseded
+by the correction near the end of this plan.
 
 **Opaque shadow-mask resolve update (2026-10-13):** The shared scene sample now
 owns an `R16F` shadow-factor attachment, with a separate attachment for the
 `showInFront` domain. The existing opaque shader writes the exact multiplier
 it already applies, including stencil-volume visibility, depth-map comparison,
 shadow focus/offset, and intensity. The front factor merges with front color,
-material, depth, and normal data; the deferred resolve applies it after cavity
-and before selected tint. The mask clears to neutral visibility 1. Transparent
+material, depth, and normal data; the deferred resolve applies it after cavity.
+The mask clears to neutral visibility 1. Transparent
 objects keep their existing direct shading path. The C++ build and offscreen
 `viewport_render_contracts` pass with an active OpenGL context. Matched Blender
 output comparison remains open.
@@ -969,10 +967,11 @@ in ordinary free views or orthographic views is superseded by this correction.
 - classiCAD retains local camera-depth reconstruction and a resolve path that
   accounts for its scene-linear and display-transform stages; these remain
   renderer adaptations requiring matched visual comparison.
-- Selected transparent ranges now decode their sRGB edit-selection tint before
-  mixing it into the primary scene-linear OIT accumulation, matching the
-  opaque selected-range path. Legacy display-space accumulation keeps its
-  existing tint behavior.
+- Historical selected-fill tint behavior described in this section was removed
+  on 2026-10-16 after checking Blender 5.2.2's Workbench source. Object
+  selection affects the outline overlay; it does not recolor the filled
+  surface. The GPU and QPainter surface paths now keep their material shading
+  unchanged for selected objects.
 
 ### GPU Workbench outline alpha blending (2026-10-12)
 
@@ -10208,21 +10207,15 @@ scene depth.
   snapshot now disables the affected shared prepass instead of marking stale
   depth ready. Build passed; matched in-front cavity captures remain open.
 
-### QPainter selection preserves Workbench fills (2026-10-16)
+### Correct selected-object fill color in GPU and QPainter paths (2026-10-16)
 
-- Selected polygon meshes now keep the active Solid shading input in the
-  QPainter path, including Attribute vertex colors, Texture, Object, Random,
-  and Custom colors. Selected NURBS surface and solid fills also receive the
-  same scene-linear selection tint as the GPU path. The prior mesh selection
-  branch replaced the fill with a flat color, and the surface renderer ignored
-  selection. Direct QPainter draws apply the existing 51/255 orange selection
-  mix after the view transform in display-linear space. The bounded
-  scene-linear compositor still bakes that tint into captured fragments before
-  cavity and shadows; matching the GPU's later selection-mask resolve remains
-  open for effect-enabled selected fills.
-  Blender keeps Attribute shading on selected objects in
-  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2045).
-  Build passed; matched selected-Attribute Blender captures remain open.
+- Removed the classiCAD-only orange fill mix for selected polygon meshes and
+  NURBS surfaces/solids. Blender 5.2.2's Workbench engine has no selected-fill
+  shading branch; it shades from the active material/color mode and draws
+  outlines separately. Selection IDs and contour rendering remain enabled.
+  The previous selected-Attribute note cited material color handling, not a
+  selected-fill tint, and did not support the claim made there. C++ build
+  passed; a matched selected-object image comparison remains open.
 
 ### GPU open-surface shadow caps (2026-10-16)
 

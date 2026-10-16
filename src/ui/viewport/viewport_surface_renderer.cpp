@@ -845,9 +845,6 @@ bool ViewportSurfaceRenderer::initialize()
             }
             return result;
         }
-        uniform bool uEditModeSelected;
-        uniform vec3 uEditSelectionColor;
-        uniform float uEditSelectionMix;
         uniform vec3 uCameraPosition;
         uniform float uOrthographicTransparencyDepthOffset;
         uniform vec3 uViewRight;
@@ -1399,13 +1396,6 @@ bool ViewportSurfaceRenderer::initialize()
                 // depth. Accumulate lit scene-linear color; the OIT resolve
                 // applies the active display transform before compositing.
                 float alpha = uBaseColor.a;
-                if (uEditModeSelected) {
-                    vec3 selectionColor = uSceneLinearOutput
-                        ? srgbToDisplayLinear(uEditSelectionColor)
-                        : uEditSelectionColor;
-                    color = mix(color, selectionColor,
-                                uEditSelectionMix);
-                }
                 float signedViewDepth = dot(vWorldPosition - uCameraPosition,
                                             uViewFacing);
                 // Perspective linear_zdepth is signed eye-space z. In
@@ -1426,22 +1416,8 @@ bool ViewportSurfaceRenderer::initialize()
                 fragmentColor = vec4(color * (alpha * weight), alpha);
                 secondaryColor = vec4(alpha * weight, 0.0, 0.0, 1.0);
             } else {
-                if (uSceneLinearOutput) {
-                    if (uEditModeSelected) {
-                        color = mix(color,
-                                    srgbToDisplayLinear(uEditSelectionColor),
-                                    uEditSelectionMix);
-                    }
-                } else {
+                if (!uSceneLinearOutput) {
                     color = sceneLinearToAgxSrgb(color);
-                    // Blender composites Edit Mode overlays after the view
-                    // transform, in linear display space.
-                    if (uEditModeSelected) {
-                        vec3 displayLinear = srgbToDisplayLinear(color);
-                        color = sceneLinearToSrgb(
-                            mix(displayLinear, uEditSelectionColor,
-                                uEditSelectionMix));
-                    }
                 }
                 fragmentColor = vec4(color, uBaseColor.a);
                 float materialPayload = 0.0;
@@ -1450,15 +1426,6 @@ bool ViewportSurfaceRenderer::initialize()
                         uRoughness, uMetallic);
                 } else if (uLightingMode == 1) {
                     materialPayload = gl_FrontFacing ? 1.0 : -1.0;
-                }
-                if (uEditModeSelected) {
-                    if (uLightingMode == 0) {
-                        materialPayload += 256.0;
-                    } else if (uLightingMode == 1) {
-                        materialPayload *= 3.0;
-                    } else {
-                        materialPayload = 1.0;
-                    }
                 }
                 secondaryColor = uWriteMaterialData
                     ? vec4(baseColor, materialPayload)
@@ -1592,8 +1559,6 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uCavitySampleEnd;
         uniform int uCavitySamplesPerIteration;
         uniform float uCavitySampleCountInv;
-        uniform vec3 uEditSelectionColor;
-        uniform float uEditSelectionMix;
         uniform bool uPerspective;
         uniform bool uUseSpecular;
         uniform mat4 uInverseViewProjection;
@@ -1860,7 +1825,6 @@ bool ViewportSurfaceRenderer::initialize()
             vec3 normal = vec3(0.0, 0.0, 1.0);
             vec3 cavityNormal = normal;
             vec3 incident = vec3(0.0, 0.0, 1.0);
-            bool selected = false;
             if (uStudioLighting || uMatcapLighting || uUseCavity) {
                 normal = decodeWorkbenchNormal(
                     texelFetch(uViewNormal, pixel, 0).xy);
@@ -1880,14 +1844,11 @@ bool ViewportSurfaceRenderer::initialize()
             }
             if (uStudioLighting) {
                 int materialBits = int(material.a);
-                selected = (materialBits & 256) != 0;
-                materialBits &= 255;
                 float roughness = float(materialBits & 31) * (1.0 / 31.0);
                 float metallic = float((materialBits >> 5) & 7) * (1.0 / 7.0);
                 color = workbenchStudioLighting(material.rgb, roughness,
                                                 metallic, normal, incident);
             } else if (uMatcapLighting && uMatcapAvailable) {
-                selected = abs(material.a) > 1.5;
                 if (material.a < 0.0) {
                     normal = -normal;
                 }
@@ -1900,8 +1861,6 @@ bool ViewportSurfaceRenderer::initialize()
                     ? texture(uMatcapTexture, vec3(uv, 1.0)).rgb
                     : vec3(0.0);
                 color = diffuse * material.rgb + specular;
-            } else if (!uStudioLighting && !uMatcapLighting) {
-                selected = material.a > 0.5;
             }
             if (uUseCavity) {
                 vec2 screenCoordinate = (vec2(pixel) + 0.5) /
@@ -1927,11 +1886,6 @@ bool ViewportSurfaceRenderer::initialize()
             }
             if (uUseShadowMask) {
                 color *= texelFetch(uShadowMask, pixel, 0).r;
-            }
-            if (selected) {
-                color = mix(color,
-                            srgbToDisplayLinear(uEditSelectionColor),
-                            uEditSelectionMix);
             }
             fragmentColor = vec4(color, 1.0);
         }
@@ -3882,14 +3836,6 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
                                                     matcapLighting);
         flatMaterialResolveProgram_.setUniformValue("uMatcapFlipX",
                                                     settings.matcapFlipX);
-        const QColor editSelectionColor(QStringLiteral("#ffa300"));
-        flatMaterialResolveProgram_.setUniformValue(
-            "uEditSelectionColor",
-            workbenchSrgbToSceneLinear(QVector3D(
-                editSelectionColor.redF(), editSelectionColor.greenF(),
-                editSelectionColor.blueF())));
-        flatMaterialResolveProgram_.setUniformValue("uEditSelectionMix",
-                                                    51.0f / 255.0f);
         const bool useSsao = cavityRequested && ssaoEnabled &&
                              cavityDepthReady;
         const bool useScreenCurvature = cavityRequested &&
@@ -6914,17 +6860,6 @@ bool ViewportSurfaceRenderer::draw(
         glActiveTexture(GL_TEXTURE9);
         glGetIntegerv(GL_TEXTURE_BINDING_2D,
                       &previousUdimLookupTextureBinding);
-        // Blender 5.2's 3D View face_select color is #FFA300 with alpha 0x33.
-        const QColor editSelectionColor(QStringLiteral("#ffa300"));
-        // Theme colors are sRGB; Blender's overlay framebuffer blends in
-        // linear display space after the view transform.
-        const QVector3D editSelectionLinear = workbenchSrgbToSceneLinear(
-            QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
-                      editSelectionColor.blueF()));
-        program_.setUniformValue(
-            "uEditSelectionColor",
-            editSelectionLinear);
-        program_.setUniformValue("uEditSelectionMix", 51.0f / 255.0f);
         vertexArray_.bind();
         vertexBuffer_.bind();
         if (geometryDirty_) {
@@ -7083,8 +7018,6 @@ bool ViewportSurfaceRenderer::draw(
                                    static_cast<float>(range.offset.y),
                                    static_cast<float>(range.offset.z));
             program_.setUniformValue("uWorldOffset", offset);
-            program_.setUniformValue("uEditModeSelected",
-                                     range.selected && !previewOverlay);
             const WorkbenchMaterialData &material = range.workbenchMaterial;
             QVector3D baseColorLinear =
                 workbenchDefaultSolidMaterialDiffuseColor();

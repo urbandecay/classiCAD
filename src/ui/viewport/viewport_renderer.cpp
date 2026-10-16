@@ -2409,7 +2409,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
             qreal roughness = 0.4;
             qreal metallic = 0.0;
             bool useWorkbenchColor = false;
-            bool selected = false;
             qreal depth = 0.0;
             QImage texture;
             QHash<int, QImage> textureTiles;
@@ -2964,7 +2963,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     }
                     if (useWorkbenchColor) {
                         triangle.useWorkbenchColor = true;
-                        triangle.selected = selected;
                         QVector3D sceneLinearColor(sourceColor.x(), sourceColor.y(),
                                                    sourceColor.z());
                         switch (shadingSettings_.colorMode) {
@@ -3223,11 +3221,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QVector3D::crossProduct(meshViewUpVector, meshViewFacing));
         const Point3D meshCameraPosition =
             transform_.cameraPosition(viewportSize);
-        const QColor editSelectionColor(QStringLiteral("#ffa300"));
-        const QVector3D editSelectionLinear = workbenchSrgbToSceneLinear(
-            QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
-                      editSelectionColor.blueF()));
-        constexpr float editSelectionMix = 51.0f / 255.0f;
         meshViewLighting = workbenchStudioLightingForView(
             meshViewLighting, shadingSettings_.studioLightRotationDegrees,
             shadingSettings_.worldSpaceLighting, meshViewRight,
@@ -3459,12 +3452,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.specularLighting,
                             shadingSettings_.matcapFlipX);
                     }
-                    if (triangle.selected &&
-                        (preserveSceneLinearPictureOutput ||
-                         fragmentSink != nullptr)) {
-                        shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
-                                       editSelectionLinear * editSelectionMix;
-                    }
                     if (shadingSettings_.xrayEnabled()) {
                         pixelAlpha *= shadingSettings_.xrayAlphaForMode();
                     }
@@ -3503,15 +3490,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.colorGamma,
                             shadingSettings_.colorLutData,
                             shadingSettings_.colorLutMetadata);
-                    if (triangle.selected &&
-                        !preserveSceneLinearPictureOutput &&
-                        fragmentSink == nullptr) {
-                        const QVector3D displayLinear =
-                            workbenchSrgbToSceneLinear(displayColor);
-                        displayColor = workbenchSceneLinearToSrgb(
-                            displayLinear * (1.0f - editSelectionMix) +
-                            editSelectionLinear * editSelectionMix);
-                    }
                     const quint64 pixelKey =
                         static_cast<quint64>(qFloor(py)) *
                             static_cast<quint64>(meshDeviceWidth) +
@@ -3576,13 +3554,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 QColor fallbackColor = triangle.color;
                 if (triangle.useWorkbenchColor) {
                     QVector3D sceneLinearColor = triangle.sceneLinearColor;
-                    if (triangle.selected &&
-                        (preserveSceneLinearPictureOutput ||
-                         fragmentSink != nullptr)) {
-                        sceneLinearColor = sceneLinearColor *
-                                (1.0f - editSelectionMix) +
-                            editSelectionLinear * editSelectionMix;
-                    }
                     QVector3D displayColor =
                         workbenchSceneLinearToDisplaySrgb(
                             sceneLinearColor,
@@ -3591,15 +3562,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadingSettings_.colorGamma,
                             shadingSettings_.colorLutData,
                             shadingSettings_.colorLutMetadata);
-                    if (triangle.selected &&
-                        !preserveSceneLinearPictureOutput &&
-                        fragmentSink == nullptr) {
-                        const QVector3D displayLinear =
-                            workbenchSrgbToSceneLinear(displayColor);
-                        displayColor = workbenchSceneLinearToSrgb(
-                            displayLinear * (1.0f - editSelectionMix) +
-                            editSelectionLinear * editSelectionMix);
-                    }
                     fallbackColor = QColor::fromRgbF(
                         std::clamp(qreal(displayColor.x()), 0.0, 1.0),
                         std::clamp(qreal(displayColor.y()), 0.0, 1.0),
@@ -5148,6 +5110,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         int displayGridU,
                                         int displayGridV) const
 {
+    // Selection changes the separate contour overlay, not the Workbench fill.
+    Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
         const WorkbenchMaterialData fallbackMaterial;
         const WorkbenchMaterialData &material = workbenchMaterial
@@ -5328,11 +5292,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         qreal sourceAlpha = 1.0;
         qreal roughness = workbenchMaterial ? material.roughness : 0.4;
         qreal metallic = workbenchMaterial ? material.metallic : 0.0;
-        const QColor editSelectionColor(QStringLiteral("#ffa300"));
-        const QVector3D editSelectionLinear = workbenchSrgbToSceneLinear(
-            QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
-                      editSelectionColor.blueF()));
-        constexpr float editSelectionMix = 51.0f / 255.0f;
 
         switch (shadingSettings_.colorMode) {
         case ViewportColorMode::Material:
@@ -5511,10 +5470,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     shadingSettings_.specularLighting,
                     shadingSettings_.matcapFlipX);
             }
-            if (selected && !preview && fragmentSink != nullptr) {
-                shadedLinear = shadedLinear * (1.0f - editSelectionMix) +
-                               editSelectionLinear * editSelectionMix;
-            }
             if (resolvedSceneLinear != nullptr) {
                 *resolvedSceneLinear = shadedLinear;
             }
@@ -5523,13 +5478,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 shadingSettings_.colorExposure, shadingSettings_.colorGamma,
                 shadingSettings_.colorLutData,
                 shadingSettings_.colorLutMetadata);
-            if (selected && !preview && fragmentSink == nullptr) {
-                const QVector3D displayLinear =
-                    workbenchSrgbToSceneLinear(shaded);
-                shaded = workbenchSceneLinearToSrgb(
-                    displayLinear * (1.0f - editSelectionMix) +
-                    editSelectionLinear * editSelectionMix);
-            }
             QColor color = baseColor;
             color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
             color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));

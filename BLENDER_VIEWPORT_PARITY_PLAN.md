@@ -82,9 +82,11 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   later perspective additive iterations do not. The vertex shader applies
   Blender's progressive perspective clip-space z offsets. Transparent output
   accumulates premultiplied RGB and coverage for correct Qt composition.
-- Picture depth currently treats its frame as a solid planar surface; alpha
-  cutouts inside RGBA reference images do not yet punch holes in the depth
-  pass. This limitation is isolated to image-backed picture objects.
+- Picture depth uses a bounded 256-by-256 conservative alpha mask. A mask cell
+  writes depth only when every source pixel represented by that cell passes
+  Blender's Image Empty alpha cutoff, so transparent regions reveal the grid.
+  The conservative mask can enlarge holes and soften thin opaque details;
+  matched image-depth comparison remains open.
 - Validation passed: `cmake --build build -j2`, all three CTest suites,
   `git diff --check`, and a five-second XCB/Mesa software-OpenGL launch. The
   application initialized without shader/context setup errors. The fixed-view

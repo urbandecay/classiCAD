@@ -10263,13 +10263,3 @@ scene depth.
   Image Empties keep their premultiplied filtering path. Qt formats that do not
   expose straight RGB retain their format's available pixel values. Matched
   Blender cutout captures remain open. C++ build passed.
-
-### Viewport projection label (2026-10-16)
-
-- The viewport HUD no longer labels every view as "2D VIEWPORT". It now
-  reports Perspective or Orthographic from the active camera projection. The
-  imported view path already retains Blender's saved perspective state and
-  floor-grid visibility flags, and both grid renderers honor those flags. The
-  supplied screenshots do not show the same scene and do not expose the
-  imported floor-grid setting, so they cannot establish why classiCAD's grid is
-  hidden. A same-file view comparison remains open. C++ build passed.

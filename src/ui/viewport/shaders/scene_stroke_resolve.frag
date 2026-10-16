@@ -161,6 +161,10 @@ void main()
             float neighborDepth = correctedMeshWireDepth(
                 neighborPixel, neighborRecord,
                 texelFetch(uCandidateDepth, neighborPixel, 0).r);
+            if (uIgnoreSceneDepth == 0 &&
+                neighborDepth > sceneDepth + 1.0e-6) {
+                continue;
+            }
             float neighborFade = xrayFadeForSample(neighborPixel, neighborDepth);
             blendNeighbor(resolvedLineColor, resolvedLineDepth,
                           texelFetch(uLineColor, neighborPixel, 0) * neighborFade,

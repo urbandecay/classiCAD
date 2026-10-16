@@ -1229,6 +1229,11 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
                 neighbor.depth > neighborSceneDepth + sceneDepthTolerance) {
                 continue;
             }
+            if (!batchIt->ignoreSceneDepth &&
+                std::isfinite(targetSceneDepth) &&
+                neighbor.depth > targetSceneDepth + sceneDepthTolerance) {
+                continue;
+            }
             const bool horizontalWire =
                 std::abs(neighbor.normalX) > std::abs(neighbor.normalY);
             if (horizontalWire != (offset.x() != 0)) continue;

@@ -9356,14 +9356,16 @@ moves them after scene effects and depth-tests them against the retained scene.
 
 ### QPainter smooth-wire fringe scene occlusion (2026-10-16)
 
-- Cardinal-neighbor Smooth Wires contributions now test the candidate wire
-  depth against the destination pixel's retained opaque scene depth. This
-  prevents a visible sample beside a foreground silhouette from painting its
-  antialiasing fringe over that foreground object. Depth-tested candidate
-  ordering behind a center wire remains intact. Blender resolves neighbor
-  coverage against the shared scene color and depth in
+- Cardinal-neighbor Smooth Wires contributions in both QPainter and the GPU
+  path test the candidate wire depth against the destination pixel's retained
+  opaque scene depth, in addition to the QPainter source-pixel visibility
+  check. This prevents a visible sample beside a foreground silhouette from
+  painting its antialiasing fringe over that foreground object. X-Ray keeps its
+  separate hidden-wire fade behavior, and depth-tested candidate ordering
+  behind a center wire remains intact. Blender resolves neighbor coverage
+  against the shared scene color and depth in
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh).
-  Build passed; matched silhouette-wire captures remain open.
+  The C++ build passed; matched silhouette-wire captures remain open.
 
 ### QPainter neighboring Smooth Wires distance direction (2026-10-16)
 

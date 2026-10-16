@@ -13633,43 +13633,60 @@ protected:
                 const auto lineVisibleAt = [&](const QPointF &screen,
                                                const Point3D &world,
                                                bool showInFront) {
-                    const int x = std::clamp(
-                        qRound(screen.x() * depthScaleX), 0,
-                        std::max(0, depthSize.width() - 1));
-                    const int y = std::clamp(
-                        qRound(screen.y() * depthScaleY), 0,
-                        std::max(0, depthSize.height() - 1));
-                    const int pixelIndex = y * depthSize.width() + x;
-                    const QVector<float> &depth = showInFront
-                        ? rasterSurfaceLayers.inFrontSceneDepth
-                        : rasterSurfaceLayers.regularSceneDepth;
-                    const QSize storedSize = showInFront
-                        ? rasterSurfaceLayers.inFrontSceneDepthSize
-                        : rasterSurfaceLayers.regularSceneDepthSize;
-                    if (storedSize != depthSize ||
-                        pixelIndex < 0 || pixelIndex >= depth.size()) {
-                        return true;
-                    }
-                    float surfaceDepth = depth[pixelIndex];
-                    if (!showInFront &&
-                        pixelIndex <
-                            rasterSurfaceLayers.inFrontSceneDepth.size()) {
-                        const float inFrontDepth =
-                            rasterSurfaceLayers.inFrontSceneDepth[pixelIndex];
-                        if (std::isfinite(inFrontDepth)) {
-                            return false;
-                        }
-                    }
-                    if (!std::isfinite(surfaceDepth)) {
-                        return true;
-                    }
                     const float strokeDepth = rasterWorkbenchCameraDepth(
                         QVector3D(float(world.x), float(world.y),
                                   float(world.z)),
                         cameraPosition, viewDirection);
-                    const float tolerance = std::max(
-                        5.0e-4f, std::abs(surfaceDepth) * 1.0e-5f);
-                    return strokeDepth >= surfaceDepth - tolerance;
+                    const auto depthSample = [&](const QVector<float> &depth,
+                                                 const QSize &depthSize)
+                        -> std::optional<float> {
+                        if (depthSize.width() <= 0 || depthSize.height() <= 0 ||
+                            depth.size() != depthSize.width() *
+                                                depthSize.height() ||
+                            renderFrame.viewportSize.width() <= 0 ||
+                            renderFrame.viewportSize.height() <= 0) {
+                            return std::nullopt;
+                        }
+                        const int x = qFloor(
+                            screen.x() * depthSize.width() /
+                            renderFrame.viewportSize.width());
+                        const int y = qFloor(
+                            screen.y() * depthSize.height() /
+                            renderFrame.viewportSize.height());
+                        if (x < 0 || x >= depthSize.width() ||
+                            y < 0 || y >= depthSize.height()) {
+                            return std::nullopt;
+                        }
+                        const float value = depth[
+                            y * depthSize.width() + x];
+                        return std::isfinite(value)
+                            ? std::optional<float>(value) : std::nullopt;
+                    };
+                    const auto isVisibleAgainst = [&](
+                        const QVector<float> &depth, const QSize &depthSize) {
+                        const std::optional<float> surfaceDepth =
+                            depthSample(depth, depthSize);
+                        if (!surfaceDepth.has_value()) return true;
+                        const float tolerance = std::max(
+                            5.0e-4f, std::abs(*surfaceDepth) * 1.0e-5f);
+                        return strokeDepth >= *surfaceDepth - tolerance;
+                    };
+                    if (showInFront) {
+                        return isVisibleAgainst(
+                            rasterSurfaceLayers.inFrontSceneDepth,
+                            rasterSurfaceLayers.inFrontSceneDepthSize);
+                    }
+                    if (!viewportShadingSettings_.xrayEnabled() &&
+                        !isVisibleAgainst(
+                            rasterSurfaceLayers.regularSceneDepth,
+                            rasterSurfaceLayers.regularSceneDepthSize)) {
+                        return false;
+                    }
+                    // Blender's in-front overlay is composed after ordinary
+                    // Edit Mode geometry and therefore covers its edges.
+                    return !depthSample(
+                        rasterSurfaceLayers.inFrontSceneDepth,
+                        rasterSurfaceLayers.inFrontSceneDepthSize).has_value();
                 };
 
                 painter.save();

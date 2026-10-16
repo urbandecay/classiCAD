@@ -8827,6 +8827,17 @@ resolve remain open.
   [`overlay_xray_fade.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_xray_fade.hh#L361-L374).
   Matched control-point and cage captures remain open.
 
+### QPainter selected component-edge X-Ray depth (2026-10-15)
+
+- Selected NURBS surface/solid component edges now bypass ordinary scene-depth
+  occlusion while X-Ray is enabled. They still remain covered by a finite
+  `showInFront` layer, which Blender composites later; selected edges belonging
+  to an in-front object test only that layer's depth. Each retained depth map
+  is sampled using its own dimensions, including bounded raster targets.
+  Blender's separate in-front Workbench passes are described in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L238-L250).
+  Matched component-edge captures remain open.
+
 ### NURBS surface derivative normals (2026-10-15)
 
 - Smooth NURBS surface and solid shading normals are now evaluated from the

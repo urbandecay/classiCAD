@@ -265,6 +265,15 @@ def source_library_exists(id_block):
     return os.path.isfile(bpy.path.abspath(path))
 
 
+def absolute_image_filepath(image):
+    """Resolve an image path relative to its owning .blend or linked library."""
+    filepath = getattr(image, "filepath", "")
+    if not filepath:
+        return ""
+    return bpy.path.abspath(
+        filepath, library=getattr(image, "library", None))
+
+
 def stable_id(id_block):
     if not SOURCE_PROJECT_NAMESPACE:
         raise RuntimeError("source Blender project namespace was not initialized")
@@ -364,9 +373,7 @@ def image_references(material):
             # (0, 0), increasing across X, then Y). Preserve the explicit
             # tile numbers and resolve the conventional <UDIM> path token
             # while the source .blend path context is available.
-            filepath_template = (
-                bpy.path.abspath(image.filepath) if image.filepath else ""
-            )
+            filepath_template = absolute_image_filepath(image)
             for tile in getattr(image, "tiles", ()):
                 tile_number = int(tile.number)
                 tile_path = filepath_template.replace("<UDIM>", str(tile_number))
@@ -492,8 +499,7 @@ def image_references(material):
                 "image_library_path_exists": source_library_exists(image),
                 # Resolve Blender's // path against the source .blend while
                 # still in Blender; classiCAD never interprets Blender paths.
-                "filepath": (bpy.path.abspath(image.filepath)
-                             if image.filepath else ""),
+                "filepath": absolute_image_filepath(image),
                 "packed": packed_file is not None or bool(packed_tiles),
                 "packed_data_base64": packed_data_base64,
                 "packed_data_error": packed_data_error,
@@ -501,7 +507,7 @@ def image_references(material):
                     bool(packed_file is not None or any(
                         tile["source_file_exists"] or tile["packed_data_base64"]
                         for tile in image_tiles)) or
-                    (os.path.isfile(bpy.path.abspath(image.filepath))
+                    (os.path.isfile(absolute_image_filepath(image))
                      if image.filepath else False)
                 ),
                 "tiles": image_tiles,

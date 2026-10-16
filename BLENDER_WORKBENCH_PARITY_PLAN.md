@@ -1411,6 +1411,14 @@ hides imported Image Empty Picture geometry while retaining the underlying
 objects. Blender camera/light icons and other unsupported guides remain
 unrepresented.
 
+**Linked image path correction (2026-10-16):** Blender image paths beginning
+with `//` are now resolved with `bpy.path.abspath(..., library=image.library)`.
+This uses the linked library's folder for linked Image Texture and UDIM images,
+and that same absolute path is used for file-existence checks and transport.
+Previously those paths could resolve relative to the importing project and
+cause available linked textures to be treated as missing. The C++ build is
+unchanged; a linked-library image fixture has not yet been run through import.
+
 **Import update:** The scene extractor bridge now accepts versions 10 through 30; the native document schema writes version 21 and reads versions 1 through 20. Ordinary Blender `.blend` Open now imports the first scene's `scene.display.shading` Solid settings into the initial classiCAD viewport. The extracted `scene.display.viewport_aa` remains unused by interactive Solid rendering, matching Blender's user-preference override; the separate `scene.display.render_aa` supplies offscreen Workbench render results. The import maps bundled studio-light/MatCap presets, color source and background, shadow/cavity/curvature/outline controls, `show_overlays`, `show_extras`, `show_xray`, the distinct `show_xray_wireframe`, `matcap_flip_x` when Blender exposes it, and studio-light rotation converted from radians to degrees. Custom unavailable presets, scene-light rendering, and Blender 5.2.2's RNA-hidden MatCap flip are reported as unsupported. `studiolight_background_alpha` and `studiolight_background_blur` are preserved in the extracted record but belong to Eevee Lookdev rather than Workbench Solid. Blender 5.2.2 Workbench does not use `studiolight_intensity`. Imported World backgrounds are retained and used for both interactive and offscreen rendering. In Original mesh mode, source geometry stays unevaluated while the active camera and focus-object transforms are resolved from the scene dependency graph. Existing classiCAD project opens do not apply imported Blender shading. Ordinary `.blend` Open creates a new classiCAD document; its source path is not used as the Save target, so users must use Save As to create a native project.
 
 **Ordinary Blender Open evaluated-mesh update (2026-10-16):** Opening a

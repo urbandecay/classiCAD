@@ -9531,6 +9531,7 @@ protected:
         bool gpuActivePicturePreviewRendered = false;
         int extrudePreviewCapStrokeIndex = 0;
         bool rasterSurfaceBatchRendered = false;
+        bool rasterSurfaceBatchHasObjects = false;
         QVector<ViewportRenderObject> sceneDrawObjects = visibleShapes;
         if (nativeRenderer == nullptr) {
             const auto hasSurfaceGeometry = [](const ViewportRenderObject &object) {
@@ -9577,6 +9578,7 @@ protected:
                     }
                     return averageViewDepth(a) < averageViewDepth(b);
                 });
+            rasterSurfaceBatchHasObjects = !surfaceDrawObjects.isEmpty();
             // Reorder only surface-bearing objects in their existing slots.
             // Curves, annotations, and other stroke-rendered objects retain
             // their prior position and relative order in the scene dispatch.
@@ -9634,10 +9636,6 @@ protected:
                          sceneDrawObjects) {
                         if (object.shape.geometryType ==
                                 GeometryType::Picture &&
-                            (object.shape.pictureUseAlphaBlend ||
-                             object.shape.pictureImageDepth !=
-                                 PictureImageDepth::Default ||
-                             object.showInFront) &&
                             !object.shape.pictureImage.isNull()) {
                             deferredPictures.append(&object);
                         }
@@ -9805,7 +9803,9 @@ protected:
             for (const ViewportRenderObject &object : sceneDrawObjects) {
                 if (object.shape.geometryType != GeometryType::Picture ||
                     object.shape.pictureImage.isNull() ||
-                    (object.shape.pictureImageDepth ==
+                    (!rasterSurfaceBatchRendered &&
+                     rasterSurfaceBatchHasObjects &&
+                     object.shape.pictureImageDepth ==
                          PictureImageDepth::Default &&
                      !object.showInFront)) {
                     continue;

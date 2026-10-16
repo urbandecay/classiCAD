@@ -8742,16 +8742,20 @@ resolve remain open.
 ### QPainter Image Empty overlay composition (2026-10-15)
 
 - When the bounded software surface batch succeeds, QPainter now defers
-  alpha-blended and non-default-depth Image Empties to the post-Workbench
-  overlay stage, sorts them by camera depth, and composites their sRGB overlay
-  pixels with linear-light alpha arithmetic.
+  all available Image Empties to the post-Workbench overlay stage, sorts them
+  by camera depth, and composites their sRGB overlay pixels with linear-light
+  alpha arithmetic. Ordinary default-depth images retain their scene-depth
+  mask in this deferred path.
   Their source color uses Blender's sRGB display encoding without the
   Workbench view transform. Default images keep scene-depth masking; Back and
   Front bypass it because Blender composites them in a depthless color-only
   target. Direct QPainter fallback scenes still use encoded-space blending
-  for ordinary direct draws. Back and Front images use a late, depthless
-  overlay when their bounded deferral is available; otherwise their inline
-  order remains scene-dependent. If scene-linear image allocation or conversion
+  for ordinary direct draws when the bounded surface compositor cannot run or
+  its deferred-image pixel budget is exceeded. If surface geometry is present
+  but its batch fails, ordinary default-depth images stay in the direct path so
+  they do not lose scene-depth testing. Back and Front images use a late,
+  depthless overlay when their bounded deferral is available; otherwise their
+  inline order remains scene-dependent. If scene-linear image allocation or conversion
   fails, QPainter switches that draw back to its encoded-image path instead of
   treating source bytes as linear color. Front-depth and object-level In Front
   images bypass scene depth, matching Blender's no-depth image pass.

@@ -11,6 +11,7 @@
 namespace classiCAD {
 
 struct ViewportHudState {
+    bool perspectiveView = false;
     ToolId activeTool = ToolId::Select;
     ArcMode arcMode = ArcMode::TwoPoint;
     bool subdivisionActive = false;

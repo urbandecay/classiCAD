@@ -14854,6 +14854,7 @@ protected:
         drawImportedCameraPassepartout(
             document_, size(), viewportTransform_, painter);
         ViewportHudState hudState;
+        hudState.perspectiveView = viewportTransform_.isPerspectiveEnabled();
         hudState.activeTool = activeTool_;
         hudState.arcMode = arcState().mode;
         hudState.subdivisionActive = subdivisionTool_.isActive();

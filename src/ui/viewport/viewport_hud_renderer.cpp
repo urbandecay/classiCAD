@@ -31,6 +31,9 @@ void ViewportHudRenderer::draw(QPainter &painter,
                                const ViewportHudState &state) const
 {
     const ToolId activeTool = state.activeTool;
+    const QString viewLabel = state.perspectiveView
+        ? QStringLiteral("PERSPECTIVE VIEWPORT")
+        : QStringLiteral("ORTHOGRAPHIC VIEWPORT");
     const ArcMode arcMode = state.arcMode;
     const bool subdivisionActive = state.subdivisionActive;
     const int subdivisionSections = state.subdivisionSections;
@@ -57,9 +60,9 @@ void ViewportHudRenderer::draw(QPainter &painter,
     const QString activeToolLabel = activeTool == Tool::Arc
                                         ? arcModeName(arcMode)
                                         : toolName(activeTool);
-    painter.drawText(18,
-                     28,
-                     QStringLiteral("2D VIEWPORT  •  %1").arg(activeToolLabel));
+    painter.drawText(18, 28,
+                     QStringLiteral("%1  •  %2")
+                         .arg(viewLabel, activeToolLabel));
 
     if (subdivisionActive) {
         painter.setPen(QColor(QStringLiteral("#f0a45a")));

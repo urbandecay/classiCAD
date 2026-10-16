@@ -2127,6 +2127,13 @@ bool ViewportSurfaceRenderer::initialize()
                 radiance += transmittance * uBaseColor *
                             (stepOpacity * scatteringScale * 0.25);
                 transmittance *= stepTransmittance;
+                // Blender clamps the remaining transmittance to zero once
+                // only one percent of the ray remains, making that volume
+                // sample fully opaque before the integration stops.
+                if (transmittance <= 0.01) {
+                    transmittance = 0.0;
+                    break;
+                }
             }
             fragmentColor = resolveVolumeColor(radiance, 1.0 - transmittance);
         }

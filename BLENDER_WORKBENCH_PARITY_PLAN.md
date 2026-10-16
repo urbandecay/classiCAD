@@ -9699,3 +9699,21 @@ moves them after scene effects and depth-tests them against the retained scene.
   limited to one million pixels, so this is not a normal viewport mismatch.
   No code change was warranted; the emergency fallback remains covered by the
   existing transparency and QPainter limitations above.
+
+### Preserve transparent routing at high X-Ray opacity (2026-10-16)
+
+- QPainter now keeps every positive-alpha X-Ray fragment in its weighted OIT
+  path, even when an opacity just below one rounds to UNorm8 value 255. The
+  opaque color/depth capture also skips X-Ray objects, so quantization cannot
+  make their depth hide other translucent fragments. This follows Blender's
+  source-level mode switch: Blender enables X-Ray transparency whenever the
+  setting is below one and multiplies that opacity into alpha in the
+  transparent accumulation shader. The QPainter mesh normal path now also
+  keeps opaque-source backfaces unflipped while X-Ray makes their fragments
+  transparent, matching the GPU and Blender transparent shader.
+- Blender references:
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L1240-L1257),
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L79-L85),
+  and
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L280-L327).
+  Build passed; matched near-opaque X-Ray captures remain open.

@@ -3359,7 +3359,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     // Blender's opaque prepass flips backface normals before
                     // encoding them. Its transparent pass keeps interpolated
                     // mesh normals unchanged.
-                    if (alpha >= 1.0 && !frontFacing) {
+                    if (alpha >= 1.0 &&
+                        !shadingSettings_.xrayEnabled() && !frontFacing) {
                         normalView = -normalView;
                     }
                     QVector3D incidentView = triangle.incidentView;

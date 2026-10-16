@@ -148,10 +148,12 @@ float saturate(float value)
     return std::clamp(value, 0.0f, 1.0f);
 }
 
-bool isOpaqueWorkbenchAlpha(float alpha)
+bool isOpaqueWorkbenchAlpha(float alpha, bool xrayEnabled = false)
 {
     // Blender classifies material transparency after packing alpha to UNorm8.
-    return workbenchPackUnitFloatToUnorm8(alpha) >= 1.0f;
+    // X-Ray routes the source object through the transparent pass whenever
+    // its setting is below one, even if the effective alpha rounds to 255.
+    return !xrayEnabled && workbenchPackUnitFloatToUnorm8(alpha) >= 1.0f;
 }
 
 float objectSourceAlpha(const ViewportRenderObject &object,
@@ -804,6 +806,7 @@ bool compositeRasterWorkbenchSurfaces(
         }
     }
     const int pixelCount = static_cast<int>(pixelCount64);
+    const bool xrayEnabled = shadingSettings.xrayEnabled();
     struct WeightedOitAccumulation {
         float red = 0.0f;
         float green = 0.0f;
@@ -1310,7 +1313,8 @@ bool compositeRasterWorkbenchSurfaces(
                 for (int x = 0; x < width; ++x) {
                     const int index = y * width + x;
                     const QRgb pixel = row[x];
-                    if (qAlpha(pixel) < 255 || objectDepth[index] == noDepth)
+                    if (qAlpha(pixel) < 255 || xrayEnabled ||
+                        objectDepth[index] == noDepth)
                         continue;
                     if (objectDepth[index] >= domainOpaqueDepth[index]) {
                         domainOpaqueDepth[index] = objectDepth[index];
@@ -1326,7 +1330,7 @@ bool compositeRasterWorkbenchSurfaces(
                      ++fragmentIndex) {
                     const RasterWorkbenchLinearFragment &fragment =
                         objectFragments[static_cast<std::size_t>(fragmentIndex)];
-                    if (!isOpaqueWorkbenchAlpha(fragment.alpha) ||
+                    if (!isOpaqueWorkbenchAlpha(fragment.alpha, xrayEnabled) ||
                         fragment.x < 0 ||
                         fragment.x >= width || fragment.y < 0 ||
                         fragment.y >= height) continue;
@@ -1421,7 +1425,7 @@ bool compositeRasterWorkbenchSurfaces(
             bool havePrevious = false;
             for (const RasterWorkbenchLinearFragment &fragment : objectFragments) {
                 if (fragment.alpha <= 0.0f ||
-                    isOpaqueWorkbenchAlpha(fragment.alpha) ||
+                    isOpaqueWorkbenchAlpha(fragment.alpha, xrayEnabled) ||
                     fragment.x < 0 || fragment.x >= width ||
                     fragment.y < 0 || fragment.y >= height) continue;
                 const int index = fragment.y * width + fragment.x;
@@ -1988,7 +1992,7 @@ bool compositeRasterWorkbenchSurfaces(
             ? frontOpaqueSceneDepth : opaqueSceneDepth;
         for (const RasterWorkbenchLinearFragment &fragment : objectFragments) {
             if (fragment.alpha <= 0.0f ||
-                isOpaqueWorkbenchAlpha(fragment.alpha) ||
+                isOpaqueWorkbenchAlpha(fragment.alpha, xrayEnabled) ||
                 fragment.x < 0 || fragment.x >= width ||
                 fragment.y < 0 || fragment.y >= height) continue;
             const int index = fragment.y * width + fragment.x;

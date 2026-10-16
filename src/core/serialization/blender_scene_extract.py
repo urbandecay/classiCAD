@@ -1192,7 +1192,7 @@ def _saved_view_areas(screen):
     return areas
 
 
-def saved_viewport_shading_record(scene):
+def saved_viewport_shading_record(scene, unsupported_features):
     """Return the deterministically selected saved VIEW_3D shading record.
 
     Prefer the active window screen when that window is editing this scene.
@@ -1226,6 +1226,33 @@ def saved_viewport_shading_record(scene):
                     overlay.wireframe_opacity)
                 record["wireframe_threshold"] = finite_number(
                     overlay.wireframe_threshold)
+                if overlay.show_overlays:
+                    unsupported_overlays = (
+                        ("show_text", "viewport_text_labels",
+                         "Blender viewport text labels are not displayed by classiCAD"),
+                        ("show_stats", "viewport_statistics",
+                         "Blender viewport statistics are not displayed by classiCAD"),
+                        ("show_cursor", "viewport_3d_cursor",
+                         "Blender's 3D cursor overlay is not represented by classiCAD"),
+                        ("show_camera_guides", "viewport_camera_guides",
+                         "Blender camera guide overlays are not displayed by classiCAD"),
+                        ("show_relationship_lines", "viewport_relationship_lines",
+                         "Blender parent relationship lines are not displayed by classiCAD"),
+                        ("show_origins", "viewport_object_origins",
+                         "Blender object origin markers are not displayed by classiCAD"),
+                        ("show_bones", "viewport_bones",
+                         "Blender armature bone overlays are not represented by classiCAD"),
+                        ("show_motion_paths", "viewport_motion_paths",
+                         "Blender motion path overlays are not represented by classiCAD"),
+                        ("show_annotation", "viewport_annotations",
+                         "Blender annotation overlays are not represented by classiCAD"),
+                    )
+                    for property_name, feature_name, reason in unsupported_overlays:
+                        if bool(getattr(overlay, property_name, False)):
+                            add_unsupported(unsupported_features,
+                                            stable_id(scene),
+                                            feature_name,
+                                            reason)
                 themes = getattr(bpy.context.preferences, "themes", ())
                 if themes:
                     view_theme = getattr(themes[0], "view_3d", None)
@@ -2611,7 +2638,8 @@ def extract_scene(input_path, mode):
             # (unevaluated) geometry.
             "active_camera": scene_camera_record(scene, camera_depsgraph),
             "workbench_shading": workbench_shading_record(scene),
-            "workbench_viewport_shading": saved_viewport_shading_record(scene),
+            "workbench_viewport_shading": saved_viewport_shading_record(
+                scene, output["unsupported_features"]),
             "color_management": bake_color_lut(
                 scene, output["color_luts"], lut_bytes_by_id,
                 output["unsupported_features"]),

@@ -7987,8 +7987,10 @@ resolve remain open.
   object transform, and image offset; readable packed images and external
   files are supported with 32 MiB packed-byte and 16M decoded-pixel bounds.
   Projection-specific visibility, image side, depth modes, alpha blending,
-  and scene-linear object tint are retained. QPainter bakes tint only for
-  source images up to 16M pixels; larger sources keep their original RGB.
+  and scene-linear object tint are retained. QPainter bakes tint into source
+  images up to 16M pixels; larger sources apply tint after sampling when the
+  viewport raster fits its 16M-pixel bound. Direct drawing and over-budget
+  viewport rasters still keep the source RGB without tint.
   Opaque cutouts are thresholded after filtering only when the viewport raster
   fits within 16M pixels. Blender's image alpha mode is retained: GPU drawing
   converts decoded RGB to scene-linear, premultiplies when Blender requests
@@ -8333,9 +8335,11 @@ resolve remain open.
   `use_empty_image_alpha` setting in native shape data. The GPU shader
   applies the tint in scene-linear color and reproduces Blender's 0.05 source
   alpha cutout when alpha blending is off. QPainter applies the tint and
-  cutout for images up to 16M pixels and encodes their linear image colors to
-  sRGB without applying the Workbench view transform, matching Blender's
-  overlay image shader. Under the bounded raster surface path, translucent
+  cutout for images up to 16M pixels, and applies large-image tint after
+  viewport-sized sampling when that raster fits its 16M-pixel bound. It
+  encodes tinted linear colors to sRGB for the ordinary overlay image path.
+  Direct drawing and over-budget viewport rasters still omit tint for large
+  source images. Under the bounded raster surface path, translucent
   and non-default-depth images are deferred until after Workbench effects and
   blended in linear light. Direct QPainter fallbacks still blend in encoded
   display space.
@@ -10236,3 +10240,14 @@ scene depth.
   existing approximation because their source scene-linear colors cannot be
   recovered reliably. The normal bounded scene-linear compositor is unchanged;
   matched fallback captures remain open. Build passed.
+
+### QPainter large Image Empty tint (2026-10-16)
+
+- Large imported Picture images no longer lose their scene-linear object tint
+  when the viewport-sized QPainter raster fits the existing 16M-pixel bound.
+  The raster applies tint after filtering the source into visible pixels,
+  avoiding a full-size processed copy and preserving the source image. Alpha
+  tint is applied only for Blender's alpha-blended image mode; cutout mode
+  retains its source-alpha threshold. Direct draws and oversized viewport
+  rasters still use the untinted source for images above the 16M source-pixel
+  processing cap. Matched image comparisons remain open. Build passed.

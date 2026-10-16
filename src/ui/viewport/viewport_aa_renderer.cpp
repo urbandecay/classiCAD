@@ -591,7 +591,8 @@ bool ViewportAaRenderer::initialize()
         {
             vec3 scenePremultiplied = uPremultipliedAlpha
                 ? scene.rgb : scene.rgb * scene.a;
-            vec3 resultPremultiplied = overlay.rgb +
+            vec3 overlayPremultiplied = overlay.rgb * overlay.a;
+            vec3 resultPremultiplied = overlayPremultiplied +
                 scenePremultiplied * (1.0 - overlay.a);
             float resultAlpha = overlay.a + scene.a * (1.0 - overlay.a);
             vec3 resultRgb = uPremultipliedAlpha
@@ -711,8 +712,9 @@ bool ViewportAaRenderer::initialize()
                     vec3 scenePremultiplied = uPremultipliedAlpha
                         ? source.rgb : source.rgb * source.a;
                     float remainingScene = 1.0 - source.a;
+                    vec3 backPremultiplied = backImage.rgb * backImage.a;
                     vec3 resultPremultiplied = scenePremultiplied +
-                        backImage.rgb * remainingScene;
+                        backPremultiplied * remainingScene;
                     float resultAlpha = source.a +
                         backImage.a * remainingScene;
                     source = uPremultipliedAlpha

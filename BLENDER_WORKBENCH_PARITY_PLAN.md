@@ -9288,6 +9288,20 @@ transform, and the layers stay outside cached AA history so they are rebuilt
 on each viewport redraw. Runtime GPU and matched Blender comparisons remain
 unverified.
 
+**Camera image straight-alpha composition correction (2026-10-16):** The
+separate camera image layers contain straight RGB and alpha. GPU presentation
+now multiplies each layer's RGB by its alpha before BACK alpha-under and FRONT
+alpha-over composition. This corrects overly bright partially transparent
+pixels; matched camera-image captures remain open.
+
+**Camera layer alpha correction (2026-10-16):** The camera image layers store
+straight RGB with alpha because their framebuffer is cleared transparent and
+images draw without blending. The presentation shader now premultiplies those
+samples during BACK alpha-under and FRONT alpha-over composition; previously
+it treated straight RGB as premultiplied and could brighten partially
+transparent pixels. Build passed; matched translucent camera-image captures
+remain open.
+
 **QPainter camera BACK Image Empty composition (2026-10-16):** Camera-view-only
 BACK images with View as Render enabled initially entered the bounded
 scene-linear background before surface composition, which incorrectly exposed

@@ -3938,8 +3938,11 @@ points through their existing geometry paths. NURBS solid component transforms a
 suppressed because solid faces are derived from the exact base surface and
 extrusion vector; whole-object solid transforms remain supported. During
 component transforms, surface CV propagation stays inside the selected surface
-or solid; matching coordinates on another object do not connect it. Curve
-control points propagate across objects only through the existing explicit
+or solid; matching coordinates on another object do not connect it. Face-mode
+NURBS surface transforms and Ctrl+L vertex expansion now map the single NURBS
+surface patch to its CV indices directly, so coincident CV positions do not
+collapse onto one control point. Curve control points propagate across objects
+only through the existing explicit
 weld groups. Component duplication uses the existing curve/surface component
 paths. Curve and point component deletion use their existing geometry
 operations. For untrimmed NURBS surfaces, Delete removes selected complete

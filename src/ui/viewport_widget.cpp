@@ -5184,15 +5184,32 @@ public:
                         if (faceIndex < 0 || faceIndex >= faces.size()) {
                             continue;
                         }
-                        for (const Point3D &point :
-                             faces[faceIndex].controlPoints) {
+                        const NurbsSurface3D &face = faces[faceIndex];
+                        if (shape->geometryType == GeometryType::NurbsSurface) {
+                            // A surface object owns exactly this one NURBS
+                            // patch. Preserve its CV identity directly so
+                            // repeated or coincident CV positions are all
+                            // transformed instead of collapsing to the first
+                            // position match.
                             for (int index = 0;
-                                 index < cage.precisePointVertices.size(); ++index) {
-                                if (samePoint(
-                                        point,
-                                        cage.precisePointVertices[index])) {
-                                    objectTargets.insert(index);
-                                    break;
+                                 index < face.controlPoints.size(); ++index) {
+                                objectTargets.insert(index);
+                            }
+                        } else {
+                            // Solid faces are derived from closed extrusion
+                            // topology and do not map one-to-one to stored
+                            // editable CV indices. Keep their existing
+                            // unique-cage lookup for non-transform operations.
+                            for (const Point3D &point : face.controlPoints) {
+                                for (int index = 0;
+                                     index < cage.precisePointVertices.size();
+                                     ++index) {
+                                    if (samePoint(
+                                            point,
+                                            cage.precisePointVertices[index])) {
+                                        objectTargets.insert(index);
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -24191,6 +24208,20 @@ private:
                         Shape faceShape;
                         faceShape.geometryType = GeometryType::NurbsSurface;
                         faceShape.nurbsSurface = objectFaces[faceIndex];
+                        if (shape->geometryType ==
+                                GeometryType::NurbsSurface &&
+                            faceIndex == 0) {
+                            // This surface face is its source control net, so
+                            // preserve CV indices instead of folding
+                            // coincident CV positions onto the first match.
+                            for (int vertex = 0;
+                                 vertex < objectFaces[faceIndex]
+                                             .controlPoints.size();
+                                 ++vertex) {
+                                linkedComponents.insert(vertex);
+                            }
+                            continue;
+                        }
                         const ViewportDepthGeometry faceCage =
                             selectedSurfaceControlNet(faceShape);
                         for (const Point3D &point :

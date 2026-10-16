@@ -424,13 +424,13 @@ float rasterWorkbenchCavityStep(float baseRadiusPixels,
 }
 
 int rasterWorkbenchCavitySampleCount(int requestedSamples,
-                                     qsizetype coveredPixels) noexcept
+                                     qsizetype targetPixels) noexcept
 {
     constexpr quint64 maximumSampleWork = 32ull * 1024ull * 1024ull;
     const int requested = std::clamp(requestedSamples, 1, 500);
-    if (coveredPixels <= 0) return requested;
+    if (targetPixels <= 0) return requested;
     const quint64 budgetedCount = maximumSampleWork /
-        static_cast<quint64>(coveredPixels);
+        static_cast<quint64>(targetPixels);
     return std::min(requested, static_cast<int>(std::clamp<quint64>(
         budgetedCount, 1, static_cast<quint64>(requested))));
 }
@@ -3353,11 +3353,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const bool curvature = settings.cavityType == ViewportCavityType::Screen ||
                            settings.cavityType == ViewportCavityType::Both;
     const int requested = std::clamp(settings.cavitySamples, 1, 500);
-    qsizetype coveredOpaquePixels = 0;
-    for (const RasterSample &sample : opaqueSamples)
-        coveredOpaquePixels += sample.objectId != 0;
+    // Keep the bounded sample count stable as geometry enters or leaves the
+    // view. Using covered pixels here made cavity quality depend on scene
+    // coverage even when the viewport size and requested sample count stayed
+    // unchanged.
     const int effectiveSamples = rasterWorkbenchCavitySampleCount(
-        requested, coveredOpaquePixels);
+        requested, static_cast<qsizetype>(opaqueSamples.size()));
     const float radius = rasterWorkbenchCavityRadius(
         static_cast<float>(settings.cavityDistance),
         static_cast<float>(

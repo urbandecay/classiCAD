@@ -1974,7 +1974,11 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
                                 "spline:%d:POLY" % spline_index,
                                 "POLY spline has fewer than two control points")
                 continue
-            item["splines"].append({"type": "POLY", "control_points_world": points})
+            item["splines"].append({
+                "type": "POLY",
+                "resolution_u": max(1, int(spline.resolution_u)),
+                "control_points_world": points,
+            })
             continue
 
         if spline.type == "NURBS":
@@ -2003,6 +2007,7 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
                 raise ValueError("Blender generated an inconsistent NURBS knot vector")
             item["splines"].append({
                 "type": "NURBS",
+                "resolution_u": max(1, int(spline.resolution_u)),
                 "degree": order - 1,
                 "control_points_world": points,
                 "weights": weights,
@@ -2029,7 +2034,11 @@ def extract_poly_curve_object(obj, scene, unsupported, depsgraph=None,
                             "spline:%d:BEZIER" % spline_index,
                             "open BEZIER spline has fewer than two control points")
             continue
-        item["splines"].append({"type": "BEZIER", "spans_world": spans})
+        item["splines"].append({
+            "type": "BEZIER",
+            "resolution_u": max(1, int(spline.resolution_u)),
+            "spans_world": spans,
+        })
     for modifier in obj.modifiers:
         add_unsupported(unsupported, item_id, "modifier:" + modifier.name,
                         "exact spline import preserves source control points; modifier was not applied")

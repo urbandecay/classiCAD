@@ -51,6 +51,10 @@ struct Shape {
     // Mixed-plane PolyCurves store one frame per component. Empty is the
     // legacy representation and uses workPlaneFrame for all components.
     QVector<WorkPlaneFrame> componentWorkPlaneFrames;
+    // Optional Blender per-spline preview detail; zero/empty retains native
+    // classiCAD sampling. Bézier spline settings repeat for each cubic span.
+    int curveDisplayResolutionU = 0;
+    QVector<int> componentCurveDisplayResolutionsU;
     // Explicit weld topology, flattened in the control-point order exposed by
     // the geometry type. Zero means the point is not welded; matching nonzero
     // values identify control points connected by the Weld command or by an

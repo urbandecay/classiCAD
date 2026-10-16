@@ -9929,3 +9929,18 @@ moves them after scene effects and depth-tests them against the retained scene.
   [Spline API](https://docs.blender.org/api/5.2/bpy.types.Spline.html), and
   describes their effect in the
   [Surface Shape properties](https://docs.blender.org/manual/en/latest/modeling/surfaces/properties/shape.html).
+
+### Blender curve spline preview resolution (2026-10-16)
+
+- Blender CURVE import now retains each source spline's U preview resolution as
+  separate Shape metadata; Bézier splines copy that value to each exact cubic
+  NURBS component. It affects only display sampling and leaves the imported
+  NURBS controls, weights, knots, and parameter domains unchanged. The
+  renderer, GPU curve-depth mesh, hit testing, and selection sampling use the
+  retained setting with existing bounded sample budgets. Old native files keep
+  their previous sampling behavior; straight POLY splines remain exact.
+- Blender documents `Spline.resolution_u` as its per-spline resolution in the
+  [Spline API](https://docs.blender.org/api/5.2/bpy.types.Spline.html), and
+  Blender 5.2.2 uses it while evaluating curve samples in
+  [`curve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/curve.cc#L3457-L3611).
+  Build passed; matched curve-display captures remain open.

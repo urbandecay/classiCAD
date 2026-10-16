@@ -180,7 +180,8 @@ void appendPictureDepthSurface(const Shape &shape,
 
 void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
                               const WorkPlaneFrame &frame,
-                              ViewportDepthGeometry *geometry)
+                              ViewportDepthGeometry *geometry,
+                              int displayResolutionU = 0)
 {
     if (geometry == nullptr || !validateNurbsCurve(curve)) {
         return;
@@ -197,7 +198,9 @@ void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
     // endpoints are sufficient. Higher-degree curves need enough vertices to
     // stay smooth at maximum orthographic zoom. Bound their normal sampling
     // budget; the resulting vertices are cached by the GPU scene renderer.
-    const int samplesPerSpan = curve.degree <= 1 ? 1 : 128;
+    const int samplesPerSpan = displayResolutionU > 0
+        ? std::max(1, displayResolutionU)
+        : (curve.degree <= 1 ? 1 : 128);
     constexpr int maximumSampleBudget = 8192;
     const int samplesForEachSpan =
         std::max(1,
@@ -999,7 +1002,13 @@ void appendShapeDepthGeometry(const Shape &shape,
                 shape.geometryType == GeometryType::PolyCurve
                     ? shapeComponentWorkPlaneFrame(shape, index)
                     : shapeWorkPlaneFrame(shape);
-            appendCurveDepthVertices(curves[index], frame, &geometry);
+            int displayResolutionU = shape.curveDisplayResolutionU;
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                displayResolutionU =
+                    shape.componentCurveDisplayResolutionsU.value(index);
+            }
+            appendCurveDepthVertices(curves[index], frame, &geometry,
+                                     displayResolutionU);
         }
 }
 

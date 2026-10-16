@@ -285,7 +285,10 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
                                                 viewportTransform,
                                                 viewportSize,
                                                 &sampled,
-                                                worldOffset)) {
+                                                worldOffset,
+                                                shape.geometryType == GeometryType::PolyCurve
+                                                    ? shape.componentCurveDisplayResolutionsU.value(componentIndex)
+                                                    : shape.curveDisplayResolutionU)) {
                 return {true, false};
             }
 

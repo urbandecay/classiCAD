@@ -3745,7 +3745,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
          layerLineType.compare(QStringLiteral("Continuous"),
                                Qt::CaseInsensitive) == 0);
     const auto drawCurve = [&](const Shape::NurbsCurve2D &curve,
-                               const WorkPlaneFrame &frame) {
+                               const WorkPlaneFrame &frame,
+                               int displayResolutionU = 0) {
         if (!isValidNurbsCurve(curve)) {
             return;
         }
@@ -3784,7 +3785,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (!curveDrawn) {
                 drawNurbsCurve(painter, curve, placedFrame, viewportSize,
                                preview ? nullptr : opaqueSceneDepth,
-                               opaqueSceneDepthSize);
+                               opaqueSceneDepthSize,
+                               displayResolutionU > 0
+                                   ? displayResolutionU
+                                   : shape.curveDisplayResolutionU);
             }
         }
         painter.restore();
@@ -4264,7 +4268,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (!preparedCurveDrawn) {
             for (int index = 0; index < shape.components.size(); ++index) {
                 const Shape::NurbsCurve2D &component = shape.components[index];
-                drawCurve(component, shapeComponentWorkPlaneFrame(shape, index));
+                drawCurve(component,
+                          shapeComponentWorkPlaneFrame(shape, index),
+                          shape.componentCurveDisplayResolutionsU.value(index));
             }
         }
     } else if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
@@ -4775,7 +4781,8 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
                                       const WorkPlaneFrame &frame,
                                       const QSize &viewportSize,
                                       const QVector<float> *opaqueSceneDepth,
-                                      const QSize &opaqueSceneDepthSize) const
+                                      const QSize &opaqueSceneDepthSize,
+                                      int displayResolutionU) const
 {
     if (!isValidNurbsCurve(curve) || !isValidWorkPlaneFrame(frame)) {
         return;
@@ -4862,6 +4869,37 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
         if (fullKnots[index + 1] > fullKnots[index]) {
             ++nonZeroSpans;
         }
+    }
+    if (displayResolutionU > 0) {
+        constexpr int maximumDisplaySampleCount = 16384;
+        const int samplesPerSpan = std::max(
+            1, std::min(displayResolutionU,
+                        maximumDisplaySampleCount /
+                            std::max(1, nonZeroSpans)));
+        QVector<Point3D> sampledWorldPoints;
+        sampledWorldPoints.reserve(nonZeroSpans * samplesPerSpan + 1);
+        for (int spanIndex = curve.degree;
+             spanIndex < controlPointCount;
+             ++spanIndex) {
+            const qreal spanStart = fullKnots[spanIndex];
+            const qreal spanEnd = fullKnots[spanIndex + 1];
+            if (spanEnd <= spanStart) continue;
+            for (int sample = 0; sample <= samplesPerSpan; ++sample) {
+                if (spanIndex > curve.degree && sample == 0) continue;
+                const qreal fraction =
+                    static_cast<qreal>(sample) / samplesPerSpan;
+                Point3D point;
+                if (evaluateNurbsPoint3D(
+                        curve, spanStart + (spanEnd - spanStart) * fraction,
+                        &point)) {
+                    sampledWorldPoints.append(worldPoint(point));
+                }
+            }
+        }
+        if (!drawDepthTestedPolyline(sampledWorldPoints)) {
+            drawClippedPolyline(sampledWorldPoints);
+        }
+        return;
     }
     if (!smoothCurveDisplay_) {
         const int sampleCount = std::max(32, nonZeroSpans * 24);

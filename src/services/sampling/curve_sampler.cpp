@@ -16,14 +16,16 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                                     const ViewportTransform &transform,
                                     const QSize &viewportSize,
                                     SampledNurbsCurve2D *sampled,
-                                    const Point3D &worldOffset) const
+                                    const Point3D &worldOffset,
+                                    int displayResolutionU) const
 {
     return sampleNurbsCurve(curve,
                             transform.workPlaneFrame(),
                             transform,
                             viewportSize,
                             sampled,
-                            worldOffset);
+                            worldOffset,
+                            displayResolutionU);
 }
 
 bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
@@ -31,7 +33,8 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                                     const ViewportTransform &transform,
                                     const QSize &viewportSize,
                                     SampledNurbsCurve2D *sampled,
-                                    const Point3D &worldOffset) const
+                                    const Point3D &worldOffset,
+                                    int displayResolutionU) const
 {
     if (sampled == nullptr || !validateNurbsCurve(curve) ||
         !isValidWorkPlaneFrame(workPlaneFrame)) {
@@ -62,10 +65,13 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
     // need more samples while higher-degree spans get a lower cap per span.
     const int samplesPerSpan = curve.degree <= 1 ? 64 : 32;
     constexpr int maximumSampleCount = 2048;
-    const int samplesForEachSpan =
-        std::max(1,
-                 std::min(samplesPerSpan,
-                          maximumSampleCount / std::max(1, nonZeroSpans)));
+    const int samplesForEachSpan = displayResolutionU > 0
+        ? std::max(1, std::min(displayResolutionU,
+                               maximumSampleCount /
+                                   std::max(1, nonZeroSpans)))
+        : std::max(1,
+                   std::min(samplesPerSpan,
+                            maximumSampleCount / std::max(1, nonZeroSpans)));
     sampled->parameters.reserve(nonZeroSpans * samplesForEachSpan + 1);
     sampled->screenPoints.reserve(nonZeroSpans * samplesForEachSpan + 1);
     sampled->worldPoints.reserve(nonZeroSpans * samplesForEachSpan + 1);

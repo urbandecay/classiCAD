@@ -85,7 +85,8 @@ public:
                         const WorkPlaneFrame &frame,
                         const QSize &viewportSize,
                         const QVector<float> *opaqueSceneDepth = nullptr,
-                        const QSize &opaqueSceneDepthSize = {}) const;
+                        const QSize &opaqueSceneDepthSize = {},
+                        int displayResolutionU = 0) const;
     void drawNurbsSurface(QPainter &painter,
                           const Shape::NurbsSurface3D &surface,
                           const QSize &viewportSize,

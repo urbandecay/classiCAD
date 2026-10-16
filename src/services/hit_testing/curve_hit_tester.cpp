@@ -276,7 +276,8 @@ qreal CurveHitTester::distanceToNurbsCurve(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     const WorkPlaneFrame *frameOverride,
-    const Point3D &worldOffset) const
+    const Point3D &worldOffset,
+    int displayResolutionU) const
 {
     const WorkPlaneFrame &frame = frameOverride != nullptr
                                       ? *frameOverride
@@ -299,7 +300,9 @@ qreal CurveHitTester::distanceToNurbsCurve(
         }
     }
 
-    const int sampleCount = std::max(64, nonZeroSpans * 32);
+    const int sampleCount = displayResolutionU > 0
+        ? std::max(1, std::min(16384, nonZeroSpans * displayResolutionU))
+        : std::max(64, nonZeroSpans * 32);
     Point3D previousLocal;
     if (!evaluateNurbsPoint3D(curve, firstParameter, &previousLocal)) {
         return 1.0e9;
@@ -600,7 +603,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                                      componentTransform,
                                                      viewportSize,
                                                      &componentFrame,
-                                                     worldOffset));
+                                                     worldOffset,
+                                                     shape.componentCurveDisplayResolutionsU.value(index)));
         }
         return distance;
     }
@@ -645,7 +649,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                        transform,
                                        viewportSize,
                                        &shapeFrame,
-                                       worldOffset);
+                                       worldOffset,
+                                       shape.curveDisplayResolutionU);
         }
         const QPointF center = transform.worldToScreen(shape.points[0], viewportSize);
         const QPointF edge = transform.worldToScreen(shape.points[1], viewportSize);
@@ -681,7 +686,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                        transform,
                                        viewportSize,
                                        &shapeFrame,
-                                       worldOffset);
+                                       worldOffset,
+                                       shape.curveDisplayResolutionU);
         }
         return shape.points.size() >= 4
                    ? distanceToCubicCurve(screenPosition,

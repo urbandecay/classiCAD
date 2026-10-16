@@ -1039,6 +1039,18 @@ QJsonObject shapeToJson(const Shape &shape)
         }
         object.insert(QStringLiteral("componentWorkPlaneFrames"), componentFrames);
     }
+    if (shape.curveDisplayResolutionU > 0) {
+        object.insert(QStringLiteral("curveDisplayResolutionU"),
+                      shape.curveDisplayResolutionU);
+    }
+    if (!shape.componentCurveDisplayResolutionsU.isEmpty()) {
+        QJsonArray resolutions;
+        for (const int resolution : shape.componentCurveDisplayResolutionsU) {
+            resolutions.append(resolution);
+        }
+        object.insert(QStringLiteral("componentCurveDisplayResolutionsU"),
+                      resolutions);
+    }
     if (!shape.controlPointWeldGroups.isEmpty()) {
         QJsonArray weldGroups;
         for (const quint64 group : shape.controlPointWeldGroups) {
@@ -1462,6 +1474,30 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         }
     }
 
+    const int curveDisplayResolutionU = object.value(
+        QStringLiteral("curveDisplayResolutionU")).toInt(0);
+    if (curveDisplayResolutionU < 0 || curveDisplayResolutionU > 256) {
+        return false;
+    }
+    QVector<int> componentCurveDisplayResolutionsU;
+    const QJsonValue componentResolutionsValue = object.value(
+        QStringLiteral("componentCurveDisplayResolutionsU"));
+    if (!componentResolutionsValue.isUndefined()) {
+        const QJsonArray resolutions = componentResolutionsValue.toArray();
+        if (!componentResolutionsValue.isArray() ||
+            resolutions.size() != components.size()) {
+            return false;
+        }
+        componentCurveDisplayResolutionsU.reserve(resolutions.size());
+        for (const QJsonValue &resolutionValue : resolutions) {
+            const int resolution = resolutionValue.toInt(-1);
+            if (resolution < 0 || resolution > 256) {
+                return false;
+            }
+            componentCurveDisplayResolutionsU.append(resolution);
+        }
+    }
+
     QVector<quint64> controlPointWeldGroups;
     const QJsonValue weldGroupsValue =
         object.value(QStringLiteral("controlPointWeldGroups"));
@@ -1612,6 +1648,9 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->subdivisionParameters = subdivisionParameters;
     shape->components = components;
     shape->componentWorkPlaneFrames = componentWorkPlaneFrames;
+    shape->curveDisplayResolutionU = curveDisplayResolutionU;
+    shape->componentCurveDisplayResolutionsU =
+        componentCurveDisplayResolutionsU;
     shape->controlPointWeldGroups = controlPointWeldGroups;
     shape->dimensionAnchors = dimensionAnchors;
     shape->dimensionOffset = dimensionOffset;

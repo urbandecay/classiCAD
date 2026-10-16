@@ -37,7 +37,8 @@ public:
                                const ViewportTransform &transform,
                                const QSize &viewportSize,
                                const WorkPlaneFrame *frame = nullptr,
-                               const Point3D &worldOffset = {}) const;
+                               const Point3D &worldOffset = {},
+                               int displayResolutionU = 0) const;
     qreal distanceToNurbsSurface(const QPointF &screenPosition,
                                  const Shape::NurbsSurface3D &surface,
                                  const ViewportTransform &transform,

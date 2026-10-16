@@ -1480,6 +1480,7 @@ bool parseBlenderPolyCurveItem(
         static_cast<float>(objectColor[2]), static_cast<float>(objectColor[3]));
 
     QVector<classiCAD::NurbsCurve3D> curves;
+    QVector<int> curveDisplayResolutions;
     for (const QJsonValue &splineValue : sourceSplines) {
         if (!splineValue.isObject()) {
             setError(errorMessage, QStringLiteral("curve spline record is invalid"));
@@ -1488,6 +1489,8 @@ bool parseBlenderPolyCurveItem(
         const QJsonObject spline = splineValue.toObject();
         const QString splineType = spline.value(QStringLiteral("type")).toString(
             QStringLiteral("POLY"));
+        const int displayResolution = std::clamp(
+            spline.value(QStringLiteral("resolution_u")).toInt(0), 0, 256);
         if (splineType == QLatin1String("POLY")) {
             const QJsonArray sourcePoints =
                 spline.value(QStringLiteral("control_points_world")).toArray();
@@ -1519,6 +1522,7 @@ bool parseBlenderPolyCurveItem(
                 curve.knots.append(static_cast<double>(pointIndex));
             }
             curves.append(std::move(curve));
+            curveDisplayResolutions.append(displayResolution);
         } else if (splineType == QLatin1String("NURBS")) {
             const QJsonArray sourcePoints =
                 spline.value(QStringLiteral("control_points_world")).toArray();
@@ -1553,6 +1557,7 @@ bool parseBlenderPolyCurveItem(
                 curve.normalCoordinates.append(xyz[2]);
             }
             curves.append(std::move(curve));
+            curveDisplayResolutions.append(displayResolution);
         } else if (splineType == QLatin1String("BEZIER")) {
             const QJsonArray spans = spline.value(QStringLiteral("spans_world")).toArray();
             if (spans.isEmpty()) {
@@ -1599,6 +1604,7 @@ bool parseBlenderPolyCurveItem(
                     curve.normalCoordinates.append(xyz[2]);
                 }
                 curves.append(std::move(curve));
+                curveDisplayResolutions.append(displayResolution);
             }
         } else {
             setError(errorMessage, QStringLiteral("unsupported Blender curve spline type"));
@@ -1641,9 +1647,13 @@ bool parseBlenderPolyCurveItem(
     if (curves.size() == 1) {
         result.geometry.geometryType = classiCAD::GeometryType::Nurbs;
         result.geometry.nurbs = std::move(curves.first());
+        result.geometry.curveDisplayResolutionU =
+            curveDisplayResolutions.value(0);
     } else {
         result.geometry.geometryType = classiCAD::GeometryType::PolyCurve;
         result.geometry.components = std::move(curves);
+        result.geometry.componentCurveDisplayResolutionsU =
+            std::move(curveDisplayResolutions);
         result.geometry.componentWorkPlaneFrames.fill(
             result.geometry.workPlaneFrame, result.geometry.components.size());
     }

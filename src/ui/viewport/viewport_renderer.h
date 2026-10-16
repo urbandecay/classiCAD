@@ -139,7 +139,8 @@ private:
         const ViewportDepthGeometry &preparedGeometry,
         const QSize &viewportSize,
         const QVector<float> *opaqueSceneDepth = nullptr,
-        const QSize &opaqueSceneDepthSize = {}) const;
+        const QSize &opaqueSceneDepthSize = {},
+        bool blenderMeshWireDepthBias = false) const;
     bool subdivisionCurve(const Shape &shape,
                           Shape::NurbsCurve2D *curve) const;
     QVector<QPointF> rectangleVertices(const Shape &shape) const;

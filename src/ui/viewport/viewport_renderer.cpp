@@ -1,5 +1,6 @@
 #include "viewport_renderer.h"
 #include "viewport_picture_visibility.h"
+#include "blender_grid_renderer.h"
 
 #include "core/geometry/curve_construction.h"
 #include "core/geometry/shape_mapping.h"
@@ -1522,7 +1523,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
     const ViewportDepthGeometry &preparedGeometry,
     const QSize &viewportSize,
     const QVector<float> *opaqueSceneDepth,
-    const QSize &opaqueSceneDepthSize) const
+    const QSize &opaqueSceneDepthSize,
+    bool blenderMeshWireDepthBias) const
 {
     const QVector<Point3D> &worldVertices =
         preparedGeometry.preciseLineVertices;
@@ -1547,6 +1549,14 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         }
         const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
         const Point3D viewDirection = transform_.viewDirection();
+        const ViewportProjectionClipRange wireClipRange =
+            blenderMeshWireDepthBias
+                ? viewportProjectionClipRange(transform_, viewportSize)
+                : ViewportProjectionClipRange{};
+        const qreal wireNdcOffset = blenderMeshWireDepthBias
+            ? std::abs(viewportBlenderMeshWireNdcOffsetFactor(
+                  transform_, viewportSize))
+            : 0.0;
         const auto cameraDepth = [&](const Point3D &point) {
             if (transform_.isPerspectiveEnabled()) {
                 return (point.x - cameraPosition.x) * viewDirection.x +
@@ -1688,6 +1698,21 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                             fraction / endDepth;
                         if (reciprocal < -1.0e-12) {
                             curveDepth = 1.0 / reciprocal;
+                        }
+                    }
+                    if (wireNdcOffset > 0.0 &&
+                        wireClipRange.nearPlane > 0.0 &&
+                        wireClipRange.farPlane > wireClipRange.nearPlane) {
+                        qreal towardCameraBias = wireNdcOffset *
+                            (wireClipRange.farPlane -
+                             wireClipRange.nearPlane) * 0.25;
+                        if (transform_.isPerspectiveEnabled()) {
+                            towardCameraBias *= curveDepth * curveDepth /
+                                (wireClipRange.farPlane *
+                                 wireClipRange.nearPlane);
+                        }
+                        if (std::isfinite(towardCameraBias)) {
+                            curveDepth += towardCameraBias;
                         }
                     }
                     const float surfaceDepth = (*opaqueSceneDepth)[
@@ -5954,7 +5979,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 std::move(depthWireVertices);
             const bool depthTested = drawPreparedCurveSegments(
                 painter, surfaceWireGeometry, viewportSize, opaqueSceneDepth,
-                opaqueSceneDepthSize);
+                opaqueSceneDepthSize, true);
             painter.restore();
             if (depthTested) return;
             painter.save();

@@ -8371,10 +8371,12 @@ resolve remain open.
 
 - Committed QPainter NURBS surface and `NurbsSolid` wire segments now reuse
   the bounded camera-depth sampling used by committed curve strokes. Hidden
-  segments are split against retained opaque scene depth, while the existing
-  depth tolerance keeps coplanar face wires visible. Preview wires retain
-  their existing draw path. Blender's Overlay wireframe uses depth-tested
-  `LESS_EQUAL`; matched edge visibility comparison remains open.
+  segments are split against retained opaque scene depth. The visibility test
+  also applies Blender's viewport-dependent mesh-wire depth nudge, converted
+  to camera depth, so nearly coplanar edges are not rejected by the QPainter
+  path. Ordinary CAD curve strokes keep their existing depth behavior. Preview
+  wires retain their existing draw path. Matched edge visibility comparison
+  remains open.
 
 ### QPainter opaque prepass coplanar depth ties (2026-10-15)
 

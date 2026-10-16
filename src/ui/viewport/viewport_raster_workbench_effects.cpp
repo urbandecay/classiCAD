@@ -2575,9 +2575,68 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
               validatePolygonMesh(object.shape.polygonMesh))) {
             continue;
         }
+        const auto flatMeshViewedEdgeOn = [&]() {
+            if (perspective ||
+                object.shape.geometryType != GeometryType::PolygonMesh ||
+                !validatePolygonMesh(object.shape.polygonMesh)) {
+                return false;
+            }
+            const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            if (mesh.vertices.isEmpty()) return false;
+            qreal minimum[3] = {
+                std::numeric_limits<qreal>::infinity(),
+                std::numeric_limits<qreal>::infinity(),
+                std::numeric_limits<qreal>::infinity()};
+            qreal maximum[3] = {
+                -std::numeric_limits<qreal>::infinity(),
+                -std::numeric_limits<qreal>::infinity(),
+                -std::numeric_limits<qreal>::infinity()};
+            for (const Point3D &vertex : mesh.vertices) {
+                const qreal coordinates[3] = {vertex.x, vertex.y, vertex.z};
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (!std::isfinite(coordinates[axis])) return false;
+                    minimum[axis] = std::min(minimum[axis], coordinates[axis]);
+                    maximum[axis] = std::max(maximum[axis], coordinates[axis]);
+                }
+            }
+            qreal largestDimension = 0.0;
+            qreal dimensions[3];
+            for (int axis = 0; axis < 3; ++axis) {
+                dimensions[axis] = maximum[axis] - minimum[axis];
+                largestDimension = std::max(largestDimension, dimensions[axis]);
+            }
+            if (largestDimension <= 0.0) return false;
+            const qreal flatTolerance = largestDimension * 1.0e-6;
+            int flatAxis = -1;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (dimensions[axis] <= flatTolerance) {
+                    if (flatAxis != -1) return false;
+                    flatAxis = axis;
+                }
+            }
+            if (flatAxis == -1) return false;
+
+            const auto &m = object.meshObjectTransform;
+            const QVector3D axisX{float(m[0]), float(m[4]), float(m[8])};
+            const QVector3D axisY{float(m[1]), float(m[5]), float(m[9])};
+            const QVector3D axisZ{float(m[2]), float(m[6]), float(m[10])};
+            QVector3D flatNormal;
+            if (flatAxis == 0) {
+                flatNormal = QVector3D::crossProduct(axisY, axisZ);
+            } else if (flatAxis == 1) {
+                flatNormal = QVector3D::crossProduct(axisZ, axisX);
+            } else {
+                flatNormal = QVector3D::crossProduct(axisX, axisY);
+            }
+            if (flatNormal.lengthSquared() <= 1.0e-16f) return false;
+            flatNormal.normalize();
+            return std::abs(QVector3D::dotProduct(
+                       flatNormal, viewFacingVector)) < 1.0e-3f;
+        };
         const bool rasterizeSelectedMeshEdges =
-            selectedOutlineEnabled && xrayEnabled && object.selected &&
-            object.shape.geometryType == GeometryType::PolygonMesh;
+            selectedOutlineEnabled && object.selected &&
+            object.shape.geometryType == GeometryType::PolygonMesh &&
+            (xrayEnabled || flatMeshViewedEdgeOn());
         const bool selectedOutlineSupported =
             object.blenderSourceObjectType != QLatin1String("SURFACE");
         const bool needsSelectedOutlineGeometry =

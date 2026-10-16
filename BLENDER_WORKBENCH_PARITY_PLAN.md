@@ -9717,3 +9717,19 @@ moves them after scene effects and depth-tests them against the retained scene.
   and
   [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L280-L327).
   Build passed; matched near-opaque X-Ray captures remain open.
+
+### Preserve selected outlines for edge-on flat meshes (2026-10-16)
+
+- The QPainter selected-outline pass now also rasterizes exposed edges into
+  selected ID/depth for a selected polygon mesh with exactly one near-zero
+  local dimension when viewed edge-on in orthographic projection. It reuses
+  the existing bounded edge rasterizer and keeps normal perspective/face-on
+  rendering unchanged; the prior X-Ray edge path remains enabled.
+- Blender 5.2.2 detects one flattened object axis using a relative `1e-6`
+  dimension tolerance, then adds its edge-detection geometry to the outline
+  prepass in orthographic views when the transformed flat normal is
+  perpendicular to view within `1e-3`, in
+  [`overlay_private.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_private.hh#L923-L992)
+  and
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L148-L170).
+  Build passed; matched edge-on outline captures remain open.

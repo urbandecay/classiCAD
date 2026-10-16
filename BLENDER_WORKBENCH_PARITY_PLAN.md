@@ -3979,12 +3979,18 @@ Edit Mode's Select tool and the supported NURBS point/curve/surface targets.
 NURBS solid component mirroring remains unsupported because its faces are
 derived from the exact base surface and extrusion vector. Partial surface CV
 deletion, individual solid-face deletion, exact active/selected outlines,
-other mode-specific overlay details, Blender's Shift/Ctrl digit selection
-extensions, and matched GPU/QPainter captures remain open. Blender 5.2.2 binds
-Shift/Ctrl digit mode variants to mesh selection operators; its curve Edit
-Mode keymap has no corresponding 1/2/3 selection modes. Ctrl expand/contract
-also depends on mesh adjacency, so those variants are not silently assigned
-new meanings for the NURBS mapping. Control-point
+other mode-specific overlay details, Blender's Shift-digit simultaneous
+selection modes, and matched GPU/QPainter captures remain open. Ctrl+1/2/3 now
+adapts Blender's mesh-mode expand/contract transfer to the requested
+CV/spline/patch mapping: switching to a higher component mode includes
+components touching selected lower-mode components; switching to a lower mode
+keeps components only when all their incident higher-mode components are
+selected. This is a classiCAD NURBS adaptation: Blender 5.2.2 binds the Ctrl
+variants to mesh selection operators, while its curve Edit Mode keymap has no
+corresponding 1/2/3 selection modes. Shift+digits remains unported because
+classiCAD currently stores one active selection mode; simultaneous modes need
+selection, rendering, and operation support across multiple domains.
+Control-point
 visibility now defaults on in Edit Mode, while a saved preference to hide it
 is preserved. Edit-only control cages, component highlights, and solid face
 boundaries are gated from Object Mode. Object Mode NURBS surface wires now use

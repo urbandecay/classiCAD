@@ -2612,6 +2612,22 @@ public:
         return supportsComponentSelectionShortcut(Qt::Key_1 + mode);
     }
 
+    bool dispatchComponentSelectionModeShortcut(
+        int key, Qt::KeyboardModifiers modifiers)
+    {
+        if (!viewportModeShortcutAvailable() ||
+            interactionMode_ != ViewportInteractionMode::Edit ||
+            (modifiers != Qt::NoModifier &&
+             modifiers != Qt::ControlModifier) ||
+            !supportsComponentSelectionShortcut(key)) {
+            return false;
+        }
+        const ComponentSelectionMode mode =
+            static_cast<ComponentSelectionMode>(key - Qt::Key_1);
+        setComponentSelectionMode(mode, modifiers == Qt::ControlModifier);
+        return true;
+    }
+
     bool setInteractionMode(int mode) override
     {
         if (mode < static_cast<int>(ViewportInteractionMode::Object) ||
@@ -9944,7 +9960,8 @@ protected:
         menu->popup(menuPosition);
     }
 
-    void setComponentSelectionMode(ComponentSelectionMode mode)
+    void setComponentSelectionMode(ComponentSelectionMode mode,
+                                   bool useExpand = false)
     {
         if (componentSelectionMode_ == mode) return;
         if (interactionMode_ == ViewportInteractionMode::Edit &&
@@ -9952,6 +9969,9 @@ protected:
                 static_cast<int>(mode) + Qt::Key_1)) {
             return;
         }
+        const ComponentSelectionMode previousMode = componentSelectionMode_;
+        const bool expandingSelection = useExpand && mode > previousMode;
+        const bool contractingSelection = useExpand && mode < previousMode;
 
         // Blender carries component selections across selection-mode
         // changes. In particular, switching Edge -> Vertex selects the two
@@ -9988,6 +10008,42 @@ protected:
                         ? activeComponentIndices_[static_cast<int>(
                               ComponentSelectionMode::Edge)]
                         : -1;
+                    if (contractingSelection) {
+                        QVector<QSet<int>> incidentEdges(
+                            selectedSurfaceControlNet(shape).pointVertices.size());
+                        for (int edgeIndex = 0;
+                             edgeIndex < edgeVertices.size(); ++edgeIndex) {
+                            const QPair<int, int> endpoints = edgeVertices[edgeIndex];
+                            if (endpoints.first >= 0 &&
+                                endpoints.first < incidentEdges.size()) {
+                                incidentEdges[endpoints.first].insert(edgeIndex);
+                            }
+                            if (endpoints.second >= 0 &&
+                                endpoints.second < incidentEdges.size()) {
+                                incidentEdges[endpoints.second].insert(edgeIndex);
+                            }
+                        }
+                        for (int vertex = 0; vertex < incidentEdges.size(); ++vertex) {
+                            const QSet<int> &incident = incidentEdges[vertex];
+                            if (incident.isEmpty() ||
+                                !std::all_of(incident.cbegin(), incident.cend(),
+                                    [&objectIt](int edgeIndex) {
+                                        return objectIt.value().contains(edgeIndex);
+                                    })) {
+                                continue;
+                            }
+                            vertices.insert(vertex);
+                            if (objectId == componentSelectionObject_ &&
+                                activeEdge >= 0 && incident.contains(activeEdge) &&
+                                (activeVertex < 0 || vertex < activeVertex)) {
+                                activeVertex = vertex;
+                            }
+                        }
+                        if (vertices.isEmpty()) {
+                            selectedVertices.remove(objectIt.key());
+                        }
+                        continue;
+                    }
                     for (int edgeIndex : objectIt.value()) {
                         if (edgeIndex < 0 || edgeIndex >= edgeVertices.size()) {
                             continue;
@@ -9999,7 +10055,8 @@ protected:
                         if (endpoints.second >= 0) {
                             vertices.insert(endpoints.second);
                         }
-                        if (edgeIndex == activeEdge && endpoints.first >= 0) {
+                        if (objectId == componentSelectionObject_ &&
+                            edgeIndex == activeEdge && endpoints.first >= 0) {
                             activeVertex = endpoints.first;
                         }
                     }
@@ -10015,6 +10072,38 @@ protected:
                     ? activeComponentIndices_[static_cast<int>(
                           ComponentSelectionMode::Edge)]
                     : -1;
+                if (contractingSelection) {
+                    QVector<QSet<int>> incidentSplines(
+                        curveControlPointVertices(shape, {}).size());
+                    for (int splineIndex = 0;
+                         splineIndex < splineControlPoints.size(); ++splineIndex) {
+                        for (int vertex : splineControlPoints[splineIndex]) {
+                            if (vertex >= 0 && vertex < incidentSplines.size()) {
+                                incidentSplines[vertex].insert(splineIndex);
+                            }
+                        }
+                    }
+                    for (int vertex = 0; vertex < incidentSplines.size(); ++vertex) {
+                        const QSet<int> &incident = incidentSplines[vertex];
+                        if (incident.isEmpty() ||
+                            !std::all_of(incident.cbegin(), incident.cend(),
+                                [&objectIt](int splineIndex) {
+                                    return objectIt.value().contains(splineIndex);
+                                })) {
+                            continue;
+                        }
+                        vertices.insert(vertex);
+                        if (objectId == componentSelectionObject_ &&
+                            activeEdge >= 0 && incident.contains(activeEdge) &&
+                            (activeVertex < 0 || vertex < activeVertex)) {
+                            activeVertex = vertex;
+                        }
+                    }
+                    if (vertices.isEmpty()) {
+                        selectedVertices.remove(objectIt.key());
+                    }
+                    continue;
+                }
                 for (int splineIndex : objectIt.value()) {
                     if (splineIndex < 0 ||
                         splineIndex >= splineControlPoints.size()) {
@@ -10022,7 +10111,8 @@ protected:
                     }
                     const QSet<int> &spline = splineControlPoints[splineIndex];
                     vertices.unite(spline);
-                    if (splineIndex == activeEdge && !spline.isEmpty()) {
+                    if (objectId == componentSelectionObject_ &&
+                        splineIndex == activeEdge && !spline.isEmpty()) {
                         activeVertex = *std::min_element(spline.cbegin(),
                                                          spline.cend());
                     }
@@ -10063,9 +10153,14 @@ protected:
                     QSet<int> &edges = selectedEdges[objectIt.key()];
                     for (int edgeIndex = 0; edgeIndex < edgeVertices.size(); ++edgeIndex) {
                         const QPair<int, int> endpoints = edgeVertices[edgeIndex];
+                        const bool firstSelected = endpoints.first >= 0 &&
+                            objectIt.value().contains(endpoints.first);
+                        const bool secondSelected = endpoints.second >= 0 &&
+                            objectIt.value().contains(endpoints.second);
                         if (endpoints.first >= 0 && endpoints.second >= 0 &&
-                            objectIt.value().contains(endpoints.first) &&
-                            objectIt.value().contains(endpoints.second)) {
+                            (expandingSelection
+                                 ? firstSelected || secondSelected
+                                 : firstSelected && secondSelected)) {
                             edges.insert(edgeIndex);
                         }
                     }
@@ -10084,13 +10179,15 @@ protected:
                         continue;
                     }
                     bool fullySelected = true;
+                    bool partiallySelected = false;
                     for (int vertex : spline) {
-                        if (!objectIt.value().contains(vertex)) {
+                        if (objectIt.value().contains(vertex)) {
+                            partiallySelected = true;
+                        } else {
                             fullySelected = false;
-                            break;
                         }
                     }
-                    if (fullySelected) {
+                    if (expandingSelection ? partiallySelected : fullySelected) {
                         edges.insert(splineIndex);
                     }
                 }
@@ -10100,6 +10197,17 @@ protected:
             }
             activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Edge)] =
                 -1;
+            if (useExpand) {
+                const auto activeSelection = selectedEdges.constFind(
+                    componentSelectionObject_.value());
+                if (activeSelection != selectedEdges.cend() &&
+                    !activeSelection.value().isEmpty()) {
+                    activeComponentIndices_[static_cast<int>(
+                        ComponentSelectionMode::Edge)] =
+                        *std::min_element(activeSelection.value().cbegin(),
+                                          activeSelection.value().cend());
+                }
+            }
         }
 
         if ((componentSelectionMode_ == ComponentSelectionMode::Face &&
@@ -10164,6 +10272,52 @@ protected:
                     return -1;
                 };
 
+                QVector<QSet<int>> incidentFacesByVertex(
+                    parentCage.pointVertices.size());
+                QVector<QSet<int>> incidentFacesByEdge(
+                    parentCage.preciseLineVertices.size() / 2);
+                if (contractingSelection) {
+                    for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+                        Shape faceShape;
+                        faceShape.geometryType = GeometryType::NurbsSurface;
+                        faceShape.nurbsSurface = faces[faceIndex];
+                        const ViewportDepthGeometry faceCage =
+                            selectedSurfaceControlNet(faceShape);
+                        for (int localVertex = 0;
+                             localVertex < faceCage.pointVertices.size();
+                             ++localVertex) {
+                            const int parentVertex =
+                                shape.geometryType == GeometryType::NurbsSurface &&
+                                        faceIndex == 0
+                                    ? localVertex
+                                    : findParentVertex(duplicateCagePoint(
+                                          faceCage.pointVertices[localVertex]));
+                            if (parentVertex >= 0 &&
+                                parentVertex < incidentFacesByVertex.size()) {
+                                incidentFacesByVertex[parentVertex].insert(faceIndex);
+                            }
+                        }
+                        const int faceEdgeCount =
+                            faceCage.preciseLineVertices.size() / 2;
+                        for (int localEdge = 0; localEdge < faceEdgeCount;
+                             ++localEdge) {
+                            const Point3D first = duplicateCagePoint(
+                                faceCage.preciseLineVertices[localEdge * 2]);
+                            const Point3D second = duplicateCagePoint(
+                                faceCage.preciseLineVertices[localEdge * 2 + 1]);
+                            const int parentEdge =
+                                shape.geometryType == GeometryType::NurbsSurface &&
+                                        faceIndex == 0
+                                    ? localEdge
+                                    : findParentEdge(first, second);
+                            if (parentEdge >= 0 &&
+                                parentEdge < incidentFacesByEdge.size()) {
+                                incidentFacesByEdge[parentEdge].insert(faceIndex);
+                            }
+                        }
+                    }
+                }
+
                 for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
                     Shape faceShape;
                     faceShape.geometryType = GeometryType::NurbsSurface;
@@ -10175,29 +10329,106 @@ protected:
                           mode == ComponentSelectionMode::Vertex)) {
                         const auto boundaries = surfaceBoundaryComponents(faceShape);
                         bool fullySelected = !boundaries.isEmpty();
+                        bool partiallySelected = false;
+                        if (sourceMode == ComponentSelectionMode::Vertex &&
+                            expandingSelection) {
+                            for (int localVertex = 0;
+                                 localVertex < faceCage.pointVertices.size();
+                                 ++localVertex) {
+                                const int parentVertex =
+                                    shape.geometryType == GeometryType::NurbsSurface &&
+                                            faceIndex == 0
+                                        ? localVertex
+                                        : findParentVertex(duplicateCagePoint(
+                                              faceCage.pointVertices[localVertex]));
+                                if (parentVertex >= 0 &&
+                                    objectIt.value().contains(parentVertex)) {
+                                    partiallySelected = true;
+                                }
+                            }
+                        }
                         for (const auto &boundary : boundaries) {
                             const int firstVertex = findParentVertex(boundary.boundary.startPoint);
                             const int lastVertex = findParentVertex(boundary.boundary.endPoint);
-                            const int edgeOffset = boundary.edge * 2;
-                            const int edge = findParentEdge(faceCage.preciseLineVertices[edgeOffset],
-                                                           faceCage.preciseLineVertices[edgeOffset + 1]);
+                            QVector<int> parentBoundaryEdges;
+                            parentBoundaryEdges.reserve(boundary.edges.size());
+                            for (int localEdge : boundary.edges) {
+                                const int edgeOffset = localEdge * 2;
+                                if (localEdge < 0 ||
+                                    edgeOffset + 1 >=
+                                        faceCage.preciseLineVertices.size()) {
+                                    continue;
+                                }
+                                const Point3D first = duplicateCagePoint(
+                                    faceCage.preciseLineVertices[edgeOffset]);
+                                const Point3D second = duplicateCagePoint(
+                                    faceCage.preciseLineVertices[edgeOffset + 1]);
+                                const int parentEdge =
+                                    shape.geometryType == GeometryType::NurbsSurface &&
+                                            faceIndex == 0
+                                        ? localEdge
+                                        : findParentEdge(first, second);
+                                if (parentEdge >= 0) {
+                                    parentBoundaryEdges.append(parentEdge);
+                                }
+                            }
                             if (sourceMode == ComponentSelectionMode::Face) {
                                 if (!objectIt.value().contains(faceIndex)) continue;
                                 if (mode == ComponentSelectionMode::Vertex) {
                                     if (firstVertex >= 0) target.insert(firstVertex);
                                     if (lastVertex >= 0) target.insert(lastVertex);
-                                } else if (edge >= 0) target.insert(edge);
+                                } else {
+                                    for (int edge : parentBoundaryEdges) {
+                                        const bool allIncidentFacesSelected =
+                                            !contractingSelection ||
+                                            (edge < incidentFacesByEdge.size() &&
+                                             !incidentFacesByEdge[edge].isEmpty() &&
+                                             std::all_of(
+                                                 incidentFacesByEdge[edge].cbegin(),
+                                                 incidentFacesByEdge[edge].cend(),
+                                                 [&objectIt](int incidentFace) {
+                                                     return objectIt.value().contains(
+                                                         incidentFace);
+                                                 }));
+                                        if (allIncidentFacesSelected) {
+                                            target.insert(edge);
+                                        }
+                                    }
+                                }
                             } else {
-                                fullySelected = fullySelected &&
-                                    (sourceMode == ComponentSelectionMode::Vertex
-                                        ? firstVertex >= 0 && lastVertex >= 0 &&
-                                          objectIt.value().contains(firstVertex) &&
-                                          objectIt.value().contains(lastVertex)
-                                        : edge >= 0 && objectIt.value().contains(edge));
+                                if (sourceMode == ComponentSelectionMode::Vertex) {
+                                    const bool firstSelected = firstVertex >= 0 &&
+                                        objectIt.value().contains(firstVertex);
+                                    const bool lastSelected = lastVertex >= 0 &&
+                                        objectIt.value().contains(lastVertex);
+                                    partiallySelected = partiallySelected ||
+                                        firstSelected || lastSelected;
+                                    fullySelected = fullySelected &&
+                                        firstSelected && lastSelected;
+                                } else {
+                                    bool anyBoundaryEdgeSelected = false;
+                                    bool allBoundaryEdgesSelected =
+                                        !parentBoundaryEdges.isEmpty();
+                                    for (int edge : parentBoundaryEdges) {
+                                        const bool edgeSelected =
+                                            objectIt.value().contains(edge);
+                                        anyBoundaryEdgeSelected =
+                                            anyBoundaryEdgeSelected || edgeSelected;
+                                        allBoundaryEdgesSelected =
+                                            allBoundaryEdgesSelected && edgeSelected;
+                                    }
+                                    partiallySelected = partiallySelected ||
+                                        anyBoundaryEdgeSelected;
+                                    fullySelected = fullySelected &&
+                                        allBoundaryEdgesSelected;
+                                }
                             }
                         }
-                        if (sourceMode != ComponentSelectionMode::Face && fullySelected)
+                        if (sourceMode != ComponentSelectionMode::Face &&
+                            (expandingSelection ? partiallySelected
+                                                : fullySelected)) {
                             target.insert(faceIndex);
+                        }
                         continue;
                     }
                     if (sourceMode == ComponentSelectionMode::Face) {
@@ -10216,7 +10447,19 @@ protected:
                                         ? localVertex
                                         : findParentVertex(
                                               duplicateCagePoint(point));
-                                if (parentVertex >= 0) {
+                                const bool allIncidentFacesSelected =
+                                    parentVertex >= 0 &&
+                                    parentVertex < incidentFacesByVertex.size() &&
+                                    !incidentFacesByVertex[parentVertex].isEmpty() &&
+                                    std::all_of(
+                                        incidentFacesByVertex[parentVertex].cbegin(),
+                                        incidentFacesByVertex[parentVertex].cend(),
+                                        [&objectIt](int incidentFace) {
+                                            return objectIt.value().contains(incidentFace);
+                                        });
+                                if (parentVertex >= 0 &&
+                                    (!contractingSelection ||
+                                     allIncidentFacesSelected)) {
                                     target.insert(parentVertex);
                                 }
                             }
@@ -10240,13 +10483,28 @@ protected:
                                             faceIndex == 0
                                         ? localEdge
                                         : findParentEdge(first, second);
-                                if (parentEdge >= 0) target.insert(parentEdge);
+                                const bool allIncidentFacesSelected =
+                                    parentEdge >= 0 &&
+                                    parentEdge < incidentFacesByEdge.size() &&
+                                    !incidentFacesByEdge[parentEdge].isEmpty() &&
+                                    std::all_of(
+                                        incidentFacesByEdge[parentEdge].cbegin(),
+                                        incidentFacesByEdge[parentEdge].cend(),
+                                        [&objectIt](int incidentFace) {
+                                            return objectIt.value().contains(incidentFace);
+                                        });
+                                if (parentEdge >= 0 &&
+                                    (!contractingSelection ||
+                                     allIncidentFacesSelected)) {
+                                    target.insert(parentEdge);
+                                }
                             }
                         }
                         continue;
                     }
 
                     bool fullySelected = !faceCage.pointVertices.isEmpty();
+                    bool partiallySelected = false;
                     if (sourceMode == ComponentSelectionMode::Vertex) {
                         for (int localVertex = 0;
                              localVertex < faceCage.pointVertices.size();
@@ -10258,10 +10516,11 @@ protected:
                                         faceIndex == 0
                                     ? localVertex
                                     : findParentVertex(duplicateCagePoint(point));
-                            if (parentVertex < 0 ||
-                                !objectIt.value().contains(parentVertex)) {
+                            const bool vertexSelected = parentVertex >= 0 &&
+                                objectIt.value().contains(parentVertex);
+                            partiallySelected = partiallySelected || vertexSelected;
+                            if (!vertexSelected) {
                                 fullySelected = false;
-                                break;
                             }
                         }
                     } else {
@@ -10283,18 +10542,31 @@ protected:
                                         faceIndex == 0
                                     ? localEdge
                                     : findParentEdge(first, second);
-                            if (parentEdge < 0 ||
-                                !objectIt.value().contains(parentEdge)) {
+                            const bool edgeSelected = parentEdge >= 0 &&
+                                objectIt.value().contains(parentEdge);
+                            partiallySelected = partiallySelected || edgeSelected;
+                            if (!edgeSelected) {
                                 fullySelected = false;
-                                break;
                             }
                         }
                     }
-                    if (fullySelected) target.insert(faceIndex);
+                    if (expandingSelection ? partiallySelected : fullySelected) {
+                        target.insert(faceIndex);
+                    }
                 }
                 if (target.isEmpty()) targetSelections.remove(objectIt.key());
             }
             activeComponentIndices_[static_cast<int>(mode)] = -1;
+            if (useExpand) {
+                const auto activeSelection = targetSelections.constFind(
+                    componentSelectionObject_.value());
+                if (activeSelection != targetSelections.cend() &&
+                    !activeSelection.value().isEmpty()) {
+                    activeComponentIndices_[static_cast<int>(mode)] =
+                        *std::min_element(activeSelection.value().cbegin(),
+                                          activeSelection.value().cend());
+                }
+            }
         }
 
         componentSelectionMode_ = mode;
@@ -17778,6 +18050,12 @@ protected:
             activeTool_ == Tool::Select &&
             viewportModeShortcutAvailable()) {
             const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+            const bool componentSelectionShortcut =
+                (keyEvent->modifiers() == Qt::ControlModifier ||
+                 keyEvent->modifiers() == Qt::NoModifier) &&
+                keyEvent->key() >= Qt::Key_1 &&
+                keyEvent->key() <= Qt::Key_3 &&
+                supportsComponentSelectionShortcut(keyEvent->key());
             const bool mirrorShortcut = keyEvent->key() == Qt::Key_M &&
                                         keyEvent->modifiers() == Qt::ControlModifier;
             const bool invertSelectionShortcut =
@@ -17786,7 +18064,7 @@ protected:
             const bool linkedSelectionShortcut =
                 keyEvent->key() == Qt::Key_L &&
                 keyEvent->modifiers() == Qt::ControlModifier;
-            if (mirrorShortcut || invertSelectionShortcut ||
+            if (componentSelectionShortcut || mirrorShortcut || invertSelectionShortcut ||
                 linkedSelectionShortcut) {
                 event->accept();
                 return true;
@@ -17895,13 +18173,9 @@ protected:
             event->accept();
             return;
         }
-        if (viewportModeShortcutAvailable() && !event->isAutoRepeat() &&
-            event->modifiers() == Qt::NoModifier &&
-            supportsComponentSelectionShortcut(event->key()) &&
-            (event->key() == Qt::Key_1 || event->key() == Qt::Key_2 ||
-             event->key() == Qt::Key_3)) {
-            setComponentSelectionMode(static_cast<ComponentSelectionMode>(
-                event->key() - Qt::Key_1));
+        if (!event->isAutoRepeat() &&
+            dispatchComponentSelectionModeShortcut(event->key(),
+                                                   event->modifiers())) {
             event->accept();
             return;
         }
@@ -18339,9 +18613,14 @@ protected:
             return true;
         }
 
-        if (keyEvent->modifiers() != Qt::NoModifier) {
-            return false;
+        if (!keyEvent->isAutoRepeat() &&
+            dispatchComponentSelectionModeShortcut(keyEvent->key(),
+                                                   keyEvent->modifiers())) {
+            keyEvent->accept();
+            return true;
         }
+
+        if (keyEvent->modifiers() != Qt::NoModifier) return false;
 
         if (keyEvent->key() == Qt::Key_Tab &&
             viewportModeToggleShortcutAvailable()) {
@@ -18355,13 +18634,6 @@ protected:
         }
         if (!viewportModeShortcutAvailable()) {
             return false;
-        }
-        if (supportsComponentSelectionShortcut(keyEvent->key()) &&
-            keyEvent->key() >= Qt::Key_1 && keyEvent->key() <= Qt::Key_3) {
-            setComponentSelectionMode(static_cast<ComponentSelectionMode>(
-                keyEvent->key() - Qt::Key_1));
-            keyEvent->accept();
-            return true;
         }
         return false;
     }

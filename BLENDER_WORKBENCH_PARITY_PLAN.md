@@ -3181,14 +3181,13 @@ sRGB decode for Single Color. The direct-display formula is in
 the scene-linear comparison remains tied to Blender's 5.2.2 Workbench
 background behavior documented in the Theme integration entry above.
 
-### Theme gradient interpolation (2026-10-16)
+### QPainter Theme gradient interpolation (2026-10-16)
 
-- Scene-linear Theme rendering in both GPU and QPainter paths now interpolates
-  Linear and Radial endpoint colors in Blender 5.2.2's gamma-2.2 encoded space,
-  then decodes the result with the matching 2.2 power. Single-color backgrounds
-  retain the exact sRGB conversion; world/custom scene-linear inputs are
-  unchanged. This aligns the two classiCAD paths and fixes the mid-gradient
-  response; matched live Blender captures remain open. Blender reference:
+- The scene-linear Theme fallback now interpolates Linear and Radial endpoint
+  colors in Blender 5.2.2's gamma-2.2 encoded space, then decodes the result
+  with the matching 2.2 power. Single-color backgrounds retain their previous
+  color conversion. This fixes the mid-gradient response; matched live Blender
+  captures remain open. Blender reference:
   [`overlay_background_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_background_frag.glsl#L527-L560).
 
 ### QPainter cavity and outline order (2026-10-13)

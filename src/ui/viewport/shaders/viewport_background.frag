@@ -37,27 +37,18 @@ void main()
         vec3 highLinear = uHighGradient;
         vec3 lowLinear = uGradient;
         if (uColorsSceneLinear == 0) {
-            if (uGradientStyle == 0) {
-                // Solid theme colors use the exact sRGB-to-linear transfer.
-                highLinear = mix(uHighGradient / 12.92,
-                                 pow((uHighGradient + 0.055) / 1.055,
-                                     vec3(2.4)),
-                                 step(vec3(0.04045), uHighGradient));
-                lowLinear = highLinear;
-            } else {
-                // Blender interpolates theme gradients after a gamma-2.2
-                // encode, then decodes the result into the scene-linear target.
-                vec3 highGamma = pow(clamp(uHighGradient, 0.0, 1.0),
-                                     vec3(1.0 / 2.2));
-                vec3 lowGamma = pow(clamp(uGradient, 0.0, 1.0),
-                                    vec3(1.0 / 2.2));
-                vec3 mixedGamma = mix(highGamma, lowGamma, gradientFactor);
-                highLinear = pow(mixedGamma, vec3(2.2));
-                lowLinear = highLinear;
-            }
+            // QColor components are sRGB encoded. Decode before
+            // interpolation so this pass can feed a scene-linear target.
+            highLinear = mix(uHighGradient / 12.92,
+                             pow((uHighGradient + 0.055) / 1.055,
+                                 vec3(2.4)),
+                             step(vec3(0.04045), uHighGradient));
+            lowLinear = mix(uGradient / 12.92,
+                            pow((uGradient + 0.055) / 1.055,
+                                vec3(2.4)),
+                            step(vec3(0.04045), uGradient));
         }
-        vec3 color = uColorsSceneLinear == 0 && uGradientStyle != 0
-            ? highLinear : mix(highLinear, lowLinear, gradientFactor);
+        vec3 color = mix(highLinear, lowLinear, gradientFactor);
         fragmentColor = vec4(color, 1.0);
         return;
     }

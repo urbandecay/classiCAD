@@ -13127,7 +13127,9 @@ protected:
                      !viewportWorldColorSceneLinear.has_value());
                 aaRenderer->setDisplayTransform(
                     renderShadingSettings, true, false,
-                    themeBackgroundActive);
+                    themeBackgroundActive,
+                    themeBackground_.style ==
+                        ViewportThemeBackgroundStyle::SingleColor);
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),
                     renderFrame.camera, historyKey,

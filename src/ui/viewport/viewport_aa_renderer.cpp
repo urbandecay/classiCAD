@@ -363,12 +363,18 @@ void ViewportAaRenderer::setDisplayTransform(
     const ViewportShadingSettings &settings,
     bool sourceIsSceneLinear,
     bool sourceHasPremultipliedAlpha,
-    bool preserveThemeBackground)
+    bool preserveThemeBackground,
+    bool themeBackgroundSingleColor)
 {
     displaySettings_ = settings;
     sourceIsSceneLinear_ = sourceIsSceneLinear;
     sourceHasPremultipliedAlpha_ = sourceHasPremultipliedAlpha;
-    preserveThemeBackground_ = preserveThemeBackground;
+    // DOF can gather foreground colors into depth-clear pixels. Until the
+    // gather exposes a separate background contribution, keep those pixels
+    // on the ordinary scene transform path while DOF is active.
+    preserveThemeBackground_ = preserveThemeBackground &&
+                               !depthOfFieldEnabled_;
+    themeBackgroundSingleColor_ = themeBackgroundSingleColor;
     if (sceneSampleActive_) {
         targets_.sceneLinearColorTexture = sourceIsSceneLinear
             ? sceneColorTexture_ : 0;
@@ -540,6 +546,7 @@ bool ViewportAaRenderer::initialize()
         uniform bool uApplyViewTransform;
         uniform bool uPremultipliedAlpha;
         uniform bool uPreserveThemeBackground;
+        uniform bool uThemeBackgroundSingleColor;
         uniform sampler3D uDisplayLut;
         uniform bool uDisplayLutAvailable;
         uniform int uColorTransform;
@@ -733,7 +740,11 @@ bool ViewportAaRenderer::initialize()
                 }
             }
             vec3 outputColor = source.rgb;
+            bool cameraImageContent =
+                (uUseCameraBack && texture(uCameraBack, vUv).a > 0.0) ||
+                (uUseCameraFront && texture(uCameraFront, vUv).a > 0.0);
             bool preserveThemeBackground = uPreserveThemeBackground &&
+                !cameraImageContent &&
                 texture(uDepth, vUv).r >= 1.0 - 1.0e-7;
             bool predivide = uPremultipliedAlpha && uApplyViewTransform;
             if (predivide) {
@@ -744,6 +755,13 @@ bool ViewportAaRenderer::initialize()
                 outputColor = transformColor(outputColor);
             } else if (uEncodeDisplay && !preserveThemeBackground) {
                 outputColor = linearToSrgb(outputColor);
+            } else if (preserveThemeBackground) {
+                // The scene sample stores theme pixels in linear form. Restore
+                // their display RGB without applying the scene view transform.
+                outputColor = uThemeBackgroundSingleColor
+                    ? linearToSrgb(outputColor)
+                    : pow(clamp(outputColor, 0.0, 1.0),
+                          vec3(1.0 / 2.2));
             }
             // Blender 5.2.2 applies render dither after the display transform
             // when converting RGBA float pixels to display bytes. gl_FragCoord
@@ -2560,6 +2578,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
                                     sourceHasPremultipliedAlpha_);
     presentProgram_.setUniformValue("uPreserveThemeBackground",
                                     preserveThemeBackground_);
+    presentProgram_.setUniformValue("uThemeBackgroundSingleColor",
+                                    themeBackgroundSingleColor_);
     presentProgram_.setUniformValue("uDisplayLutAvailable", transformAvailable);
     presentProgram_.setUniformValue("uColorTransform",
                                     displaySettings_.colorTransform);

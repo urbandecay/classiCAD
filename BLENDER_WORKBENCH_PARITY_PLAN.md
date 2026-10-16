@@ -10291,7 +10291,9 @@ scene depth.
   made the configured dark gray appear much lighter than Blender when AA was
   enabled. Presentation now bypasses the scene transform for depth-clear
   pixels when the active background is Theme (including World mode without an
-  imported World), while continuing to transform scene pixels. The AA history
-  key now also tracks theme colors for the World-without-World fallback. C++
-  build passed; matched GPU captures across transforms and background modes
-  remain open.
+  imported World), then applies the matching sRGB or gamma-2.2 display
+  encoding. Camera image pixels keep the scene transform. DOF disables this
+  shortcut because its gather may place blurred geometry into depth-clear
+  pixels. The AA history key now also tracks theme colors for the
+  World-without-World fallback. C++ build passed; matched GPU captures across
+  transforms, camera images, DOF, and background modes remain open.

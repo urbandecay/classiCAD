@@ -9686,3 +9686,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   The GPU X-Ray special NURBS branch also excludes imported `SURFACE` objects
   so it cannot reintroduce their selected contour. Build passed; matched
   imported-surface outline captures remain open.
+
+### QPainter X-Ray weighted transparency audit (2026-10-16)
+
+- An independent audit initially reported that QPainter sorts X-Ray meshes by
+  depth. Tracing the viewport calls showed the normal interactive path uses
+  `compositeRasterWorkbenchSurfaces` with weighted OIT enabled, and
+  `drawShape` captures the X-Ray-adjusted alpha into those scene-linear
+  fragments. The depth-sorted direct painter path is used only when that
+  bounded compositor cannot run or is bypassed, such as missing prepared
+  geometry or fragment-budget overflow. The interactive targets are already
+  limited to one million pixels, so this is not a normal viewport mismatch.
+  No code change was warranted; the emergency fallback remains covered by the
+  existing transparency and QPainter limitations above.

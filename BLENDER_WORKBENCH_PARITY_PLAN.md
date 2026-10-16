@@ -3903,6 +3903,9 @@ selection and curve control-point editing paths are reused in Edit Mode. Edit
 picking is limited to the selected objects compatible with the active object's
 geometry family (curves, NURBS surfaces/solids, or polygon meshes); selecting a
 component updates the active object while retaining the edit set.
+Tab and the 1/2/3 component-mode keys are routed through the application's
+viewport event filter so Qt focus traversal cannot consume them. The existing
+three-point tangent-circle Tab cycling retains priority.
 
 Still open: matched behavior for active versus selected object outlines,
 Blender's exact component selection defaults/conversion semantics, unsupported

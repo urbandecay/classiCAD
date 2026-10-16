@@ -17166,8 +17166,7 @@ protected:
 
     bool eventFilter(QObject *watched, QEvent *event) override
     {
-        if (activeTool_ != Tool::CircleTangentThree ||
-            event->type() != QEvent::KeyPress) {
+        if (event->type() != QEvent::KeyPress) {
             return false;
         }
 
@@ -17177,17 +17176,44 @@ protected:
         }
 
         auto *keyEvent = static_cast<QKeyEvent *>(event);
-        if (keyEvent->key() != Qt::Key_Tab && keyEvent->key() != Qt::Key_Backtab) {
+        const bool tabKey = keyEvent->key() == Qt::Key_Tab ||
+                            keyEvent->key() == Qt::Key_Backtab;
+        if (activeTool_ == Tool::CircleTangentThree && tabKey) {
+            const ToolInput input = makeKeyToolInput(*keyEvent);
+            if (activeToolController_ != nullptr &&
+                activeToolController_->dispatchKey(input, toolContext_) ==
+                    InteractionTool::EventResult::Handled) {
+                keyEvent->accept();
+                update();
+                emitCoordinateUpdate();
+                return true;
+            }
+        }
+
+        const QPoint localCursor = mapFromGlobal(QCursor::pos());
+        const bool viewportHasKeyboardContext =
+            targetWidget == this || isAncestorOf(targetWidget) ||
+            rect().contains(localCursor);
+        if (!viewportHasKeyboardContext || activeTool_ != Tool::Select ||
+            keyEvent->isAutoRepeat() ||
+            keyEvent->modifiers() != Qt::NoModifier) {
             return false;
         }
 
-        const ToolInput input = makeKeyToolInput(*keyEvent);
-        if (activeToolController_ != nullptr &&
-            activeToolController_->dispatchKey(input, toolContext_) ==
-                InteractionTool::EventResult::Handled) {
+        if (keyEvent->key() == Qt::Key_Tab) {
+            const int nextMode = interactionMode_ ==
+                                         ViewportInteractionMode::Object
+                                     ? static_cast<int>(ViewportInteractionMode::Edit)
+                                     : static_cast<int>(ViewportInteractionMode::Object);
+            setInteractionMode(nextMode);
             keyEvent->accept();
-            update();
-            emitCoordinateUpdate();
+            return true;
+        }
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            keyEvent->key() >= Qt::Key_1 && keyEvent->key() <= Qt::Key_3) {
+            setComponentSelectionMode(static_cast<ComponentSelectionMode>(
+                keyEvent->key() - Qt::Key_1));
+            keyEvent->accept();
             return true;
         }
         return false;

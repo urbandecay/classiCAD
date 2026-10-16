@@ -68,6 +68,7 @@ private:
         int count = 0;
         Point3D offset;
         bool selected = false;
+        bool active = false;
         bool selectedOutlineSupported = true;
         bool showInFront = false;
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
@@ -97,6 +98,7 @@ private:
         int count = 0;
         Point3D offset;
         quint32 effectObjectId = 0;
+        bool active = false;
         bool showInFront = false;
         bool flatEdgeOnly = false;
     };

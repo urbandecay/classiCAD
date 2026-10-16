@@ -90,6 +90,7 @@ struct ViewportRenderObject {
     // it shares the same pixel width and antialiasing as spline strokes.
     bool outlineHandledBySceneStroke = false;
     bool selected = false;
+    bool active = false;
     bool showInFront = false;
     bool showWire = false;
     bool showAllEdges = false;

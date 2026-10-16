@@ -268,6 +268,7 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());
+        entry.active = input.primarySelectedObjectId == entry.objectId;
         entry.showInFront = sceneObject.showInFront;
         entry.showWire = sceneObject.showWire;
         entry.showAllEdges = sceneObject.showAllEdges;
@@ -286,6 +287,8 @@ ViewportRenderFrame buildViewportRenderFrame(
             entry.blenderLooseMeshEdgeSourceActive =
                 sourceObjectId.isValid() &&
                 input.primarySelectedObjectId == sourceObjectId;
+            entry.active = entry.active ||
+                           entry.blenderLooseMeshEdgeSourceActive;
             entry.blenderLooseMeshEdgeSourceTransforming =
                 sourceObjectId.isValid() &&
                 transformedIds.contains(sourceObjectId.value());

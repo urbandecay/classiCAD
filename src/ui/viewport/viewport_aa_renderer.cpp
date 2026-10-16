@@ -3071,7 +3071,8 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
         stream << quint64(object.objectId.value())
                << static_cast<quint8>(object.shape.geometryType)
                << quint64(object.geometryRevision)
-               << object.selected << object.scalePreview << object.rotatePreview
+               << object.selected << object.active
+               << object.scalePreview << object.rotatePreview
                << object.showInFront << object.outlineHandledBySceneStroke
                << object.displayName << object.libraryPath
                << object.workbenchRandomLibraryPath << object.displayColor

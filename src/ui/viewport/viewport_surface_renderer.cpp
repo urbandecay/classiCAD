@@ -39,6 +39,14 @@ namespace classiCAD {
 namespace {
 
 constexpr int kWorkbenchShadowMapSize = 1024;
+constexpr GLuint kSelectionOutlineSelectedBit = 0x80000000u;
+constexpr GLuint kSelectionOutlineActiveBit = 0x40000000u;
+
+GLuint selectedOutlineObjectId(GLuint objectId, bool active)
+{
+    return (objectId & 0x3fffffffu) | kSelectionOutlineSelectedBit |
+           (active ? kSelectionOutlineActiveBit : 0u);
+}
 
 struct PolygonShadowEdgeUse {
     int count = 0;
@@ -2427,6 +2435,8 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2D uSelectedDepth;
         uniform sampler2D uSceneDepth;
         uniform vec4 uOutlineColor;
+        uniform vec4 uSelectedObjectOutlineColor;
+        uniform vec4 uActiveObjectOutlineColor;
         uniform float uUiScale;
         uniform bool uSelectionOutlineOnly;
         uniform bool uVisibleSelectionOutlineOnly;
@@ -2435,10 +2445,30 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uThickSelectionOutline;
         uniform bool uXRayWireSelectionOutline;
         layout(location = 0) out vec4 fragmentColor;
+        bool isSelectedOutlineId(uint id)
+        {
+            return (id & 0x80000000u) != 0u;
+        }
+        vec4 selectionOutlineColor(uint id)
+        {
+            return (id & 0x40000000u) != 0u
+                ? uActiveObjectOutlineColor
+                : uSelectedObjectOutlineColor;
+        }
+        uint selectionOutlineReference(uint centerId, uvec4 neighborIds)
+        {
+            if (isSelectedOutlineId(centerId)) return centerId;
+            for (int i = 0; i < 4; ++i) {
+                if (isSelectedOutlineId(neighborIds[i])) {
+                    return neighborIds[i];
+                }
+            }
+            return centerId;
+        }
         bool selectedOutlineBoundary(uint centerId, uint neighborId)
         {
-            bool centerSelected = (centerId & 0x80000000u) != 0u;
-            bool neighborSelected = (neighborId & 0x80000000u) != 0u;
+            bool centerSelected = isSelectedOutlineId(centerId);
+            bool neighborSelected = isSelectedOutlineId(neighborId);
             return centerSelected != neighborSelected ||
                 (centerSelected && neighborSelected && centerId != neighborId);
         }
@@ -2459,10 +2489,12 @@ bool ViewportSurfaceRenderer::initialize()
             if (uHiddenSelectionOutlineOnly) {
                 ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
                                              ivec2(0, 1), ivec2(0, -1));
-                bool centerSelected = (centerId & 0x80000000u) != 0u;
+                bool centerSelected = isSelectedOutlineId(centerId);
                 float hiddenCoverage = 0.0;
+                vec4 hiddenColorSum = vec4(0.0);
+                float hiddenColorWeight = 0.0;
                 for (int i = 0; i < 4; ++i) {
-                    bool neighborSelected = (cardinalIds[i] & 0x80000000u) != 0u;
+                    bool neighborSelected = isSelectedOutlineId(cardinalIds[i]);
                     bool objectBoundary = centerSelected != neighborSelected ||
                         (centerSelected && neighborSelected &&
                          centerId != cardinalIds[i]);
@@ -2477,18 +2509,26 @@ bool ViewportSurfaceRenderer::initialize()
                     float sceneDepth = texelFetch(uSceneDepth, selectedPixel, 0).r;
                     if (selectedDepth > sceneDepth + 1.0e-6) {
                         hiddenCoverage += 0.25;
+                        uint selectedId = texelFetch(
+                            uObjectIdBuffer, selectedPixel, 0).r;
+                        hiddenColorSum += selectionOutlineColor(selectedId) *
+                                          0.25;
+                        hiddenColorWeight += 0.25;
                     }
                 }
                 if (hiddenCoverage <= 0.0) discard;
-                fragmentColor = vec4(uOutlineColor.rgb,
-                    uOutlineColor.a * hiddenCoverage * 0.35);
+                vec4 hiddenColor = hiddenColorSum / hiddenColorWeight;
+                fragmentColor = vec4(hiddenColor.rgb,
+                    hiddenColor.a * hiddenCoverage * 0.35);
                 return;
             }
             if (uVisibleSelectionOutlineOnly) {
                 ivec2 offsets[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0),
                                              ivec2(0, 1), ivec2(0, -1));
-                bool centerSelected = (centerId & 0x80000000u) != 0u;
+                bool centerSelected = isSelectedOutlineId(centerId);
                 float visibleCoverage = 0.0;
+                vec4 visibleColorSum = vec4(0.0);
+                float visibleColorWeight = 0.0;
                 for (int ring = 1; ring <= 2; ++ring) {
                     uvec4 ringIds = ring == 1 ? cardinalIds : uvec4(
                         texture(uObjectIdBuffer, uv + 2.0 * dx).r,
@@ -2497,7 +2537,7 @@ bool ViewportSurfaceRenderer::initialize()
                         texture(uObjectIdBuffer, uv - 2.0 * dy).r);
                     for (int i = 0; i < 4; ++i) {
                         bool neighborSelected =
-                            (ringIds[i] & 0x80000000u) != 0u;
+                            isSelectedOutlineId(ringIds[i]);
                         bool objectBoundary = centerSelected != neighborSelected ||
                             (centerSelected && neighborSelected &&
                              centerId != ringIds[i]);
@@ -2512,8 +2552,20 @@ bool ViewportSurfaceRenderer::initialize()
                         float sceneDepth = texelFetch(
                             uSceneDepth, selectedPixel, 0).r;
                         if (selectedDepth <= sceneDepth + 1.0e-6) {
-                            visibleCoverage += ring == 1 ? 0.25 : 0.0;
-                            if (ring == 2) visibleCoverage = 0.25;
+                            uint selectedId = texelFetch(
+                                uObjectIdBuffer, selectedPixel, 0).r;
+                            vec4 selectedColor =
+                                selectionOutlineColor(selectedId);
+                            if (ring == 1) {
+                                visibleCoverage += 0.25;
+                                visibleColorSum += selectedColor * 0.25;
+                                visibleColorWeight += 0.25;
+                            }
+                            if (ring == 2) {
+                                visibleCoverage = 0.25;
+                                visibleColorSum = selectedColor * 0.25;
+                                visibleColorWeight = 0.25;
+                            }
                         }
                     }
                     if (ring == 1 && visibleCoverage > 0.0) break;
@@ -2522,11 +2574,14 @@ bool ViewportSurfaceRenderer::initialize()
                 if (visibleCoverage <= 0.0) discard;
                 float selectionOpacity = uSmoothSelectionOutline
                     ? visibleCoverage : 1.0;
-                fragmentColor = vec4(uOutlineColor.rgb,
-                    uOutlineColor.a * selectionOpacity);
+                vec4 visibleColor = visibleColorSum / visibleColorWeight;
+                fragmentColor = vec4(visibleColor.rgb,
+                    visibleColor.a * selectionOpacity);
                 return;
             }
             if (uSelectionOutlineOnly) {
+                uint colorId = selectionOutlineReference(centerId,
+                                                         cardinalIds);
                 bvec4 objectBoundary = bvec4(
                     selectedOutlineBoundary(centerId, cardinalIds.x),
                     selectedOutlineBoundary(centerId, cardinalIds.y),
@@ -2545,6 +2600,7 @@ bool ViewportSurfaceRenderer::initialize()
                         texture(uObjectIdBuffer, uv - 2.0 * dx).r,
                         texture(uObjectIdBuffer, uv + 2.0 * dy).r,
                         texture(uObjectIdBuffer, uv - 2.0 * dy).r);
+                    colorId = selectionOutlineReference(centerId, outerIds);
                     bvec4 outerBoundary = bvec4(
                         selectedOutlineBoundary(centerId, outerIds.x),
                         selectedOutlineBoundary(centerId, outerIds.y),
@@ -2559,8 +2615,9 @@ bool ViewportSurfaceRenderer::initialize()
                         : (any(outerBoundary) ? 1.0 : 0.0);
                 }
                 if (selectionOpacity <= 0.0) discard;
-                fragmentColor = vec4(uOutlineColor.rgb,
-                                     uOutlineColor.a * selectionOpacity);
+                vec4 selectedColor = selectionOutlineColor(colorId);
+                fragmentColor = vec4(selectedColor.rgb,
+                                     selectedColor.a * selectionOpacity);
                 return;
             }
             // Blender Workbench derives silhouette coverage from the center
@@ -2829,6 +2886,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.count = count;
             range.offset = object.preparedGeometryOffset;
             range.selected = object.selected;
+            range.active = object.active;
             range.selectedOutlineSupported =
                 object.blenderSourceObjectType != QLatin1String("SURFACE");
             range.showInFront = object.showInFront;
@@ -2837,7 +2895,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.hasWorkbenchMaterial = object.hasWorkbenchMaterial;
             range.objectSeed = object.objectId.value();
             range.effectObjectId = static_cast<quint32>(objectIndex + 1) &
-                                   0x7fffffffu;
+                                   0x3fffffffu;
             range.displayName = object.displayName;
             range.libraryPath = workbenchRandomIdentityLibraryPath(object);
             range.outlineHandledBySceneStroke =
@@ -4236,7 +4294,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
                                      : objectId;
         if (range.selected && range.selectedOutlineSupported &&
             !range.outlineHandledBySceneStroke) {
-            outlineObjectId |= 0x80000000u;
+            outlineObjectId = selectedOutlineObjectId(
+                range.effectObjectId, range.active);
         }
         glUniform1ui(objectIdUniformLocation, objectId);
         glUniform1ui(outlineObjectIdUniformLocation, outlineObjectId);
@@ -4489,7 +4548,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
                                      : range.effectObjectId;
         if (range.selected && range.selectedOutlineSupported &&
             !range.outlineHandledBySceneStroke) {
-            outlineObjectId |= 0x80000000u;
+            outlineObjectId = selectedOutlineObjectId(
+                range.effectObjectId, range.active);
         }
         glUniform1ui(objectIdUniformLocation, range.effectObjectId);
         glUniform1ui(outlineObjectIdUniformLocation, outlineObjectId);
@@ -8202,7 +8262,7 @@ bool ViewportSurfaceRenderer::draw(
                         xraySelectedMeshPresent = true;
                         xraySelectedMeshObjectIds.insert(
                             static_cast<quint32>(objectIndex + 1) &
-                            0x7fffffffu);
+                            0x3fffffffu);
                     }
                     const PolygonMesh3D &mesh = object.shape.polygonMesh;
                     const auto &matrix = object.meshObjectTransform;
@@ -8265,7 +8325,8 @@ bool ViewportSurfaceRenderer::draw(
                     edgeRange.first = xraySelectedEdgeVertices.size();
                     edgeRange.offset = object.preparedGeometryOffset;
                     edgeRange.effectObjectId =
-                        static_cast<quint32>(objectIndex + 1) & 0x7fffffffu;
+                        static_cast<quint32>(objectIndex + 1) & 0x3fffffffu;
+                    edgeRange.active = object.active;
                     edgeRange.showInFront = object.showInFront;
                     edgeRange.flatEdgeOnly = flatEdgeOnly;
                     for (quint64 edgeKey : edgeKeys) {
@@ -8380,7 +8441,8 @@ bool ViewportSurfaceRenderer::draw(
                                  xraySelectedNurbsPresent &&
                                  xraySelectedMeshObjectIds.contains(
                                      range.effectObjectId))) {
-                        objectId |= 0x80000000u;
+                        objectId = selectedOutlineObjectId(
+                            range.effectObjectId, range.active);
                     }
                     glUniform1ui(objectIdUniformLocation, objectId);
                     const QString alphaMode =
@@ -8477,7 +8539,9 @@ bool ViewportSurfaceRenderer::draw(
                             continue;
                         }
                         glUniform1ui(objectIdUniformLocation,
-                                     edgeRange.effectObjectId | 0x80000000u);
+                                     selectedOutlineObjectId(
+                                         edgeRange.effectObjectId,
+                                         edgeRange.active));
                         objectIdProgram_.setUniformValue(
                             "uWorldOffset",
                             QVector3D(static_cast<float>(edgeRange.offset.x),
@@ -8652,7 +8716,8 @@ bool ViewportSurfaceRenderer::draw(
                                       udimTexture.tileLookup);
                         glActiveTexture(GL_TEXTURE0);
                         glUniform1ui(objectIdLocation,
-                                     range.effectObjectId | 0x80000000u);
+                                     selectedOutlineObjectId(
+                                         range.effectObjectId, range.active));
                         objectIdProgram_.setUniformValue(
                             "uWorldOffset",
                             QVector3D(static_cast<float>(range.offset.x),
@@ -8677,7 +8742,9 @@ bool ViewportSurfaceRenderer::draw(
                             }
                             glUniform1ui(
                                 objectIdLocation,
-                                edgeRange.effectObjectId | 0x80000000u);
+                                selectedOutlineObjectId(
+                                    edgeRange.effectObjectId,
+                                    edgeRange.active));
                             objectIdProgram_.setUniformValue(
                                 "uWorldOffset",
                                 QVector3D(
@@ -8763,7 +8830,8 @@ bool ViewportSurfaceRenderer::draw(
                     if (edgeRange.showInFront || edgeRange.count <= 0) continue;
                     glUniform1ui(
                         objectIdProgram_.uniformLocation("uObjectId"),
-                        edgeRange.effectObjectId | 0x80000000u);
+                        selectedOutlineObjectId(edgeRange.effectObjectId,
+                                                edgeRange.active));
                     objectIdProgram_.setUniformValue(
                         "uWorldOffset",
                         QVector3D(static_cast<float>(edgeRange.offset.x),
@@ -8777,7 +8845,8 @@ bool ViewportSurfaceRenderer::draw(
                     if (!edgeRange.showInFront || edgeRange.count <= 0) continue;
                     glUniform1ui(
                         objectIdProgram_.uniformLocation("uObjectId"),
-                        edgeRange.effectObjectId | 0x80000000u);
+                        selectedOutlineObjectId(edgeRange.effectObjectId,
+                                                edgeRange.active));
                     objectIdProgram_.setUniformValue(
                         "uWorldOffset",
                         QVector3D(static_cast<float>(edgeRange.offset.x),
@@ -8832,11 +8901,29 @@ bool ViewportSurfaceRenderer::draw(
                                               bool xrayWireSelection = false) {
                 QVector3D color(sourceColor.redF(), sourceColor.greenF(),
                                 sourceColor.blueF());
+                QVector3D selectedColor(
+                    settings.themeSelectedObjectColor.redF(),
+                    settings.themeSelectedObjectColor.greenF(),
+                    settings.themeSelectedObjectColor.blueF());
+                QVector3D activeColor(
+                    settings.themeActiveObjectColor.redF(),
+                    settings.themeActiveObjectColor.greenF(),
+                    settings.themeActiveObjectColor.blueF());
                 if (sceneLinearOutput) {
                     color = workbenchSrgbToSceneLinear(color);
+                    selectedColor = workbenchSrgbToSceneLinear(selectedColor);
+                    activeColor = workbenchSrgbToSceneLinear(activeColor);
                 }
                 outlineProgram_.setUniformValue(
                     "uOutlineColor", QVector4D(color, sourceColor.alphaF()));
+                outlineProgram_.setUniformValue(
+                    "uSelectedObjectOutlineColor",
+                    QVector4D(selectedColor,
+                              settings.themeSelectedObjectColor.alphaF()));
+                outlineProgram_.setUniformValue(
+                    "uActiveObjectOutlineColor",
+                    QVector4D(activeColor,
+                              settings.themeActiveObjectColor.alphaF()));
                 outlineProgram_.setUniformValue("uSelectionOutlineOnly",
                                                 selectionOnly);
                 outlineProgram_.setUniformValue(
@@ -8978,7 +9065,8 @@ bool ViewportSurfaceRenderer::draw(
                         }
                         glUniform1ui(
                             objectIdProgram_.uniformLocation("uObjectId"),
-                            range.effectObjectId | 0x80000000u);
+                            selectedOutlineObjectId(range.effectObjectId,
+                                                    range.active));
                         objectIdProgram_.setUniformValue(
                             "uWorldOffset",
                             QVector3D(static_cast<float>(range.offset.x),
@@ -9004,7 +9092,9 @@ bool ViewportSurfaceRenderer::draw(
                             }
                             glUniform1ui(
                                 objectIdProgram_.uniformLocation("uObjectId"),
-                                edgeRange.effectObjectId | 0x80000000u);
+                                selectedOutlineObjectId(
+                                    edgeRange.effectObjectId,
+                                    edgeRange.active));
                             objectIdProgram_.setUniformValue(
                                 "uWorldOffset",
                                 QVector3D(

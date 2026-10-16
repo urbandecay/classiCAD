@@ -32,6 +32,15 @@
 namespace classiCAD {
 namespace {
 
+constexpr quint64 kSelectionOutlineSelectedBit = 0x80000000ull;
+constexpr quint64 kSelectionOutlineActiveBit = 0x40000000ull;
+
+quint64 selectedOutlineObjectId(quint64 objectId, bool active)
+{
+    return (objectId & 0x3fffffffull) | kSelectionOutlineSelectedBit |
+           (active ? kSelectionOutlineActiveBit : 0ull);
+}
+
 struct RasterSample {
     float depth = -std::numeric_limits<float>::infinity();
     QVector3D position;
@@ -2828,8 +2837,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
             if (rasterizeSelectedMeshEdges) {
                 QHash<quint64, QVector<QVector3D>> edgeFaceNormals;
-                const quint64 objectId = object.objectId.value() |
-                                         0x80000000ull;
+                const quint64 objectId = selectedOutlineObjectId(
+                    object.objectId.value(), object.active);
                 const QVector3D offset(
                     static_cast<float>(object.preparedGeometryOffset.x),
                     static_cast<float>(object.preparedGeometryOffset.y),
@@ -3215,8 +3224,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 std::min({p0.y(), p1.y(), p2.y()}))), 0, height - 1);
             const int maxY = std::clamp(static_cast<int>(std::ceil(
                 std::max({p0.y(), p1.y(), p2.y()}))), 0, height - 1);
-            const quint64 id = object.objectId.value() |
-                               (object.selected ? 0x80000000ull : 0ull);
+            const quint64 rawObjectId = object.objectId.value();
+            const quint64 id = object.selected
+                ? selectedOutlineObjectId(rawObjectId, object.active)
+                : (rawObjectId & 0x3fffffffull);
             if (rasterizeSelectedMeshEdges) {
                 xraySelectedMeshOutlineIds.insert(id);
             }
@@ -3618,7 +3629,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
         const QColor outline = settings.outlineColor;
-        const QColor selectionOutline = settings.themeActiveObjectColor;
+        const QColor activeSelectionOutline =
+            settings.themeActiveObjectColor;
+        const QColor otherSelectionOutline =
+            settings.themeSelectedObjectColor;
         // Blender offsets its four object-ID taps by UI scale in normalized
         // viewport coordinates. The QPainter ID buffer is allocated at the
         // device-pixel resolution, so this is the equivalent texel distance.
@@ -3684,8 +3698,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     : 0;
                 int differentNeighbors = 0;
                 float selectedOutlineCoverage = 0.0f;
+                float activeSelectionOutlineCoverage = 0.0f;
                 float selectedOutlineHardOpacity = 0.0f;
                 float selectedOutlineWiderOpacity = 0.0f;
+                float activeSelectionOutlineWiderOpacity = 0.0f;
+                float otherSelectionOutlineWiderOpacity = 0.0f;
                 const std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(outlineSampleOffset, 0),
                     QPoint(-outlineSampleOffset, 0),
@@ -3729,11 +3746,23 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             selectedSide.depth >
                                 sceneSample.depth + 1.0e-5f;
                         const float boundaryOpacity = occluded ? 0.35f : 1.0f;
+                        const bool activeBoundary =
+                            (selectedSide.objectId &
+                             kSelectionOutlineActiveBit) != 0;
                         if (widerRing) {
                             selectedOutlineWiderOpacity = std::max(
                                 selectedOutlineWiderOpacity, boundaryOpacity);
+                            float &categoryOpacity = activeBoundary
+                                ? activeSelectionOutlineWiderOpacity
+                                : otherSelectionOutlineWiderOpacity;
+                            categoryOpacity = std::max(categoryOpacity,
+                                                       boundaryOpacity);
                         } else {
                             selectedOutlineCoverage += boundaryOpacity;
+                            if (activeBoundary) {
+                                activeSelectionOutlineCoverage +=
+                                    boundaryOpacity;
+                            }
                             selectedOutlineHardOpacity = std::max(
                                 selectedOutlineHardOpacity, boundaryOpacity);
                         }
@@ -3829,7 +3858,15 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         : (smoothWiresOverlay
                                ? 0.25f * selectedOutlineWiderOpacity
                                : selectedOutlineWiderOpacity);
-                    blend(selectionOutline, coverage);
+                    const bool activeBoundary =
+                        selectedOutlineCoverage > 0.0f
+                            ? activeSelectionOutlineCoverage * 2.0f >
+                                  selectedOutlineCoverage
+                            : activeSelectionOutlineWiderOpacity >
+                                  otherSelectionOutlineWiderOpacity;
+                    blend(activeBoundary ? activeSelectionOutline
+                                          : otherSelectionOutline,
+                          coverage);
                 }
             }
         }

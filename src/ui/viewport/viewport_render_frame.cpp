@@ -257,6 +257,7 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.libraryPath = sceneObject.libraryPath;
         entry.workbenchRandomLibraryPath =
             sceneObject.workbenchRandomLibraryPath;
+        entry.blenderSourceObjectType = sceneObject.blenderSourceObjectType;
         if (sceneObject.geometry.geometryType == GeometryType::NurbsSurface &&
             !sceneObject.blenderSurfaceWireGeometryFingerprint.isEmpty() &&
             sceneObject.blenderSurfaceWireGeometryFingerprint ==

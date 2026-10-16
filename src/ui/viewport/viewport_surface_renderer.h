@@ -68,6 +68,7 @@ private:
         int count = 0;
         Point3D offset;
         bool selected = false;
+        bool selectedOutlineSupported = true;
         bool showInFront = false;
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;

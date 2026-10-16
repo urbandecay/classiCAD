@@ -544,6 +544,8 @@ QJsonObject documentToJson(const Document &document)
                                 sceneObject.blenderSourceVersion);
         serializedObject.insert(QStringLiteral("blenderMeshImportMode"),
                                 sceneObject.blenderMeshImportMode);
+        serializedObject.insert(QStringLiteral("blenderSourceObjectType"),
+                                sceneObject.blenderSourceObjectType);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         if (!sceneObject.blenderSurfaceWireVerticesWorld.isEmpty()) {
             QJsonArray wireVertices;
@@ -1545,6 +1547,8 @@ bool documentFromJson(const QJsonValue &value,
             }
         }
         sceneObject.geometry = std::move(shape);
+        sceneObject.blenderSourceObjectType = serializedObject.value(
+            QStringLiteral("blenderSourceObjectType")).toString();
         const QJsonValue surfaceWireValue = serializedObject.value(
             QStringLiteral("blenderSurfaceWireVerticesWorld"));
         if (!surfaceWireValue.isUndefined()) {

@@ -9671,3 +9671,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   checks the outer ring only when no first-ring edge exists in
   [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1316).
   Build passed; matched diagonal-outline captures remain open.
+
+### Preserve Blender legacy surface selection-outline behavior (2026-10-16)
+
+- Blender surface object type is now retained on imported scene objects and
+  through native project save/load. Blender 5.2.2's overlay selected-outline
+  synchronization has no legacy `OB_SURF` handler, while classiCAD's NURBS
+  surface proxies had been treated like native NURBS surfaces in both render
+  paths. Selected outlines are now suppressed only for imported Blender
+  `SURFACE` objects; regular surface shading, depth, and outlines for
+  classiCAD-created NURBS surfaces remain available.
+- Blender source reference:
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L121-L182).
+  Build passed; matched imported-surface outline captures remain open.

@@ -2871,6 +2871,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.count = count;
             range.offset = object.preparedGeometryOffset;
             range.selected = object.selected;
+            range.selectedOutlineSupported =
+                object.blenderSourceObjectType != QLatin1String("SURFACE");
             range.showInFront = object.showInFront;
             range.displayColorSceneLinear = object.displayColorSceneLinear;
             range.workbenchMaterial = object.workbenchMaterial;
@@ -4249,7 +4251,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
         GLuint outlineObjectId = range.outlineHandledBySceneStroke
                                      ? 0u
                                      : objectId;
-        if (range.selected && !range.outlineHandledBySceneStroke) {
+        if (range.selected && range.selectedOutlineSupported &&
+            !range.outlineHandledBySceneStroke) {
             outlineObjectId |= 0x80000000u;
         }
         glUniform1ui(objectIdUniformLocation, objectId);
@@ -4501,7 +4504,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
         GLuint outlineObjectId = range.outlineHandledBySceneStroke
                                      ? 0u
                                      : range.effectObjectId;
-        if (range.selected && !range.outlineHandledBySceneStroke) {
+        if (range.selected && range.selectedOutlineSupported &&
+            !range.outlineHandledBySceneStroke) {
             outlineObjectId |= 0x80000000u;
         }
         glUniform1ui(objectIdUniformLocation, range.effectObjectId);
@@ -8309,6 +8313,7 @@ bool ViewportSurfaceRenderer::draw(
                         // shared scene-stroke renderer.
                         objectId = 0u;
                     } else if (range.selected &&
+                               range.selectedOutlineSupported &&
                                !(settings.xrayEnabled() &&
                                  xraySelectedMeshPresent &&
                                  xraySelectedNurbsPresent &&
@@ -8343,7 +8348,8 @@ bool ViewportSurfaceRenderer::draw(
                         ? ensureUdimTexture(range.textureImageTiles,
                                             range.textureImageSrgb)
                         : UdimTextureSet{};
-                    const bool useOutlineTextureAlpha = !range.selected;
+                    const bool useOutlineTextureAlpha =
+                        !range.selected || !range.selectedOutlineSupported;
                     glUniform1i(
                         objectIdProgram_.uniformLocation(
                             "uUseTextureAlphaMask"),
@@ -8492,6 +8498,7 @@ bool ViewportSurfaceRenderer::draw(
                     glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture2);
                     for (const DrawRange &range : ranges_) {
                         if (range.count <= 0 || !range.selected ||
+                            !range.selectedOutlineSupported ||
                             range.showInFront ||
                             range.outlineHandledBySceneStroke) {
                             continue;
@@ -8831,6 +8838,7 @@ bool ViewportSurfaceRenderer::draw(
                     vertexBuffer_.bind();
                     for (const DrawRange &range : ranges_) {
                         if (range.count <= 0 || !range.selected ||
+                            !range.selectedOutlineSupported ||
                             !range.showInFront ||
                             range.outlineHandledBySceneStroke) {
                             continue;

@@ -2574,8 +2574,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const bool rasterizeSelectedMeshEdges =
             selectedOutlineEnabled && xrayEnabled && object.selected &&
             object.shape.geometryType == GeometryType::PolygonMesh;
+        const bool selectedOutlineSupported =
+            object.blenderSourceObjectType != QLatin1String("SURFACE");
         const bool needsSelectedOutlineGeometry =
-            selectedOutlineEnabled && object.selected;
+            selectedOutlineEnabled && object.selected &&
+            selectedOutlineSupported;
         const bool perFaceMaterialAlpha =
             (object.shape.geometryType == GeometryType::PolygonMesh ||
              object.shape.geometryType == GeometryType::NurbsSolid) &&

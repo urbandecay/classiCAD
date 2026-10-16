@@ -3339,6 +3339,7 @@ bool importBlenderScene(const QString &path,
         sceneObject.blenderSourceVersion =
             source.value(QStringLiteral("blender_version")).toString();
         sceneObject.blenderMeshImportMode = mode;
+        sceneObject.blenderSourceObjectType = objectType;
         sceneObject.defaultViewLayerKey =
             item.value(QStringLiteral("default_view_layer_key")).toString();
         if (!sceneObject.defaultViewLayerKey.isEmpty() &&

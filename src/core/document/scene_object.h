@@ -168,6 +168,9 @@ struct SceneObject {
     MeshObjectTransform meshObjectTransform = identityMeshObjectTransform;
     QString blenderSourceVersion;
     QString blenderMeshImportMode;
+    // Original Blender object type. Kept for viewport behaviors that differ
+    // between legacy Blender object families and native classiCAD geometry.
+    QString blenderSourceObjectType;
 };
 
 } // namespace classiCAD

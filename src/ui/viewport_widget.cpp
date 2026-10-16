@@ -2931,6 +2931,55 @@ public:
         emitCoordinateUpdate();
     }
 
+    void invertObjectSelection()
+    {
+        if (interactionMode_ != ViewportInteractionMode::Object ||
+            activeTool_ != Tool::Select) {
+            return;
+        }
+
+        QVector<ObjectId> inverted;
+        inverted.reserve(document_.size());
+        for (int index = 0; index < document_.size(); ++index) {
+            const ObjectId objectId = document_.objectIdAt(index);
+            if (document_.isObjectEditable(objectId) &&
+                !selection_.contains(objectId)) {
+                inverted.append(objectId);
+            }
+        }
+        const ObjectId primaryObjectId = inverted.isEmpty()
+                                             ? ObjectId::invalid()
+                                             : inverted.back();
+        selection_.setObjectIds(inverted, primaryObjectId);
+        update();
+        emitCoordinateUpdate();
+    }
+
+    bool isObjectSelectionShortcut(
+        int key, Qt::KeyboardModifiers modifiers) const
+    {
+        return (key == Qt::Key_A && modifiers == Qt::AltModifier) ||
+               (key == Qt::Key_I && modifiers == Qt::ControlModifier);
+    }
+
+    bool dispatchObjectSelectionShortcut(
+        int key, Qt::KeyboardModifiers modifiers)
+    {
+        if (interactionMode_ != ViewportInteractionMode::Object ||
+            !selectionShortcutsAvailable() ||
+            !isObjectSelectionShortcut(key, modifiers)) {
+            return false;
+        }
+        if (key == Qt::Key_A) {
+            clearSelection();
+            update();
+            emitCoordinateUpdate();
+        } else {
+            invertObjectSelection();
+        }
+        return true;
+    }
+
     void activateViewportShadingControl(int control) override
     {
         activateViewportShadingControlInternal(control);
@@ -18046,6 +18095,16 @@ protected:
     bool event(QEvent *event) override
     {
         if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
+            interactionMode_ == ViewportInteractionMode::Object &&
+            selectionShortcutsAvailable()) {
+            const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+            if (isObjectSelectionShortcut(keyEvent->key(),
+                                          keyEvent->modifiers())) {
+                event->accept();
+                return true;
+            }
+        }
+        if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
             interactionMode_ == ViewportInteractionMode::Edit &&
             activeTool_ == Tool::Select &&
             viewportModeShortcutAvailable()) {
@@ -18135,6 +18194,12 @@ protected:
                 }, this);
             pie->setAttribute(Qt::WA_DeleteOnClose);
             pie->showAt(QCursor::pos());
+            event->accept();
+            return;
+        }
+        if (!event->isAutoRepeat() &&
+            dispatchObjectSelectionShortcut(event->key(),
+                                            event->modifiers())) {
             event->accept();
             return;
         }
@@ -18548,6 +18613,23 @@ protected:
 
     bool eventFilter(QObject *watched, QEvent *event) override
     {
+        if (event->type() == QEvent::ShortcutOverride) {
+            QWidget *targetWidget = qobject_cast<QWidget *>(watched);
+            if (targetWidget == nullptr || targetWidget->window() != window() ||
+                (targetWidget != this && !isAncestorOf(targetWidget))) {
+                return false;
+            }
+            if (interactionMode_ == ViewportInteractionMode::Object &&
+                selectionShortcutsAvailable()) {
+                const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+                if (isObjectSelectionShortcut(keyEvent->key(),
+                                              keyEvent->modifiers())) {
+                    event->accept();
+                    return true;
+                }
+            }
+            return false;
+        }
         if (event->type() != QEvent::KeyPress) {
             return false;
         }
@@ -18576,6 +18658,12 @@ protected:
             targetWidget == this || isAncestorOf(targetWidget);
         if (!viewportHasKeyboardContext || keyEvent->isAutoRepeat()) {
             return false;
+        }
+
+        if (dispatchObjectSelectionShortcut(keyEvent->key(),
+                                            keyEvent->modifiers())) {
+            keyEvent->accept();
+            return true;
         }
 
         if (interactionMode_ == ViewportInteractionMode::Edit &&

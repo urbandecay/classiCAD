@@ -3904,6 +3904,18 @@ geometry when it has no retained component selection.
 Returning to Object Mode preserves the component caches without allowing them
 to affect object transforms, point extrusion, or object duplication.
 
+Object Mode selection now routes Blender's `Alt+A` deselect and `Ctrl+I` invert
+shortcuts through the Select tool when no selection drag is active. Invert
+complements the current selection over visible, selectable document objects;
+the last resulting object becomes the primary selection. `Alt+A` clears the
+primary object along with the selection because `SelectionModel` currently
+requires the primary object to be selected; Blender retains an active-object
+pointer after deselection. Modeling that independent active state remains
+open. The shortcuts follow Blender's documented
+[object selection shortcuts](https://docs.blender.org/manual/en/5.2/scene_layout/object/selecting.html)
+while using `Document::isObjectEditable` for classiCAD's visibility and
+selectability rules.
+
 For this porting slice, use classiCAD's existing geometry as the component
 model: curve control points map to vertices, curve splines map to edges, and
 NURBS surface or solid patches map to faces. With the Select tool active, the

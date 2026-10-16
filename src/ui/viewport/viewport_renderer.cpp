@@ -4040,15 +4040,66 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                                          const QSize &inFrontDepthSize,
                                          bool showInFront) const
 {
-    Q_UNUSED(regularSceneDepth)
-    Q_UNUSED(regularDepthSize)
-    Q_UNUSED(inFrontSceneDepth)
-    Q_UNUSED(inFrontDepthSize)
-    Q_UNUSED(showInFront)
     const QColor handleColor(QStringLiteral("#77b7e6"));
     const QColor handleFill(QStringLiteral("#263b4b"));
     painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
     painter.setBrush(Qt::NoBrush);
+
+    const bool hasRegularDepth = regularSceneDepth != nullptr &&
+        regularDepthSize.width() > 0 && regularDepthSize.height() > 0 &&
+        regularSceneDepth->size() ==
+            regularDepthSize.width() * regularDepthSize.height();
+    const bool hasInFrontDepth = inFrontSceneDepth != nullptr &&
+        inFrontDepthSize.width() > 0 && inFrontDepthSize.height() > 0 &&
+        inFrontSceneDepth->size() ==
+            inFrontDepthSize.width() * inFrontDepthSize.height();
+    const bool xrayEnabled = shadingSettings_.xrayEnabledForMode();
+    const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
+    const Point3D viewDirection = transform_.viewDirection();
+    const auto cameraDepth = [&](const Point3D &point) {
+        if (transform_.isPerspectiveEnabled()) {
+            return (point.x - cameraPosition.x) * viewDirection.x +
+                   (point.y - cameraPosition.y) * viewDirection.y +
+                   (point.z - cameraPosition.z) * viewDirection.z;
+        }
+        return transform_.worldDirectionToView(point).towardCamera;
+    };
+    const auto visibleAtDepth = [&](const QVector<float> *depth,
+                                    const QSize &depthSize,
+                                    const QPointF &screen,
+                                    qreal worldDepth) {
+        if (depth == nullptr || depthSize.width() <= 0 ||
+            depthSize.height() <= 0 || viewportSize.width() <= 0 ||
+            viewportSize.height() <= 0) {
+            return true;
+        }
+        const int x = qFloor(screen.x() * depthSize.width() /
+                             qreal(viewportSize.width()));
+        const int y = qFloor(screen.y() * depthSize.height() /
+                             qreal(viewportSize.height()));
+        if (x < 0 || x >= depthSize.width() ||
+            y < 0 || y >= depthSize.height()) {
+            return true;
+        }
+        const float surfaceDepth = (*depth)[y * depthSize.width() + x];
+        const qreal tolerance = std::max<qreal>(
+            1.0e-4, std::abs(worldDepth) * 1.0e-6);
+        return !std::isfinite(surfaceDepth) ||
+               surfaceDepth <= worldDepth + tolerance;
+    };
+    const auto controlCageVisible = [&](const QPointF &screen, qreal depth) {
+        if (showInFront) {
+            return !hasInFrontDepth || visibleAtDepth(
+                inFrontSceneDepth, inFrontDepthSize, screen, depth);
+        }
+        if (!xrayEnabled && hasRegularDepth &&
+            !visibleAtDepth(regularSceneDepth, regularDepthSize,
+                            screen, depth)) {
+            return false;
+        }
+        return !hasInFrontDepth || visibleAtDepth(
+            inFrontSceneDepth, inFrontDepthSize, screen, depth);
+    };
 
     int globalControlPointIndex = 0;
     const auto drawControlPointChain = [&](const QVector<QPointF> &controlPoints,
@@ -4090,7 +4141,40 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     worldEnd, viewportSize, &end)) {
                 continue;
             }
-            painter.drawLine(start, end);
+            const qreal screenLength = QLineF(start, end).length();
+            const int steps = std::clamp(qCeil(screenLength * 2.0), 1, 8192);
+            const qreal startDepth = cameraDepth(worldStart);
+            const qreal endDepth = cameraDepth(worldEnd);
+            QPainterPath visiblePath;
+            bool visibleRun = false;
+            for (int step = 0; step <= steps; ++step) {
+                const qreal fraction = qreal(step) / steps;
+                qreal depth = startDepth +
+                              (endDepth - startDepth) * fraction;
+                if (transform_.isPerspectiveEnabled() &&
+                    std::abs(startDepth) > 1.0e-9 &&
+                    std::abs(endDepth) > 1.0e-9) {
+                    const qreal reciprocal = (1.0 - fraction) / startDepth +
+                                             fraction / endDepth;
+                    if (std::abs(reciprocal) > 1.0e-12) {
+                        depth = 1.0 / reciprocal;
+                    }
+                }
+                const QPointF screenPoint = start + (end - start) * fraction;
+                const bool visible = xrayEnabled || controlCageVisible(
+                    screenPoint, depth);
+                if (visible) {
+                    if (!visibleRun) {
+                        visiblePath.moveTo(screenPoint);
+                        visibleRun = true;
+                    } else {
+                        visiblePath.lineTo(screenPoint);
+                    }
+                } else {
+                    visibleRun = false;
+                }
+            }
+            painter.drawPath(visiblePath);
         }
         painter.restore();
 

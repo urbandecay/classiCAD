@@ -2101,6 +2101,11 @@ public:
         setCursor(Qt::CrossCursor);
         if (ViewportGpuSurface::isSupported()) {
             gpuSurface_ = new ViewportGpuSurface(this);
+            ViewportGpuSurface *surface = gpuSurface_;
+            gpuSurface_->setContextStateCallback(
+                [this, surface](bool ready) {
+                    handleGpuSurfaceContextState(surface, ready);
+                });
             gpuSurface_->setSurfaceTessellationCache(
                 &surfaceTessellationCache_);
             gpuSurface_->setGeometry(rect());
@@ -2118,6 +2123,14 @@ public:
                                   &surfaceRenderer);
                 });
             gpuSurface_->show();
+            const quint64 startupGeneration = gpuContextGeneration_;
+            QTimer::singleShot(2000, this,
+                               [this, surface, startupGeneration]() {
+                if (gpuSurface_ == surface && !gpuContextReady_ &&
+                    gpuContextGeneration_ == startupGeneration) {
+                    demoteGpuSurfaceToRaster(surface);
+                }
+            });
         }
         DebugLog::instance().write(QStringLiteral("viewport constructed"));
     }
@@ -2136,6 +2149,40 @@ public:
         } else {
             QWidget::update();
         }
+    }
+
+    void handleGpuSurfaceContextState(ViewportGpuSurface *surface, bool ready)
+    {
+        if (surface == nullptr || surface != gpuSurface_) {
+            return;
+        }
+        ++gpuContextGeneration_;
+        gpuContextReady_ = ready;
+        if (ready) {
+            update();
+            return;
+        }
+
+        const quint64 lossGeneration = gpuContextGeneration_;
+        QTimer::singleShot(1000, this, [this, surface, lossGeneration]() {
+            if (gpuSurface_ == surface && !gpuContextReady_ &&
+                gpuContextGeneration_ == lossGeneration) {
+                demoteGpuSurfaceToRaster(surface);
+            }
+        });
+    }
+
+    void demoteGpuSurfaceToRaster(ViewportGpuSurface *surface)
+    {
+        if (surface == nullptr || gpuSurface_ != surface) {
+            return;
+        }
+        gpuSurface_ = nullptr;
+        gpuContextReady_ = false;
+        ++gpuContextGeneration_;
+        surface->hide();
+        surface->deleteLater();
+        QWidget::update();
     }
 
     void setTool(ToolId tool)
@@ -26728,6 +26775,8 @@ private:
     QCheckBox *cavityCheck_ = nullptr;
     BlenderGridRenderer blenderGridRenderer_;
     ViewportGpuSurface *gpuSurface_ = nullptr;
+    quint64 gpuContextGeneration_ = 0;
+    bool gpuContextReady_ = false;
     ViewportOverlay viewportOverlay_;
     ViewportEraseOverlayRenderer eraseOverlayRenderer_;
     ViewportHudRenderer viewportHudRenderer_;

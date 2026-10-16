@@ -10049,3 +10049,15 @@ scene depth.
   This improves the documented QPainter depth-map approximation but does not
   replace Blender's GPU stencil shadow volumes. Build passed; matched shadow
   captures remain open.
+
+### Recover to QPainter after a reported OpenGL context loss (2026-10-16)
+
+- The on-screen GPU viewport now reports successful context initialization and
+  Qt's `aboutToBeDestroyed` notification to its owning widget. A startup
+  watchdog covers the case where the support probe succeeds but the actual
+  widget context never initializes. After a reported loss, classiCAD waits for
+  Qt to recreate the context; if it does not return within one second, the GPU
+  child is removed and the parent repaints through the existing QPainter path.
+  This covers context failures Qt reports; it cannot detect every driver reset
+  that leaves a context appearing valid. Build passed; no GUI or matched image
+  comparison was run.

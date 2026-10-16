@@ -96,6 +96,34 @@ bool ViewportGpuSurface::isSupported()
     return true;
 }
 
+void ViewportGpuSurface::setContextStateCallback(
+    ContextStateCallback callback)
+{
+    contextStateCallback_ = std::move(callback);
+}
+
+void ViewportGpuSurface::initializeGL()
+{
+    QOpenGLContext *initializedContext = context();
+    if (initializedContext != nullptr &&
+        connectedContext_ != initializedContext) {
+        connectedContext_ = initializedContext;
+        connect(initializedContext, &QOpenGLContext::aboutToBeDestroyed,
+                this, [this, initializedContext]() {
+                    if (connectedContext_ != initializedContext) {
+                        return;
+                    }
+                    connectedContext_ = nullptr;
+                    if (contextStateCallback_) {
+                        contextStateCallback_(false);
+                    }
+                }, Qt::DirectConnection);
+    }
+    if (contextStateCallback_) {
+        contextStateCallback_(true);
+    }
+}
+
 void ViewportGpuSurface::setDrawCallback(DrawCallback callback)
 {
     drawCallback_ = std::move(callback);

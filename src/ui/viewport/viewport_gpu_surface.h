@@ -37,6 +37,8 @@ public:
     ~ViewportGpuSurface() override;
 
     static bool isSupported();
+    using ContextStateCallback = std::function<void(bool)>;
+    void setContextStateCallback(ContextStateCallback callback);
     void setDrawCallback(DrawCallback callback);
     // Keep source compatibility for renderer clients that do not use the AA
     // renderer supplied to the newer callback form.
@@ -89,9 +91,12 @@ public:
         QVector<int> *candidateIndices);
 
 protected:
+    void initializeGL() override;
     void paintGL() override;
 
 private:
+    ContextStateCallback contextStateCallback_;
+    QOpenGLContext *connectedContext_ = nullptr;
     DrawCallback drawCallback_;
     std::unique_ptr<BlenderGridRenderer> gridRenderer_;
     std::unique_ptr<ViewportAaRenderer> aaRenderer_;

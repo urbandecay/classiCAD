@@ -1771,7 +1771,18 @@ bool ViewportSceneRenderer::draw(
                     ++last;
                 }
             }
-            boundProgram->setUniformValue("uWidth", widthPixels);
+            // Blender's native Overlay line resolve integrates about 2% more
+            // coverage than this GL line rasterizer on the matched 1920x1080
+            // capture, even with the same packed line record and smoothing
+            // kernel. Keep the primitive itself one pixel wide and compensate
+            // only the post-raster coverage estimate for ordinary curve wires.
+            const float curveCoverageWidthPixels =
+                widthPixels +
+                (strokeResolveActive && smoothWire && stroke.blenderCurveWire
+                     ? 0.02f
+                     : 0.0f);
+            boundProgram->setUniformValue("uWidth",
+                                          curveCoverageWidthPixels);
             boundProgram->setUniformValue(
                 "uLineStyle", static_cast<int>(pattern.style));
             boundProgram->setUniformValue("uPatternPeriod", pattern.periodPixels);

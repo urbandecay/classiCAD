@@ -2522,6 +2522,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
           surfaceLayers->outlineAppliedBeforeDisplay);
     QVector<RasterOutlineSample> outlineSamples;
     QVector<RasterOutlineSample> inFrontOutlineSamples;
+    QVector<RasterOutlineSample> selectedOutlineSamples;
+    QVector<RasterOutlineSample> inFrontSelectedOutlineSamples;
     QVector<float> outlineOpaqueDepth;
     QVector<float> inFrontOutlineOpaqueDepth;
     if (rasterWorkbenchOutlineEnabled) {
@@ -2531,6 +2533,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                 width * height);
         inFrontOutlineOpaqueDepth.fill(std::numeric_limits<float>::infinity(),
                                        width * height);
+    }
+    if (selectedOutlineEnabled) {
+        selectedOutlineSamples.resize(width * height);
+        inFrontSelectedOutlineSamples.resize(width * height);
     }
     QVector<RasterSample> opaqueSamples;
     QVector<RasterSample> inFrontOpaqueSamples;
@@ -3037,6 +3043,19 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         target.sourceAlpha = triangleSourceAlpha;
                     };
                     const float sourceAlpha = triangleSourceAlpha;
+                    if (selectedOutlineEnabled && object.selected &&
+                        sourceAlpha > 0.0f) {
+                        QVector<RasterOutlineSample> &domainSelectedOutline =
+                            object.showInFront ? inFrontSelectedOutlineSamples
+                                               : selectedOutlineSamples;
+                        RasterOutlineSample &selectedSample =
+                            domainSelectedOutline[y * width + x];
+                        if (selectedSample.objectId == 0 ||
+                            z <= selectedSample.depth) {
+                            selectedSample.depth = z;
+                            selectedSample.objectId = id;
+                        }
+                    }
                     if (rasterWorkbenchOutlineEnabled &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {
                         QVector<float> &domainOpaqueDepth = object.showInFront
@@ -3106,6 +3125,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         if (rasterWorkbenchOutlineEnabled &&
             inFrontOutlineSamples[index].objectId != 0) {
             outlineSamples[index] = inFrontOutlineSamples[index];
+        }
+        if (selectedOutlineEnabled &&
+            inFrontSelectedOutlineSamples[index].objectId != 0) {
+            selectedOutlineSamples[index] =
+                inFrontSelectedOutlineSamples[index];
         }
         if ((cavityEnabled || shadowEnabled) &&
             inFrontOpaqueSamples[index].objectId != 0) {
@@ -3320,11 +3344,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     ? outlineSamples[sampleIndex].objectId
                     : samples[sampleIndex].objectId;
                 const quint64 selectionObjectId =
-                    samples[sampleIndex].objectId;
+                    selectedOutlineSamples[sampleIndex].objectId;
                 int differentNeighbors = 0;
-                int differentSelectionNeighbors = 0;
-                const bool centerSelected =
-                    (selectionObjectId & 0x80000000ull) != 0;
+                float selectedOutlineCoverage = 0.0f;
                 const std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(outlineSampleOffset, 0),
                     QPoint(-outlineSampleOffset, 0),
@@ -3339,14 +3361,22 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         ? outlineSamples[neighborIndex].objectId
                         : samples[neighborIndex].objectId;
                     const quint64 selectionNeighborId =
-                        samples[neighborIndex].objectId;
+                        selectedOutlineSamples[neighborIndex].objectId;
                     differentNeighbors += neighborId != objectId;
-                    const bool neighborSelected =
-                        (selectionNeighborId & 0x80000000ull) != 0;
-                    differentSelectionNeighbors +=
-                        neighborSelected != centerSelected ||
-                        (centerSelected && neighborSelected &&
-                         selectionNeighborId != selectionObjectId);
+                    const bool selectionBoundary =
+                        selectionObjectId != selectionNeighborId &&
+                        (selectionObjectId != 0 || selectionNeighborId != 0);
+                    if (selectionBoundary) {
+                        const RasterOutlineSample &selectedSide =
+                            selectionObjectId != 0
+                                ? selectedOutlineSamples[sampleIndex]
+                                : selectedOutlineSamples[neighborIndex];
+                        const RasterSample &sceneSample = samples[sampleIndex];
+                        const bool occluded = !xrayEnabled &&
+                            sceneSample.objectId != 0 &&
+                            selectedSide.depth > sceneSample.depth + 1.0e-5f;
+                        selectedOutlineCoverage += occluded ? 0.35f : 1.0f;
+                    }
                 }
                 const auto blend = [&](const QColor &color, float coverage) {
                     const float sourceAlpha =
@@ -3381,8 +3411,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
                 if (drawSelectionOutline) {
                     blend(selectionOutline,
-                          static_cast<float>(differentSelectionNeighbors) /
-                              4.0f);
+                          selectedOutlineCoverage / 4.0f);
                 }
             }
         }

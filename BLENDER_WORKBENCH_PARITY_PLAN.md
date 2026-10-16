@@ -1799,9 +1799,11 @@ touching selected objects. Blender's overlay outline pass compares object IDs
 in [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl).
 The QPainter effect entry now also runs selected contours when the general
 Workbench object-outline option is off, including X-Ray when the saved
-selection-outline overlay remains enabled.
-Occluded selected contours still need a separate selected-object depth input
-and Blender's occlusion fade. Build passed; matched outline images remain open.
+selection-outline overlay remains enabled. Its raster pass keeps a selected-
+only ID/depth layer and fades contours hidden by the resolved scene depth to
+35% opacity (full opacity in X-Ray), matching Blender's overlay rule. The GPU
+path still lacks this separate selected-object depth input and occlusion fade.
+Build passed; matched outline images remain open.
 
 - The GPU single-sample dense one-pixel-wire correction now gates on the copied center wire's alpha, matching Blender's test of the original center overlay pixel. Opaque-stroke eligibility previously made the stroke-alpha check unconditional for this case, so partially transparent wires could receive a correction that Blender skips. GPU runtime and matched image comparisons remain open.
 

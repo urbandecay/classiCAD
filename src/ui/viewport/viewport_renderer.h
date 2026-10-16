@@ -83,7 +83,9 @@ public:
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
                         const WorkPlaneFrame &frame,
-                        const QSize &viewportSize) const;
+                        const QSize &viewportSize,
+                        const QVector<float> *opaqueSceneDepth = nullptr,
+                        const QSize &opaqueSceneDepthSize = {}) const;
     void drawNurbsSurface(QPainter &painter,
                           const Shape::NurbsSurface3D &surface,
                           const QSize &viewportSize,

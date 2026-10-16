@@ -3782,7 +3782,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     opaqueSceneDepthSize);
             }
             if (!curveDrawn) {
-                drawNurbsCurve(painter, curve, placedFrame, viewportSize);
+                drawNurbsCurve(painter, curve, placedFrame, viewportSize,
+                               preview ? nullptr : opaqueSceneDepth,
+                               opaqueSceneDepthSize);
             }
         }
         painter.restore();
@@ -4769,7 +4771,9 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
 void ViewportRenderer::drawNurbsCurve(QPainter &painter,
                                       const Shape::NurbsCurve2D &curve,
                                       const WorkPlaneFrame &frame,
-                                      const QSize &viewportSize) const
+                                      const QSize &viewportSize,
+                                      const QVector<float> *opaqueSceneDepth,
+                                      const QSize &opaqueSceneDepthSize) const
 {
     if (!isValidNurbsCurve(curve) || !isValidWorkPlaneFrame(frame)) {
         return;
@@ -4785,6 +4789,31 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
     const auto worldPoint = [&frame](const Point3D &localPoint) {
         return workPlaneFramePointToWorld(
             {localPoint.x, localPoint.y}, localPoint.z, frame);
+    };
+    const auto drawDepthTestedPolyline = [&](const QVector<Point3D> &points) {
+        if (opaqueSceneDepth == nullptr ||
+            opaqueSceneDepthSize.width() <= 0 ||
+            opaqueSceneDepthSize.height() <= 0 ||
+            opaqueSceneDepth->size() !=
+                opaqueSceneDepthSize.width() * opaqueSceneDepthSize.height()) {
+            return false;
+        }
+        ViewportDepthGeometry directGeometry;
+        if (points.size() > 1) {
+            directGeometry.preciseLineVertices.reserve((points.size() - 1) * 2);
+            for (int index = 0; index + 1 < points.size(); ++index) {
+                directGeometry.preciseLineVertices.append(points[index]);
+                directGeometry.preciseLineVertices.append(points[index + 1]);
+            }
+        }
+        if (directGeometry.preciseLineVertices.isEmpty()) {
+            return true;
+        }
+        drawPreparedCurveSegments(painter, directGeometry, viewportSize,
+                                  opaqueSceneDepth, opaqueSceneDepthSize);
+        // A valid retained depth target means the direct curve path must not
+        // bypass occlusion if its bounded depth resolve cannot submit it.
+        return true;
     };
     const auto drawClippedPolyline = [&](const QVector<Point3D> &worldPoints) {
         QPainterPath clippedPath;
@@ -4844,7 +4873,9 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
             if (evaluateNurbsPoint3D(curve, parameter, &point))
                 sampledWorldPoints.append(worldPoint(point));
         }
-        drawClippedPolyline(sampledWorldPoints);
+        if (!drawDepthTestedPolyline(sampledWorldPoints)) {
+            drawClippedPolyline(sampledWorldPoints);
+        }
         return;
     }
 
@@ -5005,7 +5036,9 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
         if (evaluateNurbsPoint3D(curve, parameter, &localPoint))
             adaptiveWorldPoints.append(worldPoint(localPoint));
     }
-    drawClippedPolyline(adaptiveWorldPoints);
+    if (!drawDepthTestedPolyline(adaptiveWorldPoints)) {
+        drawClippedPolyline(adaptiveWorldPoints);
+    }
 }
 
 void ViewportRenderer::drawNurbsSurface(QPainter &painter,

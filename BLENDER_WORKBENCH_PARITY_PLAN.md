@@ -9895,3 +9895,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   the underlying dimension calculation is in
   [`object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc#L3498-L3509).
   Build passed; matched rotated-volume images remain open.
+
+### QPainter direct curve fallback depth testing (2026-10-16)
+
+- If prepared and sampled curve geometry cannot be submitted, the final
+  adaptive NURBS evaluator now sends its own sampled world-space segments
+  through the retained-scene-depth resolver. With valid retained depth, a
+  failed bounded resolve no longer falls through to an unoccluded curve.
+  When no usable depth image was retained, the existing direct curve fallback
+  remains available. Blender's committed curve Overlay wires are
+  depth-tested in
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L68-L74)
+  and [#L125-L142](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L125-L142).
+  Build passed; matched fallback-curve occlusion captures remain open.

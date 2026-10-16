@@ -9624,3 +9624,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L976-L990)
   and compares outline and scene depth at that coordinate in [#L1357-L1365](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1357-L1365).
   Build passed; matched selected-outline captures remain open.
+
+### QPainter selected-outline diagonal fallback samples (2026-10-16)
+
+- When cardinal samples find no selected contour, the QPainter resolve now
+  checks four diagonal neighbors before giving up. At UI scales above one, it
+  also checks diagonal neighbors in the wider ring after the first ring finds
+  no boundary. This catches additional diagonal contours in the bounded
+  raster pass; Blender's shader reconstructs subpixel lines from gathered edge
+  patterns, so this remains an approximation and has no matched image result.
+- Blender 5.2.2's selected-outline shader gathers a wider sample pattern and
+  checks the outer ring only when no first-ring edge exists in
+  [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1316).
+  Build passed; matched diagonal-outline captures remain open.

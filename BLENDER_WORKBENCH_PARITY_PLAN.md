@@ -8937,3 +8937,12 @@ resolve remain open.
   results. The scene extractor record is now version 20, and the reader accepts
   versions 10 through 20. C++ build passed; a matched saved-view comparison
   has not been run.
+
+### QPainter cavity near-plane receivers (2026-10-15)
+
+- QPainter World/Both cavity now skips SSAO and edge accumulation for opaque
+  receivers whose projected depth is at Blender's near-plane depth zero. It
+  still evaluates Screen/Both curvature for those pixels, matching Blender's
+  separate cavity early-out and curvature composition. The projection uses
+  the same viewport view-projection matrix as the scene renderer. C++ build
+  passed; no matched near-plane Blender image comparison has been run.

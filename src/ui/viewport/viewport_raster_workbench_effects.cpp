@@ -4,6 +4,7 @@
 #include "viewport_raster_workbench_volume.h"
 #include "viewport_workbench_effect_scale.h"
 #include "viewport_renderer.h"
+#include "blender_grid_renderer.h"
 #include "workbench_lighting.h"
 
 #include "viewport_depth_geometry.h"
@@ -3269,6 +3270,19 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const Point3D cameraPosition = perspective
         ? transform.cameraPosition(viewportSize) : transform.viewTarget();
     const Point3D viewTarget = transform.viewTarget();
+    const QMatrix4x4 cavityViewProjection =
+        viewportViewProjection(transform, viewportSize);
+    const auto isNearPlaneSample = [&cavityViewProjection](
+                                      const QVector3D &position) {
+        const QVector4D clip = cavityViewProjection *
+            QVector4D(position, 1.0f);
+        if (!std::isfinite(clip.w()) || clip.w() <= 1.0e-12f ||
+            !std::isfinite(clip.z())) {
+            return false;
+        }
+        const float normalizedDepth = clip.z() / clip.w() * 0.5f + 0.5f;
+        return normalizedDepth <= 1.0e-6f;
+    };
     QVector<float> factors(width * height, 1.0f);
     const float ridge = std::max(0.0f,
         static_cast<float>(settings.cavityRidgeFactor));
@@ -3285,6 +3299,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         for (int x = 0; x < width; ++x) {
             const RasterSample &center = opaqueSamples[y * width + x];
             if (center.objectId == 0) continue;
+            const bool skipSsaoForNearPlane =
+                ssao && isNearPlaneSample(center.position);
             const float step = rasterWorkbenchCavityStep(
                 radius, center.position, cameraPosition, viewTarget,
                 towardCamera, perspective);
@@ -3407,7 +3423,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 if (captureTaps)
                     tapCapture.neighborObjectId = neighbor.objectId;
                 if (neighbor.objectId == 0) {
-                    if (ssao) {
+                    if (ssao && !skipSsaoForNearPlane) {
                         // Blender treats a background depth read as a point
                         // at the receiver's depth, then moves it farther from
                         // the camera by cavity_distance. Reconstruct that
@@ -3471,7 +3487,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     continue;
                 }
                 ++validNeighbors;
-                if (ssao) {
+                if (ssao && !skipSsaoForNearPlane) {
                     // Blender reconstructs the sampled view position from
                     // the fractional UV and sampled depth. Retained CPU depth
                     // samples store only the pixel-center position, so move

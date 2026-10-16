@@ -2423,11 +2423,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  qreal cameraFrameSensorScale)
 {
     const bool xrayEnabled = settings.xrayEnabled();
+    const bool selectedOutlineEnabled =
+        settings.selectedObjectOutlineVisible && settings.wireOverlaysVisible;
     if (colorImage == nullptr || colorImage->isNull() ||
-        (!settings.cavity && !settings.outline && !settings.depthOfField &&
-         !settings.shadows) ||
+        (!settings.cavity && !settings.outline && !selectedOutlineEnabled &&
+         !settings.depthOfField && !settings.shadows) ||
         settings.mode != ViewportShadingMode::Solid ||
-        (xrayEnabled && !settings.outline) ||
+        (xrayEnabled && !settings.outline && !selectedOutlineEnabled) ||
         viewportSize.isEmpty()) {
         return;
     }

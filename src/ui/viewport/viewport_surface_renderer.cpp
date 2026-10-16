@@ -8132,7 +8132,10 @@ bool ViewportSurfaceRenderer::draw(
                 for (int objectIndex = 0; objectIndex < objects.size();
                      ++objectIndex) {
                     const ViewportRenderObject &object = objects[objectIndex];
-                    if (object.selected && !object.outlineHandledBySceneStroke &&
+                    if (object.selected &&
+                        object.blenderSourceObjectType !=
+                            QLatin1String("SURFACE") &&
+                        !object.outlineHandledBySceneStroke &&
                         hasNurbsSurfaceGeometry(object)) {
                         xraySelectedNurbsPresent = true;
                     }

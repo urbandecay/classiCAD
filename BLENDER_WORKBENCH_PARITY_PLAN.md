@@ -9683,4 +9683,6 @@ moves them after scene effects and depth-tests them against the retained scene.
   classiCAD-created NURBS surfaces remain available.
 - Blender source reference:
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L121-L182).
-  Build passed; matched imported-surface outline captures remain open.
+  The GPU X-Ray special NURBS branch also excludes imported `SURFACE` objects
+  so it cannot reintroduce their selected contour. Build passed; matched
+  imported-surface outline captures remain open.

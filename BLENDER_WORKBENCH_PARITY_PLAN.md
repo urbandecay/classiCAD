@@ -8782,6 +8782,21 @@ resolve remain open.
   edges. The display-referred fallback keeps its separate QImage path. Matched
   Blender DOF output remains open.
 
+### QPainter DOF target-pixel radius (2026-10-15)
+
+- The software DOF CoC already uses the physical color target width to produce
+  a radius in target pixels. Removed the second multiplication by the image
+  device-pixel ratio from its gather offsets, CoC weights, mip selection,
+  resolve blend, and 100-pixel coverage dilation. The ratio remains in the
+  mapping from color pixels to the separately bounded depth buffer. This keeps
+  blur width consistent at high DPI and during supersampling. The Blender
+  5.2.2 blur shader also applies CoC directly in target-pixel units in
+  [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L395-L425),
+  with the 100-pixel cap in
+  [`workbench_effect_dof_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_lib.glsl#L291-L316).
+  The C++ build passed; matched high-DPI and supersampled Blender DOF
+  comparisons remain open.
+
 ### QPainter bounded viewport raster target (2026-10-15)
 
 - The interactive QPainter viewport now reduces its internal supersampling

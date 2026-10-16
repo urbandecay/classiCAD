@@ -4011,9 +4011,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
             }
             const int dilationX = std::min(
-                qCeil(100.0 * colorDpr), outputWidth);
+                qCeil(100.0), outputWidth);
             const int dilationY = std::min(
-                qCeil(100.0 * colorDpr), outputHeight);
+                qCeil(100.0), outputHeight);
             for (int y = 0; y < outputHeight; ++y) {
                 int covered = 0;
                 for (int x = 0; x <= dilationX && x < outputWidth; ++x) {
@@ -4334,9 +4334,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                          (fStop * std::abs(focus - focal))) *
                         ((z - focus) / std::max<qreal>(z, 1.0e-6)));
                     const qreal radius = std::clamp(
-                        cocMm * outputWidth / sensorWidth, 0.0, 100.0) * colorDpr;
+                        cocMm * outputWidth / sensorWidth, 0.0, 100.0);
                     const qreal mix = rasterWorkbenchDofResolveBlend(
-                        static_cast<float>(radius / colorDpr));
+                        static_cast<float>(radius));
                     if (mix <= 0.0) continue;
                     dofMixes[pixelIndex] = static_cast<float>(mix);
                     const QPointF gatherOriginOffset =
@@ -4361,12 +4361,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         const FilteredDofPixel sample = sampleDofMip(
                             sx, sy, rasterWorkbenchDofMipLod(
                                 sourceCocAt(sx, sy),
-                                static_cast<float>(radius / colorDpr)));
+                                static_cast<float>(radius)));
                         const float signedCoc = sample.nearCoc > sample.farCoc
                             ? sample.nearCoc : -sample.farCoc;
                         const float weight = rasterWorkbenchDofGatherWeight(
                             signedCoc,
-                            static_cast<float>(radius / colorDpr), tap.radius);
+                            static_cast<float>(radius), tap.radius);
                         red += sample.color.red * weight;
                         green += sample.color.green * weight;
                         blue += sample.color.blue * weight;

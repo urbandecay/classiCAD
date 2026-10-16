@@ -2465,10 +2465,21 @@ bool ViewportSurfaceRenderer::initialize()
                     (cardinalIds.y & 0x80000000u) != 0u,
                     (cardinalIds.z & 0x80000000u) != 0u,
                     (cardinalIds.w & 0x80000000u) != 0u);
-                float sameSelection = dot(
-                    vec4(equal(bvec4(centerSelected), neighborSelected)),
-                    vec4(0.25));
-                float selectionOpacity = 1.0 - sameSelection;
+                bvec4 differentObject = bvec4(
+                    centerId != cardinalIds.x,
+                    centerId != cardinalIds.y,
+                    centerId != cardinalIds.z,
+                    centerId != cardinalIds.w);
+                bvec4 objectBoundary = bvec4(
+                    centerSelected != neighborSelected.x ||
+                        (centerSelected && neighborSelected.x && differentObject.x),
+                    centerSelected != neighborSelected.y ||
+                        (centerSelected && neighborSelected.y && differentObject.y),
+                    centerSelected != neighborSelected.z ||
+                        (centerSelected && neighborSelected.z && differentObject.z),
+                    centerSelected != neighborSelected.w ||
+                        (centerSelected && neighborSelected.w && differentObject.w));
+                float selectionOpacity = dot(vec4(objectBoundary), vec4(0.25));
                 if (selectionOpacity <= 0.0) discard;
                 fragmentColor = vec4(uOutlineColor.rgb,
                                      uOutlineColor.a * selectionOpacity);

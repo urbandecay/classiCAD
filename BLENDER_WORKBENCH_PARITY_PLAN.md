@@ -1791,6 +1791,15 @@ one-million-pixel depth target and solid pen styles; dashed/styled paths and
 missing-depth fallbacks keep Qt's renderer. Build passed; matched wire images
 remain unverified.
 
+**Selected-object outline identity (2026-10-16):** GPU and QPainter selected
+contours now detect boundaries between adjacent selected objects by comparing
+their full per-object outline IDs, while still outlining selected/unselected
+boundaries. Previously both paths compared only the selected bit and merged
+touching selected objects. Blender's overlay outline pass compares object IDs
+in [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl).
+Occluded selected contours still need a separate selected-object depth input
+and Blender's occlusion fade. Build passed; matched outline images remain open.
+
 - The GPU single-sample dense one-pixel-wire correction now gates on the copied center wire's alpha, matching Blender's test of the original center overlay pixel. Opaque-stroke eligibility previously made the stroke-alpha check unconditional for this case, so partially transparent wires could receive a correction that Blender skips. GPU runtime and matched image comparisons remain open.
 
 GPU and QPainter NURBS Texture mapping follows exact parameter domains and

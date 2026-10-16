@@ -3339,9 +3339,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const quint64 selectionNeighborId =
                         samples[neighborIndex].objectId;
                     differentNeighbors += neighborId != objectId;
+                    const bool neighborSelected =
+                        (selectionNeighborId & 0x80000000ull) != 0;
                     differentSelectionNeighbors +=
-                        ((selectionNeighborId & 0x80000000ull) != 0) !=
-                        centerSelected;
+                        neighborSelected != centerSelected ||
+                        (centerSelected && neighborSelected &&
+                         selectionNeighborId != selectionObjectId);
                 }
                 const auto blend = [&](const QColor &color, float coverage) {
                     const float sourceAlpha =

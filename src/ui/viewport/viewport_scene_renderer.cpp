@@ -1395,24 +1395,14 @@ bool ViewportSceneRenderer::draw(
     bool strokeResolveActive = (isolatedDepthActive || depthTest) &&
         originalSamples == 0 &&
         originalDepthAttachment != GL_NONE && sourceDepthFormat.isValid() &&
-        colorWritesEnabled && opacity >= 0.999999;
+        colorWritesEnabled;
     if (strokeResolveActive) {
         for (const ViewportSceneStroke &stroke : strokes) {
             const ViewportSceneStrokePattern pattern =
                 viewportSceneStrokePattern(stroke, stroke.width * float(dpr));
             if (stroke.pointDiameter > 0.0f || !stroke.writeDepth ||
-                stroke.color.alpha() != 255 ||
                 pattern.style != ViewportSceneLineStyle::Solid) {
                 strokeResolveActive = false;
-                break;
-            }
-            for (const QVector4D &color : stroke.lineVertexColors) {
-                if (color.w() < 0.999999f) {
-                    strokeResolveActive = false;
-                    break;
-                }
-            }
-            if (!strokeResolveActive) {
                 break;
             }
         }

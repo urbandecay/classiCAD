@@ -12091,10 +12091,7 @@ protected:
                               ? rasterSurfaceLayers.inFrontSceneDepthSize
                               : rasterSurfaceLayers.regularSceneDepthSize);
             } else {
-                QPainter &shapePainter =
-                    rasterWorkbenchEffectPainter.isActive() &&
-                    isViewportCurveStrokeType(geometryType)
-                        ? rasterWorkbenchEffectPainter : scenePainter;
+                QPainter &shapePainter = scenePainter;
                 drawShape(shapePainter,
                           visibleShape,
                           false,
@@ -12942,7 +12939,6 @@ protected:
             bool aaSceneSampleActive = false;
             bool cachedScenePresented = false;
             bool aaNeedsAnotherSample = false;
-            bool dofCurveStrokesDrawn = false;
             bool sceneDrawn = true;
             bool surfacesDrawn = true;
             bool cameraViewAsRenderImagesComposited = false;
@@ -13106,34 +13102,6 @@ protected:
             }
             const bool nativeSurfacePassFailed = !surfacesDrawn;
 
-            const bool workbenchDofActive =
-                viewportShadingSettings_.depthOfField &&
-                !viewportShadingSettings_.xrayEnabled() &&
-                sceneCamera.cameraPreferences().sceneCameraEnabled;
-            const auto isDofCurveStroke = [](
-                const ViewportSceneStroke &stroke) {
-                return stroke.shape != nullptr &&
-                       isViewportCurveStrokeType(
-                           stroke.shape->geometryType) &&
-                       stroke.writeDepth && !stroke.editModeWire &&
-                       stroke.pointDiameter <= 0.0f;
-            };
-            if (workbenchDofActive && aaSceneSampleActive &&
-                !nativeSurfacePassFailed && sceneRenderer != nullptr) {
-                QVector<ViewportSceneStroke> dofCurveStrokes;
-                for (const ViewportSceneStroke &stroke : gpuStrokes) {
-                    if (isDofCurveStroke(stroke)) {
-                        dofCurveStrokes.append(stroke);
-                    }
-                }
-                if (!dofCurveStrokes.isEmpty()) {
-                    dofCurveStrokesDrawn = sceneRenderer->draw(
-                        dofCurveStrokes, sceneCamera,
-                        renderFrame.viewportSize, devicePixelRatioF(), true,
-                        1.0, smoothWiresOverlay_, smoothWiresEditMode_, true);
-                }
-            }
-
             if (aaSceneSampleActive) {
                 if (!nativeSurfacePassFailed) {
                     const bool backLayerReady =
@@ -13284,20 +13252,6 @@ protected:
             // from cached AA history. They depth-test against the regenerated
             // unjittered surface depth but never write into it.
             if (sceneRenderer != nullptr) {
-                const bool dofCurveStrokesAlreadyInScene =
-                    workbenchDofActive &&
-                    (dofCurveStrokesDrawn || cachedScenePresented);
-                QVector<ViewportSceneStroke> overlayStrokes;
-                const QVector<ViewportSceneStroke> *strokesToDraw = &gpuStrokes;
-                if (dofCurveStrokesAlreadyInScene) {
-                    overlayStrokes.reserve(gpuStrokes.size());
-                    for (const ViewportSceneStroke &stroke : gpuStrokes) {
-                        if (!isDofCurveStroke(stroke)) {
-                            overlayStrokes.append(stroke);
-                        }
-                    }
-                    strokesToDraw = &overlayStrokes;
-                }
                 const bool xrayEnabled =
                     viewportShadingSettings_.xrayEnabledForMode();
                 if (xrayEnabled) {
@@ -13305,13 +13259,13 @@ protected:
                     // occlude farther wires, without letting scene surfaces
                     // hide them. Wire opacity is independent of surface X-Ray.
                     sceneDrawn = sceneRenderer->draw(
-                        *strokesToDraw, overlayCamera, renderFrame.viewportSize,
+                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_, false,
                         nullptr, true);
                 } else {
                     sceneDrawn = sceneRenderer->draw(
-                        *strokesToDraw, overlayCamera, renderFrame.viewportSize,
+                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_);
                 }
@@ -13801,146 +13755,12 @@ protected:
             }
             QImage &effectTarget = rasterWorkbenchEffectsLayered
                 ? rasterWorkbenchEffectLayer : committedSceneLayer;
-            QVector<float> committedCurveDepth;
-            QVector<float> committedInFrontCurveDepth;
-            const QSize committedCurveDepthSize = effectTarget.size();
-            const qreal curveDepthDpr = std::max<qreal>(
-                effectTarget.devicePixelRatioF(), 1.0e-6);
-            if (renderShadingSettings.depthOfField &&
-                renderShadingSettings.mode == ViewportShadingMode::Solid &&
-                !viewportShadingSettings_.xrayEnabled() &&
-                viewportTransform_.cameraPreferences().sceneCameraEnabled &&
-                !committedCurveDepthSize.isEmpty() &&
-                qint64(committedCurveDepthSize.width()) *
-                    committedCurveDepthSize.height() <=
-                    std::numeric_limits<int>::max()) {
-                const int curveDepthWidth = committedCurveDepthSize.width();
-                const int curveDepthHeight = committedCurveDepthSize.height();
-                committedCurveDepth.fill(
-                    std::numeric_limits<float>::infinity(),
-                    curveDepthWidth * curveDepthHeight);
-                committedInFrontCurveDepth.fill(
-                    std::numeric_limits<float>::infinity(),
-                    curveDepthWidth * curveDepthHeight);
-                const Point3D cameraPosition = viewportTransform_.cameraPosition(
-                    renderFrame.viewportSize);
-                const Point3D viewDirection = viewportTransform_.viewDirection();
-                const bool perspective =
-                    viewportTransform_.isPerspectiveEnabled();
-                for (const ViewportSceneStroke &stroke : gpuStrokes) {
-                    if (!stroke.writeDepth || stroke.controlGuide ||
-                        stroke.editModeWire || stroke.blenderMeshWire ||
-                        stroke.pointDiameter > 0.0f || stroke.shape == nullptr ||
-                        stroke.lineStyle != ViewportSceneLineStyle::Solid ||
-                        !isViewportCurveStrokeType(
-                            stroke.shape->geometryType) ||
-                        !stroke.preparedDepthGeometry) {
-                        continue;
-                    }
-                    const ViewportRenderObject *renderObject =
-                        renderFrame.find(stroke.objectId);
-                    QVector<float> &curveDepthBuffer =
-                        renderObject != nullptr && renderObject->showInFront
-                            ? committedInFrontCurveDepth
-                            : committedCurveDepth;
-                    const QVector<Point3D> &segments =
-                        stroke.preparedDepthGeometry->preciseLineVertices;
-                    const qreal radius = std::max<qreal>(
-                        0.5, qreal(stroke.width) * curveDepthDpr * 0.5) + 0.5;
-                    for (int segment = 0; segment + 1 < segments.size();
-                         segment += 2) {
-                        const Point3D &localFirst = segments[segment];
-                        const Point3D &localSecond = segments[segment + 1];
-                        const Point3D first{
-                            localFirst.x + stroke.worldOffset.x,
-                            localFirst.y + stroke.worldOffset.y,
-                            localFirst.z + stroke.worldOffset.z};
-                        const Point3D second{
-                            localSecond.x + stroke.worldOffset.x,
-                            localSecond.y + stroke.worldOffset.y,
-                            localSecond.z + stroke.worldOffset.z};
-                        const auto cameraDepth = [&](const Point3D &point) {
-                            return -((point.x - cameraPosition.x) *
-                                         viewDirection.x +
-                                     (point.y - cameraPosition.y) *
-                                         viewDirection.y +
-                                     (point.z - cameraPosition.z) *
-                                         viewDirection.z);
-                        };
-                        const qreal firstDepth = cameraDepth(first);
-                        const qreal secondDepth = cameraDepth(second);
-                        if (!std::isfinite(firstDepth) ||
-                            !std::isfinite(secondDepth) || firstDepth <= 0.0 ||
-                            secondDepth <= 0.0) {
-                            continue;
-                        }
-                        QPointF firstScreen;
-                        QPointF secondScreen;
-                        if (!viewportTransform_.worldPointToScreenUnclipped(
-                                first, renderFrame.viewportSize, &firstScreen) ||
-                            !viewportTransform_.worldPointToScreenUnclipped(
-                                second, renderFrame.viewportSize, &secondScreen)) {
-                            continue;
-                        }
-                        firstScreen *= curveDepthDpr;
-                        secondScreen *= curveDepthDpr;
-                        const QPointF delta = secondScreen - firstScreen;
-                        const qreal lengthSquared = QPointF::dotProduct(
-                            delta, delta);
-                        const int minX = std::max(0, qFloor(
-                            std::min(firstScreen.x(), secondScreen.x()) - radius));
-                        const int maxX = std::min(curveDepthWidth - 1, qCeil(
-                            std::max(firstScreen.x(), secondScreen.x()) + radius));
-                        const int minY = std::max(0, qFloor(
-                            std::min(firstScreen.y(), secondScreen.y()) - radius));
-                        const int maxY = std::min(curveDepthHeight - 1, qCeil(
-                            std::max(firstScreen.y(), secondScreen.y()) + radius));
-                        if (minX > maxX || minY > maxY) continue;
-                        const qreal radiusSquared = radius * radius;
-                        for (int y = minY; y <= maxY; ++y) {
-                            for (int x = minX; x <= maxX; ++x) {
-                                const QPointF pixelCenter(x + 0.5, y + 0.5);
-                                const qreal screenT = lengthSquared > 1.0e-12
-                                    ? std::clamp(QPointF::dotProduct(
-                                          pixelCenter - firstScreen, delta) /
-                                          lengthSquared, 0.0, 1.0)
-                                    : 0.0;
-                                const QPointF nearest = firstScreen +
-                                    delta * screenT;
-                                const QPointF distance = pixelCenter - nearest;
-                                if (QPointF::dotProduct(distance, distance) >
-                                    radiusSquared) {
-                                    continue;
-                                }
-                                qreal depth = firstDepth +
-                                    (secondDepth - firstDepth) * screenT;
-                                if (perspective) {
-                                    const qreal reciprocalDepth =
-                                        (1.0 - screenT) / firstDepth +
-                                        screenT / secondDepth;
-                                    if (reciprocalDepth > 1.0e-12) {
-                                        depth = 1.0 / reciprocalDepth;
-                                    }
-                                }
-                                float &storedDepth = curveDepthBuffer[
-                                    y * curveDepthWidth + x];
-                                storedDepth = std::min(
-                                    storedDepth, float(depth));
-                            }
-                        }
-                    }
-                }
-            }
             applyRasterWorkbenchEffects(
                 &effectTarget, visibleSurfaceShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr,
-                nullptr, nullptr,
-                committedCurveDepth.isEmpty() ? nullptr : &committedCurveDepth,
-                committedInFrontCurveDepth.isEmpty()
-                    ? nullptr : &committedInFrontCurveDepth,
-                committedCurveDepthSize,
+                nullptr, nullptr, nullptr, nullptr, QSize(),
                 importedCameraFrameTextureScale(
                     document_, renderFrame.camera,
                     renderFrame.viewportSize),

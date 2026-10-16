@@ -9200,24 +9200,20 @@ resolve remain open.
 
 ### GPU scene curves in Workbench Depth of Field (2026-10-15)
 
-- Committed CAD curve strokes that write scene depth now render into the
-  jittered GPU scene sample before Workbench Depth of Field and accumulation.
-  They are omitted from the later sharp overlay pass, including when presenting
-  cached scene history. The QPainter fallback now rasterizes the depth of
-  visible, committed Solid curve strokes into a separate depth buffer and feeds
-  it to the existing CoC coverage and gather. Surface depth masks curve parts
-  behind the scene. When the fallback separates effect output from later
-  overlays, committed curves are drawn into the effect layer as well;
-  selection cages, component highlights, control points, and other editor
-  overlays stay after the effect. The fallback uses a bounded
-  screen-space stroke footprint and approximates depth along perspective
-  segments, so edge coverage and curve blur can differ from Blender. Regular
-  and `showInFront` curve depths are kept separate: each is visibility-tested
-  against its matching surface-depth domain, and visible in-front curves supply
-  their own CoC ahead of the regular scene. No matched curve-blur captures have
-  been run.
-  Blender routes curves through its mesh passes before DOF in
-  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L429-L446).
+- **Correction (2026-10-16):** The earlier entry treated legacy curve wire
+  geometry as Workbench surface geometry. Blender 5.2.2 submits legacy curves
+  through the later Overlay wire pass, while Workbench resolves its depth of
+  field and anti-aliasing before returning the scene image. Committed CAD curve
+  strokes now draw in classiCAD's later overlay pass, depth-tested against the
+  regenerated unjittered scene depth. QPainter keeps them in its post-effect
+  overlay layer and no longer feeds their depth into the DOF gather. They stay
+  sharp and do not alter scene CoC. The earlier `curves_sync` reference handles
+  Curves/hair geometry and does not establish the order for legacy curve wire
+  objects. Blender source:
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L1048-L1054)
+  and
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2632-L2645).
+  Build passed; matched curve/DOF captures remain open.
 
 ### Image Empty View as Render (2026-10-15)
 

@@ -9303,11 +9303,16 @@ moves them after scene effects and depth-tests them against the retained scene.
   while the cleared private wire-depth attachment still keeps nearer wires
   ahead of farther wires. The resolve composites the antialiased wires over
   the saved scene color, then restores the original scene depth.
-- Blender 5.2.2 keeps Smooth Wires active with X-Ray and uses isolated wire
-  depth; see
-  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh)
+- Blender 5.2.2 keeps Smooth Wires active with X-Ray. Its wire pass binds
+  Workbench's scene-depth texture when X-Ray is enabled, and its smooth-wire
+  resolve also samples that texture; it does not use a separately cleared
+  scene-depth input. classiCAD currently ignores the saved scene depth for
+  X-Ray candidates and uses a cleared private attachment only to order wires.
+  Whether this changes visible X-Ray behavior needs a matched Blender capture
+  before changing the rendering rule. See
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L56-L84)
   and
-  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L74-L82).
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L486-L500).
   Build passed; matched X-Ray wire captures remain open.
 
 ### QPainter X-Ray Smooth Wires resolve (2026-10-16)
@@ -9318,10 +9323,10 @@ moves them after scene effects and depth-tests them against the retained scene.
   resolve cannot run, the existing direct paths still draw both visible and
   hidden segments. Ordinary non-X-Ray batches keep their scene-depth checks.
 - Blender 5.2.2 keeps its Overlay Smooth Wires resolve active with X-Ray and
-  uses isolated wire depth; see
-  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh)
-  and
-  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L74-L82).
+  samples Workbench scene depth. QPainter currently bypasses scene-depth
+  rejection for X-Ray candidates. A matched capture is needed to determine
+  whether that produces a visible difference; see
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh#L486-L500).
   Build passed; matched X-Ray raster captures remain open.
 
 ### Blender Solid interactive AA preference precedence (2026-10-16)

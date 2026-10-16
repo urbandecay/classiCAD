@@ -826,14 +826,11 @@ bool compositeRasterWorkbenchSurfaces(
         float weight = 0.0f;
         float revealage = 1.0f;
     };
-    const QVector3D editSelectionRgb = workbenchSrgbToSceneLinear(
-        QVector3D(1.0f, 0.6392157f, 0.0f));
-    constexpr float editSelectionMix = 51.0f / 255.0f;
     const auto makeOitBuffer = [pixelCount] {
         return std::vector<WeightedOitAccumulation>(
             static_cast<std::size_t>(pixelCount));
     };
-    const auto addOitFragment = [width, height, editSelectionRgb](
+    const auto addOitFragment = [width, height](
         std::vector<WeightedOitAccumulation> &buffer,
         const RasterWorkbenchLinearFragment &fragment,
         float shadowFactor = 1.0f) {
@@ -851,28 +848,15 @@ bool compositeRasterWorkbenchSurfaces(
                     ? fragment.oitLinearDepth
                     : fragment.cameraDepth);
         WeightedOitAccumulation &accumulation = buffer[index];
-        const float selectionMix = fragment.selected ? editSelectionMix : 0.0f;
-        const float red = fragment.sceneLinearRgb[0] * (1.0f - selectionMix) +
-                          editSelectionRgb.x() * selectionMix;
-        const float green = fragment.sceneLinearRgb[1] * (1.0f - selectionMix) +
-                            editSelectionRgb.y() * selectionMix;
-        const float blue = fragment.sceneLinearRgb[2] * (1.0f - selectionMix) +
-                           editSelectionRgb.z() * selectionMix;
-        accumulation.red += red * weightedAlpha;
-        accumulation.green += green * weightedAlpha;
-        accumulation.blue += blue * weightedAlpha;
+        accumulation.red += fragment.sceneLinearRgb[0] * weightedAlpha;
+        accumulation.green += fragment.sceneLinearRgb[1] * weightedAlpha;
+        accumulation.blue += fragment.sceneLinearRgb[2] * weightedAlpha;
         accumulation.shadowedRed +=
-            (fragment.sceneLinearRgb[0] * shadowFactor *
-                 (1.0f - selectionMix) + editSelectionRgb.x() * selectionMix) *
-            weightedAlpha;
+            fragment.sceneLinearRgb[0] * weightedAlpha * shadowFactor;
         accumulation.shadowedGreen +=
-            (fragment.sceneLinearRgb[1] * shadowFactor *
-                 (1.0f - selectionMix) + editSelectionRgb.y() * selectionMix) *
-            weightedAlpha;
+            fragment.sceneLinearRgb[1] * weightedAlpha * shadowFactor;
         accumulation.shadowedBlue +=
-            (fragment.sceneLinearRgb[2] * shadowFactor *
-                 (1.0f - selectionMix) + editSelectionRgb.z() * selectionMix) *
-            weightedAlpha;
+            fragment.sceneLinearRgb[2] * weightedAlpha * shadowFactor;
         accumulation.weight += weightedAlpha;
         accumulation.revealage *= 1.0f - fragment.alpha;
     };
@@ -1098,8 +1082,6 @@ bool compositeRasterWorkbenchSurfaces(
         surfaceLayers->sceneLinearDofPending = false;
         surfaceLayers->sceneLinearColor.clear();
         surfaceLayers->sceneLinearOpaqueColor.clear();
-        surfaceLayers->sceneLinearRegularOpaqueSelected.clear();
-        surfaceLayers->sceneLinearInFrontOpaqueSelected.clear();
         surfaceLayers->sceneLinearTransparentColor.clear();
         surfaceLayers->sceneLinearShadowedTransparentColor.clear();
         surfaceLayers->sceneLinearShadowedTransparentColorAvailable = false;
@@ -1141,7 +1123,6 @@ bool compositeRasterWorkbenchSurfaces(
         int objectOrder = 0;
         std::array<float, 3> sceneLinearRgb{};
         float alpha = 0.0f;
-        bool selected = false;
     };
     // Bound storage independently from viewport size. If the visible layer
     // count exceeds this budget, let the caller use its existing sorted path.
@@ -1425,8 +1406,6 @@ bool compositeRasterWorkbenchSurfaces(
             RasterWorkbenchFragmentSink objectFragments;
             renderObject(object, &objectFragments, [&](const QImage &) {
             });
-            for (RasterWorkbenchLinearFragment &fragment : objectFragments)
-                fragment.selected = object.selected;
             if (objectFragments.size() >
                     static_cast<std::size_t>(kMaximumTransparentFragments)) {
                 return false;
@@ -1581,41 +1560,6 @@ bool compositeRasterWorkbenchSurfaces(
                 surfaceLayers->cavityAppliedBeforeTransparency = true;
             }
         }
-        std::vector<std::uint8_t> regularOpaqueSelected(
-            static_cast<std::size_t>(pixelCount), 0);
-        std::vector<std::uint8_t> inFrontOpaqueSelected(
-            static_cast<std::size_t>(pixelCount), 0);
-        for (int index = 0; index < pixelCount; ++index) {
-            const int regularIndex = opaqueObject[index];
-            if (regularIndex >= 0 && regularIndex < objects.size())
-                regularOpaqueSelected[static_cast<std::size_t>(index)] =
-                    objects[regularIndex].selected ? 1 : 0;
-            const int frontIndex = frontOpaqueObject[index];
-            if (frontIndex >= 0 && frontIndex < objects.size())
-                inFrontOpaqueSelected[static_cast<std::size_t>(index)] =
-                    objects[frontIndex].selected ? 1 : 0;
-        }
-        const bool deferOpaqueSelectionTint = surfaceLayers != nullptr &&
-            shadingSettings.shadows && !shadingSettings.xrayEnabled();
-        if (!deferOpaqueSelectionTint) {
-            for (int index = 0; index < pixelCount; ++index) {
-                const std::size_t pixelIndex = static_cast<std::size_t>(index);
-                const auto tintSelected = [&](RasterWorkbenchLinearPixel &pixel,
-                                              bool selected) {
-                    if (!selected || pixel.alpha <= 0.0f) return;
-                    pixel.red = pixel.red * (1.0f - editSelectionMix) +
-                        editSelectionRgb.x() * pixel.alpha * editSelectionMix;
-                    pixel.green = pixel.green * (1.0f - editSelectionMix) +
-                        editSelectionRgb.y() * pixel.alpha * editSelectionMix;
-                    pixel.blue = pixel.blue * (1.0f - editSelectionMix) +
-                        editSelectionRgb.z() * pixel.alpha * editSelectionMix;
-                };
-                tintSelected(opaqueScenePixels[pixelIndex],
-                             regularOpaqueSelected[pixelIndex] != 0);
-                tintSelected(frontOpaqueScenePixels[pixelIndex],
-                             inFrontOpaqueSelected[pixelIndex] != 0);
-            }
-        }
         std::vector<RasterWorkbenchLinearPixel> basePixels(
             static_cast<std::size_t>(pixelCount));
         QVector<bool> inFrontCovered(pixelCount, false);
@@ -1749,12 +1693,6 @@ bool compositeRasterWorkbenchSurfaces(
                 regularOpaqueScenePixels;
             surfaceLayers->sceneLinearInFrontOpaqueColor =
                 frontOpaqueScenePixels;
-            if (deferOpaqueSelectionTint) {
-                surfaceLayers->sceneLinearRegularOpaqueSelected =
-                    regularOpaqueSelected;
-                surfaceLayers->sceneLinearInFrontOpaqueSelected =
-                    inFrontOpaqueSelected;
-            }
             surfaceLayers->sceneLinearTransparentColor = transparentResolved;
             if (!shadowedTransparentResolved.empty()) {
                 surfaceLayers->sceneLinearShadowedTransparentColor =
@@ -2026,32 +1964,6 @@ bool compositeRasterWorkbenchSurfaces(
         if (surfaceLayers != nullptr)
             surfaceLayers->cavityAppliedBeforeTransparency = true;
     }
-    for (int index = 0; index < pixelCount; ++index) {
-        const int regularIndex = opaqueObject[index];
-        if (regularIndex >= 0 && regularIndex < objects.size()) {
-            if (objects[regularIndex].selected) {
-                auto &pixel = opaqueScenePixels[static_cast<std::size_t>(index)];
-                pixel.red = pixel.red * (1.0f - editSelectionMix) +
-                    editSelectionRgb.x() * pixel.alpha * editSelectionMix;
-                pixel.green = pixel.green * (1.0f - editSelectionMix) +
-                    editSelectionRgb.y() * pixel.alpha * editSelectionMix;
-                pixel.blue = pixel.blue * (1.0f - editSelectionMix) +
-                    editSelectionRgb.z() * pixel.alpha * editSelectionMix;
-            }
-        }
-        const int frontIndex = frontOpaqueObject[index];
-        if (frontIndex >= 0 && frontIndex < objects.size()) {
-            if (objects[frontIndex].selected) {
-                auto &pixel = frontOpaqueScenePixels[static_cast<std::size_t>(index)];
-                pixel.red = pixel.red * (1.0f - editSelectionMix) +
-                    editSelectionRgb.x() * pixel.alpha * editSelectionMix;
-                pixel.green = pixel.green * (1.0f - editSelectionMix) +
-                    editSelectionRgb.y() * pixel.alpha * editSelectionMix;
-                pixel.blue = pixel.blue * (1.0f - editSelectionMix) +
-                    editSelectionRgb.z() * pixel.alpha * editSelectionMix;
-            }
-        }
-    }
 
     // The sorted fallback retains its per-pixel far-to-near order, but now
     // composites the captured Workbench fragments in scene-linear color.
@@ -2130,7 +2042,8 @@ bool compositeRasterWorkbenchSurfaces(
             (object.showInFront ? frontTransparentFragments
                                 : regularTransparentFragments).append(
                 {index, fragment.cameraDepth, objectOrder,
-                 fragment.sceneLinearRgb, fragment.alpha, object.selected});
+                 fragment.sceneLinearRgb,
+                 fragment.alpha});
         }
         if (transparentFragmentBudgetExceeded) return false;
     }
@@ -2152,25 +2065,18 @@ bool compositeRasterWorkbenchSurfaces(
         static_cast<std::size_t>(pixelCount));
     std::vector<RasterWorkbenchLinearPixel> frontTransparentPixels(
         static_cast<std::size_t>(pixelCount));
-    const auto accumulateLinearFragments = [editSelectionRgb](
+    const auto accumulateLinearFragments = [](
         const QVector<TransparentFragment> &fragments,
         std::vector<RasterWorkbenchLinearPixel> *pixels) {
         for (const TransparentFragment &fragment : fragments) {
             RasterWorkbenchLinearPixel &pixel =
                 (*pixels)[static_cast<std::size_t>(fragment.pixelIndex)];
             const float remain = 1.0f - fragment.alpha;
-            const float mix = fragment.selected ? editSelectionMix : 0.0f;
-            const float red = fragment.sceneLinearRgb[0] * (1.0f - mix) +
-                              editSelectionRgb.x() * mix;
-            const float green = fragment.sceneLinearRgb[1] * (1.0f - mix) +
-                                editSelectionRgb.y() * mix;
-            const float blue = fragment.sceneLinearRgb[2] * (1.0f - mix) +
-                               editSelectionRgb.z() * mix;
-            pixel.red = red * fragment.alpha +
+            pixel.red = fragment.sceneLinearRgb[0] * fragment.alpha +
                         pixel.red * remain;
-            pixel.green = green * fragment.alpha +
+            pixel.green = fragment.sceneLinearRgb[1] * fragment.alpha +
                           pixel.green * remain;
-            pixel.blue = blue * fragment.alpha +
+            pixel.blue = fragment.sceneLinearRgb[2] * fragment.alpha +
                          pixel.blue * remain;
             pixel.alpha = fragment.alpha + pixel.alpha * remain;
         }
@@ -4462,12 +4368,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 static_cast<std::size_t>(pixelCount) &&
             surfaceLayers->sceneLinearTransparentColor.size() ==
                 static_cast<std::size_t>(pixelCount);
-        const bool hasOpaqueSelectionLayers =
-            surfaceLayers != nullptr &&
-            surfaceLayers->sceneLinearRegularOpaqueSelected.size() ==
-                static_cast<std::size_t>(pixelCount) &&
-            surfaceLayers->sceneLinearInFrontOpaqueSelected.size() ==
-                static_cast<std::size_t>(pixelCount);
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -4549,26 +4449,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                          static_cast<std::size_t>(index)].blue);
                 const bool opaqueLayerShadowChanged =
                     regularOpaqueFactor < 1.0f || inFrontOpaqueFactor < 1.0f;
-                const std::size_t selectionIndex =
-                    static_cast<std::size_t>(index);
-                const bool regularSelected = hasOpaqueSelectionLayers &&
-                    surfaceLayers->sceneLinearRegularOpaqueSelected[
-                        selectionIndex] != 0;
-                const bool inFrontSelected = hasOpaqueSelectionLayers &&
-                    surfaceLayers->sceneLinearInFrontOpaqueSelected[
-                        selectionIndex] != 0;
-                const bool opaqueSelectionPresent =
-                    regularSelected || inFrontSelected;
                 if (!opaqueLayerShadowChanged &&
                     transparentFactor >= 1.0f &&
-                    !perFragmentTransparentChanged &&
-                    !opaqueSelectionPresent) continue;
+                    !perFragmentTransparentChanged) continue;
                 if (surfaceLayers != nullptr &&
                     (hasSeparateOpaqueShadowLayers ||
                      surfaceLayers->sceneLinearOutlinePending ||
                      surfaceLayers->sceneLinearDofPending ||
-                     hasPerFragmentShadowResolve ||
-                     hasOpaqueSelectionLayers) &&
+                     hasPerFragmentShadowResolve) &&
                     surfaceLayers->sceneLinearSize == QSize(width, height) &&
                     surfaceLayers->sceneLinearColor.size() ==
                         static_cast<std::size_t>(width) * height &&
@@ -4581,8 +4469,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     surfaceLayers->sceneLinearTransparentColor.size() ==
                         static_cast<std::size_t>(width) * height &&
                     (opaqueLayerShadowChanged || transparentFactor < 1.0f ||
-                     perFragmentTransparentChanged ||
-                     opaqueSelectionPresent)) {
+                     perFragmentTransparentChanged)) {
                     const std::size_t linearIndex =
                         static_cast<std::size_t>(index);
                     RasterWorkbenchLinearPixel &linear =
@@ -4613,42 +4500,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                              regularBehindFront +
                          inFrontOpaque.blue * (inFrontOpaqueFactor - 1.0f)) *
                         remain;
-                    if (opaqueSelectionPresent) {
-                        const QVector3D editOrange =
-                            workbenchSrgbToSceneLinear(
-                                QVector3D(1.0f, 0.6392157f, 0.0f));
-                        const float mix = 51.0f / 255.0f;
-                        const float regularWeight = regularBehindFront * remain;
-                        const float frontWeight = remain;
-                        if (regularSelected) {
-                            linear.red += mix *
-                                (editOrange.x() * regularOpaque.alpha -
-                                 regularOpaque.red * regularOpaqueFactor) *
-                                regularWeight;
-                            linear.green += mix *
-                                (editOrange.y() * regularOpaque.alpha -
-                                 regularOpaque.green * regularOpaqueFactor) *
-                                regularWeight;
-                            linear.blue += mix *
-                                (editOrange.z() * regularOpaque.alpha -
-                                 regularOpaque.blue * regularOpaqueFactor) *
-                                regularWeight;
-                        }
-                        if (inFrontSelected) {
-                            linear.red += mix *
-                                (editOrange.x() * inFrontOpaque.alpha -
-                                 inFrontOpaque.red * inFrontOpaqueFactor) *
-                                frontWeight;
-                            linear.green += mix *
-                                (editOrange.y() * inFrontOpaque.alpha -
-                                 inFrontOpaque.green * inFrontOpaqueFactor) *
-                                frontWeight;
-                            linear.blue += mix *
-                                (editOrange.z() * inFrontOpaque.alpha -
-                                 inFrontOpaque.blue * inFrontOpaqueFactor) *
-                                frontWeight;
-                        }
-                    }
                     if (hasPerFragmentShadowResolve) {
                         if (perFragmentTransparentChanged) {
                             const RasterWorkbenchLinearPixel &shadowedTransparent =

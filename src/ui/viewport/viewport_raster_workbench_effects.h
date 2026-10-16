@@ -204,8 +204,6 @@ struct RasterWorkbenchSurfaceLayers {
     // receiver shadow factors remain independent at partially covered edges.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearRegularOpaqueColor;
     std::vector<RasterWorkbenchLinearPixel> sceneLinearInFrontOpaqueColor;
-    std::vector<std::uint8_t> sceneLinearRegularOpaqueSelected;
-    std::vector<std::uint8_t> sceneLinearInFrontOpaqueSelected;
     std::vector<RasterWorkbenchLinearPixel> sceneLinearTransparentColor;
     // Weighted transparency with Blender's per-fragment normal shadow factor
     // already applied. Accumulated in per-pixel buffers so dense scenes do not

@@ -33,9 +33,6 @@ struct RasterWorkbenchLinearFragment {
     std::array<float, 3> sceneLinearRgb{};
     float alpha = 1.0f;
     std::uint64_t sourceId = 0;
-    // Selected fragments receive Workbench's edit tint after lighting and
-    // shadowing, without changing their coverage or OIT weight.
-    bool selected = false;
     // Positive linear z depth used by Blender's OIT weight. A negative value
     // means the caller has only cameraDepth, which remains useful to depth
     // sort and is used as the weight-depth fallback by CPU contracts.

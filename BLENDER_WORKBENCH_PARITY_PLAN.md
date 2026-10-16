@@ -10158,16 +10158,10 @@ scene depth.
   same scene-linear selection tint as the GPU path. The prior mesh selection
   branch replaced the fill with a flat color, and the surface renderer ignored
   selection. Direct QPainter draws apply the existing 51/255 orange selection
-  mix after the view transform in display-linear space. The bounded weighted
-  compositor now retains selected state for captured fragments, applies
-  selected transparent tint after each per-fragment shadow factor, and defers
-  selected opaque tint until after regular/in-front opaque shadow factors. With
-  shadows disabled, opaque tint is applied after cavity. The sorted overflow
-  fallback applies opaque tint after cavity and keeps transparent tint attached
-  to selected fragments, but its later coarse transparent-shadow correction
-  still tints before that approximation. The direct painter fallback retains
-  its display-space tint. Matched selected-object captures remain open; this
-  does not establish visual parity.
+  mix after the view transform in display-linear space. The bounded
+  scene-linear compositor still bakes that tint into captured fragments before
+  cavity and shadows; matching the GPU's later selection-mask resolve remains
+  open for effect-enabled selected fills.
   Blender keeps Attribute shading on selected objects in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2045).
   Build passed; matched selected-Attribute Blender captures remain open.

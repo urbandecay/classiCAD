@@ -7932,12 +7932,15 @@ resolve remain open.
   `length(to_scale(object_to_world)) / sqrt(3)` transform rule; Gaussian splats
   are reported as unsupported.
 - The grouped data is serialized natively and participates in scene rendering,
-  radius-aware click picking, center-based box selection, snapping, transforms,
+  radius-aware click picking and box selection, snapping, transforms,
   and duplication.
   GPU markers and the QPainter fallback now project each world radius into a
   screen-space disk. Point colors still use object color, and the raster path
   uses flat disks rather than Workbench's shaded point surfaces.
-  Blender fixture and matched viewport comparisons have not been run.
+  Box selection uses projected point footprints for crossing and full
+  containment. This follows the visible geometry, but Blender's exact
+  Workbench box-selection behavior has not been source-verified. Blender
+  fixtures and matched viewport comparisons have not been run.
 
 - Non-image Blender Empty display icons are reported as viewport overlays with
   no matching classiCAD scene-object representation. Still Image Empties retain

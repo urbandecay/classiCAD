@@ -21,6 +21,57 @@ bool pointInside(const QRectF &rect, const QPointF &point)
            rect.top() <= point.y() && point.y() <= rect.bottom();
 }
 
+qreal projectedPointCloudRadiusPixels(const Point3D &worldPoint,
+                                     qreal worldRadius,
+                                     const ViewportTransform &transform,
+                                     const QSize &viewportSize)
+{
+    if (!std::isfinite(worldRadius) || worldRadius <= 0.0) return 0.0;
+    const Point3D direction = transform.viewDirection();
+    const Point3D up = transform.viewUp();
+    Point3D right{direction.y * up.z - direction.z * up.y,
+                  direction.z * up.x - direction.x * up.z,
+                  direction.x * up.y - direction.y * up.x};
+    const qreal length = std::sqrt(right.x * right.x + right.y * right.y +
+                                   right.z * right.z);
+    if (!std::isfinite(length) || length <= 1.0e-12) return 0.0;
+    right.x /= length;
+    right.y /= length;
+    right.z /= length;
+    QPointF centerScreen;
+    QPointF edgeScreen;
+    const Point3D edgePoint{worldPoint.x + right.x * worldRadius,
+                            worldPoint.y + right.y * worldRadius,
+                            worldPoint.z + right.z * worldRadius};
+    if (!transform.worldPointToScreen(worldPoint, viewportSize, &centerScreen) ||
+        !transform.worldPointToScreen(edgePoint, viewportSize, &edgeScreen)) {
+        return 0.0;
+    }
+    const qreal projected = std::hypot(edgeScreen.x() - centerScreen.x(),
+                                       edgeScreen.y() - centerScreen.y());
+    return std::isfinite(projected) ? std::clamp(projected, 0.0, 4096.0) : 0.0;
+}
+
+bool projectedPointFootprintInside(const QRectF &rect,
+                                   const QPointF &center,
+                                   qreal radius)
+{
+    return center.x() - radius >= rect.left() &&
+           center.x() + radius <= rect.right() &&
+           center.y() - radius >= rect.top() &&
+           center.y() + radius <= rect.bottom();
+}
+
+bool projectedPointFootprintIntersects(const QRectF &rect,
+                                       const QPointF &center,
+                                       qreal radius)
+{
+    return center.x() + radius >= rect.left() &&
+           center.x() - radius <= rect.right() &&
+           center.y() + radius >= rect.top() &&
+           center.y() - radius <= rect.bottom();
+}
+
 bool segmentIntersectsRect(const QRectF &rect,
                            const QPointF &start,
                            const QPointF &end)
@@ -138,10 +189,33 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
 
     if (shape.geometryType == GeometryType::PointCloud &&
         validatePointCloud(shape.pointCloud)) {
-        for (const Point3D &point : shape.pointCloud.positions) {
-            includeWorldPoint({point.x + worldOffset.x,
-                               point.y + worldOffset.y,
-                               point.z + worldOffset.z});
+        for (qsizetype index = 0;
+             index < shape.pointCloud.positions.size(); ++index) {
+            const Point3D &point = shape.pointCloud.positions[index];
+            const Point3D worldPoint{point.x + worldOffset.x,
+                                     point.y + worldOffset.y,
+                                     point.z + worldOffset.z};
+            QPointF screenPoint;
+            if (!viewportTransform.worldPointToScreen(worldPoint,
+                                                      viewportSize,
+                                                      &screenPoint)) {
+                continue;
+            }
+            const qreal radius = projectedPointCloudRadiusPixels(
+                worldPoint, shape.pointCloud.radii[index], viewportTransform,
+                viewportSize);
+            if (!initialized) {
+                minX = screenPoint.x() - radius;
+                maxX = screenPoint.x() + radius;
+                minY = screenPoint.y() - radius;
+                maxY = screenPoint.y() + radius;
+                initialized = true;
+            } else {
+                minX = std::min(minX, screenPoint.x() - radius);
+                maxX = std::max(maxX, screenPoint.x() + radius);
+                minY = std::min(minY, screenPoint.y() - radius);
+                maxY = std::max(maxY, screenPoint.y() + radius);
+            }
         }
     }
 
@@ -259,17 +333,28 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
         bool anyPoint = false;
         bool everyProjectedPointInside = true;
         bool projectedPoint = false;
-        for (const Point3D &point : shape.pointCloud.positions) {
+        for (qsizetype index = 0;
+             index < shape.pointCloud.positions.size(); ++index) {
+            const Point3D &point = shape.pointCloud.positions[index];
+            const Point3D worldPoint{point.x + worldOffset.x,
+                                     point.y + worldOffset.y,
+                                     point.z + worldOffset.z};
             QPointF screenPoint;
-            if (!viewportTransform.worldPointToScreen(
-                    {point.x + worldOffset.x, point.y + worldOffset.y,
-                     point.z + worldOffset.z}, viewportSize, &screenPoint)) {
+            if (!viewportTransform.worldPointToScreen(worldPoint,
+                                                      viewportSize,
+                                                      &screenPoint)) {
                 everyProjectedPointInside = false;
                 continue;
             }
             projectedPoint = true;
-            const bool inside = pointInside(hitRect, screenPoint);
-            anyPoint = anyPoint || inside;
+            const qreal radius = projectedPointCloudRadiusPixels(
+                worldPoint, shape.pointCloud.radii[index], viewportTransform,
+                viewportSize);
+            const bool inside = projectedPointFootprintInside(
+                selectionRect, screenPoint, radius);
+            const bool intersects = projectedPointFootprintIntersects(
+                hitRect, screenPoint, radius);
+            anyPoint = anyPoint || intersects;
             everyProjectedPointInside = everyProjectedPointInside && inside;
         }
         return {true, projectedPoint && (crossingSelection

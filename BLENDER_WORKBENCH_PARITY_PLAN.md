@@ -3904,15 +3904,17 @@ to affect object transforms, point extrusion, or object duplication.
 
 For this porting slice, use classiCAD's existing geometry as the component
 model: curve control points map to vertices, curve splines map to edges, and
-NURBS surface or solid patches map to faces. The 1/2/3 keys switch among modes
-supported by the active geometry. The matching toolbar buttons are enabled
-only for component types supported by the active object. Component selection
-carries between modes: curve spline selection expands to its control points,
-fully selected curve control nets map back to their splines, and surface
-control-net selections map to NURBS faces. `A` and `Alt+A` select and deselect
-all components in the current Edit Mode selection domain without leaving Edit
-Mode. Grab, rotate, and scale transform curve and NURBS surface control points
-through their existing geometry paths. NURBS solid component transforms are
+NURBS surface or solid patches map to faces. With the Select tool active, the
+1/2/3 keys switch among modes supported by the active geometry. Other CAD tools
+retain their number-key input for dimensions and parameters. The matching
+toolbar buttons are enabled only for component types supported by the active
+object. Component selection carries between modes: curve spline selection
+expands to its control points, fully selected curve control nets map back to
+their splines, and surface control-net selections map to NURBS faces. With the
+Select tool active, `A` and `Alt+A` select and deselect all components in the
+current Edit Mode selection domain without leaving Edit Mode. Grab, rotate, and
+scale transform curve and NURBS surface control points through their existing
+geometry paths. NURBS solid component transforms are
 suppressed because solid faces are derived from the exact base surface and
 extrusion vector; whole-object solid transforms remain supported. Surface CV
 propagation stays inside the selected surface or solid; matching coordinates

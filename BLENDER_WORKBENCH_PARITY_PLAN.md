@@ -10717,16 +10717,20 @@ scene depth.
   fallback. Raising either cap alone risks high CPU memory use; exact
   full-resolution behavior would need a tiled compositor that also preserves
   depth domains and later screen-space effects.
-- Rechecked the suspected oversized-mesh color-transform bypass in
-  `viewport_renderer.cpp`. Exceeding coverage-resolve work limits disables
-  fractional-edge accumulation, but ordinary Solid mesh triangles still pass
-  through `drawWorkbenchTriangle`, which shades in scene-linear space and
-  applies the active Standard/AgX/custom transform before display. No color
-  fix was justified by the source path.
-- Rechecked software shadow alpha handling. QPainter submits caster geometry
-  to the shadow depth map before its separate texture-alpha visibility tests.
-  Blender 5.2.2's shadow caster pass also uses geometry without sampling Image
-  Texture alpha, so adding cutout shadows only to QPainter would reduce parity.
-  Existing texture-alpha cutouts still apply to visible raster/effect coverage.
-  These audits found no source change to make; large-target and fallback image
-  comparisons remain open.
+- Two independent Luna medium audits rechecked the suspected oversized-mesh
+  color-transform bypass in `viewport_renderer.cpp`. Exceeding coverage-resolve
+  work limits disables fractional-edge accumulation, but ordinary Solid mesh
+  triangles still pass through `drawWorkbenchTriangle`, which shades in
+  scene-linear space and applies the active Standard/AgX/custom transform
+  before display. Its bounded raster path preserves the packed material/object
+  alpha and coverage; Flat lighting leaves the base color unlit while retaining
+  the transform. The later polygon fallback also applies the transform and
+  keeps source alpha, though it appears unreachable for normally emitted mesh
+  triangles. No color fix was justified by the source path.
+- An independent Luna medium audit also rechecked software shadow alpha
+  handling. QPainter submits caster geometry to the shadow depth map before
+  its separate texture-alpha visibility tests. Blender 5.2.2's shadow caster
+  pass likewise does not sample Image Texture alpha, so adding cutout shadows
+  only to QPainter would reduce parity. Existing texture-alpha cutouts still
+  apply to visible raster/effect coverage. These audits found no source change
+  to make; large-target and fallback image comparisons remain open.

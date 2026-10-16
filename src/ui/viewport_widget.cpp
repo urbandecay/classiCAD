@@ -2773,9 +2773,14 @@ public:
 
     bool viewportModeShortcutAvailable() const
     {
-        return activeTool_ == Tool::Select && !grabTool_.isActive() &&
-               !duplicateTool_.isActive() && !selectionBoxOverlayActive() &&
-               !objectSelectionDragActive() &&
+        return activeTool_ == Tool::Select &&
+               viewportModeToggleShortcutAvailable();
+    }
+
+    bool viewportModeToggleShortcutAvailable() const
+    {
+        return !grabTool_.isActive() && !duplicateTool_.isActive() &&
+               !selectionBoxOverlayActive() && !objectSelectionDragActive() &&
                !controlPointSelectionDragActive();
     }
 
@@ -17646,11 +17651,9 @@ protected:
             event->accept();
             return;
         }
-        if (viewportModeShortcutAvailable() && !event->isAutoRepeat() &&
+        if (viewportModeToggleShortcutAvailable() && !event->isAutoRepeat() &&
             event->key() == Qt::Key_Tab &&
-            event->modifiers() == Qt::NoModifier &&
-            !grabTool_.isActive() && !duplicateTool_.isActive() &&
-            !selectionBoxOverlayActive()) {
+            event->modifiers() == Qt::NoModifier) {
             const int nextMode = interactionMode_ ==
                                          ViewportInteractionMode::Object
                                      ? static_cast<int>(ViewportInteractionMode::Edit)
@@ -18048,12 +18051,12 @@ protected:
             return true;
         }
 
-        if (!viewportModeShortcutAvailable() ||
-            keyEvent->modifiers() != Qt::NoModifier) {
+        if (keyEvent->modifiers() != Qt::NoModifier) {
             return false;
         }
 
-        if (keyEvent->key() == Qt::Key_Tab) {
+        if (keyEvent->key() == Qt::Key_Tab &&
+            viewportModeToggleShortcutAvailable()) {
             const int nextMode = interactionMode_ ==
                                          ViewportInteractionMode::Object
                                      ? static_cast<int>(ViewportInteractionMode::Edit)
@@ -18061,6 +18064,9 @@ protected:
             setInteractionMode(nextMode);
             keyEvent->accept();
             return true;
+        }
+        if (!viewportModeShortcutAvailable()) {
+            return false;
         }
         if (supportsComponentSelectionShortcut(keyEvent->key()) &&
             keyEvent->key() >= Qt::Key_1 && keyEvent->key() <= Qt::Key_3) {

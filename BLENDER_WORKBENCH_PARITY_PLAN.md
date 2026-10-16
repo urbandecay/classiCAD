@@ -1791,6 +1791,16 @@ one-million-pixel depth target and solid pen styles; dashed/styled paths and
 missing-depth fallbacks keep Qt's renderer. Build passed; matched wire images
 remain unverified.
 
+**QPainter prepared-wire width at reduced depth resolution (2026-10-16):**
+When the retained depth target is reduced to stay under its one-million-pixel
+budget, the prepared-wire resolve now scales each wire's coverage width along
+its screen-space normal into that smaller target. Stretching the result back
+to viewport size therefore preserves the intended device-pixel wire thickness,
+including nonuniform target scaling. Blender's Overlay wire pass measures its
+coverage in viewport pixels in
+[`overlay_wireframe.frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_wireframe.frag.glsl).
+Build passed; matched large-viewport wire comparison remains open.
+
 **Selected-object outline identity (2026-10-16):** GPU and QPainter selected
 contours now detect boundaries between adjacent selected objects by comparing
 their full per-object outline IDs, while still outlining selected/unselected

@@ -1812,15 +1812,15 @@ bool ViewportRenderer::drawPreparedCurveSegments(
         const bool ignoreSceneDepth = shadingSettings_.xrayEnabledForMode();
         SmoothWireBatch *smoothWireBatch = nullptr;
         bool smoothWireSubmitted = false;
-        qreal smoothWireWidth = 1.0;
+        qreal smoothWireBaseWidth = 1.0;
         if (smoothWireResolveEnabled) {
             const qreal deviceScale = std::sqrt(std::abs(
                 deviceTransform.m11() * deviceTransform.m22()));
-            smoothWireWidth = wirePen.widthF() <= 0.0
+            smoothWireBaseWidth = wirePen.widthF() <= 0.0
                 ? 1.0
                 : wirePen.widthF() * (wirePen.isCosmetic() ? 1.0
                                                             : deviceScale);
-            smoothWireWidth = std::max<qreal>(smoothWireWidth, 0.01);
+            smoothWireBaseWidth = std::max<qreal>(smoothWireBaseWidth, 0.01);
             auto batchIt = std::find_if(
                 smoothWireBatches_.begin(), smoothWireBatches_.end(),
                 [&](const SmoothWireBatch &batch) {
@@ -2015,6 +2015,16 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                             opaqueSceneDepthSize.width() / targetDeviceWidth;
                         const qreal scaleY =
                             opaqueSceneDepthSize.height() / targetDeviceHeight;
+                        const QPointF deviceDelta = deviceEnd - deviceStart;
+                        const qreal deviceLength = std::hypot(
+                            deviceDelta.x(), deviceDelta.y());
+                        const QPointF deviceNormal = deviceLength > 1.0e-8
+                            ? QPointF(deviceDelta.y() / deviceLength,
+                                      -deviceDelta.x() / deviceLength)
+                            : QPointF(1.0, 0.0);
+                        const qreal resolveWidth = smoothWireBaseWidth *
+                            std::hypot(deviceNormal.x() * scaleX,
+                                       deviceNormal.y() * scaleY);
                         const QPointF resolveStart(deviceStart.x() * scaleX,
                                                    deviceStart.y() * scaleY);
                         const QPointF resolveEnd(deviceEnd.x() * scaleX,
@@ -2081,7 +2091,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                                 record.alpha = std::clamp<qreal>(
                                     wirePen.color().alphaF() * painter.opacity(),
                                     0.0, 1.0);
-                                record.width = smoothWireWidth;
+                                record.width = std::max<qreal>(
+                                    resolveWidth, 0.01);
                                 record.valid = true;
                             }
                         }

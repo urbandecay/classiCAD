@@ -7932,10 +7932,10 @@ resolve remain open.
   `length(to_scale(object_to_world)) / sqrt(3)` transform rule; Gaussian splats
   are reported as unsupported.
 - The grouped data is serialized natively and participates in scene rendering,
-  center-based picking and box selection, snapping, transforms, and duplication.
+  radius-aware click picking, center-based box selection, snapping, transforms,
+  and duplication.
   Current display markers still use a fixed screen size and object color, so
   Workbench's variable point radii and point colors are not yet reproduced.
-  Point selection uses centers rather than the visible point footprints.
   Blender fixture and matched viewport comparisons have not been run.
 
 - Non-image Blender Empty display icons are reported as viewport overlays with

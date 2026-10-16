@@ -20,6 +20,37 @@
 namespace classiCAD {
 namespace {
 
+qreal projectedPointCloudRadiusPixels(const Point3D &worldPoint,
+                                      qreal worldRadius,
+                                      const ViewportTransform &transform,
+                                      const QSize &viewportSize)
+{
+    if (!std::isfinite(worldRadius) || worldRadius <= 0.0) return 0.0;
+    const Point3D direction = transform.viewDirection();
+    const Point3D up = transform.viewUp();
+    Point3D right{direction.y * up.z - direction.z * up.y,
+                  direction.z * up.x - direction.x * up.z,
+                  direction.x * up.y - direction.y * up.x};
+    const qreal length = std::sqrt(right.x * right.x + right.y * right.y +
+                                   right.z * right.z);
+    if (!std::isfinite(length) || length <= 1.0e-12) return 0.0;
+    right.x /= length;
+    right.y /= length;
+    right.z /= length;
+    QPointF centerScreen;
+    QPointF edgeScreen;
+    const Point3D edgePoint{worldPoint.x + right.x * worldRadius,
+                            worldPoint.y + right.y * worldRadius,
+                            worldPoint.z + right.z * worldRadius};
+    if (!transform.worldPointToScreen(worldPoint, viewportSize, &centerScreen) ||
+        !transform.worldPointToScreen(edgePoint, viewportSize, &edgeScreen)) {
+        return 0.0;
+    }
+    const qreal projected = std::hypot(edgeScreen.x() - centerScreen.x(),
+                                       edgeScreen.y() - centerScreen.y());
+    return std::isfinite(projected) ? std::clamp(projected, 0.0, 4096.0) : 0.0;
+}
+
 bool shapeHasCurveControlHull(const Shape &shape)
 {
     switch (shape.geometryType) {
@@ -583,16 +614,23 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
     if (shape.geometryType == GeometryType::PointCloud &&
         validatePointCloud(shape.pointCloud)) {
         qreal nearest = 1.0e9;
-        for (const Point3D &sourcePoint : shape.pointCloud.positions) {
+        for (qsizetype index = 0;
+             index < shape.pointCloud.positions.size(); ++index) {
+            const Point3D &sourcePoint = shape.pointCloud.positions[index];
             Point3D worldPoint{sourcePoint.x + worldOffset.x,
                                sourcePoint.y + worldOffset.y,
                                sourcePoint.z + worldOffset.z};
             QPointF point;
             if (!transform.worldPointToScreen(worldPoint, viewportSize, &point))
                 continue;
-            nearest = std::min(nearest, std::hypot(
+            const qreal centerDistance = std::hypot(
                 screenPosition.x() - point.x(),
-                screenPosition.y() - point.y()));
+                screenPosition.y() - point.y());
+            const qreal markerRadius = projectedPointCloudRadiusPixels(
+                worldPoint, shape.pointCloud.radii[index], transform,
+                viewportSize);
+            nearest = std::min(nearest,
+                               std::max(0.0, centerDistance - markerRadius));
         }
         return nearest;
     }

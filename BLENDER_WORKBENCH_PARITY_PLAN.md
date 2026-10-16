@@ -10251,15 +10251,3 @@ scene depth.
   retains its source-alpha threshold. Direct draws and oversized viewport
   rasters still use the untinted source for images above the 16M source-pixel
   processing cap. Matched image comparisons remain open. Build passed.
-
-### QPainter Image Empty straight-alpha cutout filtering (2026-10-16)
-
-- The bounded QPainter cutout raster now filters RGB and alpha as straight
-  channels before applying Blender's 0.05 alpha cutoff. This preserves colored
-  RGB under transparent source texels while filtering; the earlier
-  premultiplied QPainter resample could darken those edges. Cutout mip levels
-  also average straight RGB, and sampling is restricted to the projected image
-  bounds inside the existing 16M-pixel viewport raster limit. Alpha-blended
-  Image Empties keep their premultiplied filtering path. Qt formats that do not
-  expose straight RGB retain their format's available pixel values. Matched
-  Blender cutout captures remain open. C++ build passed.

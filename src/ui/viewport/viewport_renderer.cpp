@@ -190,8 +190,7 @@ QImage pictureImageForPainter(const Shape &picture,
     return result;
 }
 
-QImage pictureMipForPainter(const QImage &source, qreal lod,
-                            bool straightAlphaSampling = false)
+QImage pictureMipForPainter(const QImage &source, qreal lod)
 {
     if (source.format() != QImage::Format_RGBA32FPx4 ||
         (source.width() <= 1 && source.height() <= 1) ||
@@ -208,7 +207,7 @@ QImage pictureMipForPainter(const QImage &source, qreal lod,
                                          static_cast<qreal>(maximumLevel));
     const int lowerLevel = qFloor(boundedLod);
     const int upperLevel = lowerLevel + 1;
-    const auto buildNextLevel = [straightAlphaSampling](const QImage &level) {
+    const auto buildNextLevel = [](const QImage &level) {
         const QSize nextSize(std::max(level.width() / 2, 1),
                              std::max(level.height() / 2, 1));
         if (nextSize == level.size()) return level;
@@ -235,21 +234,14 @@ QImage pictureMipForPainter(const QImage &source, qreal lod,
                         const double alpha = pixel[3];
                         alphaSum += alpha;
                         for (int channel = 0; channel < 3; ++channel)
-                            rgbPremultiplied[channel] +=
-                                straightAlphaSampling
-                                    ? pixel[channel]
-                                    : pixel[channel] * alpha;
+                            rgbPremultiplied[channel] += pixel[channel] * alpha;
                         ++count;
                     }
                 }
                 float *pixel = destination + x * 4;
                 for (int channel = 0; channel < 3; ++channel) {
-                    pixel[channel] = straightAlphaSampling
-                        ? float(rgbPremultiplied[channel] /
-                                std::max(count, 1))
-                        : alphaSum > 0.0
-                              ? float(rgbPremultiplied[channel] / alphaSum)
-                              : 0.0f;
+                    pixel[channel] = alphaSum > 0.0
+                        ? float(rgbPremultiplied[channel] / alphaSum) : 0.0f;
                 }
                 pixel[3] = float(alphaSum / std::max(count, 1));
             }
@@ -308,16 +300,11 @@ QImage pictureMipForPainter(const QImage &source, qreal lod,
             pixel[3] = lowerPixel[3] * lowerWeight +
                        upperPixel[3] * upperWeight;
             for (int channel = 0; channel < 3; ++channel) {
-                if (straightAlphaSampling) {
-                    pixel[channel] = lowerPixel[channel] * lowerWeight +
-                                     upperPixel[channel] * upperWeight;
-                } else {
-                    const float premultiplied =
-                        lowerPixel[channel] * lowerPixel[3] * lowerWeight +
-                        upperPixel[channel] * upperPixel[3] * upperWeight;
-                    pixel[channel] = pixel[3] > 1.0e-8f
-                        ? premultiplied / pixel[3] : 0.0f;
-                }
+                const float premultiplied =
+                    lowerPixel[channel] * lowerPixel[3] * lowerWeight +
+                    upperPixel[channel] * upperPixel[3] * upperWeight;
+                pixel[channel] = pixel[3] > 1.0e-8f
+                    ? premultiplied / pixel[3] : 0.0f;
             }
         }
     }
@@ -4003,8 +3990,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 shape.pictureImage.height() / projectedHeight);
             if (sourceFootprint > 1.0)
                 mipLevel = std::log2(sourceFootprint);
-            painterImage = pictureMipForPainter(
-                painterImage, mipLevel, !shape.pictureUseAlphaBlend);
+            painterImage = pictureMipForPainter(painterImage, mipLevel);
         }
         if (imageVisible && painterImage.isNull()) return;
         if (painterImage.size() != shape.pictureImage.size() &&
@@ -4027,43 +4013,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 bool inverseValid = false;
                 const QTransform deviceToImage =
                     imageToDevice.inverted(&inverseValid);
-                bool painterImageInverseValid = false;
-                const QTransform deviceToPainterImage =
-                    (mipToSource * imageToDevice).inverted(
-                        &painterImageInverseValid);
                 const QVector<QPointF> deviceCorners{
                     imageToDevice.map(sourceCorners[0]),
                     imageToDevice.map(sourceCorners[1]),
                     imageToDevice.map(sourceCorners[2]),
                     imageToDevice.map(sourceCorners[3])};
-                const int left = std::clamp(
-                    qFloor(std::min_element(
-                        deviceCorners.cbegin(), deviceCorners.cend(),
-                        [](const QPointF &a, const QPointF &b) {
-                            return a.x() < b.x();
-                        })->x()),
-                    0, rasterSize.width());
-                const int right = std::clamp(
-                    qCeil(std::max_element(
-                        deviceCorners.cbegin(), deviceCorners.cend(),
-                        [](const QPointF &a, const QPointF &b) {
-                            return a.x() < b.x();
-                        })->x()),
-                    0, rasterSize.width());
-                const int top = std::clamp(
-                    qFloor(std::min_element(
-                        deviceCorners.cbegin(), deviceCorners.cend(),
-                        [](const QPointF &a, const QPointF &b) {
-                            return a.y() < b.y();
-                        })->y()),
-                    0, rasterSize.height());
-                const int bottom = std::clamp(
-                    qCeil(std::max_element(
-                        deviceCorners.cbegin(), deviceCorners.cend(),
-                        [](const QPointF &a, const QPointF &b) {
-                            return a.y() < b.y();
-                        })->y()),
-                    0, rasterSize.height());
                 if (inverseValid) {
                     depthMaskedImage = QImage(
                         rasterSize,
@@ -4075,73 +4029,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     imagePainter.setRenderHint(
                         QPainter::SmoothPixmapTransform, true);
                     imagePainter.setTransform(mipToSource * imageToDevice);
-                    if (shape.pictureUseAlphaBlend) {
-                        imagePainter.drawImage(QPointF(0.0, 0.0), painterImage);
-                    }
+                    imagePainter.drawImage(QPointF(0.0, 0.0), painterImage);
                     imagePainter.end();
-
-                    if (!shape.pictureUseAlphaBlend &&
-                        painterImageInverseValid) {
-                        const auto straightPixel = [&painterImage](int x, int y) {
-                            if (painterImage.format() ==
-                                QImage::Format_RGBA32FPx4) {
-                                const auto *row = reinterpret_cast<const float *>(
-                                    painterImage.constScanLine(y));
-                                const float *pixel = row + x * 4;
-                                return QVector4D(pixel[0], pixel[1], pixel[2],
-                                                pixel[3]);
-                            }
-                            const QColor color = painterImage.pixelColor(x, y);
-                            return QVector4D(color.redF(), color.greenF(),
-                                             color.blueF(), color.alphaF());
-                        };
-                        for (int y = top; y < bottom; ++y) {
-                            auto *imageRow = reinterpret_cast<float *>(
-                                depthMaskedImage.scanLine(y));
-                            for (int x = left; x < right; ++x) {
-                                const QPointF source = deviceToImage.map(
-                                    QPointF(x + 0.5, y + 0.5));
-                                if (source.x() < 0.0 ||
-                                    source.x() >= shape.pictureImage.width() ||
-                                    source.y() < 0.0 ||
-                                    source.y() >= shape.pictureImage.height()) {
-                                    continue;
-                                }
-                                const QPointF position =
-                                    deviceToPainterImage.map(
-                                        QPointF(x + 0.5, y + 0.5));
-                                const qreal sampleX = std::clamp(
-                                    position.x() - 0.5, 0.0,
-                                    qreal(painterImage.width() - 1));
-                                const qreal sampleY = std::clamp(
-                                    position.y() - 0.5, 0.0,
-                                    qreal(painterImage.height() - 1));
-                                const int x0 = qFloor(sampleX);
-                                const int y0 = qFloor(sampleY);
-                                const int x1 = std::min(
-                                    x0 + 1, painterImage.width() - 1);
-                                const int y1 = std::min(
-                                    y0 + 1, painterImage.height() - 1);
-                                const float tx = float(sampleX - x0);
-                                const float ty = float(sampleY - y0);
-                                const QVector4D top =
-                                    straightPixel(x0, y0) * (1.0f - tx) +
-                                    straightPixel(x1, y0) * tx;
-                                const QVector4D bottom =
-                                    straightPixel(x0, y1) * (1.0f - tx) +
-                                    straightPixel(x1, y1) * tx;
-                                const QVector4D sample =
-                                    top * (1.0f - ty) + bottom * ty;
-                                const float alpha = std::clamp(
-                                    sample.w(), 0.0f, 1.0f);
-                                float *pixel = imageRow + x * 4;
-                                pixel[0] = sample.x() * alpha;
-                                pixel[1] = sample.y() * alpha;
-                                pixel[2] = sample.z() * alpha;
-                                pixel[3] = alpha;
-                            }
-                        }
-                    }
 
                     if (tintLargePictureAfterSampling) {
                         const auto decodeSrgb = [](float value) {
@@ -4235,6 +4124,34 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  (world.z - cameraPosition.z) *
                                      viewDirection.z);
                     };
+                    const int left = std::clamp(
+                        qFloor(std::min_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.x() < b.x();
+                            })->x()),
+                        0, rasterSize.width());
+                    const int right = std::clamp(
+                        qCeil(std::max_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.x() < b.x();
+                            })->x()),
+                        0, rasterSize.width());
+                    const int top = std::clamp(
+                        qFloor(std::min_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.y() < b.y();
+                            })->y()),
+                        0, rasterSize.height());
+                    const int bottom = std::clamp(
+                        qCeil(std::max_element(
+                            deviceCorners.cbegin(), deviceCorners.cend(),
+                            [](const QPointF &a, const QPointF &b) {
+                                return a.y() < b.y();
+                            })->y()),
+                        0, rasterSize.height());
                     for (int y = top; y < bottom; ++y) {
                         auto *imageRow = reinterpret_cast<float *>(
                             depthMaskedImage.scanLine(y));

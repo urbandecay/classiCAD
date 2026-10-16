@@ -8138,8 +8138,10 @@ resolve remain open.
   Workbench's shaded point surfaces.
   Box selection uses projected point footprints for crossing and full
   containment. This follows the visible geometry, but Blender's exact
-  Workbench box-selection behavior has not been source-verified. Blender
-  fixtures and matched viewport comparisons have not been run.
+  Workbench box-selection behavior has not been source-verified. A follow-up
+  audit found that the C++ importer whitelist rejected `POINTCLOUD` before its
+  existing parser could run; the whitelist now accepts it. Blender fixtures
+  and matched viewport comparisons have not been run.
 
 - Non-image Blender Empty display icons are reported as viewport overlays with
   no matching classiCAD scene-object representation. Still Image Empties retain
@@ -8172,7 +8174,9 @@ resolve remain open.
   per-view-layer visibility. The scene allows at most 10,000 derived points
   per source mesh and 50,000 per scene; over-limit point sets are reported and
   omitted. This is a bounded bridge using classiCAD's existing one-point
-  object type; Blender POINTCLOUD remains a separate unsupported batched type.
+  object type. Blender `POINTCLOUD` has a separate batched classiCAD type as
+  described above. A follow-up audit found a stale type whitelist that had
+  caused the C++ importer to reject those records; it now accepts them.
   C++ build passed; no Blender fixture comparison was run.
 
 ### Blender evaluated object transforms in original geometry mode (2026-10-15)

@@ -3323,6 +3323,7 @@ bool importBlenderScene(const QString &path,
              objectType != QLatin1String("CURVE") &&
              objectType != QLatin1String("SURFACE") &&
              objectType != QLatin1String("POINT") &&
+             objectType != QLatin1String("POINTCLOUD") &&
              objectType != QLatin1String("EMPTY_IMAGE") &&
              objectType != QLatin1String("VOLUME"))) {
             ++skippedCount;

@@ -8722,6 +8722,12 @@ resolve remain open.
   default attribute when both existed. C++ build passed; matched image
   comparison remains open.
 
+- Attribute color now uses opaque source alpha in both GPU and QPainter mesh
+  paths. Blender's Workbench builds its vertex-color material with alpha one,
+  so a transparent assigned material no longer makes Attribute mode see-through.
+  X-Ray opacity remains a separate later control. Matched image comparison
+  remains open.
+
 ### QPainter textured shadow-caster audit correction (2026-10-15)
 
 - An attempted software shadow-map texture-alpha cutoff was removed after

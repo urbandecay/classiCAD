@@ -2426,7 +2426,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (useWorkbenchColor) {
                 switch (shadingSettings_.colorMode) {
                 case ViewportColorMode::Material:
+                    break;
                 case ViewportColorMode::Attribute:
+                    // Blender's attribute-color material has alpha one even
+                    // when the assigned material has a transparent alpha.
+                    sourceColor.setW(1.0f);
                     break;
                 case ViewportColorMode::Texture:
                     // The active image texture overrides this material color

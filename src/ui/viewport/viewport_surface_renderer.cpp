@@ -487,12 +487,15 @@ qreal workbenchSourceAlpha(ViewportColorMode colorMode,
 {
     switch (colorMode) {
     case ViewportColorMode::Material:
-    case ViewportColorMode::Attribute:
     case ViewportColorMode::Texture:
         // Blender's object-color alpha is used by Object and Random color
         // modes. These modes use the Workbench material alpha, whose default
         // is opaque when no material slot is assigned.
         return hasWorkbenchMaterial ? material.alpha : 1.0;
+    case ViewportColorMode::Attribute:
+        // Workbench's vertex-color material is opaque; material alpha does
+        // not participate when the attribute supplies the surface color.
+        return 1.0;
     case ViewportColorMode::Object:
     case ViewportColorMode::Random:
         return objectAlpha;

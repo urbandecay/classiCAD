@@ -1130,7 +1130,9 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             return batch.device == painter.device() &&
                    batch.opaqueSceneDepth == opaqueSceneDepth &&
                    batch.viewportSize == viewportSize &&
-                   batch.depthSize == opaqueSceneDepthSize;
+                   batch.depthSize == opaqueSceneDepthSize &&
+                   batch.ignoreSceneDepth ==
+                       shadingSettings_.xrayEnabledForMode();
         });
     if (batchIt == smoothWireBatches_.end() || batchIt->records.isEmpty()) {
         return;
@@ -1186,8 +1188,10 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
         const float targetSceneDepth = (*opaqueSceneDepth)[pixelIndex];
         QVector3D premultipliedColor;
         qreal alpha = 0.0;
-        qreal resolvedDepth = targetSceneDepth;
-        if (!std::isfinite(resolvedDepth)) {
+        qreal resolvedDepth = batchIt->ignoreSceneDepth
+            ? std::numeric_limits<qreal>::infinity()
+            : targetSceneDepth;
+        if (!batchIt->ignoreSceneDepth && !std::isfinite(resolvedDepth)) {
             resolvedDepth = std::numeric_limits<qreal>::infinity();
         }
         if (center.valid) {
@@ -1211,7 +1215,8 @@ void ViewportRenderer::flushPreparedCurveSegmentResolve(
             if (!neighbor.valid) continue;
             const qreal sceneDepthTolerance = std::max<qreal>(
                 1.0e-4, std::abs(neighbor.depth) * 1.0e-6);
-            if (std::isfinite(targetSceneDepth) &&
+            if (!batchIt->ignoreSceneDepth &&
+                std::isfinite(targetSceneDepth) &&
                 neighbor.depth > targetSceneDepth + sceneDepthTolerance) {
                 continue;
             }
@@ -1752,6 +1757,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
             smoothWirePixelCount > 0 &&
             smoothWirePixelCount <= maximumSmoothWirePixels &&
             painter.device() != nullptr;
+        const bool ignoreSceneDepth = shadingSettings_.xrayEnabledForMode();
         SmoothWireBatch *smoothWireBatch = nullptr;
         bool smoothWireSubmitted = false;
         qreal smoothWireWidth = 1.0;
@@ -1769,7 +1775,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     return batch.device == painter.device() &&
                            batch.opaqueSceneDepth == opaqueSceneDepth &&
                            batch.viewportSize == viewportSize &&
-                           batch.depthSize == opaqueSceneDepthSize;
+                           batch.depthSize == opaqueSceneDepthSize &&
+                           batch.ignoreSceneDepth == ignoreSceneDepth;
                 });
             if (batchIt == smoothWireBatches_.end()) {
                 SmoothWireBatch batch;
@@ -1777,6 +1784,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 batch.opaqueSceneDepth = opaqueSceneDepth;
                 batch.viewportSize = viewportSize;
                 batch.depthSize = opaqueSceneDepthSize;
+                batch.ignoreSceneDepth = ignoreSceneDepth;
                 batch.records.reserve(4096);
                 batch.resolvePixels.reserve(8192);
                 batch.resolvePixelSet.reserve(8192);
@@ -1949,7 +1957,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                         1.0e-4, std::abs(curveDepth) * 1.0e-6);
                     visible = !std::isfinite(surfaceDepth) ||
                               surfaceDepth <= curveDepth + depthTolerance;
-                    if (visible && smoothWireResolveEnabled) {
+                    if ((visible || ignoreSceneDepth) &&
+                        smoothWireResolveEnabled) {
                         const qreal scaleX =
                             opaqueSceneDepthSize.width() / targetDeviceWidth;
                         const qreal scaleY =
@@ -2051,16 +2060,22 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 }
             }
         }
-        if (shadingSettings_.xrayEnabledForMode() && !hiddenPath.isEmpty()) {
+        if (shadingSettings_.xrayEnabledForMode() &&
+            !smoothWireSubmitted && !hiddenPath.isEmpty()) {
             painter.drawPath(hiddenPath);
         }
-        if (smoothWireSubmitted && smoothWireBatch != nullptr &&
-            !visiblePath.isEmpty()) {
+        if (smoothWireSubmitted && smoothWireBatch != nullptr) {
             SmoothWireBatch::FallbackPath fallback;
-            fallback.path = visiblePath;
             fallback.pen = wirePen;
             fallback.opacity = painter.opacity();
-            smoothWireBatch->fallbackPaths.append(std::move(fallback));
+            if (!visiblePath.isEmpty()) {
+                fallback.path = visiblePath;
+                smoothWireBatch->fallbackPaths.append(fallback);
+            }
+            if (ignoreSceneDepth && !hiddenPath.isEmpty()) {
+                fallback.path = hiddenPath;
+                smoothWireBatch->fallbackPaths.append(std::move(fallback));
+            }
         }
         if (!visiblePath.isEmpty() && !smoothWireSubmitted) {
             painter.drawPath(visiblePath);

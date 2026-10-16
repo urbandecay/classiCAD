@@ -9310,6 +9310,20 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L74-L82).
   Build passed; matched X-Ray wire captures remain open.
 
+### QPainter X-Ray Smooth Wires resolve (2026-10-16)
+
+- Prepared QPainter curve and wire samples now include X-Ray-hidden segments in
+  the shared bounded Smooth Wires resolve. X-Ray candidates bypass scene-depth
+  rejection and order their antialiased overlaps by wire depth; if the bounded
+  resolve cannot run, the existing direct paths still draw both visible and
+  hidden segments. Ordinary non-X-Ray batches keep their scene-depth checks.
+- Blender 5.2.2 keeps its Overlay Smooth Wires resolve active with X-Ray and
+  uses isolated wire depth; see
+  [`overlay_antialiasing.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_antialiasing.hh)
+  and
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L74-L82).
+  Build passed; matched X-Ray raster captures remain open.
+
 ### Blender Solid interactive AA preference precedence (2026-10-16)
 
 - Opening a Blender scene no longer applies its saved `scene.display.viewport_aa`

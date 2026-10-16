@@ -160,6 +160,7 @@ private:
         const QVector<float> *opaqueSceneDepth = nullptr;
         QSize viewportSize;
         QSize depthSize;
+        bool ignoreSceneDepth = false;
         QHash<int, SmoothWireRecord> records;
         QVector<int> resolvePixels;
         QSet<int> resolvePixelSet;

@@ -10080,3 +10080,13 @@ scene depth.
   applied to the visible opaque layer. This follows Blender's shared opaque
   cavity attachments while keeping transparent surfaces out of cavity input.
   Build passed; matched in-front cavity captures remain open.
+
+### QPainter preserves in-front shadow factors at coverage edges (2026-10-16)
+
+- The bounded scene-linear compositor now retains regular and in-front opaque
+  colors and receiver samples separately through the shadow resolve. It applies
+  each layer's own receiver factor before alpha-compositing the front layer over
+  the regular one. Previously an antialiased in-front edge could apply the
+  front receiver's shadow to regular color showing through that edge. The
+  legacy painter fallback remains approximate. Build passed; matched
+  in-front-shadow captures remain open.

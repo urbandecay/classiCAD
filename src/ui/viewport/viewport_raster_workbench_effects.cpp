@@ -1614,6 +1614,8 @@ bool compositeRasterWorkbenchSurfaces(
         }
         std::vector<RasterWorkbenchLinearPixel> frontBasePixels(
             static_cast<std::size_t>(pixelCount));
+        const std::vector<RasterWorkbenchLinearPixel>
+            regularOpaqueScenePixels = opaqueScenePixels;
         for (int index = 0; index < pixelCount; ++index) {
             const RasterWorkbenchLinearPixel &regularResolved =
                 resolved[static_cast<std::size_t>(index)];
@@ -1687,6 +1689,10 @@ bool compositeRasterWorkbenchSurfaces(
             surfaceLayers->sceneLinearColor = resolved;
             surfaceLayers->sceneLinearSize = QSize(width, height);
             surfaceLayers->sceneLinearOpaqueColor = opaqueScenePixels;
+            surfaceLayers->sceneLinearRegularOpaqueColor =
+                regularOpaqueScenePixels;
+            surfaceLayers->sceneLinearInFrontOpaqueColor =
+                frontOpaqueScenePixels;
             surfaceLayers->sceneLinearTransparentColor = transparentResolved;
             if (!shadowedTransparentResolved.empty()) {
                 surfaceLayers->sceneLinearShadowedTransparentColor =
@@ -3357,6 +3363,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
     }
 
+    const QVector<RasterSample> regularOpaqueSamples =
+        shadowEnabled ? opaqueSamples : QVector<RasterSample>{};
+
     // Workbench keeps depth_in_front separate through its effects inputs.
     // Select the nearest sample inside each domain first, then let covered
     // in-front samples replace regular scene samples regardless of geometric
@@ -3389,8 +3398,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         QSize(width, height));
     const int lightMapWidth = lightMapSize.width();
     const int lightMapHeight = lightMapSize.height();
-    QVector<QVector2D> receiverLightCoordinates;
-    QVector<float> receiverLightDepth;
+    QVector<QVector2D> regularReceiverLightCoordinates;
+    QVector<float> regularReceiverLightDepth;
+    QVector<QVector2D> inFrontReceiverLightCoordinates;
+    QVector<float> inFrontReceiverLightDepth;
     QVector<QVector2D> transparentReceiverLightCoordinates;
     QVector<float> transparentReceiverLightDepth;
     float softwareDepthBias = 0.0f;
@@ -3456,35 +3467,41 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             QPointF(receiverPixelQuarter, -receiverPixelQuarter),
             QPointF(-receiverPixelQuarter, receiverPixelQuarter),
             QPointF(receiverPixelQuarter, receiverPixelQuarter)}};
-        for (int index = 0; index < opaqueSamples.size(); ++index) {
-            const RasterSample &receiver = opaqueSamples[index];
-            if (receiver.objectId == 0) continue;
-            includeReceiverPoint(receiver.position);
-            const Point3D receiverOrigin{receiver.position.x(),
-                                         receiver.position.y(),
-                                         receiver.position.z()};
-            const Point3D receiverNormal{receiver.normal.x(),
-                                         receiver.normal.y(),
-                                         receiver.normal.z()};
-            const WorkPlaneFrame receiverPlane = makeWorkPlaneFrameFromNormal(
-                receiverOrigin, receiverNormal);
-            const QPointF screenPixelCenter(
-                (index % width + 0.5) / dpr,
-                (index / width + 0.5) / dpr);
-            for (const QPointF &screenOffset : receiverScreenOffsets) {
-                QPointF receiverPlanePoint;
-                if (!transform.screenToWorkPlaneUnclipped(
-                        screenPixelCenter + screenOffset, viewportSize,
-                        receiverPlane, &receiverPlanePoint)) {
-                    continue;
+        const auto includeReceiverBounds = [&](
+            const QVector<RasterSample> &receiverSamples) {
+            for (int index = 0; index < receiverSamples.size(); ++index) {
+                const RasterSample &receiver = receiverSamples[index];
+                if (receiver.objectId == 0) continue;
+                includeReceiverPoint(receiver.position);
+                const Point3D receiverOrigin{receiver.position.x(),
+                                             receiver.position.y(),
+                                             receiver.position.z()};
+                const Point3D receiverNormal{receiver.normal.x(),
+                                             receiver.normal.y(),
+                                             receiver.normal.z()};
+                const WorkPlaneFrame receiverPlane =
+                    makeWorkPlaneFrameFromNormal(receiverOrigin,
+                                                 receiverNormal);
+                const QPointF screenPixelCenter(
+                    (index % width + 0.5) / dpr,
+                    (index / width + 0.5) / dpr);
+                for (const QPointF &screenOffset : receiverScreenOffsets) {
+                    QPointF receiverPlanePoint;
+                    if (!transform.screenToWorkPlaneUnclipped(
+                            screenPixelCenter + screenOffset, viewportSize,
+                            receiverPlane, &receiverPlanePoint)) {
+                        continue;
+                    }
+                    const Point3D worldPoint = workPlaneFramePointToWorld(
+                        receiverPlanePoint, receiverPlane);
+                    includeReceiverPoint(QVector3D(
+                        float(worldPoint.x), float(worldPoint.y),
+                        float(worldPoint.z)));
                 }
-                const Point3D worldPoint = workPlaneFramePointToWorld(
-                    receiverPlanePoint, receiverPlane);
-                includeReceiverPoint(QVector3D(
-                    float(worldPoint.x), float(worldPoint.y),
-                    float(worldPoint.z)));
             }
-        }
+        };
+        includeReceiverBounds(regularOpaqueSamples);
+        includeReceiverBounds(inFrontOpaqueSamples);
         if (!hasReceiverBounds) {
             minX = casterMinX;
             maxX = casterMaxX;
@@ -3557,17 +3574,31 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 depth = std::min(depth, float(a*z[0] + b*z[1] + c*z[2]));
             }
         }
-        receiverLightDepth.resize(width * height);
-        receiverLightCoordinates.resize(width * height);
+        regularReceiverLightDepth.resize(width * height);
+        regularReceiverLightCoordinates.resize(width * height);
+        inFrontReceiverLightDepth.resize(width * height);
+        inFrontReceiverLightCoordinates.resize(width * height);
         transparentReceiverLightDepth.resize(width * height);
         transparentReceiverLightCoordinates.resize(width * height);
-        for (int i = 0; i < opaqueSamples.size(); ++i) {
-            if (opaqueSamples[i].objectId != 0) {
-                receiverLightDepth[i] = QVector3D::dotProduct(
-                    opaqueSamples[i].position, shadowLightDirection);
-                const QPointF p = lightScreen(opaqueSamples[i].position);
-                receiverLightCoordinates[i] = QVector2D(p.x(), p.y());
+        const auto prepareReceiverLightSamples = [&](
+            const QVector<RasterSample> &receiverSamples,
+            QVector<float> *receiverDepths,
+            QVector<QVector2D> *receiverCoordinates) {
+            for (int i = 0; i < receiverSamples.size(); ++i) {
+                if (receiverSamples[i].objectId == 0) continue;
+                (*receiverDepths)[i] = QVector3D::dotProduct(
+                    receiverSamples[i].position, shadowLightDirection);
+                const QPointF p = lightScreen(receiverSamples[i].position);
+                (*receiverCoordinates)[i] = QVector2D(p.x(), p.y());
             }
+        };
+        prepareReceiverLightSamples(regularOpaqueSamples,
+                                    &regularReceiverLightDepth,
+                                    &regularReceiverLightCoordinates);
+        prepareReceiverLightSamples(inFrontOpaqueSamples,
+                                    &inFrontReceiverLightDepth,
+                                    &inFrontReceiverLightCoordinates);
+        for (int i = 0; i < opaqueSamples.size(); ++i) {
             const RasterSample &transparent = samples[i];
             if (transparent.objectId != 0 && transparent.sourceAlpha > 0.0f &&
                 !isOpaqueWorkbenchAlpha(transparent.sourceAlpha)) {
@@ -4320,6 +4351,19 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 &surfaceLayers->sceneLinearShadowedTransparentColor;
             hasPerFragmentShadowResolve = true;
         }
+        const bool hasSeparateOpaqueShadowLayers =
+            surfaceLayers != nullptr &&
+            surfaceLayers->sceneLinearSize == QSize(width, height) &&
+            surfaceLayers->sceneLinearColor.size() ==
+                static_cast<std::size_t>(pixelCount) &&
+            surfaceLayers->sceneLinearOpaqueColor.size() ==
+                static_cast<std::size_t>(pixelCount) &&
+            surfaceLayers->sceneLinearRegularOpaqueColor.size() ==
+                static_cast<std::size_t>(pixelCount) &&
+            surfaceLayers->sceneLinearInFrontOpaqueColor.size() ==
+                static_cast<std::size_t>(pixelCount) &&
+            surfaceLayers->sceneLinearTransparentColor.size() ==
+                static_cast<std::size_t>(pixelCount);
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -4331,6 +4375,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     0, width - 1);
                 const int index = depthY * width + depthX;
                 const RasterSample &receiver = opaqueSamples[index];
+                const RasterSample &regularReceiver =
+                    regularOpaqueSamples[index];
+                const RasterSample &inFrontReceiver =
+                    inFrontOpaqueSamples[index];
                 const RasterSample &visible = samples[index];
                 const bool hasOpaqueReceiver = receiver.objectId != 0;
                 const bool hasTransparentReceiver = visible.objectId != 0 &&
@@ -4351,13 +4399,28 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     surfaceLayers->transparentColor.size() == colorImage->size();
                 if ((hasTransparentTop || hasTransparentReceiver) &&
                     !hasRetainedLayers) continue;
-                const float opaqueFactor = hasOpaqueReceiver
-                    ? shadowFactorAt(receiverLightCoordinates[index],
-                                     receiverLightDepth[index],
-                                     receiver.position, receiver.normal,
-                                     QPointF((depthX + 0.5) / dpr,
-                                             (depthY + 0.5) / dpr))
-                    : 1.0f;
+                const QPointF receiverScreenPosition(
+                    (depthX + 0.5) / dpr, (depthY + 0.5) / dpr);
+                const float regularOpaqueFactor =
+                    regularReceiver.objectId != 0
+                        ? shadowFactorAt(
+                              regularReceiverLightCoordinates[index],
+                              regularReceiverLightDepth[index],
+                              regularReceiver.position,
+                              regularReceiver.normal,
+                              receiverScreenPosition)
+                        : 1.0f;
+                const float inFrontOpaqueFactor =
+                    inFrontReceiver.objectId != 0
+                        ? shadowFactorAt(
+                              inFrontReceiverLightCoordinates[index],
+                              inFrontReceiverLightDepth[index],
+                              inFrontReceiver.position,
+                              inFrontReceiver.normal,
+                              receiverScreenPosition)
+                        : 1.0f;
+                const float opaqueFactor = inFrontReceiver.objectId != 0
+                    ? inFrontOpaqueFactor : regularOpaqueFactor;
                 const float transparentFactor = hasTransparentReceiver
                     ? shadowFactorAt(
                           transparentReceiverLightCoordinates[index],
@@ -4380,10 +4443,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                          static_cast<std::size_t>(index)].blue !=
                          surfaceLayers->sceneLinearTransparentColor[
                          static_cast<std::size_t>(index)].blue);
-                if (opaqueFactor >= 1.0f && transparentFactor >= 1.0f &&
+                const bool opaqueLayerShadowChanged =
+                    regularOpaqueFactor < 1.0f || inFrontOpaqueFactor < 1.0f;
+                if (!opaqueLayerShadowChanged &&
+                    transparentFactor >= 1.0f &&
                     !perFragmentTransparentChanged) continue;
                 if (surfaceLayers != nullptr &&
-                    (surfaceLayers->sceneLinearOutlinePending ||
+                    (hasSeparateOpaqueShadowLayers ||
+                     surfaceLayers->sceneLinearOutlinePending ||
                      surfaceLayers->sceneLinearDofPending ||
                      hasPerFragmentShadowResolve) &&
                     surfaceLayers->sceneLinearSize == QSize(width, height) &&
@@ -4391,22 +4458,44 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         static_cast<std::size_t>(width) * height &&
                     surfaceLayers->sceneLinearOpaqueColor.size() ==
                         static_cast<std::size_t>(width) * height &&
+                    surfaceLayers->sceneLinearRegularOpaqueColor.size() ==
+                        static_cast<std::size_t>(width) * height &&
+                    surfaceLayers->sceneLinearInFrontOpaqueColor.size() ==
+                        static_cast<std::size_t>(width) * height &&
                     surfaceLayers->sceneLinearTransparentColor.size() ==
                         static_cast<std::size_t>(width) * height &&
-                    (opaqueFactor < 1.0f || transparentFactor < 1.0f ||
+                    (opaqueLayerShadowChanged || transparentFactor < 1.0f ||
                      perFragmentTransparentChanged)) {
                     const std::size_t linearIndex =
                         static_cast<std::size_t>(index);
                     RasterWorkbenchLinearPixel &linear =
                         surfaceLayers->sceneLinearColor[linearIndex];
-                    const RasterWorkbenchLinearPixel &opaque =
-                        surfaceLayers->sceneLinearOpaqueColor[linearIndex];
+                    const RasterWorkbenchLinearPixel &regularOpaque =
+                        surfaceLayers->sceneLinearRegularOpaqueColor[
+                            linearIndex];
+                    const RasterWorkbenchLinearPixel &inFrontOpaque =
+                        surfaceLayers->sceneLinearInFrontOpaqueColor[
+                            linearIndex];
                     const RasterWorkbenchLinearPixel &transparent =
                         surfaceLayers->sceneLinearTransparentColor[linearIndex];
                     const float remain = 1.0f - transparent.alpha;
-                    linear.red += opaque.red * (opaqueFactor - 1.0f) * remain;
-                    linear.green += opaque.green * (opaqueFactor - 1.0f) * remain;
-                    linear.blue += opaque.blue * (opaqueFactor - 1.0f) * remain;
+                    const float regularBehindFront =
+                        1.0f - inFrontOpaque.alpha;
+                    linear.red +=
+                        (regularOpaque.red * (regularOpaqueFactor - 1.0f) *
+                             regularBehindFront +
+                         inFrontOpaque.red * (inFrontOpaqueFactor - 1.0f)) *
+                        remain;
+                    linear.green +=
+                        (regularOpaque.green * (regularOpaqueFactor - 1.0f) *
+                             regularBehindFront +
+                         inFrontOpaque.green * (inFrontOpaqueFactor - 1.0f)) *
+                        remain;
+                    linear.blue +=
+                        (regularOpaque.blue * (regularOpaqueFactor - 1.0f) *
+                             regularBehindFront +
+                         inFrontOpaque.blue * (inFrontOpaqueFactor - 1.0f)) *
+                        remain;
                     if (hasPerFragmentShadowResolve) {
                         if (perFragmentTransparentChanged) {
                             const RasterWorkbenchLinearPixel &shadowedTransparent =
@@ -4476,7 +4565,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
         }
         *colorImage = result.convertToFormat(colorImage->format());
-        if (hasPerFragmentShadowResolve && surfaceLayers != nullptr &&
+        if ((hasPerFragmentShadowResolve || hasSeparateOpaqueShadowLayers) &&
+            surfaceLayers != nullptr &&
             !surfaceLayers->sceneLinearOutlinePending &&
             !surfaceLayers->sceneLinearDofPending) {
             (void)displayRetainedSceneLinear();

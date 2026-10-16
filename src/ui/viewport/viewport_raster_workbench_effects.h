@@ -200,6 +200,10 @@ struct RasterWorkbenchSurfaceLayers {
     // Opaque and transparent contributions used to apply the QPainter shadow
     // factor before a deferred scene-linear outline.
     std::vector<RasterWorkbenchLinearPixel> sceneLinearOpaqueColor;
+    // Retain regular and in-front opaque contributions separately so their
+    // receiver shadow factors remain independent at partially covered edges.
+    std::vector<RasterWorkbenchLinearPixel> sceneLinearRegularOpaqueColor;
+    std::vector<RasterWorkbenchLinearPixel> sceneLinearInFrontOpaqueColor;
     std::vector<RasterWorkbenchLinearPixel> sceneLinearTransparentColor;
     // Weighted transparency with Blender's per-fragment normal shadow factor
     // already applied. Accumulated in per-pixel buffers so dense scenes do not

@@ -1443,6 +1443,368 @@ void drawImportedCameraPassepartout(const Document &document,
     painter.restore();
 }
 
+QVector<ViewportSceneStroke> importedCameraViewportStrokes(
+    const Document &document, const QColor &wireColor, bool cameraView)
+{
+    const QJsonArray scenes = document.settings().importedBlenderScenes;
+    const QString activeLayer = document.settings().activeViewLayerKey;
+    QJsonObject activeScene;
+    for (const QJsonValue &sceneValue : scenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = false;
+        if (!activeLayer.isEmpty()) {
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                    activeLayer) {
+                    matchesActiveLayer = true;
+                    break;
+                }
+            }
+        } else {
+            matchesActiveLayer =
+                scene.value(QStringLiteral("is_active_scene")).toBool(false);
+        }
+        if (matchesActiveLayer) {
+            activeScene = scene;
+            break;
+        }
+    }
+    if (activeScene.isEmpty() && activeLayer.isEmpty() && !scenes.isEmpty()) {
+        activeScene = scenes.first().toObject();
+    }
+
+    QVector<ViewportSceneStroke> strokes;
+    const QJsonArray extras = activeScene.value(
+        QStringLiteral("viewport_extras")).toArray();
+    strokes.reserve(extras.size());
+    for (const QJsonValue &extraValue : extras) {
+        const QJsonObject extra = extraValue.toObject();
+        if (extra.value(QStringLiteral("kind")).toString() !=
+            QLatin1String("CAMERA")) {
+            continue;
+        }
+        const bool activeCamera =
+            extra.value(QStringLiteral("is_active_camera")).toBool(false);
+        if (!activeLayer.isEmpty()) {
+            bool visibleInLayer = false;
+            for (const QJsonValue &layerValue :
+                 extra.value(QStringLiteral("visible_view_layer_keys")).toArray()) {
+                if (layerValue.toString() == activeLayer) {
+                    visibleInLayer = true;
+                    break;
+                }
+            }
+            if (!visibleInLayer) continue;
+        } else if (!extra.value(QStringLiteral("visible_default")).toBool(true)) {
+            continue;
+        }
+
+        const QJsonArray worldVertices = extra.value(
+            cameraView && activeCamera
+                ? QStringLiteral("camera_view_line_vertices")
+                : QStringLiteral("world_line_vertices")).toArray();
+        if (worldVertices.size() < 2 || worldVertices.size() % 2 != 0) {
+            continue;
+        }
+        QVector<Point3D> points;
+        points.reserve(worldVertices.size());
+        bool valid = true;
+        for (const QJsonValue &pointValue : worldVertices) {
+            const QJsonArray coordinates = pointValue.toArray();
+            if (coordinates.size() != 3 ||
+                !coordinates[0].isDouble() ||
+                !coordinates[1].isDouble() ||
+                !coordinates[2].isDouble()) {
+                valid = false;
+                break;
+            }
+            const Point3D point{coordinates[0].toDouble(),
+                                coordinates[1].toDouble(),
+                                coordinates[2].toDouble()};
+            if (!std::isfinite(point.x) || !std::isfinite(point.y) ||
+                !std::isfinite(point.z)) {
+                valid = false;
+                break;
+            }
+            points.append(point);
+        }
+        if (!valid || points.isEmpty()) continue;
+
+        const Point3D worldOffset = points.first();
+        auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+        geometry->preciseLineVertices.reserve(points.size());
+        geometry->lineVertices.reserve(points.size());
+        for (const Point3D &worldPoint : points) {
+            const Point3D localPoint{worldPoint.x - worldOffset.x,
+                                     worldPoint.y - worldOffset.y,
+                                     worldPoint.z - worldOffset.z};
+            geometry->preciseLineVertices.append(localPoint);
+            geometry->lineVertices.append(
+                QVector3D(float(localPoint.x), float(localPoint.y),
+                          float(localPoint.z)));
+        }
+
+        ViewportSceneStroke stroke;
+        stroke.color = wireColor;
+        stroke.width = 1.0f;
+        stroke.writeDepth = true;
+        stroke.smoothWireCategory = ViewportSmoothWireCategory::Overlay;
+        stroke.geometryCacheKey =
+            QByteArrayLiteral("blender-camera-extra:") +
+            extra.value(QStringLiteral("object_id")).toString().toUtf8() +
+            QJsonDocument(worldVertices).toJson(QJsonDocument::Compact);
+        stroke.preparedDepthGeometry = std::move(geometry);
+        stroke.worldOffset = worldOffset;
+        strokes.append(std::move(stroke));
+    }
+    return strokes;
+}
+
+void drawImportedCameraViewportStrokesFallback(
+    QPainter &painter,
+    const Document &document,
+    const QColor &wireColor,
+    bool cameraView,
+    bool smoothWires,
+    bool xrayEnabled,
+    qreal xrayAlpha,
+    const ViewportTransform &camera,
+    const QSize &viewportSize,
+    const RasterWorkbenchSurfaceLayers &depthLayers)
+{
+    if (viewportSize.width() <= 0 || viewportSize.height() <= 0) return;
+
+    const QVector<ViewportSceneStroke> strokes = importedCameraViewportStrokes(
+        document, wireColor, cameraView);
+    if (strokes.isEmpty()) return;
+
+    const qreal depthScaleX = depthLayers.regularSceneDepthSize.width() > 0
+        ? qreal(depthLayers.regularSceneDepthSize.width()) /
+              viewportSize.width()
+        : 1.0;
+    const qreal depthScaleY = depthLayers.regularSceneDepthSize.height() > 0
+        ? qreal(depthLayers.regularSceneDepthSize.height()) /
+              viewportSize.height()
+        : 1.0;
+    const bool hasRegularDepth =
+        depthLayers.regularSceneDepthSize.width() > 0 &&
+        depthLayers.regularSceneDepthSize.height() > 0 &&
+        depthLayers.regularSceneDepth.size() ==
+            depthLayers.regularSceneDepthSize.width() *
+                depthLayers.regularSceneDepthSize.height();
+    const bool hasFrontDepth =
+        depthLayers.inFrontSceneDepthSize.width() > 0 &&
+        depthLayers.inFrontSceneDepthSize.height() > 0 &&
+        depthLayers.inFrontSceneDepth.size() ==
+            depthLayers.inFrontSceneDepthSize.width() *
+                depthLayers.inFrontSceneDepthSize.height();
+    const QSize strokeDepthSize = hasRegularDepth
+        ? depthLayers.regularSceneDepthSize : viewportSize;
+    QVector<float> drawnCameraStrokeDepth(
+        strokeDepthSize.width() * strokeDepthSize.height(),
+        -std::numeric_limits<float>::infinity());
+    const Point3D cameraPosition = camera.cameraPosition(viewportSize);
+    const Point3D viewDirection = camera.viewDirection();
+    const ViewportCameraPreferences &cameraPreferences =
+        camera.cameraPreferences();
+    const qreal clipStart = std::max<qreal>(0.0, cameraPreferences.clipStart);
+    const qreal clipEnd = cameraPreferences.clipEnd;
+    const bool perspective = camera.isPerspectiveEnabled();
+    const qreal clipDepthOffset = perspective ? 0.0 : clipEnd;
+    const qreal clipDepthEnd = perspective ? clipEnd : 2.0 * clipEnd;
+    if (!std::isfinite(clipStart) || !std::isfinite(clipEnd) ||
+        clipEnd <= clipStart || !std::isfinite(clipDepthEnd) ||
+        clipDepthEnd <= clipStart) {
+        return;
+    }
+
+    const auto depthAt = [&](const QVector<float> &depth,
+                             const QSize &depthSize,
+                             const QPointF &screen) -> std::optional<float> {
+        if (depthSize.width() <= 0 || depthSize.height() <= 0) {
+            return std::nullopt;
+        }
+        const int x = qFloor(screen.x() * depthSize.width() /
+                             viewportSize.width());
+        const int y = qFloor(screen.y() * depthSize.height() /
+                             viewportSize.height());
+        if (x < 0 || x >= depthSize.width() ||
+            y < 0 || y >= depthSize.height()) {
+            return std::nullopt;
+        }
+        const float value = depth[y * depthSize.width() + x];
+        return std::isfinite(value) ? std::optional<float>(value)
+                                    : std::nullopt;
+    };
+    const auto depthIndexAt = [&](const QSize &depthSize,
+                                  const QPointF &screen) {
+        if (depthSize.width() <= 0 || depthSize.height() <= 0) return -1;
+        const int x = qFloor(screen.x() * depthSize.width() /
+                             viewportSize.width());
+        const int y = qFloor(screen.y() * depthSize.height() /
+                             viewportSize.height());
+        if (x < 0 || x >= depthSize.width() ||
+            y < 0 || y >= depthSize.height()) {
+            return -1;
+        }
+        return y * depthSize.width() + x;
+    };
+    const auto interpolate = [](const Point3D &first,
+                                const Point3D &second,
+                                qreal t) {
+        return Point3D{first.x + (second.x - first.x) * t,
+                       first.y + (second.y - first.y) * t,
+                       first.z + (second.z - first.z) * t};
+    };
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, smoothWires);
+    for (const ViewportSceneStroke &stroke : strokes) {
+        if (!stroke.preparedDepthGeometry) continue;
+        const QVector<Point3D> &segments =
+            stroke.preparedDepthGeometry->preciseLineVertices;
+        QPen pen(stroke.color);
+        pen.setWidthF(std::max<qreal>(0.01, stroke.width));
+        pen.setCapStyle(Qt::RoundCap);
+        painter.setPen(pen);
+        for (int index = 0; index + 1 < segments.size(); index += 2) {
+            const Point3D &firstLocal = segments[index];
+            const Point3D &secondLocal = segments[index + 1];
+            Point3D first{firstLocal.x + stroke.worldOffset.x,
+                          firstLocal.y + stroke.worldOffset.y,
+                          firstLocal.z + stroke.worldOffset.z};
+            Point3D second{secondLocal.x + stroke.worldOffset.x,
+                           secondLocal.y + stroke.worldOffset.y,
+                           secondLocal.z + stroke.worldOffset.z};
+            qreal firstRawDepth = rasterWorkbenchCameraDepth(
+                QVector3D(float(first.x), float(first.y), float(first.z)),
+                cameraPosition, viewDirection);
+            qreal secondRawDepth = rasterWorkbenchCameraDepth(
+                QVector3D(float(second.x), float(second.y), float(second.z)),
+                cameraPosition, viewDirection);
+            if (!std::isfinite(firstRawDepth) ||
+                !std::isfinite(secondRawDepth)) {
+                continue;
+            }
+
+            // The orthographic projection is clipped from a virtual eye one
+            // clip-end behind the view target. Raster surface depths remain
+            // target-relative, so use the offset only for clipping.
+            qreal firstDepth = firstRawDepth + clipDepthOffset;
+            qreal secondDepth = secondRawDepth + clipDepthOffset;
+            const qreal depthDelta = secondDepth - firstDepth;
+            qreal segmentStart = 0.0;
+            qreal segmentEnd = 1.0;
+            if (std::abs(depthDelta) <= 1.0e-12) {
+                if (firstDepth < clipStart || firstDepth > clipDepthEnd) continue;
+            } else {
+                const qreal nearT = (clipStart - firstDepth) / depthDelta;
+                const qreal farT =
+                    (clipDepthEnd - firstDepth) / depthDelta;
+                segmentStart = std::max(0.0, std::min(nearT, farT));
+                segmentEnd = std::min(1.0, std::max(nearT, farT));
+                if (segmentStart > segmentEnd) continue;
+                const Point3D originalFirst = first;
+                const Point3D originalSecond = second;
+                first = interpolate(originalFirst, originalSecond, segmentStart);
+                second = interpolate(originalFirst, originalSecond, segmentEnd);
+                firstRawDepth = rasterWorkbenchCameraDepth(
+                    QVector3D(float(first.x), float(first.y), float(first.z)),
+                    cameraPosition, viewDirection);
+                secondRawDepth = rasterWorkbenchCameraDepth(
+                    QVector3D(float(second.x), float(second.y), float(second.z)),
+                    cameraPosition, viewDirection);
+                firstDepth = firstRawDepth + clipDepthOffset;
+                secondDepth = secondRawDepth + clipDepthOffset;
+            }
+
+            QPointF firstScreen;
+            QPointF secondScreen;
+            if (!camera.worldPointToScreenUnclipped(
+                    first, viewportSize, &firstScreen) ||
+                !camera.worldPointToScreenUnclipped(
+                    second, viewportSize, &secondScreen)) {
+                continue;
+            }
+            const qreal screenLength = QLineF(firstScreen, secondScreen).length();
+            const int subdivisions = std::clamp(
+                qCeil(screenLength * std::max(depthScaleX, depthScaleY)),
+                1, 8192);
+            for (int sample = 0; sample < subdivisions; ++sample) {
+                const qreal t0 = qreal(sample) / subdivisions;
+                const qreal t1 = qreal(sample + 1) / subdivisions;
+                const qreal tm = (t0 + t1) * 0.5;
+                const QPointF a = firstScreen +
+                    (secondScreen - firstScreen) * t0;
+                const QPointF b = firstScreen +
+                    (secondScreen - firstScreen) * t1;
+                qreal worldFraction = tm;
+                if (perspective &&
+                    firstDepth > 1.0e-9 && secondDepth > 1.0e-9) {
+                    const qreal reciprocalDepth =
+                        (1.0 - tm) / firstDepth + tm / secondDepth;
+                    if (reciprocalDepth > 1.0e-12) {
+                        worldFraction = (tm / secondDepth) / reciprocalDepth;
+                    }
+                }
+                const Point3D world = interpolate(first, second, worldFraction);
+                const float strokeDepth = rasterWorkbenchCameraDepth(
+                    QVector3D(float(world.x), float(world.y), float(world.z)),
+                    cameraPosition, viewDirection);
+                const QPointF midpoint = (a + b) * 0.5;
+                float occludingDepth =
+                    -std::numeric_limits<float>::infinity();
+                if (hasRegularDepth) {
+                    const std::optional<float> surfaceDepth = depthAt(
+                        depthLayers.regularSceneDepth,
+                        depthLayers.regularSceneDepthSize, midpoint);
+                    if (surfaceDepth.has_value()) {
+                        occludingDepth = std::max(occludingDepth,
+                                                  *surfaceDepth);
+                    }
+                }
+                if (hasFrontDepth && depthAt(
+                        depthLayers.inFrontSceneDepth,
+                        depthLayers.inFrontSceneDepthSize, midpoint).has_value()) {
+                    continue;
+                }
+                const int strokeDepthIndex = depthIndexAt(
+                    strokeDepthSize, midpoint);
+                if (strokeDepthIndex >= 0 &&
+                    strokeDepthIndex < drawnCameraStrokeDepth.size()) {
+                    occludingDepth = std::max(
+                        occludingDepth,
+                        drawnCameraStrokeDepth[strokeDepthIndex]);
+                }
+                const float tolerance = std::isfinite(occludingDepth)
+                    ? std::max(5.0e-4f,
+                               std::abs(occludingDepth) * 1.0e-5f)
+                    : 0.0f;
+                const bool hiddenBySceneDepth =
+                    std::isfinite(occludingDepth) &&
+                    strokeDepth < occludingDepth - tolerance;
+                if (hiddenBySceneDepth && !xrayEnabled) continue;
+
+                QColor segmentColor = stroke.color;
+                if (hiddenBySceneDepth) {
+                    segmentColor.setAlphaF(segmentColor.alphaF() *
+                                           std::clamp(xrayAlpha, 0.0, 1.0));
+                }
+                pen.setColor(segmentColor);
+                painter.setPen(pen);
+                painter.drawLine(a, b);
+                if (!hiddenBySceneDepth && strokeDepthIndex >= 0 &&
+                    strokeDepthIndex < drawnCameraStrokeDepth.size()) {
+                    drawnCameraStrokeDepth[strokeDepthIndex] = std::max(
+                        drawnCameraStrokeDepth[strokeDepthIndex], strokeDepth);
+                }
+            }
+        }
+    }
+    painter.restore();
+}
+
 bool applyImportedRenderColorManagement(
     const Document &document, ViewportShadingSettings *settings)
 {
@@ -14768,6 +15130,12 @@ protected:
                                       false,
                                       true);
             }
+            if (viewportShadingSettings_.wireOverlaysVisible &&
+                viewportShadingSettings_.showExtras) {
+                gpuStrokes += importedCameraViewportStrokes(
+                    document_, viewportShadingSettings_.themeWireColor,
+                    viewportTransform_.cameraState().cameraView);
+            }
             // Scene strokes are overlay-like: draw them after the scene resolve
             // with the unjittered camera, including when the color image came
             // from cached AA history. They depth-test against the regenerated
@@ -16095,6 +16463,19 @@ protected:
                 }
                 painter.restore();
             }
+        }
+
+        if (nativeRenderer == nullptr &&
+            viewportShadingSettings_.wireOverlaysVisible &&
+            viewportShadingSettings_.showExtras) {
+            drawImportedCameraViewportStrokesFallback(
+                painter, document_, viewportShadingSettings_.themeWireColor,
+                viewportTransform_.cameraState().cameraView,
+                smoothWiresOverlay_, viewportShadingSettings_.xrayEnabled(),
+                1.0 - std::clamp<qreal>(
+                    viewportShadingSettings_.xrayAlphaForMode(), 0.0, 1.0),
+                viewportTransform_, renderFrame.viewportSize,
+                rasterSurfaceLayers);
         }
 
         for (const ViewportRenderObject &renderObject : visibleShapes) {

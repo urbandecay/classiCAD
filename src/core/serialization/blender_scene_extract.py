@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 33
+BRIDGE_FORMAT_VERSION = 34
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -45,6 +45,7 @@ MAX_VOLUME_GRID_RECORDS = 262144
 MAX_VOLUME_GRID_VOXELS = 16 * 1024 * 1024
 MAX_VOLUME_GRID_PAYLOAD_BYTES = 16 * 1024 * 1024
 MAX_COLLECTION_INSTANCES = 50000
+MAX_CAMERA_VIEWPORT_EXTRAS_PER_SCENE = 1024
 MAX_COLLECTION_IMAGE_EMPTY_INSTANCES = 256
 MAX_COLLECTION_IMAGE_EMPTY_PIXELS = 16 * 1024 * 1024
 MAX_COLLECTION_VOLUME_INSTANCES = 4
@@ -1098,6 +1099,142 @@ def scene_camera_record(scene, depsgraph=None):
         "dof_aperture_blades": int(data.dof.aperture_blades),
         "dof_aperture_rotation": finite_number(data.dof.aperture_rotation),
         "dof_aperture_ratio": finite_number(data.dof.aperture_ratio),
+    }
+
+
+def camera_viewport_extra_record(obj, scene, depsgraph):
+    """Capture the depth-tested wire guide Blender draws for a camera object."""
+    from mathutils import Vector
+
+    evaluated = obj.evaluated_get(depsgraph) if depsgraph is not None else obj
+    camera = evaluated.data
+    display_size = finite_number(getattr(camera, "display_size", 1.0))
+    if display_size <= 0.0:
+        return None
+    frame = camera.view_frame(scene=scene)
+    if len(frame) != 4:
+        return None
+
+    matrix = evaluated.matrix_world
+    basis = matrix.to_3x3()
+    axes = []
+    axis_scales = []
+    for axis_index in range(3):
+        axis = Vector(tuple(basis[row][axis_index] for row in range(3)))
+        if axis.length <= 1.0e-12:
+            return None
+        axis_scales.append(float(axis.length))
+        axes.append(axis.normalized())
+    origin = matrix.translation.copy()
+
+    is_orthographic = camera.type == "ORTHO"
+    if is_orthographic:
+        # Blender keeps an orthographic camera's frame at ortho_scale. The
+        # display size sets only the camera body's depth in the object view.
+        draw_size = 0.5 * finite_number(camera.ortho_scale)
+        local_frame = [
+            Vector((finite_number(point.x), finite_number(point.y), -display_size))
+            for point in frame
+        ]
+        camera_view_frame = [
+            Vector((finite_number(point.x), finite_number(point.y),
+                    -(finite_number(camera.clip_start) + 0.1)))
+            for point in frame
+        ]
+    else:
+        # BKE_camera_view_frame_ex uses half the display size, adjusted by the
+        # reciprocal object scale, for perspective camera guides.
+        average_inverse_scale = sum(1.0 / scale for scale in axis_scales) / 3.0
+        if not math.isfinite(average_inverse_scale) or average_inverse_scale <= 1.0e-12:
+            return None
+        draw_size = (display_size * 0.5) / average_inverse_scale
+        # camera.view_frame() calls BKE_camera_view_frame_ex with drawsize=1,
+        # whose perspective frame is already half-sized. The overlay call
+        # passes camera.display_size, so its frame needs twice r_drawsize.
+        frame_scale = 2.0 * draw_size
+        local_frame = [
+            Vector((finite_number(point.x) * frame_scale,
+                    finite_number(point.y) * frame_scale,
+                    finite_number(point.z) * frame_scale))
+            for point in frame
+        ]
+        camera_view_frame = []
+        for point in frame:
+            depth = abs(float(point.z))
+            if not math.isfinite(depth) or depth <= 1.0e-12:
+                return None
+            # Blender clips the active camera's frame to clip_start + 0.1.
+            clip_scale = (finite_number(camera.clip_start) + 0.1) / depth
+            camera_view_frame.append(Vector((
+                finite_number(point.x) * clip_scale,
+                finite_number(point.y) * clip_scale,
+                finite_number(point.z) * clip_scale,
+            )))
+
+    def world_point(local_point):
+        return origin + axes[0] * local_point.x + axes[1] * local_point.y + axes[2] * local_point.z
+
+    local_frame_segments = []
+    local_segments = []
+    for index in range(4):
+        local_frame_segments.append(
+            (local_frame[index], local_frame[(index + 1) % 4]))
+        local_segments.append(
+            (local_frame[index], local_frame[(index + 1) % 4]))
+        local_segments.append((Vector((0.0, 0.0, 0.0)), local_frame[index]))
+
+    # Blender's camera overlay adds its recognizable triangle above the frame
+    # when the camera is drawn as a scene object rather than as the active
+    # camera-view border.
+    center_x = sum(point.x for point in local_frame) * 0.25
+    frame_top = max(point.y for point in local_frame)
+    frame_depth = sum(point.z for point in local_frame) * 0.25
+    triangle_size = 0.7 * draw_size
+    triangle_base = frame_top + 0.1 * draw_size
+    triangle = (
+        Vector((center_x - triangle_size, triangle_base, frame_depth)),
+        Vector((center_x + triangle_size, triangle_base, frame_depth)),
+        Vector((center_x, triangle_base + 2.0 * triangle_size, frame_depth)),
+    )
+    local_segments.extend(((triangle[0], triangle[1]),
+                           (triangle[1], triangle[2]),
+                           (triangle[2], triangle[0])))
+
+    def world_line_vertices_for_segments(segments):
+        vertices = []
+        for first, second in segments:
+            vertices.append(vector_values(world_point(first)))
+            vertices.append(vector_values(world_point(second)))
+        return vertices
+
+    camera_view_frame_segments = [
+        (camera_view_frame[index], camera_view_frame[(index + 1) % 4])
+        for index in range(4)
+    ]
+    camera_view_line_vertices = world_line_vertices_for_segments(
+        camera_view_frame_segments)
+    world_line_vertices = world_line_vertices_for_segments(local_segments)
+
+    visible_view_layer_keys = []
+    visible_default = True
+    for index, view_layer in enumerate(scene.view_layers):
+        try:
+            visible = bool(obj.visible_get(view_layer=view_layer))
+        except Exception:
+            visible = not object_hidden_in_layer(obj, view_layer)
+        if index == 0:
+            visible_default = visible
+        if visible:
+            visible_view_layer_keys.append(view_layer_key(scene, view_layer))
+
+    return {
+        "object_id": stable_id(obj),
+        "kind": "CAMERA",
+        "is_active_camera": scene.camera == obj,
+        "visible_default": visible_default,
+        "visible_view_layer_keys": visible_view_layer_keys,
+        "camera_view_line_vertices": camera_view_line_vertices,
+        "world_line_vertices": world_line_vertices,
     }
 
 
@@ -2635,6 +2772,7 @@ def extract_scene(input_path, mode):
                 if scene.name_full in scene_names
             ),
             "object_ids": [],
+            "viewport_extras": [],
             # Camera and focus-object transforms are evaluated scene state,
             # even when mesh import is explicitly set to preserve original
             # (unevaluated) geometry.
@@ -2698,10 +2836,33 @@ def extract_scene(input_path, mode):
             "loose_vertex_point_count": 0,
             "loose_vertex_limit_exceeded": False,
         }
+        viewport_extra_count = 0
+        viewport_extra_limit_reported = False
         for obj in scene.objects:
             object_count += 1
             object_id = stable_id(obj)
             scene_record["object_ids"].append(object_id)
+            if obj.type == "CAMERA":
+                if viewport_extra_count < MAX_CAMERA_VIEWPORT_EXTRAS_PER_SCENE:
+                    try:
+                        extra = camera_viewport_extra_record(
+                            obj, scene, camera_depsgraph)
+                    except Exception as error:
+                        extra = None
+                        add_unsupported(
+                            output["unsupported_features"], object_id,
+                            "camera_viewport_extra",
+                            "camera guide could not be evaluated: " + str(error))
+                    if extra is not None:
+                        scene_record["viewport_extras"].append(extra)
+                        viewport_extra_count += 1
+                elif not viewport_extra_limit_reported:
+                    viewport_extra_limit_reported = True
+                    add_unsupported(
+                        output["unsupported_features"], stable_id(scene),
+                        "camera_viewport_extra_limit",
+                        "camera guides beyond the per-scene limit of %d were omitted" %
+                        MAX_CAMERA_VIEWPORT_EXTRAS_PER_SCENE)
             if obj.type == "EMPTY" and obj.instance_collection is not None:
                 add_unsupported(
                     output["unsupported_features"], object_id,

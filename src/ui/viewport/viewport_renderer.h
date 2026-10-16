@@ -40,6 +40,7 @@ public:
     void setShadingSettings(const ViewportShadingSettings &settings);
     void setWorkbenchRasterAntialiasingEnabled(bool enabled);
     void setSmoothWirePreferences(bool overlay, bool editMode);
+    void setThemeOutlineWidth(qreal width);
     void beginPreparedCurveSegmentResolve() const;
     void flushPreparedCurveSegmentResolve(
         QPainter &painter,
@@ -204,6 +205,7 @@ private:
     bool workbenchRasterAntialiasingEnabled_ = true;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
+    qreal themeOutlineWidth_ = 1.0;
     bool architecturalDimensionFont_ = false;
     mutable QVector<SmoothWireBatch> smoothWireBatches_;
     BlenderGridAppearance gridAppearance_;

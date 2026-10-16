@@ -3195,6 +3195,18 @@ public:
 
     bool smoothWiresOverlay() const override { return smoothWiresOverlay_; }
     bool smoothWiresEditMode() const override { return smoothWiresEditMode_; }
+    qreal themeOutlineWidth() const override { return themeOutlineWidth_; }
+
+    void setThemeOutlineWidth(qreal width) override
+    {
+        if (!std::isfinite(width) || width < 0.0 || width > 10.0 ||
+            themeOutlineWidth_ == width) {
+            return;
+        }
+        themeOutlineWidth_ = width;
+        viewportRenderer_.setThemeOutlineWidth(width);
+        update();
+    }
 
     void setSmoothWirePreferences(bool overlay, bool editMode) override
     {
@@ -14581,7 +14593,8 @@ protected:
                             renderShadingSettings,
                             aaRenderer != nullptr ? &aaRenderer->targets()
                                                   : nullptr,
-                            aaSceneSampleActive, smoothWiresOverlay_);
+                            aaSceneSampleActive, smoothWiresOverlay_,
+                            themeOutlineWidth_);
                 }
                 surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {
@@ -15333,7 +15346,8 @@ protected:
                     document_, renderFrame.camera,
                     renderFrame.viewportSize),
                 smoothWiresOverlay_,
-                renderFrame.camera.cameraState().cameraView);
+                renderFrame.camera.cameraState().cameraView,
+                themeOutlineWidth_);
             const qint64 sceneLinearTargetPixels =
                 qint64(committedSceneLayer.width()) *
                 committedSceneLayer.height();
@@ -29454,6 +29468,7 @@ private:
     bool controlPointsVisible_ = true;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
+    qreal themeOutlineWidth_ = 1.0;
     bool viewportPlaybackActive_ = false;
     ViewportInteractionMode interactionMode_ =
         ViewportInteractionMode::Object;

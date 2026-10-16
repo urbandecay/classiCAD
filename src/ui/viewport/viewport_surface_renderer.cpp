@@ -6101,7 +6101,8 @@ bool ViewportSurfaceRenderer::draw(
     const ViewportRenderTargets *sharedTargets,
     ViewportRenderPassReport *passReport,
     bool sceneLinearOutput,
-    bool smoothWiresOverlay)
+    bool smoothWiresOverlay,
+    qreal themeOutlineWidth)
 {
     if (passReport != nullptr) *passReport = {};
     if (QOpenGLContext::currentContext() == nullptr || viewportSize.isEmpty() ||
@@ -8935,7 +8936,10 @@ bool ViewportSurfaceRenderer::draw(
                     selectionOnly && smoothWiresOverlay);
                 outlineProgram_.setUniformValue(
                     "uThickSelectionOutline",
-                    selectionOnly && workbenchEffectUiScale(dpr) > 1);
+                    selectionOnly &&
+                        (workbenchEffectUiScale(dpr) > 1 ||
+                         (std::isfinite(themeOutlineWidth) &&
+                          themeOutlineWidth > 2.0)));
                 outlineProgram_.setUniformValue(
                     "uXRayWireSelectionOutline",
                     selectionOnly && xrayWireSelection);

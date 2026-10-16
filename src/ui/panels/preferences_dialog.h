@@ -21,6 +21,7 @@ struct PreferencesDialogValues {
     int viewportAaMode = 8;
     bool smoothWiresOverlay = true;
     bool smoothWiresEditMode = true;
+    qreal themeOutlineWidth = 1.0;
 };
 
 // Returns true when the user accepts the dialog and writes the selected values.

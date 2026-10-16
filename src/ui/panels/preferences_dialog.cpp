@@ -42,6 +42,7 @@ public:
                                int viewportAaMode,
                                bool smoothWiresOverlay,
                                bool smoothWiresEditMode,
+                               qreal themeOutlineWidth,
                                std::function<void(int, bool, bool)>
                                    viewportQualityPreview,
                                QWidget *parent = nullptr)
@@ -95,7 +96,8 @@ public:
                                                      rotateToolPreferences,
                                                      viewportAaMode,
                                                      smoothWiresOverlay,
-                                                     smoothWiresEditMode));
+                                                     smoothWiresEditMode,
+                                                     themeOutlineWidth));
             } else if (category == QStringLiteral("Dimensions")) {
                 pages_->addWidget(createDimensionPage(architecturalDimensionFont));
             } else if (category == QStringLiteral("Navigation")) {
@@ -222,6 +224,11 @@ public:
     bool smoothWiresEditMode() const
     {
         return smoothWiresEditModeCheckBox_->isChecked();
+    }
+
+    qreal themeOutlineWidth() const
+    {
+        return themeOutlineWidthSpinBox_->value();
     }
 
 private:
@@ -371,7 +378,8 @@ private:
                                 const RotateToolPreferences &rotateToolPreferences,
                                 int viewportAaMode,
                                 bool smoothWiresOverlay,
-                                bool smoothWiresEditMode)
+                                bool smoothWiresEditMode,
+                                qreal themeOutlineWidth)
     {
         gridAppearance_ = gridAppearance;
         themeBackground_ = themeBackground;
@@ -414,6 +422,18 @@ private:
         smoothWiresEditModeCheckBox_->setToolTip(
             QStringLiteral("Changes take effect after restarting classiCAD."));
         qualityLayout->addRow(QString(), smoothWiresEditModeCheckBox_);
+        themeOutlineWidthSpinBox_ = new QDoubleSpinBox;
+        themeOutlineWidthSpinBox_->setRange(0.0, 10.0);
+        themeOutlineWidthSpinBox_->setDecimals(1);
+        themeOutlineWidthSpinBox_->setSingleStep(0.5);
+        themeOutlineWidthSpinBox_->setSuffix(QStringLiteral(" px"));
+        themeOutlineWidthSpinBox_->setValue(themeOutlineWidth);
+        themeOutlineWidthSpinBox_->setObjectName(
+            QStringLiteral("themeOutlineWidthPreference"));
+        themeOutlineWidthSpinBox_->setToolTip(QStringLiteral(
+            "Blender uses a wider selected-object outline when this value is greater than 2 px."));
+        qualityLayout->addRow(QStringLiteral("Theme Outline Width"),
+                              themeOutlineWidthSpinBox_);
         const auto previewQuality = [this] {
             if (viewportQualityPreview_) {
                 viewportQualityPreview_(this->viewportAaMode(),
@@ -946,6 +966,7 @@ private:
     QComboBox *viewportAaCombo_ = nullptr;
     QCheckBox *smoothWiresOverlayCheckBox_ = nullptr;
     QCheckBox *smoothWiresEditModeCheckBox_ = nullptr;
+    QDoubleSpinBox *themeOutlineWidthSpinBox_ = nullptr;
     std::function<void(int, bool, bool)> viewportQualityPreview_;
 };
 
@@ -973,6 +994,7 @@ bool showPreferencesDialog(QWidget *parent,
                              initialValues.viewportAaMode,
                              initialValues.smoothWiresOverlay,
                              initialValues.smoothWiresEditMode,
+                             initialValues.themeOutlineWidth,
                              std::move(viewportQualityPreview),
                              parent);
     if (dialog.exec() != QDialog::Accepted) {
@@ -992,6 +1014,7 @@ bool showPreferencesDialog(QWidget *parent,
     selectedValues->viewportAaMode = dialog.viewportAaMode();
     selectedValues->smoothWiresOverlay = dialog.smoothWiresOverlay();
     selectedValues->smoothWiresEditMode = dialog.smoothWiresEditMode();
+    selectedValues->themeOutlineWidth = dialog.themeOutlineWidth();
     return true;
 }
 

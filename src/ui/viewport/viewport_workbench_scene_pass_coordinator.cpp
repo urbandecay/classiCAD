@@ -15,11 +15,13 @@ ViewportWorkbenchScenePassPacket::fromFrame(
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets *sharedTargets,
     bool sceneLinearOutput,
-    bool smoothWiresOverlay)
+    bool smoothWiresOverlay,
+    qreal themeOutlineWidth)
 {
     return fromScene(drawObjects, sampleCamera, frame.viewportSize,
                      devicePixelRatio, settings, sharedTargets,
-                     sceneLinearOutput, smoothWiresOverlay);
+                     sceneLinearOutput, smoothWiresOverlay,
+                     themeOutlineWidth);
 }
 
 ViewportWorkbenchScenePassPacket
@@ -31,7 +33,8 @@ ViewportWorkbenchScenePassPacket::fromScene(
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets *sharedTargets,
     bool sceneLinearOutput,
-    bool smoothWiresOverlay)
+    bool smoothWiresOverlay,
+    qreal themeOutlineWidth)
 {
     ViewportWorkbenchScenePassPacket packet;
     packet.objects = objects;
@@ -42,6 +45,7 @@ ViewportWorkbenchScenePassPacket::fromScene(
     packet.sharedTargets = sharedTargets;
     packet.sceneLinearOutput = sceneLinearOutput;
     packet.smoothWiresOverlay = smoothWiresOverlay;
+    packet.themeOutlineWidth = themeOutlineWidth;
     return packet;
 }
 
@@ -70,7 +74,8 @@ ViewportWorkbenchScenePassCoordinator::renderSceneColor(
         packet.objects, packet.camera, packet.viewportSize,
         packet.devicePixelRatio, packet.settings,
         false, true, false, packet.sharedTargets, &result.report,
-        packet.sceneLinearOutput, packet.smoothWiresOverlay);
+        packet.sceneLinearOutput, packet.smoothWiresOverlay,
+        packet.themeOutlineWidth);
     return result;
 }
 
@@ -84,12 +89,14 @@ ViewportWorkbenchScenePassCoordinator::renderFrameSceneColor(
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets *sharedTargets,
     bool sceneLinearOutput,
-    bool smoothWiresOverlay)
+    bool smoothWiresOverlay,
+    qreal themeOutlineWidth)
 {
     const ViewportWorkbenchScenePassPacket packet =
         ViewportWorkbenchScenePassPacket::fromFrame(
             frame, drawObjects, sampleCamera, devicePixelRatio, settings,
-            sharedTargets, sceneLinearOutput, smoothWiresOverlay);
+            sharedTargets, sceneLinearOutput, smoothWiresOverlay,
+            themeOutlineWidth);
     return renderSceneColor(surfaceRenderer, packet);
 }
 

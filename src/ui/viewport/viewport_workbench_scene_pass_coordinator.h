@@ -21,6 +21,7 @@ struct ViewportWorkbenchScenePassPacket {
     const ViewportRenderTargets *sharedTargets = nullptr;
     bool sceneLinearOutput = false;
     bool smoothWiresOverlay = true;
+    qreal themeOutlineWidth = 1.0;
 
     static ViewportWorkbenchScenePassPacket fromFrame(
         const ViewportRenderFrame &frame,
@@ -30,7 +31,8 @@ struct ViewportWorkbenchScenePassPacket {
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets *sharedTargets,
         bool sceneLinearOutput,
-        bool smoothWiresOverlay = true);
+        bool smoothWiresOverlay = true,
+        qreal themeOutlineWidth = 1.0);
 
     static ViewportWorkbenchScenePassPacket fromScene(
         const QVector<ViewportRenderObject> &objects,
@@ -40,7 +42,8 @@ struct ViewportWorkbenchScenePassPacket {
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets *sharedTargets,
         bool sceneLinearOutput,
-        bool smoothWiresOverlay = true);
+        bool smoothWiresOverlay = true,
+        qreal themeOutlineWidth = 1.0);
 
     bool isValid() const noexcept;
 };
@@ -69,7 +72,8 @@ public:
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets *sharedTargets,
         bool sceneLinearOutput,
-        bool smoothWiresOverlay = true);
+        bool smoothWiresOverlay = true,
+        qreal themeOutlineWidth = 1.0);
 
     static ViewportWorkbenchSceneColorPassResult renderSceneColor(
         ViewportSurfaceRenderer &surfaceRenderer,

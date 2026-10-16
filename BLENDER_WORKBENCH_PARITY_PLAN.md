@@ -9947,11 +9947,12 @@ scene depth.
 
 - The selected-object outline resolve now follows classiCAD's Overlay Smooth
   Wires preference: enabled outlines keep fractional edge coverage, while
-  disabled outlines use a hard full-coverage edge. At UI scales above one, the
-  resolve checks the wider two-step footprint Blender enables for thick
-  outlines. X-Ray selected-mesh silhouettes also suppress expansion on the
-  negative screen axes, following Blender's X-Ray wire rule. The setting is
-  passed from the live viewport preference and is not stored as imported scene
+  disabled outlines use a hard full-coverage edge. At UI scales above one or
+  theme outline widths above two pixels, the resolve checks the wider
+  two-step footprint Blender enables for thick outlines. X-Ray selected-mesh
+  silhouettes also suppress expansion on the negative screen axes, following
+  Blender's X-Ray wire rule. The width is a persisted classiCAD viewport
+  preference, defaults to Blender's one-pixel value, and is not imported scene
   data.
 - Blender 5.2.2 chooses smooth selection-outline AA from
   `USER_GPU_FLAG_OVERLAY_SMOOTH_WIRE`, expands the resolve for UI scale above
@@ -9960,17 +9961,18 @@ scene depth.
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913)
   and
   [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1327).
-  classiCAD does not yet carry Blender's theme outline-width preference, so
-  only the UI-scale expansion trigger is matched. Build passed; matched outline
-  captures remain open.
+  classiCAD exposes the theme outline width as a persisted viewport
+  preference, so both expansion triggers are represented. Build passed;
+  matched outline captures remain open.
 
 ### QPainter selected-outline smoothing preference (2026-10-16)
 
 - The raster fallback now uses the Overlay Smooth Wires preference for selected
   object contours. When enabled it keeps the existing partial edge coverage;
   when disabled any selected-object boundary is drawn at full coverage. The
-  QPainter fallback still does not expand selected contours using Blender's
-  high-DPI/theme-width rule.
+  raster fallback expands selected contours when UI scale is above one or the
+  persisted theme outline width is above two pixels, using the same trigger as
+  the GPU resolve.
 - Blender 5.2.2 passes the same `USER_GPU_FLAG_OVERLAY_SMOOTH_WIRE` preference
   into the selected-outline resolve in
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913).
@@ -9979,21 +9981,32 @@ scene depth.
 ### QPainter selected-outline high-DPI expansion (2026-10-16)
 
 - At UI scales above one, the raster fallback now checks Blender's wider
-  second cardinal ring only when its first ring finds no selected boundary.
+  second cardinal ring only when its first ring finds no selected boundary;
+  theme outline widths above two pixels activate the same ring at UI scale one.
   That outer ring uses fixed quarter coverage when Smooth Wires is enabled,
   matching the GPU resolve; disabling smoothing gives a hard edge while
   retaining Blender's 35% opacity for hidden contours. In X-Ray, selected
   polygon-mesh outlines skip expansion toward screen-left and screen-down,
   matching Blender's negative-axis rule after accounting for QImage's
   downward Y axis. This is still a cardinal-sample approximation; Blender
-  also checks diagonal taps, and classiCAD does not carry Blender's theme
-  outline-width setting.
+  also checks diagonal taps.
 - Blender 5.2.2 enables the wider outline footprint above UI scale one and
   checks the second ring only when the first ring finds no edge in
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913)
   and
   [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1327).
   Build passed; matched QPainter outline captures remain open.
+
+### Persist Blender's selected-outline width trigger (2026-10-16)
+
+- Preferences now store a viewport theme outline width, defaulting to 1 px.
+  Both the GPU and raster selected-object outline paths use Blender's trigger:
+  expand the outline sample footprint when UI scale is above one or the theme
+  outline width is above two pixels. The preference is applied live and does
+  not change imported Blender scene data.
+- Blender 5.2.2 reads `TH_OUTLINE_WIDTH` and combines it with `U.pixelsize` in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913).
+  Matched GPU and QPainter outline captures remain open.
 
 ### QPainter selected outlines for transparent surfaces (2026-10-16)
 

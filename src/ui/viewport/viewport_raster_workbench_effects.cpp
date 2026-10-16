@@ -2444,7 +2444,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QSize &committedCurveDepthSize,
                                  qreal cameraFrameSensorScale,
                                  bool smoothWiresOverlay,
-                                 bool sceneCameraView)
+                                 bool sceneCameraView,
+                                 qreal themeOutlineWidth)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     const bool selectedOutlineEnabled =
@@ -3639,6 +3640,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         // Integer ID sampling resolves the fractional scale to the nearest
         // texel, as the GPU texture lookup does.
         const int outlineSampleOffset = workbenchEffectUiScale(dpr);
+        const bool thickSelectionOutline = outlineSampleOffset > 1 ||
+            (std::isfinite(themeOutlineWidth) && themeOutlineWidth > 2.0);
         const float outlineExposureScale = std::exp2(
             static_cast<float>(settings.colorExposure));
         const bool standardLinearOutlineBlend = drawWorkbenchOutline &&
@@ -3783,7 +3786,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         }
                     }
                     if (selectedOutlineCoverage <= 0.0f &&
-                        outlineSampleOffset > 1) {
+                        thickSelectionOutline) {
                         const std::array<QPoint, 4> widerCardinalNeighbors = {
                             QPoint(outlineSampleOffset * 2, 0),
                             QPoint(-outlineSampleOffset * 2, 0),

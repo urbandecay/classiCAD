@@ -46,7 +46,8 @@ public:
               const ViewportRenderTargets *sharedTargets = nullptr,
               ViewportRenderPassReport *passReport = nullptr,
               bool sceneLinearOutput = false,
-              bool smoothWiresOverlay = true);
+              bool smoothWiresOverlay = true,
+              qreal themeOutlineWidth = 1.0);
 
 private:
     struct SurfaceVertex {

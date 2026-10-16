@@ -1107,6 +1107,13 @@ void ViewportRenderer::setSmoothWirePreferences(bool overlay, bool editMode)
     smoothWiresEditMode_ = editMode;
 }
 
+void ViewportRenderer::setThemeOutlineWidth(qreal width)
+{
+    if (std::isfinite(width) && width >= 0.0 && width <= 10.0) {
+        themeOutlineWidth_ = width;
+    }
+}
+
 void ViewportRenderer::beginPreparedCurveSegmentResolve() const
 {
     smoothWireBatches_.clear();

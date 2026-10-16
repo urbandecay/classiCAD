@@ -32,6 +32,10 @@
 namespace classiCAD {
 namespace {
 
+// This legacy QPainter effects compositor does not multiply scattering by
+// Blender's pi-valued shadow texture, so it uses the phase coefficient itself.
+constexpr float kQPainterIsotropicPhaseFunction = 0.0795774715f;
+
 struct RasterSample {
     float depth = -std::numeric_limits<float>::infinity();
     QVector3D position;
@@ -996,9 +1000,12 @@ bool compositeRasterWorkbenchSurfaces(
             pixel.depth = sample.cameraDepth;
             pixel.objectOrder = objectOrder;
             pixel.sampleIndex = sample.sampleIndex;
-            pixel.color = {baseColor.x() * alpha * scatterScale * 0.25f,
-                           baseColor.y() * alpha * scatterScale * 0.25f,
-                           baseColor.z() * alpha * scatterScale * 0.25f,
+            pixel.color = {baseColor.x() * alpha * scatterScale *
+                               kQPainterIsotropicPhaseFunction,
+                           baseColor.y() * alpha * scatterScale *
+                               kQPainterIsotropicPhaseFunction,
+                           baseColor.z() * alpha * scatterScale *
+                               kQPainterIsotropicPhaseFunction,
                            alpha};
             volumeSlicePixels[static_cast<std::size_t>(
                 sample.y * width + sample.x)].push_back(pixel);

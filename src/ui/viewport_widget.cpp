@@ -10679,6 +10679,16 @@ protected:
         return found == selections.cend() ? emptySelection : found.value();
     }
 
+    bool hasExplicitComponentSelection(
+        ObjectId objectId, ComponentSelectionMode mode) const
+    {
+        if (!isEditObject(objectId)) {
+            return false;
+        }
+        return componentSelections_[static_cast<int>(mode)].contains(
+            objectId.value());
+    }
+
     bool isEditObject(ObjectId objectId) const
     {
         return interactionMode_ == ViewportInteractionMode::Edit &&
@@ -10946,6 +10956,9 @@ protected:
                         ? curveEndpointVertices(renderObject->shape,
                                                 renderObject->placementTranslation)
                         : QVector<QPair<int, Point3D>>{};
+                const bool hasExplicitVertexSelection =
+                    hasExplicitComponentSelection(
+                        objectId, ComponentSelectionMode::Vertex);
                 QSet<int> effectiveEndpointSelection =
                     componentSelectionForObject(objectId);
                 effectiveEndpointSelection.unite(
@@ -11002,7 +11015,8 @@ protected:
                         const bool selected =
                             effectiveEndpointSelection.contains(componentIndex) ||
                             (renderObject->selected &&
-                             effectiveEndpointSelection.isEmpty());
+                             effectiveEndpointSelection.isEmpty() &&
+                             !hasExplicitVertexSelection);
                         const bool activeVertex =
                             effectiveEndpointSelection.contains(componentIndex) &&
                             componentSelectionObject_ == objectId &&
@@ -11025,7 +11039,8 @@ protected:
                         const bool selected = vertexSelectionMode &&
                             (effectiveEndpointSelection.contains(componentIndex) ||
                              (renderObject->selected &&
-                              effectiveEndpointSelection.isEmpty()));
+                              effectiveEndpointSelection.isEmpty() &&
+                              !hasExplicitVertexSelection));
                         const bool activeVertex = selected &&
                             componentSelectionObject_ == objectId &&
                             activeComponentIndices_[static_cast<int>(
@@ -11062,11 +11077,16 @@ protected:
                         componentSelectionObject_ == renderObject.objectId
                             ? activeComponentIndex()
                             : -1;
+                    const bool hasExplicitVertexSelection =
+                        hasExplicitComponentSelection(
+                            renderObject.objectId,
+                            ComponentSelectionMode::Vertex);
                     appendSurfaceCornerHandles(
                         renderObject.shape,
                         renderObject.placementTranslation,
                         selection, activePoint,
-                        renderObject.selected && selection.isEmpty());
+                        renderObject.selected && selection.isEmpty() &&
+                            !hasExplicitVertexSelection);
                 }
             }
         }
@@ -16142,7 +16162,10 @@ protected:
                             componentSelectionMode_ ==
                                 ComponentSelectionMode::Vertex &&
                             renderObject->selected &&
-                            selectedControlPointIndices.isEmpty();
+                            selectedControlPointIndices.isEmpty() &&
+                            !hasExplicitComponentSelection(
+                                objectId,
+                                ComponentSelectionMode::Vertex);
                         drawControlPoints(painter,
                                           *renderObject,
                                           selectedControlPointIndices,
@@ -16176,7 +16199,10 @@ protected:
                     const bool selected =
                         effectiveEndpointSelection.contains(endpoint.first) ||
                         (renderObject->selected &&
-                         effectiveEndpointSelection.isEmpty());
+                         effectiveEndpointSelection.isEmpty() &&
+                         !hasExplicitComponentSelection(
+                             renderObject->objectId,
+                             ComponentSelectionMode::Vertex));
                     const bool active =
                         effectiveEndpointSelection.contains(endpoint.first) &&
                         componentSelectionObject_ == renderObject->objectId &&

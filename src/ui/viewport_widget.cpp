@@ -20711,7 +20711,6 @@ private:
             }
             if (!moved && componentBoxStartedOnBlank_ && !additive) {
                 clearComponentSelections();
-                componentSelectionObject_ = ObjectId::invalid();
             }
             componentBoxStartedOnBlank_ = false;
             if (moved) {
@@ -21456,8 +21455,7 @@ private:
                             .arg(finalSelections.join(QStringLiteral(";"))));
                 } else if (!additive) {
                     clearComponentSelections();
-                    componentSelectionObject_ = ObjectId::invalid();
-                    selection_.clear();
+                    selection_.deselectAllPreservingActive();
                 }
             }
             update();

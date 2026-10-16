@@ -3911,9 +3911,11 @@ when nothing is selected. The active object determines the Edit Mode geometry
 family; compatible selected objects join it when present. Blender imports now
 retain an active object even if it is unselected, and update-session version 7
 saves and restores this state. Selection visuals continue to use only the
-selected-object list. This ports the active-object state needed by the current
-workflow; exact Blender behavior for every selection gesture and hidden-object
-case remains under review.
+selected-object list. Clicking empty space to clear component selections in
+Edit Mode also keeps the active edit target alive so the mode shortcuts remain
+available. This ports the active-object state needed by the current workflow;
+exact Blender behavior for every selection gesture and hidden-object case
+remains under review.
 
 Object Mode selection now routes Blender's `Alt+A` deselect and `Ctrl+I` invert
 shortcuts through the Select tool when no selection drag is active. Invert

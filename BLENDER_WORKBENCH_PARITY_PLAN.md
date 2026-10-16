@@ -5211,6 +5211,9 @@ resolve remain open.
   transmittance behavior; [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc)
   sets the volume sample count to five times each grid dimension and computes
   the world-space step as the length of the per-axis spacing vector. The
+  QPainter marcher now sets remaining transmittance to zero when it reaches
+  Blender's 0.01 early-stop threshold, matching the shader's fully opaque
+  result at termination.
   production contract checks
   visible output and increased contribution at higher density. Matched Blender
   output and comprehensive depth/occlusion combinations remain open.

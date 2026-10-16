@@ -586,6 +586,13 @@ bool rasterWorkbenchVolumeRaySamples(
                                          scatteringScale * 0.25f;
                 radiance += QVector3D(scattering, scattering, scattering);
                 transmittance *= stepTransmittance;
+                // Blender treats the volume as fully opaque once only one
+                // percent of the ray remains. Keep the final alpha at 1.0
+                // when terminating instead of retaining that small remainder.
+                if (transmittance <= 0.01f) {
+                    transmittance = 0.0f;
+                    break;
+                }
             }
             if (exhaustedWork) {
                 samples->clear();

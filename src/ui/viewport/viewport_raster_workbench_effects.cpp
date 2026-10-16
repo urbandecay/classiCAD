@@ -4458,10 +4458,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const int depthX = std::clamp(
                         static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                         0, width - 1);
+                    const int depthIndex = depthY * width + depthX;
                     const bool hasRegularSurfaceDepth = std::isfinite(
-                        regularDofDepth[depthY * width + depthX]);
+                        regularDofDepth[depthIndex]);
                     if (hasRegularSurfaceDepth ||
-                        std::isfinite(visibleCurveDepthAt(x, y, false))) {
+                        std::isfinite(visibleCurveDepthAt(x, y, false)) ||
+                        inFrontSamples[depthIndex].objectId != 0 ||
+                        std::isfinite(visibleCurveDepthAt(x, y, true))) {
                         dofCoverage[qsizetype(y) * outputWidth + x] = 1;
                     }
                 }

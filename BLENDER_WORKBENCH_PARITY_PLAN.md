@@ -9598,12 +9598,17 @@ moves them after scene effects and depth-tests them against the retained scene.
 ### QPainter DOF uses regular-scene depth (2026-10-16)
 
 - QPainter's camera depth-of-field gather now derives circle of confusion,
-  center depth, and covered-pixel regions from regular scene surfaces and
-  regular scene curves. `showInFront` objects still contribute their already
-  composited color, but their separate depth no longer changes the DOF blur.
+  center depth, and blur calculations from regular scene surfaces and regular
+  scene curves. Its bounded work mask includes both regular and `showInFront`
+  surface/curve coverage, so front-only color still receives the full-screen
+  DOF resolve. `showInFront` objects contribute their already composited color,
+  but their separate depth does not change the blur calculation.
 - Blender 5.2.2 runs Workbench DOF before the later overlay-depth pass and
   supplies the regular scene depth texture to the DOF effect in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L457-L465)
   and
   [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc).
-  Build passed; matched `showInFront` DOF captures remain open.
+  QPainter already maps orthographic OIT weights to near-plane depth in its
+  fragment capture; this fix only restores front-only pixels to the bounded
+  DOF candidate mask. Build passed; matched `showInFront` DOF captures remain
+  open.

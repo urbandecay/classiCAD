@@ -18,6 +18,7 @@ struct DocumentCollection {
     QVector<CollectionId> parentIds;
     bool hideViewport = false;
     bool hideRender = false;
+    bool hideSelect = false;
     QJsonArray viewLayerStates;
 };
 } // namespace classiCAD

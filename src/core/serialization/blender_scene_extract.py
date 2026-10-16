@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 31
+BRIDGE_FORMAT_VERSION = 32
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -2596,6 +2596,7 @@ def extract_scene(input_path, mode):
             "source_scene_names": sorted(scene_names_by_collection.get(collection_id, set())),
             "hide_viewport": bool(collection.hide_viewport),
             "hide_render": bool(collection.hide_render),
+            "hide_select": bool(collection.hide_select),
             "view_layer_states": states_by_collection.get(collection_id, []),
         })
     for scene in bpy.data.scenes:

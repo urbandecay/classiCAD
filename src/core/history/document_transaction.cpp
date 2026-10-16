@@ -175,7 +175,8 @@ CollectionId DocumentTransaction::insertCollection(
     for (const CollectionId parentId : collection.parentIds) {
         changes_.addCollection(parentId);
     }
-    if (collection.hideViewport) changes_.visibilityChanged = true;
+    if (collection.hideViewport || collection.hideSelect)
+        changes_.visibilityChanged = true;
     return id;
 }
 

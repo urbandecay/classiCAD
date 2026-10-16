@@ -583,6 +583,7 @@ CollectionId Document::insertCollection(DocumentCollection value)
     changes.addCollection(value.id);
     changes.structureChanged = true;
     changes.collectionsChanged = true;
+    changes.visibilityChanged = value.hideViewport || value.hideSelect;
     applyChanges(changes);
     return value.id;
 }
@@ -887,8 +888,114 @@ bool Document::isObjectRenderable(ObjectId objectId) const
 bool Document::isObjectEditable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
-    return sceneObject != nullptr && isObjectVisible(objectId) &&
-           !sceneObject->hideSelect;
+    if (sceneObject == nullptr || sceneObject->hideSelect ||
+        !isObjectVisible(objectId)) {
+        return false;
+    }
+    if (sceneObject->collectionIds.isEmpty()) return true;
+
+    const QString activeViewLayerKey = settings_.activeViewLayerKey.isEmpty()
+        ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
+    if (activeViewLayerKey.isEmpty()) {
+        const auto hasSelectableCollectionPath =
+            [&](const auto &self, CollectionId id, QSet<quint64> path) -> bool {
+                if (path.contains(id.value())) return false;
+                path.insert(id.value());
+                const DocumentCollection *entry = collection(id);
+                if (entry == nullptr || entry->hideViewport || entry->hideSelect)
+                    return false;
+                if (entry->parentIds.isEmpty()) return true;
+                for (CollectionId parent : entry->parentIds) {
+                    if (self(self, parent, path)) return true;
+                }
+                return false;
+            };
+        for (CollectionId membershipId : sceneObject->collectionIds) {
+            if (hasSelectableCollectionPath(hasSelectableCollectionPath,
+                                            membershipId, {})) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    const auto pathMatches = [](const QJsonArray &stored,
+                                const QStringList &expected) {
+        if (stored.size() != expected.size()) return false;
+        for (int i = 0; i < expected.size(); ++i) {
+            if (!stored[i].isString() || stored[i].toString() != expected[i])
+                return false;
+        }
+        return true;
+    };
+    for (CollectionId membershipId : sceneObject->collectionIds) {
+        const DocumentCollection *membership = collection(membershipId);
+        if (membership == nullptr) continue;
+        for (const QJsonValue &membershipStateValue : membership->viewLayerStates) {
+            const QJsonObject membershipState = membershipStateValue.toObject();
+            if (membershipState.value(QStringLiteral("view_layer_key")).toString() !=
+                activeViewLayerKey) {
+                continue;
+            }
+            const QJsonArray pathArray =
+                membershipState.value(QStringLiteral("path")).toArray();
+            QStringList sourcePath;
+            for (const QJsonValue &part : pathArray) {
+                if (!part.isString()) {
+                    sourcePath.clear();
+                    break;
+                }
+                sourcePath.append(part.toString());
+            }
+            if (sourcePath.isEmpty() || sourcePath.last() != membership->sourceId)
+                continue;
+
+            bool selectable = true;
+            CollectionId previous = CollectionId::invalid();
+            for (int index = 0; index < sourcePath.size(); ++index) {
+                const QString &sourceId = sourcePath[index];
+                const auto node = std::find_if(
+                    collections_.cbegin(), collections_.cend(),
+                    [&sourceId](const DocumentCollection &candidate) {
+                        return candidate.sourceId == sourceId;
+                    });
+                if (node == collections_.cend() ||
+                    (previous.isValid() && !node->parentIds.contains(previous)) ||
+                    node->hideViewport || node->hideSelect) {
+                    selectable = false;
+                    break;
+                }
+
+                QJsonObject nodeState;
+                bool foundNodeState = false;
+                QStringList prefix;
+                for (int prefixIndex = 0; prefixIndex <= index; ++prefixIndex)
+                    prefix.append(sourcePath[prefixIndex]);
+                for (const QJsonValue &stateValue : node->viewLayerStates) {
+                    const QJsonObject state = stateValue.toObject();
+                    if (state.value(QStringLiteral("view_layer_key")).toString() ==
+                            activeViewLayerKey &&
+                        pathMatches(state.value(QStringLiteral("path")).toArray(),
+                                    prefix)) {
+                        nodeState = state;
+                        foundNodeState = true;
+                        break;
+                    }
+                }
+                if (!foundNodeState ||
+                    nodeState.value(QStringLiteral("exclude")).toBool()) {
+                    selectable = false;
+                    break;
+                }
+                previous = node->id;
+            }
+            // Blender ORs BASE_SELECTABLE across collection paths. A hidden
+            // (but non-excluded) LayerCollection still contributes that flag;
+            // visibility has already been checked independently above.
+            if (selectable) return true;
+        }
+    }
+    return false;
 }
 
 Document::Snapshot Document::snapshot() const

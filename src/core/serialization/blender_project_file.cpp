@@ -2816,7 +2816,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 22 && bridgeVersion != 23 && bridgeVersion != 24 &&
          bridgeVersion != 25 && bridgeVersion != 26 && bridgeVersion != 27 &&
          bridgeVersion != 28 && bridgeVersion != 29 &&
-         bridgeVersion != 30 && bridgeVersion != 31)) {
+         bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3262,6 +3262,13 @@ bool importBlenderScene(const QString &path,
         collection.libraryPath = record.value(QStringLiteral("library_path")).toString();
         collection.hideViewport = record.value(QStringLiteral("hide_viewport")).toBool();
         collection.hideRender = record.value(QStringLiteral("hide_render")).toBool();
+        if (bridgeVersion >= 32 &&
+            !record.value(QStringLiteral("hide_select")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender collection hide-select state is invalid"));
+            return false;
+        }
+        collection.hideSelect = record.value(QStringLiteral("hide_select")).toBool();
         collection.viewLayerStates = record.value(QStringLiteral("view_layer_states")).toArray();
         const QJsonArray sourceSceneNames = record.value(QStringLiteral("source_scene_names")).toArray();
         if (!sourceSceneNames.isEmpty()) {

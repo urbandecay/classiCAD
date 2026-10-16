@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 23);
+    serialized.insert(QStringLiteral("version"), 24);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -391,6 +391,7 @@ QJsonObject documentToJson(const Document &document)
         record.insert(QStringLiteral("parentIds"), parentIds);
         record.insert(QStringLiteral("hideViewport"), collection.hideViewport);
         record.insert(QStringLiteral("hideRender"), collection.hideRender);
+        record.insert(QStringLiteral("hideSelect"), collection.hideSelect);
         record.insert(QStringLiteral("viewLayerStates"), collection.viewLayerStates);
         collections.append(record);
     }
@@ -625,7 +626,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 23) {
+    if (version < 1 || version > 24) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -668,7 +669,9 @@ bool documentFromJson(const QJsonValue &value,
                 !sourceSceneNamesValue.isArray() || !sourceSceneName.isString() ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
-                !record.value(QStringLiteral("hideRender")).isBool()) {
+                !record.value(QStringLiteral("hideRender")).isBool() ||
+                (version >= 24 &&
+                 !record.value(QStringLiteral("hideSelect")).isBool())) {
                 setError(errorMessage, QStringLiteral("invalid document collection"));
                 return false;
             }
@@ -688,6 +691,8 @@ bool documentFromJson(const QJsonValue &value,
             collection.libraryPath = libraryPath.toString();
             collection.hideViewport = record.value(QStringLiteral("hideViewport")).toBool();
             collection.hideRender = record.value(QStringLiteral("hideRender")).toBool();
+            collection.hideSelect = version >= 24 &&
+                                    record.value(QStringLiteral("hideSelect")).toBool();
             if (version >= 12) {
                 const QJsonValue states = record.value(QStringLiteral("viewLayerStates"));
                 if (!states.isArray()) {

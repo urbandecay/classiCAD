@@ -687,6 +687,11 @@ void ViewportSurfaceRenderer::setCavityDiagnosticTap(int tap) noexcept
     cavityDiagnosticTap_ = tap;
 }
 
+void ViewportSurfaceRenderer::setSelectedOutlineWidth(int width) noexcept
+{
+    selectedOutlineWidth_ = std::clamp(width, 1, 5);
+}
+
 bool ViewportSurfaceRenderer::initialize()
 {
     if (initializationAttempted_) {
@@ -8916,7 +8921,9 @@ bool ViewportSurfaceRenderer::draw(
                     selectionOnly && smoothWiresOverlay);
                 outlineProgram_.setUniformValue(
                     "uThickSelectionOutline",
-                    selectionOnly && workbenchEffectUiScale(dpr) > 1);
+                    selectionOnly &&
+                        (workbenchEffectUiScale(dpr) > 1 ||
+                         selectedOutlineWidth_ > 2));
                 outlineProgram_.setUniformValue(
                     "uXRayWireSelectionOutline",
                     selectionOnly && xrayWireSelection);

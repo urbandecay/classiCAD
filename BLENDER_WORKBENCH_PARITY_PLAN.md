@@ -10200,3 +10200,14 @@ scene depth.
   [`workbench_shadow.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_shadow.bsl.hh#L247-L276)
   and
   [`workbench_shadow.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_shadow.cc#L401-L422).
+
+### Selected-outline theme width preference (2026-10-16)
+
+- Added a saved classiCAD viewport preference for Blender's theme outline width
+  (range 1–5). The GPU and QPainter selected-object outline resolves now enable
+  the wider sampling footprint when the preference is above 2 or the UI scale
+  is above 1, matching Blender 5.2.2's `do_expand` condition. This setting only
+  selects the wider contour sampling path; it does not change stroke thickness.
+  Blender's preference is a user theme value, so classiCAD stores it in app
+  preferences rather than imported document shading. Build passed; matched
+  selected-outline images remain open.

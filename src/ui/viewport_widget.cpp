@@ -2857,6 +2857,19 @@ public:
         update();
     }
 
+    int selectedOutlineWidth() const override
+    {
+        return selectedOutlineWidth_;
+    }
+
+    void setSelectedOutlineWidth(int width) override
+    {
+        const int clampedWidth = std::clamp(width, 1, 5);
+        if (selectedOutlineWidth_ == clampedWidth) return;
+        selectedOutlineWidth_ = clampedWidth;
+        update();
+    }
+
     void setArchitecturalDimensionFont(bool enabled) override
     {
         architecturalDimensionFont_ = enabled;
@@ -9425,6 +9438,9 @@ protected:
         viewportRenderer_.setGridAppearance(renderGridAppearance);
         viewportRenderer_.setSmoothWirePreferences(
             smoothWiresOverlay_, smoothWiresEditMode_);
+        if (surfaceRenderer != nullptr) {
+            surfaceRenderer->setSelectedOutlineWidth(selectedOutlineWidth_);
+        }
         viewportRenderer_.beginPreparedCurveSegmentResolve();
         // The CPU Workbench fallback uses one pixel-center coverage sample
         // for AA Off and its bounded 4x4 estimate for every enabled AA mode.
@@ -13845,7 +13861,8 @@ protected:
                     document_, renderFrame.camera,
                     renderFrame.viewportSize),
                 smoothWiresOverlay_,
-                renderFrame.camera.cameraState().cameraView);
+                renderFrame.camera.cameraState().cameraView,
+                selectedOutlineWidth_);
             const qint64 sceneLinearTargetPixels =
                 qint64(committedSceneLayer.width()) *
                 committedSceneLayer.height();
@@ -26739,6 +26756,7 @@ private:
     bool controlPointsVisible_ = false;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
+    int selectedOutlineWidth_ = 2;
     bool viewportPlaybackActive_ = false;
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     bool componentBoxSelectionActive_ = false;

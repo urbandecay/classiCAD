@@ -2558,7 +2558,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QSize &committedCurveDepthSize,
                                  qreal cameraFrameSensorScale,
                                  bool smoothWiresOverlay,
-                                 bool sceneCameraView)
+                                 bool sceneCameraView,
+                                 int selectedOutlineWidth)
 {
     const bool xrayEnabled = settings.xrayEnabled();
     const bool selectedOutlineEnabled =
@@ -3877,7 +3878,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         }
                     }
                     if (selectedOutlineCoverage <= 0.0f &&
-                        outlineSampleOffset > 1) {
+                        (outlineSampleOffset > 1 ||
+                         selectedOutlineWidth > 2)) {
                         const std::array<QPoint, 4> widerCardinalNeighbors = {
                             QPoint(outlineSampleOffset * 2, 0),
                             QPoint(-outlineSampleOffset * 2, 0),

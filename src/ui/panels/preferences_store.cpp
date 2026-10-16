@@ -9,6 +9,8 @@
 #include <QColor>
 #include <QSettings>
 
+#include <algorithm>
+
 namespace classiCAD {
 namespace {
 
@@ -218,6 +220,10 @@ StoredPreferences loadStoredPreferences()
         QStringLiteral("viewport/smoothWiresOverlay"), true).toBool();
     dialog.smoothWiresEditMode = settings.value(
         QStringLiteral("viewport/smoothWiresEditMode"), true).toBool();
+    dialog.selectedOutlineWidth = std::clamp(
+        settings.value(QStringLiteral("viewport/selectedOutlineWidth"), 2)
+            .toInt(),
+        1, 5);
 
     stored.orthoEnabled =
         settings.value(QStringLiteral("modeling/orthoEnabled"), false).toBool();
@@ -387,6 +393,15 @@ void saveSmoothWirePreferences(bool overlay, bool editMode)
     writeSettings([overlay, editMode](QSettings &settings) {
         settings.setValue(QStringLiteral("viewport/smoothWiresOverlay"), overlay);
         settings.setValue(QStringLiteral("viewport/smoothWiresEditMode"), editMode);
+    });
+}
+
+void saveSelectedOutlineWidthPreference(int width)
+{
+    const int clampedWidth = std::clamp(width, 1, 5);
+    writeSettings([clampedWidth](QSettings &settings) {
+        settings.setValue(QStringLiteral("viewport/selectedOutlineWidth"),
+                          clampedWidth);
     });
 }
 

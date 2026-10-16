@@ -2941,7 +2941,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             if (!valid) continue;
             // Zero-alpha material geometry is still a Blender shadow caster,
             // but it must not become a visible receiver or depth sample here.
-            if (triangleSourceAlpha <= 0.0f) continue;
+            if (triangleSourceAlpha <= 0.0f &&
+                !rasterWorkbenchOutlineEnabled) {
+                continue;
+            }
             const QPointF p0 = screen[0] * dpr;
             const QPointF p1 = screen[1] * dpr;
             const QPointF p2 = screen[2] * dpr;
@@ -3030,7 +3033,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         target.objectId = id;
                         target.sourceAlpha = triangleSourceAlpha;
                     };
-                    writeNearest(sample);
                     const float sourceAlpha = triangleSourceAlpha;
                     if (rasterWorkbenchOutlineEnabled &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {
@@ -3039,8 +3041,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         float &opaqueDepth = domainOpaqueDepth[y * width + x];
                         opaqueDepth = std::min(opaqueDepth, z);
                     }
-                    if (rasterWorkbenchOutlineEnabled &&
-                        sourceAlpha > 0.0f) {
+                    if (rasterWorkbenchOutlineEnabled) {
                         const QVector<float> &domainOpaqueDepth =
                             object.showInFront ? inFrontOutlineOpaqueDepth
                                                : outlineOpaqueDepth;
@@ -3061,6 +3062,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             outlineSample.objectId = id;
                         }
                     }
+                    // Blender's transparent-depth pass writes the outline ID
+                    // for zero-alpha material surfaces, while the color pass
+                    // leaves them invisible. Keep this depth only in the
+                    // separate outline domain.
+                    if (sourceAlpha <= 0.0f) continue;
+                    writeNearest(sample);
                     if ((cavityEnabled || shadowEnabled) &&
                         isOpaqueWorkbenchAlpha(sourceAlpha)) {
                         QVector<RasterSample> &domainOpaqueSamples =

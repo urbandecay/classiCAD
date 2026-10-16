@@ -9381,3 +9381,17 @@ moves them after scene effects and depth-tests them against the retained scene.
   and submits its ID/depth outputs at
   [#L1520-L1528](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1520-L1528).
   Build passed; matched coplanar X-Ray outline captures remain open.
+
+### QPainter zero-alpha outline depth (2026-10-16)
+
+- QPainter's outline ID buffer now records zero-alpha material surfaces that
+  survive Image Texture cutout, while leaving those surfaces out of visible
+  scene color and cavity/shadow receivers. This lets a transparent foreground
+  surface block a rear object's outline, matching Blender's separate
+  transparent-depth pass.
+- Blender 5.2.2 submits transparent depth with the opaque pipeline and writes
+  IDs/depth in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1438-L1453).
+  The same image-texture cutoff remains active in
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L429).
+  Build passed; matched zero-alpha outline captures remain open.

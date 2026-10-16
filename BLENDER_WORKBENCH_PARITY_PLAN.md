@@ -7907,12 +7907,15 @@ resolve remain open.
 
 ### Collection-instanced Blender Image Empties (2026-10-15)
 
-- Static file-backed Image Empties inside collection instances now import as
-  Picture items using each instance's world matrix. To bound repeated image
-  decoding, extraction limits these instances to 256 items and 16M decoded
-  pixels per scene, while sharing the existing 32 MiB packed-byte budget.
-  Projection modes and other Image Empty display rules remain unsupported;
-  no matched comparison has been run.
+- Image Empties inside collection instances now import as Picture items using
+  each instance's world matrix. They use the same extraction path as direct
+  Image Empties, preserving perspective/orthographic visibility, axis-aligned
+  visibility, front/back side, depth, alpha blend, tint, and View as Render.
+  To bound repeated image decoding, extraction limits these instances to 256
+  items and 16M decoded pixels per scene, while sharing the existing 32 MiB
+  packed-byte budget. Collection hierarchy, instance selection, and per-instance
+  Random color variation remain unsupported; matched instance comparison has
+  not been run.
 
 ### Collection-instanced Blender scalar Volumes (2026-10-15)
 

@@ -13027,9 +13027,9 @@ protected:
             // depth test, but composite its display-referred pixels only after
             // Workbench's scene-linear color transform.
             QVector<const TransientPreviewPicture *> backPictures;
+            QVector<const TransientPreviewPicture *> frontPictures;
             if (sceneRenderer != nullptr) {
                 QVector<const TransientPreviewPicture *> regularPictures;
-                QVector<const TransientPreviewPicture *> frontPictures;
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex < 0) continue;
                     if (preview.showInFront ||
@@ -13101,7 +13101,6 @@ protected:
                     }
                 };
                 drawPictureGroup(regularPictures, true);
-                drawPictureGroup(frontPictures, false);
             }
             // Selected-face highlighting is also an edit-mode overlay. Draw it
             // after resolve/history presentation against the unjittered scene
@@ -13262,6 +13261,21 @@ protected:
                         arcHudPanelWidth,
                         !gpuActiveToolPreview || !gpuPreviewRendered,
                         viewportOverlay_.snapLabelsVisible());
+            }
+            // Blender draws in-front Image Empties in its later color-only
+            // overlay pass, after the regular wires and grid. Keep those
+            // images above committed and editor scene overlays as well.
+            if (sceneRenderer != nullptr) {
+                for (const TransientPreviewPicture *preview : frontPictures) {
+                    if (preview == nullptr) continue;
+                    if (!sceneRenderer->drawPicture(
+                            preview->image, overlayCamera,
+                            renderFrame.viewportSize, devicePixelRatioF(),
+                            preview->opacity, false, false, true,
+                            &renderShadingSettings)) {
+                        failedScenePicturePreviews.append(&preview->image);
+                    }
+                }
             }
             // Blender composites Back Image Empties in its final output pass,
             // after the regular and in-front overlay passes. Keep them above

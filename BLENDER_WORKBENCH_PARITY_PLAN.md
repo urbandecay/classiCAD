@@ -8654,6 +8654,16 @@ resolve remain open.
   [`draw_pass.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_pass.hh).
   Build passed; no matched overlapping-image comparison has been run.
 
+### GPU in-front Image Empty pass order (2026-10-16)
+
+- GPU `Front` Image Empties now draw after committed scene strokes and the grid,
+  following Blender 5.2.2's later color-only in-front image pass. Regular
+  depth-tested images remain in the earlier pass, and `Back` images remain the
+  final output overlay. The source ordering is in Blender's
+  [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L821-L825)
+  and [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L908-L916).
+  Build passed; matched Blender image comparison remains open.
+
 ### QPainter oversized-mesh color fallback (2026-10-15)
 
 - The rare raw-polygon fallback now runs Workbench scene-linear face colors

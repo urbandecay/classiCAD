@@ -3410,9 +3410,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             QVector3D::crossProduct(shadowLightDirection, helper));
         shadowLightUp = normalized(
             QVector3D::crossProduct(shadowLightRight, shadowLightDirection));
-        float minX = std::numeric_limits<float>::max();
-        float maxX = std::numeric_limits<float>::lowest();
-        float minY = minX, maxY = maxX;
+        float casterMinX = std::numeric_limits<float>::max();
+        float casterMaxX = std::numeric_limits<float>::lowest();
+        float casterMinY = casterMinX;
+        float casterMaxY = casterMaxX;
         float minLightDepth = std::numeric_limits<float>::max();
         float maxLightDepth = std::numeric_limits<float>::lowest();
         for (const ShadowTriangle &triangle : shadowTriangles) {
@@ -3420,11 +3421,69 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const float x = QVector3D::dotProduct(point, shadowLightRight);
                 const float y = QVector3D::dotProduct(point, shadowLightUp);
                 const float z = QVector3D::dotProduct(point, shadowLightDirection);
-                minX = std::min(minX, x); maxX = std::max(maxX, x);
-                minY = std::min(minY, y); maxY = std::max(maxY, y);
+                casterMinX = std::min(casterMinX, x);
+                casterMaxX = std::max(casterMaxX, x);
+                casterMinY = std::min(casterMinY, y);
+                casterMaxY = std::max(casterMaxY, y);
                 minLightDepth = std::min(minLightDepth, z);
                 maxLightDepth = std::max(maxLightDepth, z);
             }
+        }
+        float minX = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        float minY = std::numeric_limits<float>::max();
+        float maxY = std::numeric_limits<float>::lowest();
+        bool hasReceiverBounds = false;
+        const auto includeReceiverPoint = [&](const QVector3D &point) {
+            const float x = QVector3D::dotProduct(point, shadowLightRight);
+            const float y = QVector3D::dotProduct(point, shadowLightUp);
+            if (!std::isfinite(x) || !std::isfinite(y)) return;
+            minX = std::min(minX, x);
+            maxX = std::max(maxX, x);
+            minY = std::min(minY, y);
+            maxY = std::max(maxY, y);
+            hasReceiverBounds = true;
+        };
+        const qreal receiverPixelQuarter = 0.25 / std::max<qreal>(dpr, 1.0e-6);
+        const std::array<QPointF, 4> receiverScreenOffsets{{
+            QPointF(-receiverPixelQuarter, -receiverPixelQuarter),
+            QPointF(receiverPixelQuarter, -receiverPixelQuarter),
+            QPointF(-receiverPixelQuarter, receiverPixelQuarter),
+            QPointF(receiverPixelQuarter, receiverPixelQuarter)}};
+        for (int index = 0; index < opaqueSamples.size(); ++index) {
+            const RasterSample &receiver = opaqueSamples[index];
+            if (receiver.objectId == 0) continue;
+            includeReceiverPoint(receiver.position);
+            const Point3D receiverOrigin{receiver.position.x(),
+                                         receiver.position.y(),
+                                         receiver.position.z()};
+            const Point3D receiverNormal{receiver.normal.x(),
+                                         receiver.normal.y(),
+                                         receiver.normal.z()};
+            const WorkPlaneFrame receiverPlane = makeWorkPlaneFrameFromNormal(
+                receiverOrigin, receiverNormal);
+            const QPointF screenPixelCenter(
+                (index % width + 0.5) / dpr,
+                (index / width + 0.5) / dpr);
+            for (const QPointF &screenOffset : receiverScreenOffsets) {
+                QPointF receiverPlanePoint;
+                if (!transform.screenToWorkPlaneUnclipped(
+                        screenPixelCenter + screenOffset, viewportSize,
+                        receiverPlane, &receiverPlanePoint)) {
+                    continue;
+                }
+                const Point3D worldPoint = workPlaneFramePointToWorld(
+                    receiverPlanePoint, receiverPlane);
+                includeReceiverPoint(QVector3D(
+                    float(worldPoint.x), float(worldPoint.y),
+                    float(worldPoint.z)));
+            }
+        }
+        if (!hasReceiverBounds) {
+            minX = casterMinX;
+            maxX = casterMaxX;
+            minY = casterMinY;
+            maxY = casterMaxY;
         }
         softwareDepthBias = rasterWorkbenchShadowDepthBias(
             minLightDepth, maxLightDepth);
@@ -3460,22 +3519,26 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             const qreal area = (p[1].x() - p[0].x()) * (p[2].y() - p[0].y()) -
                                (p[1].y() - p[0].y()) * (p[2].x() - p[0].x());
             if (std::abs(area) < 1.0e-10) continue;
-            const int x0 = std::clamp(
-                int(std::floor(std::min(
-                    {p[0].x(), p[1].x(), p[2].x()}))),
-                0, lightMapWidth - 1);
-            const int x1 = std::clamp(
-                int(std::ceil(std::max(
-                    {p[0].x(), p[1].x(), p[2].x()}))),
-                0, lightMapWidth - 1);
-            const int y0 = std::clamp(
-                int(std::floor(std::min(
-                    {p[0].y(), p[1].y(), p[2].y()}))),
-                0, lightMapHeight - 1);
-            const int y1 = std::clamp(
-                int(std::ceil(std::max(
-                    {p[0].y(), p[1].y(), p[2].y()}))),
-                0, lightMapHeight - 1);
+            const qreal triangleMinX = std::min(
+                {p[0].x(), p[1].x(), p[2].x()});
+            const qreal triangleMaxX = std::max(
+                {p[0].x(), p[1].x(), p[2].x()});
+            const qreal triangleMinY = std::min(
+                {p[0].y(), p[1].y(), p[2].y()});
+            const qreal triangleMaxY = std::max(
+                {p[0].y(), p[1].y(), p[2].y()});
+            if (triangleMaxX < 0.0 || triangleMinX >= lightMapWidth ||
+                triangleMaxY < 0.0 || triangleMinY >= lightMapHeight) {
+                continue;
+            }
+            const int x0 = static_cast<int>(std::floor(
+                std::max<qreal>(0.0, triangleMinX)));
+            const int x1 = static_cast<int>(std::ceil(
+                std::min<qreal>(lightMapWidth - 1.0, triangleMaxX)));
+            const int y0 = static_cast<int>(std::floor(
+                std::max<qreal>(0.0, triangleMinY)));
+            const int y1 = static_cast<int>(std::ceil(
+                std::min<qreal>(lightMapHeight - 1.0, triangleMaxY)));
             for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x) {
                 const qreal px = x + 0.5, py = y + 0.5;
                 const qreal a = ((p[1].x()-px)*(p[2].y()-py)-(p[1].y()-py)*(p[2].x()-px))/area;
@@ -4197,10 +4260,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 if (samplePosition.x() < 0.0f || samplePosition.y() < 0.0f ||
                     samplePosition.x() >= lightMapWidth ||
                     samplePosition.y() >= lightMapHeight) {
-                    // The light-map bounds enclose all caster vertices in
-                    // the plane perpendicular to the directional light.
-                    // Shadow volumes cannot extend beyond that projected
-                    // caster bounds, so an outside sample is unshadowed.
+                    // The light-map bounds enclose visible opaque receiver
+                    // centers and their four coverage samples, so outside
+                    // samples fall beyond the area that needs a shadow map.
                     factorSum += rasterWorkbenchShadowFactor(
                         normal, lightDirection,
                         static_cast<float>(settings.shadowIntensity),

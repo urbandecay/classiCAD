@@ -10006,3 +10006,15 @@ scene depth.
   and the weight definition is in
   [`gpu_shader_smaa_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/shaders/common/gpu_shader_smaa_lib.glsl#L696-L725).
   Build passed; matched SMAA edge captures remain open.
+
+### QPainter shadow map receiver bounds (2026-10-16)
+
+- The software shadow map now fits its light-space XY bounds to visible opaque
+  receiver pixels and their four quarter-pixel coverage samples, instead of
+  letting every distant or offscreen caster expand the map and reduce useful
+  resolution. All caster triangles still rasterize into that bounded region;
+  the existing map-size and memory caps remain. Triangle raster bounds are
+  clipped before integer conversion so distant casters remain safe to process.
+  This improves the documented QPainter depth-map approximation but does not
+  replace Blender's GPU stencil shadow volumes. Build passed; matched shadow
+  captures remain open.

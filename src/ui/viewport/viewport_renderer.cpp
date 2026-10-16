@@ -4053,7 +4053,6 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
         inFrontDepthSize.width() > 0 && inFrontDepthSize.height() > 0 &&
         inFrontSceneDepth->size() ==
             inFrontDepthSize.width() * inFrontDepthSize.height();
-    const bool xrayEnabled = shadingSettings_.xrayEnabledForMode();
     const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
     const Point3D viewDirection = transform_.viewDirection();
     const auto cameraDepth = [&](const Point3D &point) {
@@ -4092,7 +4091,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
             return !hasInFrontDepth || visibleAtDepth(
                 inFrontSceneDepth, inFrontDepthSize, screen, depth);
         }
-        if (!xrayEnabled && hasRegularDepth &&
+        if (hasRegularDepth &&
             !visibleAtDepth(regularSceneDepth, regularDepthSize,
                             screen, depth)) {
             return false;
@@ -4161,8 +4160,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                     }
                 }
                 const QPointF screenPoint = start + (end - start) * fraction;
-                const bool visible = xrayEnabled || controlCageVisible(
-                    screenPoint, depth);
+                const bool visible = controlCageVisible(screenPoint, depth);
                 if (visible) {
                     if (!visibleRun) {
                         visiblePath.moveTo(screenPoint);

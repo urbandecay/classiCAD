@@ -8979,7 +8979,12 @@ resolve remain open.
 
 - The native GPU scene-wire pass now follows the X-Ray checkbox even when its
   opacity slider is at 1. With X-Ray enabled, strokes draw once without scene
-  depth testing and retain their configured opacity; the surface X-Ray opacity
-  does not fade hidden wires. This follows Blender 5.2.2's separate wire
-  framebuffer, whose depth is cleared for X-Ray independently of the surface
-  opacity. The C++ build passed; matched GPU X-Ray captures remain open.
+  surface-depth occlusion and retain their configured opacity. On the
+  single-sample GPU path, a saved scene depth is replaced temporarily with an
+  empty stroke depth buffer so nearer wires still cover farther wires, then the
+  scene depth is restored. The surface X-Ray opacity does not fade hidden
+  wires. Multisample and QPainter wire-to-wire overlap remain approximate.
+  Blender 5.2.2 selects a separate wire depth input when X-Ray is active while
+  keeping depth writes and less-equal testing enabled in
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L74-L82).
+  The C++ build passed; matched GPU X-Ray captures remain open.

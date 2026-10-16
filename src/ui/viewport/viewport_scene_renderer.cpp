@@ -1173,7 +1173,8 @@ bool ViewportSceneRenderer::draw(
     bool smoothOverlayWires,
     bool smoothEditModeWires,
     bool sceneLinearOutput,
-    bool *strokeResolveUsed)
+    bool *strokeResolveUsed,
+    bool isolatedDepth)
 {
     if (strokeResolveUsed != nullptr) {
         *strokeResolveUsed = false;
@@ -1335,11 +1336,62 @@ bool ViewportSceneRenderer::draw(
         originalDrawFramebuffer != 0
             ? strokeDepthFormatForFramebuffer(*this)
             : StrokeDepthFormat{};
+    bool isolatedDepthActive = false;
+    GLboolean isolatedPreviousDepthMask = GL_TRUE;
+    GLdouble isolatedPreviousClearDepth = 1.0;
+    const GLboolean isolatedPreviousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    if (isolatedDepth && originalSamples == 0 &&
+        originalDrawFramebuffer != 0 &&
+        originalDepthAttachment != GL_NONE && sourceDepthFormat.isValid() &&
+        ensureStrokeResolveTargets(
+            pixelSize, sourceDepthFormat.internalFormat,
+            sourceDepthFormat.textureFormat, sourceDepthFormat.textureType,
+            sourceDepthFormat.attachment)) {
+        // Preserve scene depth, then use an empty depth buffer for the wire
+        // draw. Lines still depth-test and write against one another, as in
+        // Blender's X-Ray wire framebuffer.
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, strokeBaseFramebuffer_);
+        glBlitFramebuffer(0, 0, pixelSize.width(), pixelSize.height(),
+                          0, 0, pixelSize.width(), pixelSize.height(),
+                          GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalReadFramebuffer));
+        glReadBuffer(originalReadBuffer);
+        if (originalDrawFramebuffer != originalReadFramebuffer) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(originalDrawFramebuffer));
+            glReadBuffer(originalDrawFramebufferReadBuffer);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(originalReadFramebuffer));
+            glReadBuffer(originalReadBuffer);
+        }
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &isolatedPreviousDepthMask);
+        glGetDoublev(GL_DEPTH_CLEAR_VALUE, &isolatedPreviousClearDepth);
+        glDisable(GL_SCISSOR_TEST);
+        glDepthMask(GL_TRUE);
+        glClearDepth(1.0);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glClearDepth(isolatedPreviousClearDepth);
+        if (isolatedPreviousScissor) {
+            glEnable(GL_SCISSOR_TEST);
+        }
+        isolatedDepthActive = true;
+    }
+    if (isolatedDepth) {
+        // Keep X-Ray wires visible through surfaces if an isolated depth
+        // target is unavailable; supported single-sample draws still resolve
+        // wire-to-wire occlusion using the cleared depth attachment.
+        depthTest = isolatedDepthActive;
+    }
     const bool colorWritesEnabled = originalColorWriteMask[0] &&
                                     originalColorWriteMask[1] &&
                                     originalColorWriteMask[2] &&
                                     originalColorWriteMask[3];
-    bool strokeResolveActive = depthTest && originalSamples == 0 &&
+    bool strokeResolveActive = !isolatedDepthActive && depthTest && originalSamples == 0 &&
         originalDepthAttachment != GL_NONE && sourceDepthFormat.isValid() &&
         colorWritesEnabled && opacity >= 0.999999;
     if (strokeResolveActive) {
@@ -1478,6 +1530,9 @@ bool ViewportSceneRenderer::draw(
     const bool linearDisplayBlendAvailable =
         drawFramebuffer != 0 && framebufferColorEncoding == GL_SRGB;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    if (isolatedDepthActive) {
+        previousDepthMask = isolatedPreviousDepthMask;
+    }
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
     glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDestinationRgb);
@@ -1773,6 +1828,27 @@ bool ViewportSceneRenderer::draw(
                           static_cast<GLuint>(previousTextureBindings[unit]));
         }
         glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    }
+    if (isolatedDepthActive) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, strokeBaseFramebuffer_);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glBlitFramebuffer(0, 0, pixelSize.width(), pixelSize.height(),
+                          0, 0, pixelSize.width(), pixelSize.height(),
+                          GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(originalDrawFramebuffer));
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(originalReadFramebuffer));
+        glReadBuffer(originalReadBuffer);
+        if (originalDrawFramebuffer != originalReadFramebuffer) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(originalDrawFramebuffer));
+            glReadBuffer(originalDrawFramebufferReadBuffer);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(originalReadFramebuffer));
+            glReadBuffer(originalReadBuffer);
+        }
     }
     glDisable(GL_PROGRAM_POINT_SIZE);
     glDepthMask(previousDepthMask);

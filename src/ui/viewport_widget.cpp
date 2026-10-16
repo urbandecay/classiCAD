@@ -12868,13 +12868,14 @@ protected:
                 const bool xrayEnabled =
                     viewportShadingSettings_.xrayEnabledForMode();
                 if (xrayEnabled) {
-                    // Blender's scene wire framebuffer is depth-cleared while
-                    // X-Ray is active. Its wire opacity stays independent of
-                    // the surface X-Ray opacity.
+                    // Clear only the stroke depth domain so wires still
+                    // occlude farther wires, without letting scene surfaces
+                    // hide them. Wire opacity is independent of surface X-Ray.
                     sceneDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,
-                        devicePixelRatioF(), false, 1.0,
-                        smoothWiresOverlay_, smoothWiresEditMode_);
+                        devicePixelRatioF(), true, 1.0,
+                        smoothWiresOverlay_, smoothWiresEditMode_, false,
+                        nullptr, true);
                 } else {
                     sceneDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,

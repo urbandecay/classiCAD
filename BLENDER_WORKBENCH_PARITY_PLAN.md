@@ -8779,5 +8779,8 @@ resolve remain open.
   existing Picture import and viewport path. The extractor packages their
   pixels as bounded PNG data and also preserves the scene-linear float payload
   used by the image color pipeline. Generated images share the existing 32 MiB
-  packed-payload budget and 16M pixel cap. Sequence, movie, and tiled Image
-  Empties remain unsupported; no matched Blender comparison has been run.
+  packed-payload budget and 16M pixel cap. Image Empties with Blender alpha
+  mode `NONE` are normalized to opaque pixels in both transport paths, matching
+  Blender's rule to ignore their stored alpha channel. Sequence, movie, and
+  tiled Image Empties remain unsupported; no matched Blender comparison has
+  been run.

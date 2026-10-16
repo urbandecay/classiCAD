@@ -175,7 +175,7 @@ def bake_color_lut(scene, lut_records, lut_bytes_by_id, unsupported):
     return color_management
 
 
-def bake_image_source_transform(image, cache_key=""):
+def bake_image_source_transform(image, cache_key="", force_opaque_alpha=False):
     """Convert supported image texels to scene-linear float RGBA before filtering."""
     if cache_key and cache_key in SCENE_LINEAR_FLOAT_PAYLOAD_CACHE:
         return dict(SCENE_LINEAR_FLOAT_PAYLOAD_CACHE[cache_key])
@@ -215,7 +215,8 @@ def bake_image_source_transform(image, cache_key=""):
             offset = pixel_index * 4
             rgb = [float(source_pixels[offset]), float(source_pixels[offset + 1]),
                    float(source_pixels[offset + 2])]
-            alpha = float(source_pixels[offset + 3])
+            alpha = (1.0 if force_opaque_alpha else
+                     float(source_pixels[offset + 3]))
             if processor is not None:
                 rgb = processor.applyRGB(rgb)
             # Blender premultiplies float image buffers for PREMUL even though
@@ -673,8 +674,16 @@ def extract_image_empty(obj, scene, packed_payload_budget,
         image.filepath, library=getattr(image, "library", None))
         if image_source == "FILE" else "")
     source_exists = bool(filepath and os.path.isfile(filepath))
+    image_alpha_mode = str(getattr(image, "alpha_mode", "STRAIGHT"))
+    force_opaque_alpha = image_alpha_mode == "NONE"
+    if force_opaque_alpha:
+        # Re-encode the decoded pixels so the ordinary QImage path also sees
+        # opaque alpha; the original file or packed bytes may contain alpha.
+        filepath = ""
+        source_exists = False
     packed_data = b""
-    packed_file = getattr(image, "packed_file", None)
+    packed_file = (None if force_opaque_alpha else
+                   getattr(image, "packed_file", None))
     if packed_file is not None:
         packed_size = int(getattr(packed_file, "size", len(packed_file.data)))
         if (packed_size <= MAX_PACKED_IMAGE_BYTES and
@@ -685,7 +694,7 @@ def extract_image_empty(obj, scene, packed_payload_budget,
                 packed_payload_budget["bytes"] += len(packed_data)
             else:
                 packed_data = b""
-    if image_source == "GENERATED":
+    if image_source == "GENERATED" or force_opaque_alpha:
         try:
             pixels = image.pixels[:]
             expected_components = width * height * 4
@@ -697,7 +706,11 @@ def extract_image_empty(obj, scene, packed_payload_budget,
                 # Blender's pixel buffer starts at the lower-left; PNG rows
                 # start at the upper-left.
                 row_offset = (height - 1 - y) * width * 4
-                for component in pixels[row_offset:row_offset + width * 4]:
+                for component_index, component in enumerate(
+                        pixels[row_offset:row_offset + width * 4]):
+                    if force_opaque_alpha and component_index % 4 == 3:
+                        png_rows.append(255)
+                        continue
                     value = float(component)
                     if not math.isfinite(value):
                         raise ValueError("generated image has non-finite pixels")
@@ -714,11 +727,11 @@ def extract_image_empty(obj, scene, packed_payload_budget,
                            png_chunk(b"IDAT", zlib.compress(bytes(png_rows))) +
                            png_chunk(b"IEND", b""))
         except Exception as error:
-            return None, "generated Image Empty pixels could not be encoded: " + str(error)
+            return None, "Image Empty pixels could not be encoded: " + str(error)
         if (len(packed_data) > MAX_PACKED_IMAGE_BYTES or
                 packed_payload_budget["bytes"] + len(packed_data) >
                 MAX_PACKED_IMAGE_BYTES):
-            return None, "generated Image Empty exceeds the aggregate 32 MiB transport limit"
+            return None, "Image Empty exceeds the aggregate 32 MiB transport limit after pixel normalization"
         packed_payload_budget["bytes"] += len(packed_data)
     if not packed_data and not source_exists:
         if packed_file is not None:
@@ -749,7 +762,9 @@ def extract_image_empty(obj, scene, packed_payload_budget,
                center - half_x - half_y]
     source_transform = bake_image_source_transform(
         image, "image:%s:%s" %
-        (image.name_full, source_library_path(image)))
+        (image.name_full, source_library_path(image)) +
+        (":alpha-none" if force_opaque_alpha else ""),
+        force_opaque_alpha=force_opaque_alpha)
     item = object_metadata(obj, scene, depsgraph)
     item.update({
         "object_type": "EMPTY_IMAGE",
@@ -761,7 +776,7 @@ def extract_image_empty(obj, scene, packed_payload_budget,
         "picture_use_alpha_blend": bool(getattr(
             evaluated, "use_empty_image_alpha", False)),
         "picture_premultiplied_alpha": str(
-            getattr(image, "alpha_mode", "STRAIGHT")) == "PREMUL",
+            image_alpha_mode) == "PREMUL",
         "picture_color_space": image.colorspace_settings.name,
         "picture_source_transform_id": source_transform["id"],
         "picture_scene_linear_float_data_base64": source_transform["payload"],

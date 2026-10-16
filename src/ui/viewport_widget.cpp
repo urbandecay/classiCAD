@@ -13680,7 +13680,9 @@ protected:
                             rasterSurfaceLayers.inFrontSceneDepthSize);
                         if (visible.has_value() && !*visible) {
                             return viewportShadingSettings_.xrayEnabled()
-                                ? std::optional<qreal>(0.5)
+                                ? std::optional<qreal>(1.0 - std::clamp(
+                                      viewportShadingSettings_.xrayAlphaForMode(),
+                                      0.0, 1.0))
                                 : std::nullopt;
                         }
                         return 1.0;
@@ -13701,7 +13703,9 @@ protected:
                         return std::nullopt;
                     }
                     return xrayEnabled && visible.has_value() && !*visible
-                        ? std::optional<qreal>(0.5)
+                        ? std::optional<qreal>(1.0 - std::clamp(
+                              viewportShadingSettings_.xrayAlphaForMode(),
+                              0.0, 1.0))
                         : std::optional<qreal>(1.0);
                 };
 
@@ -13788,8 +13792,11 @@ protected:
                                 renderObject.showInFront);
                             if (opacity.has_value()) {
                                 QColor segmentColor = baseColor;
-                                segmentColor.setAlphaF(
-                                    baseColor.alphaF() * *opacity);
+                                const qreal xrayWireOpacity =
+                                    viewportShadingSettings_.xrayEnabledForMode()
+                                        ? 0.5 : 1.0;
+                                segmentColor.setAlphaF(baseColor.alphaF() *
+                                    xrayWireOpacity * *opacity);
                                 pen.setColor(segmentColor);
                                 painter.setPen(pen);
                                 painter.drawLine(a, b);

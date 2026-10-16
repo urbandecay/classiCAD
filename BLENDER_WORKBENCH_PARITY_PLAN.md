@@ -8843,14 +8843,21 @@ resolve remain open.
 ### QPainter selected component-edge X-Ray fade (2026-10-15)
 
 - Selected NURBS surface/solid component edges remain visible through ordinary
-  geometry in X-Ray, but segments behind their applicable regular or
-  `showInFront` depth layer now draw at 50% alpha. Visible segments retain full
-  alpha, and regular selected edges remain covered by a later in-front layer.
-  Blender 5.2.2 sets the Edit Mode wire opacity to 0.5 when its X-Ray flag is
-  active and applies that opacity in the mesh edit edge pass in
+  geometry in X-Ray. Blender's Edit Mode edge pass first applies a 0.5 base
+  opacity to all edges whenever the X-Ray checkbox is enabled, including when
+  its alpha is 1.0; its separate overlay fade then multiplies portions behind
+  scene depth by `1 - xrayAlpha` when transparency is active. The QPainter
+  fallback now applies both factors using the applicable regular or
+  `showInFront` depth layer. Regular
+  selected edges remain covered by a later in-front layer. Blender sets the
+  base wire opacity in
   [`overlay_mesh.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_mesh.hh#L2370-L2375)
+  and binds it to the Edit Mode edge pass in
+  [`overlay_mesh.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_mesh.hh#L2566-L2584),
+  and applies the hidden overlay multiplier in
+  [`overlay_xray_fade.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_xray_fade.hh#L344-L376)
   and
-  [`overlay_mesh.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_mesh.hh#L2566-L2584).
+  [`overlay_xray_fade.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_xray_fade.bsl.hh#L500-L535).
   Matched edge captures remain open.
 
 ### NURBS surface derivative normals (2026-10-15)

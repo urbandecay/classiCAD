@@ -9368,3 +9368,16 @@ moves them after scene effects and depth-tests them against the retained scene.
 - Blender 5.2.2 keeps the channels separate and applies far-weight priority in
   [`workbench_effect_dof_downsample_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_downsample_frag.glsl#L369-L399).
   Build passed; matched near/far DOF captures remain open.
+
+### GPU X-Ray outline equal-depth ownership (2026-10-16)
+
+- The private GPU outline-ID pass now uses `LEQUAL` when X-Ray is enabled, so
+  a later object at exactly the same depth can replace the prior outline ID as
+  Blender's X-Ray transparent-depth pass does. Ordinary outline ID rendering
+  keeps its strict `LESS` comparison.
+- Blender 5.2.2 configures the X-Ray transparent-depth pass with
+  `DRW_STATE_DEPTH_LESS_EQUAL` in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1438-L1453)
+  and submits its ID/depth outputs at
+  [#L1520-L1528](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1520-L1528).
+  Build passed; matched coplanar X-Ray outline captures remain open.

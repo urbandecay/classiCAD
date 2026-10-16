@@ -7831,7 +7831,7 @@ bool ViewportSurfaceRenderer::draw(
                 glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
                 glDepthMask(GL_TRUE);
                 glEnable(GL_DEPTH_TEST);
-                glDepthFunc(GL_LESS);
+                glDepthFunc(settings.xrayEnabled() ? GL_LEQUAL : GL_LESS);
                 glDisable(GL_BLEND);
                 if (settings.backfaceCulling) {
                     glEnable(GL_CULL_FACE);

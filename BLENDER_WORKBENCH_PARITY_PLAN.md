@@ -3917,9 +3917,12 @@ selection carries between modes: curve spline selection
 expands to its control points, fully selected curve control nets map back to
 their splines, and surface control-net selections map to NURBS faces. With the
 Select tool active, `A` and `Alt+A` select and deselect all components in the
-current Edit Mode selection domain without leaving Edit Mode. Grab, rotate, and
-scale transform curve and NURBS surface control points through their existing
-geometry paths. NURBS solid component transforms are
+current Edit Mode selection domain without leaving Edit Mode; `Ctrl+I` inverts
+that domain across the edited objects. Blender 5.2.2 documents this shortcut
+for both [curve](https://docs.blender.org/manual/en/5.2/modeling/curves/selecting.html)
+and [surface](https://docs.blender.org/manual/en/5.2/modeling/surfaces/selecting.html)
+Edit Mode. Grab, rotate, and scale transform curve and NURBS surface control
+points through their existing geometry paths. NURBS solid component transforms are
 suppressed because solid faces are derived from the exact base surface and
 extrusion vector; whole-object solid transforms remain supported. Surface CV
 propagation stays inside the selected surface or solid; matching coordinates

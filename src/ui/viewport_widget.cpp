@@ -2884,6 +2884,37 @@ public:
         emitCoordinateUpdate();
     }
 
+    void invertEditComponentsSelection()
+    {
+        if (interactionMode_ != ViewportInteractionMode::Edit ||
+            activeTool_ != Tool::Select) {
+            return;
+        }
+        const int modeIndex = static_cast<int>(componentSelectionMode_);
+        auto &selections = componentSelections_[modeIndex];
+        const ObjectId primaryObjectId = selection_.primaryObjectId();
+        for (quint64 objectValue : editObjectIds_) {
+            const ObjectId objectId = ObjectId::fromValue(objectValue);
+            const Shape *shape = document_.shape(objectId);
+            if (shape == nullptr) {
+                continue;
+            }
+
+            QSet<int> inverted = editComponentIndicesForShape(
+                *shape, componentSelectionMode_);
+            inverted.subtract(selections.value(objectValue));
+            selections.insert(objectValue, inverted);
+            if (objectId == primaryObjectId) {
+                activeComponentIndices_[modeIndex] = inverted.isEmpty()
+                    ? -1
+                    : *std::max_element(inverted.cbegin(), inverted.cend());
+            }
+        }
+        componentSelectionObject_ = primaryObjectId;
+        update();
+        emitCoordinateUpdate();
+    }
+
     void activateViewportShadingControl(int control) override
     {
         activateViewportShadingControlInternal(control);
@@ -17747,8 +17778,12 @@ protected:
             activeTool_ == Tool::Select &&
             viewportModeShortcutAvailable()) {
             const auto *keyEvent = static_cast<const QKeyEvent *>(event);
-            if (keyEvent->key() == Qt::Key_M &&
-                keyEvent->modifiers() == Qt::ControlModifier) {
+            const bool mirrorShortcut = keyEvent->key() == Qt::Key_M &&
+                                        keyEvent->modifiers() == Qt::ControlModifier;
+            const bool invertSelectionShortcut =
+                keyEvent->key() == Qt::Key_I &&
+                keyEvent->modifiers() == Qt::ControlModifier;
+            if (mirrorShortcut || invertSelectionShortcut) {
                 event->accept();
                 return true;
             }
@@ -17828,6 +17863,14 @@ protected:
              event->modifiers() == Qt::AltModifier)) {
             setAllEditComponentsSelected(
                 event->modifiers() == Qt::NoModifier);
+            event->accept();
+            return;
+        }
+        if (viewportModeShortcutAvailable() &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            !event->isAutoRepeat() && event->key() == Qt::Key_I &&
+            event->modifiers() == Qt::ControlModifier) {
+            invertEditComponentsSelection();
             event->accept();
             return;
         }
@@ -18262,6 +18305,15 @@ protected:
              keyEvent->modifiers() == Qt::AltModifier)) {
             setAllEditComponentsSelected(
                 keyEvent->modifiers() == Qt::NoModifier);
+            keyEvent->accept();
+            return true;
+        }
+
+        if (viewportModeShortcutAvailable() &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            keyEvent->key() == Qt::Key_I &&
+            keyEvent->modifiers() == Qt::ControlModifier) {
+            invertEditComponentsSelection();
             keyEvent->accept();
             return true;
         }

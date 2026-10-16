@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 29
+BRIDGE_FORMAT_VERSION = 30
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1186,6 +1186,7 @@ def saved_viewport_shading_record(scene):
                 record["viewport_shading_type"] = str(space.shading.type)
                 overlay = space.overlay
                 record["show_overlays"] = bool(overlay.show_overlays)
+                record["show_extras"] = bool(overlay.show_extras)
                 record["show_camera_passepartout"] = bool(
                     getattr(overlay, "show_camera_passepartout", True))
                 record["show_floor"] = bool(overlay.show_floor)

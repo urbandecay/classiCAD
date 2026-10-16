@@ -76,6 +76,8 @@ struct ViewportShadingSettings {
     // Blender's global overlays switch gates Solid-mode wire overlays,
     // including per-object show_wire and WIRE display flags.
     bool wireOverlaysVisible = true;
+    // Blender's extras switch also gates imported Image Empty pictures.
+    bool showExtras = true;
     // Blender's Overlay pass draws a separate silhouette for selected objects.
     bool selectedObjectOutlineVisible = true;
     bool gridFloorVisible = true;

@@ -7667,6 +7667,9 @@ public:
             readBoolean(QStringLiteral("show_overlays"),
                         &settings.wireOverlaysVisible);
         }
+        if (source.contains(QStringLiteral("show_extras"))) {
+            readBoolean(QStringLiteral("show_extras"), &settings.showExtras);
+        }
         readBoolean(QStringLiteral("show_outline_selected"),
                     &settings.selectedObjectOutlineVisible);
         for (const auto &entry : {
@@ -9644,6 +9647,17 @@ protected:
         bool rasterSurfaceBatchRendered = false;
         bool rasterSurfaceBatchHasObjects = false;
         QVector<ViewportRenderObject> sceneDrawObjects = visibleShapes;
+        if (!viewportShadingSettings_.wireOverlaysVisible ||
+            !viewportShadingSettings_.showExtras) {
+            sceneDrawObjects.erase(
+                std::remove_if(
+                    sceneDrawObjects.begin(), sceneDrawObjects.end(),
+                    [](const ViewportRenderObject &object) {
+                        return object.shape.geometryType ==
+                               GeometryType::Picture;
+                    }),
+                sceneDrawObjects.end());
+        }
         if (nativeRenderer == nullptr) {
             const auto hasSurfaceGeometry = [](const ViewportRenderObject &object) {
                 const GeometryType type = object.shape.geometryType;

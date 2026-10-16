@@ -10175,11 +10175,11 @@ scene depth.
   selected transparent tint after each per-fragment shadow factor, and defers
   selected opaque tint until after regular/in-front opaque shadow factors. With
   shadows disabled, opaque tint is applied after cavity. The sorted overflow
-  fallback applies opaque tint after cavity and keeps transparent tint attached
-  to selected fragments, but its later coarse transparent-shadow correction
-  still tints before that approximation. The direct painter fallback retains
-  its display-space tint. Matched selected-object captures remain open; this
-  does not establish visual parity.
+  fallback also retains separate regular/in-front opaque selection masks and
+  applies opaque tint after its shadow factors. Its transparent tint remains
+  before the later coarse transparent-shadow correction. The direct painter
+  fallback retains its display-space tint. Matched selected-object captures
+  remain open; this does not establish visual parity.
   Blender keeps Attribute shading on selected objects in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2026-L2045).
   Build passed; matched selected-Attribute Blender captures remain open.

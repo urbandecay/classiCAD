@@ -3514,8 +3514,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const quint64 objectId = drawWorkbenchOutline
                     ? outlineSamples[sampleIndex].objectId
                     : samples[sampleIndex].objectId;
-                const quint64 selectionObjectId =
-                    selectedOutlineSamples[sampleIndex].objectId;
+                const quint64 selectionObjectId = drawSelectionOutline
+                    ? selectedOutlineSamples[sampleIndex].objectId
+                    : 0;
                 int differentNeighbors = 0;
                 float selectedOutlineCoverage = 0.0f;
                 float selectedOutlineHardOpacity = 0.0f;
@@ -3569,19 +3570,21 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                 selectedOutlineHardOpacity, boundaryOpacity);
                         }
                     };
-                for (const QPoint &offset : cardinalNeighbors) {
-                    addSelectedOutlineCoverage(offset, false);
-                }
-                if (selectedOutlineCoverage <= 0.0f &&
-                    outlineSampleOffset > 1) {
-                    const std::array<QPoint, 4> widerCardinalNeighbors = {
-                        QPoint(outlineSampleOffset * 2, 0),
-                        QPoint(-outlineSampleOffset * 2, 0),
-                        QPoint(0, outlineSampleOffset * 2),
-                        QPoint(0, -outlineSampleOffset * 2),
-                    };
-                    for (const QPoint &offset : widerCardinalNeighbors) {
-                        addSelectedOutlineCoverage(offset, true);
+                if (drawSelectionOutline) {
+                    for (const QPoint &offset : cardinalNeighbors) {
+                        addSelectedOutlineCoverage(offset, false);
+                    }
+                    if (selectedOutlineCoverage <= 0.0f &&
+                        outlineSampleOffset > 1) {
+                        const std::array<QPoint, 4> widerCardinalNeighbors = {
+                            QPoint(outlineSampleOffset * 2, 0),
+                            QPoint(-outlineSampleOffset * 2, 0),
+                            QPoint(0, outlineSampleOffset * 2),
+                            QPoint(0, -outlineSampleOffset * 2),
+                        };
+                        for (const QPoint &offset : widerCardinalNeighbors) {
+                            addSelectedOutlineCoverage(offset, true);
+                        }
                     }
                 }
                 for (const QPoint &offset : cardinalNeighbors) {

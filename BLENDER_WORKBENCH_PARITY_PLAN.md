@@ -9571,3 +9571,11 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L863-L920)
   and [#L982-L997](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L982-L997).
   Build passed; visual parity remains unverified.
+
+### QPainter outline buffer guard (2026-10-16)
+
+- The shared raster outline resolve now reads selected-outline samples only
+  when selection outlines are enabled. Ordinary Workbench outlines can run
+  with selection outlines disabled without indexing an unallocated selection
+  buffer. This is a fallback correctness fix; it does not change rendered
+  pixels when selection outlines are enabled.

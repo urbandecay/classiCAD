@@ -9235,6 +9235,16 @@ fallback path remain unverified.
   camera Front/Back images keep their existing pass rules. Build passed;
   matched transparent-surface image captures remain open.
 
+### QPainter camera FRONT Image Empty scene-linear composition (2026-10-16)
+
+- With the bounded retained surface compositor, camera-view-only FRONT images
+  with View as Render now composite over the post-effect scene in scene-linear
+  space, then receive the display transform once. This preserves Blender's
+  ordering after scene effects but before its final display transform. The
+  path is limited to the compositor's one-million-pixel target and falls back
+  to the deferred image path when its linear layer cannot be created. Matched
+  FRONT-image captures remain open.
+
 ### Empty active-layer fallback for Workbench render settings (2026-10-16)
 
 - When an imported document has no active view-layer key, Workbench render

@@ -9638,6 +9638,7 @@ protected:
         QSet<quint64> surfaceOutlineStrokeObjectIds;
         QSet<quint64> rasterDeferredPictureObjectIds;
         QSet<quint64> rasterCameraBackPrecomposedPictureObjectIds;
+        QSet<quint64> rasterCameraFrontPrecomposedPictureObjectIds;
         QVector<const ViewportRenderObject *> rasterDeferredPictures;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
@@ -13917,6 +13918,123 @@ protected:
                 committedInFrontCurveDepth.isEmpty()
                     ? nullptr : &committedInFrontCurveDepth,
                 committedCurveDepthSize);
+            const qint64 sceneLinearTargetPixels =
+                qint64(committedSceneLayer.width()) *
+                committedSceneLayer.height();
+            if (rasterSurfaceBatchRendered &&
+                sceneLinearTargetPixels > 0 &&
+                sceneLinearTargetPixels <= 1'000'000 &&
+                rasterSurfaceLayers.sceneLinearSize ==
+                    committedSceneLayer.size() &&
+                rasterSurfaceLayers.sceneLinearColor.size() ==
+                    static_cast<std::size_t>(sceneLinearTargetPixels)) {
+                QImage cameraFrontLayer(
+                    committedSceneLayer.size(),
+                    QImage::Format_RGBA32FPx4_Premultiplied);
+                if (!cameraFrontLayer.isNull()) {
+                    cameraFrontLayer.setDevicePixelRatio(
+                        committedSceneLayer.devicePixelRatioF());
+                    cameraFrontLayer.fill(Qt::transparent);
+                    QPainter cameraFrontPainter(&cameraFrontLayer);
+                    cameraFrontPainter.setRenderHint(
+                        QPainter::SmoothPixmapTransform, true);
+                    for (const ViewportRenderObject *object :
+                         rasterDeferredPictures) {
+                        if (object == nullptr ||
+                            !object->shape.pictureCameraViewOnly ||
+                            object->shape.pictureImageDepth !=
+                                PictureImageDepth::Front ||
+                            !object->shape.pictureUseViewTransform ||
+                            object->shape.pictureImage.isNull()) {
+                            continue;
+                        }
+                        bool sceneLinearPicturePrepared = false;
+                        drawShape(
+                            cameraFrontPainter, object->shape, false, false,
+                            false, object->layerColor, object->layerLineType,
+                            object->layerLineWeightMm, object->objectId,
+                            object->geometryRevision,
+                            object->preparedDepthGeometry.data(),
+                            object->preparedGeometryOffset,
+                            object->displayColorSceneLinear,
+                            object->workbenchMaterial, object->displayName,
+                            workbenchRandomIdentityLibraryPath(*object),
+                            object->meshObjectTransform, object->meshMaterials,
+                            nullptr, object->nurbsSolidFaceMaterials, nullptr,
+                            QSize(), nullptr, true,
+                            &sceneLinearPicturePrepared);
+                        if (sceneLinearPicturePrepared) {
+                            rasterCameraFrontPrecomposedPictureObjectIds.insert(
+                                object->objectId.value());
+                        }
+                    }
+                    cameraFrontPainter.end();
+                    if (!rasterCameraFrontPrecomposedPictureObjectIds.isEmpty()) {
+                        for (int y = 0; y < cameraFrontLayer.height(); ++y) {
+                            const auto *sourceRow =
+                                reinterpret_cast<const float *>(
+                                    cameraFrontLayer.constScanLine(y));
+                            const std::size_t rowOffset =
+                                static_cast<std::size_t>(y) *
+                                cameraFrontLayer.width();
+                            for (int x = 0; x < cameraFrontLayer.width(); ++x) {
+                                const float *source = sourceRow + x * 4;
+                                const float alpha =
+                                    std::clamp(source[3], 0.0f, 1.0f);
+                                if (alpha <= 0.0f) continue;
+                                RasterWorkbenchLinearPixel &destination =
+                                    rasterSurfaceLayers.sceneLinearColor[
+                                        rowOffset + static_cast<std::size_t>(x)];
+                                const float remain = 1.0f - alpha;
+                                destination.red =
+                                    source[0] + destination.red * remain;
+                                destination.green =
+                                    source[1] + destination.green * remain;
+                                destination.blue =
+                                    source[2] + destination.blue * remain;
+                                destination.alpha =
+                                    alpha + destination.alpha * remain;
+                            }
+                        }
+                        for (int y = 0; y < effectTarget.height(); ++y) {
+                            auto *destinationRow =
+                                reinterpret_cast<QRgb *>(
+                                    effectTarget.scanLine(y));
+                            for (int x = 0; x < effectTarget.width(); ++x) {
+                                const RasterWorkbenchLinearPixel &pixel =
+                                    rasterSurfaceLayers.sceneLinearColor[
+                                        static_cast<std::size_t>(y) *
+                                            effectTarget.width() + x];
+                                if (pixel.alpha <= 0.0f) {
+                                    destinationRow[x] = qRgba(0, 0, 0, 0);
+                                    continue;
+                                }
+                                const QVector3D display =
+                                    workbenchSceneLinearToDisplaySrgb(
+                                        QVector3D(pixel.red / pixel.alpha,
+                                                  pixel.green / pixel.alpha,
+                                                  pixel.blue / pixel.alpha),
+                                        renderShadingSettings.colorTransform,
+                                        renderShadingSettings.colorExposure,
+                                        renderShadingSettings.colorGamma,
+                                        renderShadingSettings.colorLutData,
+                                        renderShadingSettings.colorLutMetadata);
+                                destinationRow[x] = qPremultiply(qRgba(
+                                    std::clamp(qRound(display.x() * 255.0f),
+                                               0, 255),
+                                    std::clamp(qRound(display.y() * 255.0f),
+                                               0, 255),
+                                    std::clamp(qRound(display.z() * 255.0f),
+                                               0, 255),
+                                    std::clamp(qRound(pixel.alpha * 255.0f),
+                                               0, 255)));
+                            }
+                        }
+                    } else {
+                        rasterCameraFrontPrecomposedPictureObjectIds.clear();
+                    }
+                }
+            }
             if (!rasterDeferredPictures.isEmpty()) {
                 QImage displayOutputLayer(
                     committedSceneLayer.size(),
@@ -13945,6 +14063,11 @@ protected:
                     if (object == nullptr) continue;
                     if (rasterSurfaceBatchRendered &&
                         rasterCameraBackPrecomposedPictureObjectIds.contains(
+                            object->objectId.value())) {
+                        continue;
+                    }
+                    if (rasterSurfaceBatchRendered &&
+                        rasterCameraFrontPrecomposedPictureObjectIds.contains(
                             object->objectId.value())) {
                         continue;
                     }

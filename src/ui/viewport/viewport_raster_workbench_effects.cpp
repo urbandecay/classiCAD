@@ -1761,6 +1761,13 @@ bool compositeRasterWorkbenchSurfaces(
             surfaceLayers->outlineAppliedBeforeDisplay =
                 !deferOutlineUntilEffects;
         }
+        if (surfaceLayers != nullptr) {
+            // Keep the bounded scene-linear resolve available for camera
+            // overlays that Blender composites after effects but before the
+            // final display transform.
+            surfaceLayers->sceneLinearColor = resolved;
+            surfaceLayers->sceneLinearSize = QSize(width, height);
+        }
         if (sceneLinearCapture != nullptr) {
             *sceneLinearCapture = resolved;
         }

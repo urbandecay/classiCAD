@@ -9071,11 +9071,13 @@ resolve remain open.
   now import through the existing Picture geometry and image-payload path.
   Fit, crop, and stretch sizing, camera-frame depth, rotation, opacity, and
   offset follow Blender 5.2's camera background transform. BACK images use a
-  far camera-frame plane with scene depth testing to keep them behind visible
-  geometry; FRONT images stay in the in-front image pass. These synthetic
-  picture shapes draw only in camera view. Animated or unavailable images use
-  the importer's unsupported-feature report. The scene extractor record is
-  version 23. Matched camera background captures have not been run.
+  far camera-frame plane with scene depth testing to approximate Blender's
+  under-scene compositing; antialiased edges and transparent surfaces can
+  differ from Blender's dedicated alpha-under pass. FRONT images stay in the
+  in-front image pass. These synthetic picture shapes draw only in camera
+  view. Movie/clip or unavailable images use the importer's unsupported-feature
+  report. The scene extractor record is version 23. Matched camera background
+  captures have not been run.
 
 ### Camera background image flips (2026-10-15)
 

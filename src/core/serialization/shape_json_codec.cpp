@@ -894,6 +894,12 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
     object.insert(QStringLiteral("nurbsSurface"),
                   nurbsSurfaceToJson(shape.nurbsSurface));
+    if (shape.geometryType == GeometryType::NurbsSurface) {
+        object.insert(QStringLiteral("surfaceDisplayGridU"),
+                      shape.surfaceDisplayGridU);
+        object.insert(QStringLiteral("surfaceDisplayGridV"),
+                      shape.surfaceDisplayGridV);
+    }
     if (shape.geometryType == GeometryType::ScalarVolume) {
         object.insert(QStringLiteral("scalarVolume"),
                       scalarVolumeToJson(shape.scalarVolume));
@@ -1136,6 +1142,14 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         return false;
     }
     Shape::NurbsSurface3D nurbsSurface;
+    const int surfaceDisplayGridU = object.value(
+        QStringLiteral("surfaceDisplayGridU")).toInt(48);
+    const int surfaceDisplayGridV = object.value(
+        QStringLiteral("surfaceDisplayGridV")).toInt(48);
+    if (surfaceDisplayGridU < 1 || surfaceDisplayGridU > 256 ||
+        surfaceDisplayGridV < 1 || surfaceDisplayGridV > 256) {
+        return false;
+    }
     const QJsonValue nurbsSurfaceValue = object.value(QStringLiteral("nurbsSurface"));
     if (!nurbsSurfaceValue.isUndefined() &&
         !nurbsSurfaceFromJson(nurbsSurfaceValue, &nurbsSurface)) {
@@ -1587,6 +1601,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->points = points;
     shape->nurbs = nurbs;
     shape->nurbsSurface = nurbsSurface;
+    shape->surfaceDisplayGridU = surfaceDisplayGridU;
+    shape->surfaceDisplayGridV = surfaceDisplayGridV;
     shape->nurbsSolid = nurbsSolid;
     shape->polygonMesh = std::move(polygonMesh);
     shape->scalarVolume = std::move(scalarVolume);

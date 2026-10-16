@@ -557,6 +557,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         return closest;
     }
     if (shape.geometryType == GeometryType::NurbsSurface) {
+        PreparedNurbsSurfaceTessellation::Options displayOptions;
+        displayOptions.gridCountU = shape.surfaceDisplayGridU;
+        displayOptions.gridCountV = shape.surfaceDisplayGridV;
         QRectF bounds;
         if (projectedNurbsSurfaceControlHullBounds(
                 shape.nurbsSurface, transform, viewportSize, worldOffset,
@@ -571,7 +574,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       objectId,
                                       geometryRevision,
                                       0,
-                                      worldOffset);
+                                      worldOffset,
+                                      displayOptions);
     }
     if (isDimensionGeometryType(shape.geometryType)) {
         return distanceToDimensionLayout(
@@ -770,16 +774,17 @@ qreal CurveHitTester::distanceToNurbsSurface(
     ObjectId objectId,
     quint64 geometryRevision,
     int faceIndex,
-    const Point3D &worldOffset) const
+    const Point3D &worldOffset,
+    const PreparedNurbsSurfaceTessellation::Options &options) const
 {
     PreparedNurbsSurfaceTessellation localTessellation;
     QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
     const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
     if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
         cachedTessellation = surfaceTessellationCache_->acquire(
-            objectId, geometryRevision, surface, faceIndex);
+            objectId, geometryRevision, surface, faceIndex, options);
         tessellation = cachedTessellation.data();
-    } else if (localTessellation.prepare(surface)) {
+    } else if (localTessellation.prepare(surface, options)) {
         tessellation = &localTessellation;
     }
     if (tessellation == nullptr) {
@@ -1192,6 +1197,11 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
             shape.geometryType == GeometryType::NurbsSurface ||
             shape.geometryType == GeometryType::NurbsSolid;
         if (spatialSurface) {
+            PreparedNurbsSurfaceTessellation::Options displayOptions;
+            if (shape.geometryType == GeometryType::NurbsSurface) {
+                displayOptions.gridCountU = shape.surfaceDisplayGridU;
+                displayOptions.gridCountV = shape.surfaceDisplayGridV;
+            }
             qreal nearestSurfaceDepth = -std::numeric_limits<qreal>::infinity();
             bool foundSurfacePoint = false;
             const auto considerSurface = [&](const NurbsSurface3D &surface,
@@ -1203,9 +1213,9 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
                 if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
                     cachedTessellation = surfaceTessellationCache_->acquire(
                         objectId, document.objectGeometryRevision(objectId),
-                        surface, faceIndex);
+                        surface, faceIndex, displayOptions);
                     mesh = cachedTessellation.data();
-                } else if (localTessellation.prepare(surface)) {
+                } else if (localTessellation.prepare(surface, displayOptions)) {
                     mesh = &localTessellation;
                 }
                 if (mesh == nullptr) {
@@ -1445,6 +1455,11 @@ bool CurveHitTester::hitTestVisibleSurface(
             shape.geometryType == GeometryType::NurbsSurface
                 ? QVector<NurbsSurface3D>{shape.nurbsSurface}
                 : shapeSurfaceFaces(shape);
+        PreparedNurbsSurfaceTessellation::Options displayOptions;
+        if (shape.geometryType == GeometryType::NurbsSurface) {
+            displayOptions.gridCountU = shape.surfaceDisplayGridU;
+            displayOptions.gridCountV = shape.surfaceDisplayGridV;
+        }
         for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
             const NurbsSurface3D &surface = faces[faceIndex];
             QRectF projectedBounds;
@@ -1463,9 +1478,9 @@ bool CurveHitTester::hitTestVisibleSurface(
             if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
                 cachedTessellation = surfaceTessellationCache_->acquire(
                     objectId, document.objectGeometryRevision(objectId),
-                    surface, faceIndex);
+                    surface, faceIndex, displayOptions);
                 mesh = cachedTessellation.data();
-            } else if (localTessellation.prepare(surface)) {
+            } else if (localTessellation.prepare(surface, displayOptions)) {
                 mesh = &localTessellation;
             }
             if (mesh == nullptr) {

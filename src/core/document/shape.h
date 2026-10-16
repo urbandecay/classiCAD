@@ -94,6 +94,11 @@ struct Shape {
     WorkPlaneFrame workPlaneFrame;
     using NurbsSurface3D = classiCAD::NurbsSurface3D;
     NurbsSurface3D nurbsSurface;
+    // Display tessellation density is presentation metadata, not part of the
+    // exact NURBS surface. Imported Blender surfaces retain their U/V preview
+    // grid here; older/native surfaces keep the historical 48-by-48 default.
+    int surfaceDisplayGridU = 48;
+    int surfaceDisplayGridV = 48;
     NurbsExtrusionSolid3D nurbsSolid;
     PolygonMesh3D polygonMesh;
     ScalarVolume3D scalarVolume;

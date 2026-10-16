@@ -107,7 +107,9 @@ public:
                           const QVector<float> *opaqueSceneDepth = nullptr,
                           const QSize &opaqueSceneDepthSize = {},
                           const QVector<Point3D> *blenderWireVerticesWorld =
-                              nullptr) const;
+                              nullptr,
+                          int displayGridU = 48,
+                          int displayGridV = 48) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

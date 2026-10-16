@@ -2358,6 +2358,10 @@ def extract_surface_patches(obj, scene, materials, unsupported, depsgraph=None,
             "order_v": order_v,
             "control_vertex_count_u": expanded_u,
             "control_vertex_count_v": expanded_v,
+            # Blender evaluates each legacy surface spline with independent
+            # U/V preview resolutions per control-net segment.
+            "display_grid_u": max(1, count_u * max(1, int(spline.resolution_u))),
+            "display_grid_v": max(1, count_v * max(1, int(spline.resolution_v))),
             "control_points_world": world_points,
             "weights": weights,
             "rational": any(weight != 1.0 for weight in weights),

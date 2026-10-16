@@ -4236,7 +4236,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          false, layerColor, displayColorSceneLinear,
                          workbenchMaterial, displayName, libraryPath,
                          fragmentSink, opaqueSceneDepth,
-                         opaqueSceneDepthSize, blenderSurfaceWireVerticesWorld);
+                         opaqueSceneDepthSize, blenderSurfaceWireVerticesWorld,
+                         shape.surfaceDisplayGridU,
+                         shape.surfaceDisplayGridV);
         return;
     }
 
@@ -5060,7 +5062,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         RasterWorkbenchFragmentSink *fragmentSink,
                                         const QVector<float> *opaqueSceneDepth,
                                         const QSize &opaqueSceneDepthSize,
-                                        const QVector<Point3D> *blenderWireVerticesWorld) const
+                                        const QVector<Point3D> *blenderWireVerticesWorld,
+                                        int displayGridU,
+                                        int displayGridV) const
 {
     Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
@@ -6123,11 +6127,15 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             PreparedNurbsSurfaceTessellation localTessellation;
             QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
             const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+            PreparedNurbsSurfaceTessellation::Options surfaceDisplayOptions;
+            surfaceDisplayOptions.gridCountU = displayGridU;
+            surfaceDisplayOptions.gridCountV = displayGridV;
             if (surfaceTessellationCache_ != nullptr) {
                 cachedTessellation = surfaceTessellationCache_->acquire(
-                    objectId, geometryRevision, surface);
+                    objectId, geometryRevision, surface, 0,
+                    surfaceDisplayOptions);
                 tessellation = cachedTessellation.data();
-            } else if (localTessellation.prepare(surface)) {
+            } else if (localTessellation.prepare(surface, surfaceDisplayOptions)) {
                 tessellation = &localTessellation;
             }
             if (tessellation != nullptr) {
@@ -6392,11 +6400,15 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         PreparedNurbsSurfaceTessellation localTessellation;
         QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
         const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+        PreparedNurbsSurfaceTessellation::Options surfaceDisplayOptions;
+        surfaceDisplayOptions.gridCountU = displayGridU;
+        surfaceDisplayOptions.gridCountV = displayGridV;
         if (surfaceTessellationCache_ != nullptr) {
             cachedTessellation = surfaceTessellationCache_->acquire(
-                objectId, geometryRevision, surface);
+                objectId, geometryRevision, surface, 0,
+                surfaceDisplayOptions);
             tessellation = cachedTessellation.data();
-        } else if (localTessellation.prepare(surface)) {
+        } else if (localTessellation.prepare(surface, surfaceDisplayOptions)) {
             tessellation = &localTessellation;
         }
         if (tessellation == nullptr) {

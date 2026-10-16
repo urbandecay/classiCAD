@@ -9908,3 +9908,24 @@ moves them after scene effects and depth-tests them against the retained scene.
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L68-L74)
   and [#L125-L142](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L125-L142).
   Build passed; matched fallback-curve occlusion captures remain open.
+
+### Blender NURBS surface preview resolution (2026-10-16)
+
+- Blender SURFACE import now retains each NURBS spline's independent U/V
+  preview grid in Shape display metadata, separate from the exact NURBS
+  controls, weights, and knots. The values survive native JSON save/load and
+  drive U/V-specific viewport tessellation, surface picking, and display-proxy
+  tessellation. Old files and
+  native surfaces continue to use the existing 48-by-48 default. The imported
+  grid is bounded to 256 samples per direction to keep tessellation costs
+  predictable.
+- The surface-tessellation cache now includes both grid dimensions in its
+  compatibility checks, so a change in display detail cannot reuse a mesh
+  built at another resolution. Blender also exports its evaluated surface
+  wire vertices separately; this change mainly corrects classiCAD's filled
+  mesh density and fallback tessellation. Matched imported-surface captures
+  remain open.
+- Blender exposes these settings on each spline in the
+  [Spline API](https://docs.blender.org/api/5.2/bpy.types.Spline.html), and
+  describes their effect in the
+  [Surface Shape properties](https://docs.blender.org/manual/en/latest/modeling/surfaces/properties/shape.html).

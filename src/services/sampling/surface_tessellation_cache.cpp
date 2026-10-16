@@ -11,6 +11,16 @@ namespace {
 
 constexpr int kMaximumCachedSurfaces = 128;
 
+bool sameOptions(const PreparedNurbsSurfaceTessellation::Options &a,
+                 const PreparedNurbsSurfaceTessellation::Options &b)
+{
+    return a.gridCountU == b.gridCountU && a.gridCountV == b.gridCountV &&
+           a.trimBoundaryDepth == b.trimBoundaryDepth &&
+           a.isocurveCount == b.isocurveCount &&
+           a.isocurveSamples == b.isocurveSamples &&
+           a.trimSamples == b.trimSamples;
+}
+
 bool sameSurfaceParameterization(const NurbsSurface3D &a,
                                  const NurbsSurface3D &b)
 {
@@ -74,6 +84,7 @@ bool surfaceTranslationOffset(const NurbsSurface3D &source,
 
 QSharedPointer<const PreparedNurbsSurfaceTessellation> buildTessellation(
     const NurbsSurface3D &surface,
+    const PreparedNurbsSurfaceTessellation::Options &options,
     SurfaceTessellationCache::AcquisitionStats *stats)
 {
     auto tessellation = QSharedPointer<PreparedNurbsSurfaceTessellation>::create();
@@ -82,8 +93,7 @@ QSharedPointer<const PreparedNurbsSurfaceTessellation> buildTessellation(
         timer.start();
     }
     const bool prepared = tessellation->prepare(
-        surface, PreparedNurbsSurfaceTessellation::Options{},
-        stats != nullptr ? &stats->preparation : nullptr);
+        surface, options, stats != nullptr ? &stats->preparation : nullptr);
     if (stats != nullptr) {
         stats->prepareMicroseconds = timer.nsecsElapsed() / 1000;
     }
@@ -108,17 +118,31 @@ SurfaceTessellationCache::acquire(ObjectId objectId,
                                   int faceIndex,
                                   AcquisitionStats *stats) const
 {
+    return acquire(objectId, geometryRevision, surface, faceIndex,
+                   PreparedNurbsSurfaceTessellation::Options{}, stats);
+}
+
+QSharedPointer<const PreparedNurbsSurfaceTessellation>
+SurfaceTessellationCache::acquire(
+    ObjectId objectId,
+    quint64 geometryRevision,
+    const NurbsSurface3D &surface,
+    int faceIndex,
+    const PreparedNurbsSurfaceTessellation::Options &options,
+    AcquisitionStats *stats) const
+{
     if (stats != nullptr) {
         *stats = {};
     }
     if (!objectId.isValid() || geometryRevision == 0) {
-        return acquireTranslated(surface, stats);
+        return acquireTranslated(surface, options, stats);
     }
 
     const auto key = qMakePair(objectId.value(), faceIndex);
     auto found = entries_.find(key);
     if (found != entries_.end() &&
         found->geometryRevision == geometryRevision &&
+        sameOptions(found->options, options) &&
         !found->tessellation.isNull()) {
         found->lastUse = ++useClock_;
         if (stats != nullptr) {
@@ -128,7 +152,8 @@ SurfaceTessellationCache::acquire(ObjectId objectId,
     }
 
     QSharedPointer<const PreparedNurbsSurfaceTessellation> tessellation;
-    if (found != entries_.end() && !found->tessellation.isNull()) {
+    if (found != entries_.end() && !found->tessellation.isNull() &&
+        sameOptions(found->options, options)) {
         Point3D translation;
         if (translationOffset(found->surface, surface, &translation)) {
             tessellation = translation.x == 0.0 && translation.y == 0.0 &&
@@ -161,7 +186,7 @@ SurfaceTessellationCache::acquire(ObjectId objectId,
         }
     }
     if (tessellation.isNull()) {
-        tessellation = acquireTranslated(surface, stats);
+        tessellation = acquireTranslated(surface, options, stats);
     }
     if (tessellation.isNull()) {
         entries_.remove(key);
@@ -171,7 +196,8 @@ SurfaceTessellationCache::acquire(ObjectId objectId,
         return {};
     }
     entries_.insert(key,
-                    Entry{geometryRevision, ++useClock_, surface, tessellation});
+                    Entry{geometryRevision, ++useClock_, surface, options,
+                          tessellation});
     if (entries_.size() > kMaximumCachedSurfaces) {
         auto leastRecentlyUsed = entries_.begin();
         for (auto iterator = entries_.begin(); iterator != entries_.end(); ++iterator) {
@@ -187,11 +213,15 @@ SurfaceTessellationCache::acquire(ObjectId objectId,
 QSharedPointer<const PreparedNurbsSurfaceTessellation>
 SurfaceTessellationCache::acquireTranslated(
     const NurbsSurface3D &surface,
+    const PreparedNurbsSurfaceTessellation::Options &options,
     AcquisitionStats *stats) const
 {
     for (int i = translationEntries_.size() - 1; i >= 0; --i) {
         Point3D offset;
         const auto &entry = translationEntries_[i];
+        if (!sameOptions(entry.options, options)) {
+            continue;
+        }
         if (!translationOffset(entry.surface, surface, &offset)) {
             continue;
         }
@@ -209,7 +239,7 @@ SurfaceTessellationCache::acquireTranslated(
         return QSharedPointer<PreparedNurbsSurfaceTessellation>::create(
             tessellation->translated(offset));
     }
-    const auto tessellation = buildTessellation(surface, stats);
+    const auto tessellation = buildTessellation(surface, options, stats);
     if (!tessellation.isNull()) {
         if (stats != nullptr) {
             stats->path = AcquisitionStats::Path::Rebuilt;
@@ -217,7 +247,7 @@ SurfaceTessellationCache::acquireTranslated(
         if (translationEntries_.size() >= kMaximumCachedSurfaces) {
             translationEntries_.removeFirst();
         }
-        translationEntries_.append({surface, tessellation});
+        translationEntries_.append({surface, options, tessellation});
     } else if (stats != nullptr) {
         stats->path = AcquisitionStats::Path::Failed;
     }

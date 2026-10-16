@@ -271,6 +271,7 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                                  ObjectId objectId = ObjectId::invalid(),
                                  quint64 geometryRevision = 0,
                                  int faceIndex = 0,
+                                 const PreparedNurbsSurfaceTessellation::Options &options = {},
                                  bool reverseOrientation = false,
                                  bool collectBuildTimings = false)
 {
@@ -296,10 +297,10 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
     }
     if (cache != nullptr) {
         cachedTessellation = cache->acquire(
-            objectId, geometryRevision, surface, faceIndex,
+            objectId, geometryRevision, surface, faceIndex, options,
             collectBuildTimings ? &acquisitionStats : nullptr);
         tessellation = cachedTessellation.data();
-    } else if (localTessellation.prepare(surface)) {
+    } else if (localTessellation.prepare(surface, options)) {
         tessellation = &localTessellation;
         if (collectBuildTimings) {
             acquisitionStats.prepareMicroseconds =
@@ -646,6 +647,7 @@ bool prepareOpenSurfaceShadowMesh(
     const SurfaceTessellationCache *surfaceCache,
     ObjectId objectId,
     quint64 geometryRevision,
+    const PreparedNurbsSurfaceTessellation::Options &options,
     ViewportDepthGeometry::ShadowCasterMesh *mesh)
 {
     if (mesh == nullptr || !validateNurbsSurface(surface)) return false;
@@ -655,9 +657,9 @@ bool prepareOpenSurfaceShadowMesh(
     const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
     if (surfaceCache != nullptr) {
         cachedTessellation = surfaceCache->acquire(
-            objectId, geometryRevision, surface, 0);
+            objectId, geometryRevision, surface, 0, options);
         tessellation = cachedTessellation.data();
-    } else if (localTessellation.prepare(surface)) {
+    } else if (localTessellation.prepare(surface, options)) {
         tessellation = &localTessellation;
     }
     if (tessellation == nullptr || !tessellation->isValid() ||
@@ -959,12 +961,18 @@ void appendShapeDepthGeometry(const Shape &shape,
         if (shape.geometryType == GeometryType::NurbsSurface ||
             shape.geometryType == GeometryType::NurbsSolid) {
             const auto faces = shapeSurfaceFaces(shape);
+            PreparedNurbsSurfaceTessellation::Options displayOptions;
+            if (shape.geometryType == GeometryType::NurbsSurface) {
+                displayOptions.gridCountU = shape.surfaceDisplayGridU;
+                displayOptions.gridCountV = shape.surfaceDisplayGridV;
+            }
             for (int index = 0; index < faces.size(); ++index) {
                 appendNurbsSurfaceDepthMesh(faces[index],
                                             &geometry,
                                             surfaceCache,
                                             objectId,
                                             geometryRevision, index,
+                                            displayOptions,
                                             shape.geometryType ==
                                                     GeometryType::NurbsSolid
                                                 ? nurbsSolidFaceReversed(
@@ -979,7 +987,8 @@ void appendShapeDepthGeometry(const Shape &shape,
             } else if (shape.geometryType == GeometryType::NurbsSurface) {
                 prepareOpenSurfaceShadowMesh(
                     shape.nurbsSurface, surfaceCache, objectId,
-                    geometryRevision, &geometry.shadowCasterMesh);
+                    geometryRevision, displayOptions,
+                    &geometry.shadowCasterMesh);
             }
             return;
         }

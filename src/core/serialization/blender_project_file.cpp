@@ -124,7 +124,8 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
         // These meshes are Blender display proxies only; the exact NURBS
         // remains in the document snapshot. Keep large-project save payloads
         // bounded instead of serializing a 48-by-48 grid for every face.
-        displayOptions.gridCount = 24;
+        displayOptions.gridCountU = 24;
+        displayOptions.gridCountV = 24;
         displayOptions.trimBoundaryDepth = 3;
         displayOptions.isocurveCount = 1;
         displayOptions.isocurveSamples = 1;
@@ -141,9 +142,20 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
         QJsonArray cornerUvs;
         QJsonArray solidFaceIds;
         int surfaceIndex = 0;
+        classiCAD::PreparedNurbsSurfaceTessellation::Options objectDisplayOptions =
+            displayOptions;
+        if (sceneObject.geometry.geometryType ==
+            classiCAD::GeometryType::NurbsSurface) {
+            objectDisplayOptions.gridCountU = std::min(
+                objectDisplayOptions.gridCountU,
+                sceneObject.geometry.surfaceDisplayGridU);
+            objectDisplayOptions.gridCountV = std::min(
+                objectDisplayOptions.gridCountV,
+                sceneObject.geometry.surfaceDisplayGridV);
+        }
         for (const auto &surface : classiCAD::shapeSurfaceFaces(sceneObject.geometry)) {
             classiCAD::PreparedNurbsSurfaceTessellation tessellation;
-            if (!tessellation.prepare(surface, displayOptions)) {
+            if (!tessellation.prepare(surface, objectDisplayOptions)) {
                 setError(errorMessage,
                          QStringLiteral("Could not tessellate NURBS surface object %1 for display")
                              .arg(sceneObject.id.value()));
@@ -1926,6 +1938,10 @@ bool parseBlenderSurfaceItem(
     }
     result.geometry.geometryType = classiCAD::GeometryType::NurbsSurface;
     result.geometry.nurbsSurface = std::move(surface);
+    result.geometry.surfaceDisplayGridU = std::clamp(
+        sourceSurface.value(QStringLiteral("display_grid_u")).toInt(48), 1, 256);
+    result.geometry.surfaceDisplayGridV = std::clamp(
+        sourceSurface.value(QStringLiteral("display_grid_v")).toInt(48), 1, 256);
     const QJsonValue wireVerticesValue =
         item.value(QStringLiteral("surface_wire_vertices_world"));
     if (!wireVerticesValue.isUndefined()) {

@@ -79,14 +79,15 @@ quint64 parameterVertexKey(int uIndex, int vIndex)
 
 QPointF parameterAt(qreal uIndex,
                     qreal vIndex,
-                    int gridSize,
+                    int gridSizeU,
+                    int gridSizeV,
                     qreal uStart,
                     qreal uEnd,
                     qreal vStart,
                     qreal vEnd)
 {
-    return {uStart + (uEnd - uStart) * uIndex / gridSize,
-            vStart + (vEnd - vStart) * vIndex / gridSize};
+    return {uStart + (uEnd - uStart) * uIndex / gridSizeU,
+            vStart + (vEnd - vStart) * vIndex / gridSizeV};
 }
 
 QVector<PreparedNurbsSurfaceTessellation::Polyline> clippedIsocurves(
@@ -252,8 +253,9 @@ bool PreparedNurbsSurfaceTessellation::prepare(
     basisGrid_ = PreparedNurbsSurfaceBasisGrid{};
     valid_ = false;
     strategy_ = Strategy::Failed;
-    if (options.gridCount < 1 ||
-        options.gridCount > 256 || options.trimBoundaryDepth < 0 ||
+    if (options.gridCountU < 1 || options.gridCountU > 256 ||
+        options.gridCountV < 1 || options.gridCountV > 256 ||
+        options.trimBoundaryDepth < 0 ||
         options.trimBoundaryDepth > 8 || options.isocurveCount < 1 ||
         options.isocurveSamples < 1 || options.trimSamples < 3) {
         return false;
@@ -427,7 +429,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
             }
             const int subdivisions = std::max(
                 1, static_cast<int>(std::ceil(
-                       options.gridCount * (spanEnd - spanStart) /
+                       options.gridCountU * (spanEnd - spanStart) /
                        (uEnd - uStart))));
             for (int sampleIndex = 0; sampleIndex < subdivisions;
                  ++sampleIndex) {
@@ -458,7 +460,8 @@ bool PreparedNurbsSurfaceTessellation::prepare(
     }
 
     const int subdivisions = 1 << options.trimBoundaryDepth;
-    const int meshGridSize = options.gridCount * subdivisions;
+    const int meshGridSizeU = options.gridCountU * subdivisions;
+    const int meshGridSizeV = options.gridCountV * subdivisions;
     QHash<quint64, int> vertexIndices;
     const auto vertexAt = [&](int uIndex, int vIndex) {
         const quint64 key = parameterVertexKey(uIndex, vIndex);
@@ -468,7 +471,8 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         }
         const QPointF parameter = parameterAt(uIndex,
                                               vIndex,
-                                              meshGridSize,
+                                              meshGridSizeU,
+                                              meshGridSizeV,
                                               uStart,
                                               uEnd,
                                               vStart,
@@ -515,17 +519,17 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         }
         const int u1 = u0 + step;
         const int v1 = v0 + step;
-        const QPointF p00 = parameterAt(u0, v0, meshGridSize,
+        const QPointF p00 = parameterAt(u0, v0, meshGridSizeU, meshGridSizeV,
                                         uStart, uEnd, vStart, vEnd);
-        const QPointF p10 = parameterAt(u1, v0, meshGridSize,
+        const QPointF p10 = parameterAt(u1, v0, meshGridSizeU, meshGridSizeV,
                                         uStart, uEnd, vStart, vEnd);
-        const QPointF p11 = parameterAt(u1, v1, meshGridSize,
+        const QPointF p11 = parameterAt(u1, v1, meshGridSizeU, meshGridSizeV,
                                         uStart, uEnd, vStart, vEnd);
-        const QPointF p01 = parameterAt(u0, v1, meshGridSize,
+        const QPointF p01 = parameterAt(u0, v1, meshGridSizeU, meshGridSizeV,
                                         uStart, uEnd, vStart, vEnd);
         const QPointF center = parameterAt(u0 + step * 0.5,
                                            v0 + step * 0.5,
-                                           meshGridSize,
+                                           meshGridSizeU, meshGridSizeV,
                                            uStart, uEnd, vStart, vEnd);
         const bool inside00 = trimRegion.contains(p00);
         const bool inside10 = trimRegion.contains(p10);
@@ -567,22 +571,22 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         const QPointF firstTriangleCenter = parameterAt(
             u0 + stepAsReal * (2.0 / 3.0),
             v0 + stepAsReal * (1.0 / 3.0),
-            meshGridSize, uStart, uEnd, vStart, vEnd);
+            meshGridSizeU, meshGridSizeV, uStart, uEnd, vStart, vEnd);
         if (trimRegion.contains(firstTriangleCenter)) {
             appendTriangle(u0, v0, u1, v0, u1, v1);
         }
         const QPointF secondTriangleCenter = parameterAt(
             u0 + stepAsReal * (1.0 / 3.0),
             v0 + stepAsReal * (2.0 / 3.0),
-            meshGridSize, uStart, uEnd, vStart, vEnd);
+            meshGridSizeU, meshGridSizeV, uStart, uEnd, vStart, vEnd);
         if (trimRegion.contains(secondTriangleCenter)) {
             appendTriangle(u0, v0, u1, v1, u0, v1);
         }
     };
 
     const int initialStep = subdivisions;
-    for (int uIndex = 0; uIndex < options.gridCount; ++uIndex) {
-        for (int vIndex = 0; vIndex < options.gridCount; ++vIndex) {
+    for (int uIndex = 0; uIndex < options.gridCountU; ++uIndex) {
+        for (int vIndex = 0; vIndex < options.gridCountV; ++vIndex) {
             tessellateCell(tessellateCell,
                            uIndex * initialStep,
                            vIndex * initialStep,

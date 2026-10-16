@@ -23,7 +23,8 @@ public:
     using Triangle = std::array<int, 3>;
 
     struct Options {
-        int gridCount = 48;
+        int gridCountU = 48;
+        int gridCountV = 48;
         int trimBoundaryDepth = 4;
         int isocurveCount = 8;
         int isocurveSamples = 128;

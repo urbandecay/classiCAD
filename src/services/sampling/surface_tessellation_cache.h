@@ -37,6 +37,13 @@ public:
         const NurbsSurface3D &surface,
         int faceIndex = 0,
         AcquisitionStats *stats = nullptr) const;
+    QSharedPointer<const PreparedNurbsSurfaceTessellation> acquire(
+        ObjectId objectId,
+        quint64 geometryRevision,
+        const NurbsSurface3D &surface,
+        int faceIndex,
+        const PreparedNurbsSurfaceTessellation::Options &options,
+        AcquisitionStats *stats = nullptr) const;
 
     void clear();
     int size() const;
@@ -44,15 +51,18 @@ public:
 private:
     struct TranslationEntry {
         NurbsSurface3D surface;
+        PreparedNurbsSurfaceTessellation::Options options;
         QSharedPointer<const PreparedNurbsSurfaceTessellation> tessellation;
     };
     QSharedPointer<const PreparedNurbsSurfaceTessellation> acquireTranslated(
         const NurbsSurface3D &surface,
+        const PreparedNurbsSurfaceTessellation::Options &options,
         AcquisitionStats *stats = nullptr) const;
     struct Entry {
         quint64 geometryRevision = 0;
         quint64 lastUse = 0;
         NurbsSurface3D surface;
+        PreparedNurbsSurfaceTessellation::Options options;
         QSharedPointer<const PreparedNurbsSurfaceTessellation> tessellation;
     };
 

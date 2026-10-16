@@ -6278,10 +6278,12 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             const SurfaceFillTriangle &b) {
                              return a.depth < b.depth;
                          });
-        // A planar NURBS surface's tessellation triangles are one surface, so
-        // resolve their subpixel coverage together before source-over
-        // blending. This prevents a transparent internal diagonal from being
-        // composited as two partially covered layers.
+        // NURBS tessellation triangles are one surface, so resolve their
+        // subpixel coverage together before source-over blending. This avoids
+        // compositing transparent internal edges as separate layers. When a
+        // fragment sink is collecting depth-sensitive effect data, retain the
+        // stricter coplanar gate below so distinct depth/normal contributions
+        // are not collapsed into one pixel sample.
         const bool hasSingleImageTexture =
             !nurbsTiledTexture && !nurbsTexture.isNull() &&
             nurbsFloatTextureTiles.isEmpty();
@@ -6298,28 +6300,30 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             !fillTriangles.isEmpty() &&
             qint64(coverageTargetWidth) * coverageTargetHeight <= 1000000 &&
             qint64(fillTriangles.size()) <= 100000) {
-            const QVector3D referenceNormal =
-                workbenchNormalize(fillTriangles.first().normal);
+            const QVector3D referenceNormal = workbenchNormalize(
+                fillTriangles.first().normal);
             const Point3D referencePoint = fillTriangles.first().a;
             qreal minimumDepth = fillTriangles.first().depth;
             qreal maximumDepth = minimumDepth;
             qreal planeScale = 1.0;
             bool trianglesSharePlane = true;
             for (const SurfaceFillTriangle &triangle : fillTriangles) {
-                const Point3D *points[] = {&triangle.a, &triangle.b,
-                                           &triangle.c};
-                for (const Point3D *point : points) {
-                    const QVector3D offset(
-                        static_cast<float>(point->x - referencePoint.x),
-                        static_cast<float>(point->y - referencePoint.y),
-                        static_cast<float>(point->z - referencePoint.z));
-                    planeScale = std::max<qreal>(
-                        planeScale, offset.length());
-                    if (std::abs(QVector3D::dotProduct(
-                            referenceNormal, offset)) >
-                        1.0e-6 * planeScale) {
-                        trianglesSharePlane = false;
-                        break;
+                if (fragmentSink != nullptr) {
+                    const Point3D *points[] = {&triangle.a, &triangle.b,
+                                               &triangle.c};
+                    for (const Point3D *point : points) {
+                        const QVector3D offset(
+                            static_cast<float>(point->x - referencePoint.x),
+                            static_cast<float>(point->y - referencePoint.y),
+                            static_cast<float>(point->z - referencePoint.z));
+                        planeScale = std::max<qreal>(
+                            planeScale, offset.length());
+                        if (std::abs(QVector3D::dotProduct(
+                                referenceNormal, offset)) >
+                            1.0e-6 * planeScale) {
+                            trianglesSharePlane = false;
+                            break;
+                        }
                     }
                 }
                 if (!trianglesSharePlane) break;
@@ -6331,19 +6335,23 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     coverageResolveActive = false;
                     break;
                 }
-                const QVector3D normal = workbenchNormalize(triangle.normal);
-                if (QVector3D::dotProduct(referenceNormal, normal) <
-                        1.0f - 1.0e-6f) {
-                    coverageResolveActive = false;
-                    break;
+                if (fragmentSink != nullptr) {
+                    const QVector3D normal =
+                        workbenchNormalize(triangle.normal);
+                    if (QVector3D::dotProduct(referenceNormal, normal) <
+                            1.0f - 1.0e-6f) {
+                        coverageResolveActive = false;
+                        break;
+                    }
                 }
                 minimumDepth = std::min(minimumDepth, triangle.depth);
                 maximumDepth = std::max(maximumDepth, triangle.depth);
             }
             coverageResolveActive = coverageResolveActive &&
-                (transform_.isPerspectiveEnabled()
-                     ? trianglesSharePlane
-                     : maximumDepth - minimumDepth < 1.0e-5);
+                (fragmentSink == nullptr ||
+                 (transform_.isPerspectiveEnabled()
+                      ? trianglesSharePlane
+                      : maximumDepth - minimumDepth < 1.0e-5));
             if (coverageResolveActive) {
                 const size_t pixelCount =
                     static_cast<size_t>(coverageTargetWidth) *

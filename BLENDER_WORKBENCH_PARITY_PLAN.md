@@ -10237,7 +10237,11 @@ scene depth.
   subdivision visible at baseline and far zoom, while Blender faded it out.
   The GPU shader and QPainter path now use Blender's orthographic pixel-size
   thresholds: lines fade below 64 projected pixels and reach zero opacity at
-  four pixels. Matched captures after this change remain open.
+  four pixels. A later user screenshot showed the full floor grid absent;
+  inspection found a saved classiCAD grid opacity of zero, which hid both
+  floor lines and axes. The local preference was restored to opacity one and
+  the background style to Radial; no GUI was launched and matched captures
+  after these changes remain open.
 
 ### Report unsupported saved Blender viewport overlays (2026-10-16)
 

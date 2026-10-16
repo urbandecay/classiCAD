@@ -249,7 +249,11 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   mismatch. Fine grid LOD lines were more visible in classiCAD at baseline and
   far zoom. The GPU and QPainter fade now follow Blender's source thresholds,
   fading lines below 64 pixels and suppressing them at four pixels or smaller.
-  Post-change matched captures remain open. Before this correction, neutral-
+  A later user screenshot showed the whole grid absent; inspection found the
+  local classiCAD grid-opacity preference was 0 and its background style was
+  Linear. Those local preferences were restored to opacity 1 and Radial, which
+  match the visible Blender defaults; the running GUI was not launched and a
+  post-change capture remains open. Before the LOD correction, neutral-
   pixel ROI MAE was 6.42 for top and 9.14 for perspective;
   those values include the LOD visibility difference and viewport-specific UI,
   and are not pure background-color measurements. Exact background, fine-grid,

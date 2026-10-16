@@ -9125,8 +9125,10 @@ resolve remain open.
   picture data. The GPU overlay and QPainter display paths apply the active
   Workbench color transform, exposure, gamma, and custom LUT when this option
   is enabled; ordinary Image Empties with it disabled keep their existing
-  display path. Scene-linear image payloads retain their HDR values until the
-  selected transform is applied. Camera background images use the same
+  display path. GPU picture caches include custom LUT data and shaper/domain
+  metadata so changing a transform cannot reuse stale pretransformed pixels.
+  Scene-linear image payloads retain their HDR values until the selected
+  transform is applied. Camera background images use the same
   setting through their synthetic Image Empty source. The transformed images
   still composite as overlays after the main scene transform, so transparent
   image edges can differ from Blender's scene-linear alpha-under compositing.

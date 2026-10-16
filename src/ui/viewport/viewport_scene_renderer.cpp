@@ -2693,6 +2693,16 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     QByteArray displayTransformData;
     if (applyViewTransform) {
         displayTransformData = displaySettings->colorLutData;
+        const ImportedBlenderColorLutMetadata &lutMetadata =
+            displaySettings->colorLutMetadata;
+        displayTransformData += QByteArray::number(lutMetadata.size);
+        displayTransformData += QByteArray::number(
+            lutMetadata.domainMin, 'g', 17);
+        displayTransformData += QByteArray::number(
+            lutMetadata.domainMax, 'g', 17);
+        displayTransformData += lutMetadata.shaper.toUtf8();
+        displayTransformData += QByteArray::number(
+            lutMetadata.shaperScale, 'g', 17);
         displayTransformData += QByteArray::number(
             picture.pictureColorSceneLinear.x(), 'g', 9);
         displayTransformData += QByteArray::number(

@@ -877,7 +877,8 @@ ViewportCameraState ViewportTransform::cameraState() const
     const qreal yaw = std::atan2(outward.x, -outward.y);
     const qreal pitch = std::asin(std::clamp(outward.z, -1.0, 1.0));
     return {zoom_, pan_, orbitPivot_, yaw, pitch,
-            perspective_, viewPreset_, gridViewDistance_, orientation_, true};
+            perspective_, viewPreset_, gridViewDistance_, orientation_, true,
+            cameraView_, cameraZoom_, cameraOffsetX_, cameraOffsetY_};
 }
 
 void ViewportTransform::setCameraState(const ViewportCameraState &state)
@@ -893,6 +894,15 @@ void ViewportTransform::setCameraState(const ViewportCameraState &state)
         return;
     }
     orbitGestureActive_ = false;
+    cameraView_ = state.cameraView && std::isfinite(state.cameraZoom) &&
+                  state.cameraZoom >= -30.0 && state.cameraZoom <= 600.0 &&
+                  std::isfinite(state.cameraOffsetX) &&
+                  state.cameraOffsetX >= -1.0 && state.cameraOffsetX <= 1.0 &&
+                  std::isfinite(state.cameraOffsetY) &&
+                  state.cameraOffsetY >= -1.0 && state.cameraOffsetY <= 1.0;
+    cameraZoom_ = cameraView_ ? state.cameraZoom : 0.0;
+    cameraOffsetX_ = cameraView_ ? state.cameraOffsetX : 0.0;
+    cameraOffsetY_ = cameraView_ ? state.cameraOffsetY : 0.0;
     perspective_ = state.perspective;
     const qreal minimumZoom = perspective_
                                   ? minimumViewZoom(cameraPreferences_, gridSpacing_)
@@ -951,9 +961,17 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
     constexpr qreal halfPi = 1.57079632679489661923;
     constexpr qreal radians = 0.01745329251994329577;
     if (preset == ViewportViewPreset::Custom) {
+        cameraView_ = false;
+        cameraZoom_ = 0.0;
+        cameraOffsetX_ = 0.0;
+        cameraOffsetY_ = 0.0;
         viewPreset_ = preset;
         return;
     }
+    cameraView_ = false;
+    cameraZoom_ = 0.0;
+    cameraOffsetX_ = 0.0;
+    cameraOffsetY_ = 0.0;
     orbitGestureActive_ = false;
     orbitPivotLocked_ = false;
     const CameraBasis previousBasis = cameraBasis(orientation_);

@@ -98,6 +98,10 @@ QJsonObject cameraStateToJson(const ViewportCameraState &state)
     object.insert(QStringLiteral("gridViewDistance"), state.gridViewDistance);
     object.insert(QStringLiteral("orientation"), orientation);
     object.insert(QStringLiteral("hasOrientation"), state.hasOrientation);
+    object.insert(QStringLiteral("cameraView"), state.cameraView);
+    object.insert(QStringLiteral("cameraZoom"), state.cameraZoom);
+    object.insert(QStringLiteral("cameraOffsetX"), state.cameraOffsetX);
+    object.insert(QStringLiteral("cameraOffsetY"), state.cameraOffsetY);
     return object;
 }
 
@@ -160,6 +164,23 @@ bool cameraStateFromJson(const QJsonValue &value, ViewportCameraState *state)
                             orientationX.toDouble(),
                             orientationY.toDouble(),
                             orientationZ.toDouble()};
+    const QJsonValue cameraView = object.value(QStringLiteral("cameraView"));
+    if (!cameraView.isUndefined() && !cameraView.isBool()) {
+        return false;
+    }
+    restored.cameraView = cameraView.toBool(false);
+    if (restored.cameraView &&
+        (!finiteNumber(QStringLiteral("cameraZoom"),
+                       &restored.cameraZoom) ||
+         restored.cameraZoom < -30.0 || restored.cameraZoom > 600.0 ||
+         !finiteNumber(QStringLiteral("cameraOffsetX"),
+                       &restored.cameraOffsetX) ||
+         restored.cameraOffsetX < -1.0 || restored.cameraOffsetX > 1.0 ||
+         !finiteNumber(QStringLiteral("cameraOffsetY"),
+                       &restored.cameraOffsetY) ||
+         restored.cameraOffsetY < -1.0 || restored.cameraOffsetY > 1.0)) {
+        return false;
+    }
     const qreal orientationLengthSquared = restored.orientation.dot(restored.orientation);
     if (!std::isfinite(orientationLengthSquared) ||
         (restored.hasOrientation && orientationLengthSquared <= 1.0e-12)) {

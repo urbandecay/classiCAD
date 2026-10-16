@@ -1203,6 +1203,56 @@ bool importedSceneCameraTransform(const Document &document,
     return true;
 }
 
+bool applyImportedCameraViewFraming(ViewportTransform *transform,
+                                    const QSize &viewportSize,
+                                    qreal cameraZoom,
+                                    qreal cameraOffsetX,
+                                    qreal cameraOffsetY)
+{
+    if (transform == nullptr || viewportSize.isEmpty() ||
+        !std::isfinite(cameraZoom) || cameraZoom < -30.0 ||
+        cameraZoom > 600.0 || !std::isfinite(cameraOffsetX) ||
+        cameraOffsetX < -1.0 || cameraOffsetX > 1.0 ||
+        !std::isfinite(cameraOffsetY) || cameraOffsetY < -1.0 ||
+        cameraOffsetY > 1.0) {
+        return false;
+    }
+    const qreal zoomBase = std::sqrt(2.0) + cameraZoom / 50.0;
+    const qreal frameZoom = zoomBase * zoomBase / 2.0;
+    if (!std::isfinite(frameZoom) || frameZoom <= 0.0) return false;
+
+    ViewportCameraState cameraState = transform->cameraState();
+    cameraState.cameraView = true;
+    cameraState.cameraZoom = cameraZoom;
+    cameraState.cameraOffsetX = cameraOffsetX;
+    cameraState.cameraOffsetY = cameraOffsetY;
+    if (cameraState.perspective) {
+        ViewportCameraPreferences preferences = transform->cameraPreferences();
+        preferences.sensorWidthMillimeters /= frameZoom;
+        transform->setCameraPreferences(preferences);
+    } else {
+        cameraState.zoom *= frameZoom;
+    }
+    transform->setCameraState(cameraState);
+
+    ViewportRenderCameraProjection projection =
+        transform->renderCameraProjection();
+    projection.cameraViewZoom = frameZoom;
+    // Blender offsets the camera frame by a zoom-scaled fraction of its size.
+    const qreal viewFactor = std::max<qreal>(
+        1.0, std::max(viewportSize.width(), viewportSize.height()));
+    projection.shiftX += cameraOffsetX * frameZoom *
+                         viewportSize.width() / viewFactor;
+    projection.shiftY += cameraOffsetY * frameZoom *
+                         viewportSize.height() / viewFactor;
+    transform->setRenderCameraProjection(projection);
+    transform->setProjectionShiftPixels(
+        transform->projectionShiftPixels() +
+        QPointF(cameraOffsetX * frameZoom * viewportSize.width(),
+                cameraOffsetY * frameZoom * viewportSize.height()));
+    return true;
+}
+
 bool applyImportedRenderColorManagement(
     const Document &document, ViewportShadingSettings *settings)
 {
@@ -6687,6 +6737,15 @@ public:
                                              restored.view.workPlaneOffset);
             viewportTransform_.setWorkPlaneFrame(restored.view.workPlaneFrame);
             viewportTransform_.setCameraState(restored.view.camera);
+            if (restored.view.camera.cameraView &&
+                importedSceneCameraTransform(
+                    document_, size(), &viewportTransform_, nullptr)) {
+                applyImportedCameraViewFraming(
+                    &viewportTransform_, size(),
+                    restored.view.camera.cameraZoom,
+                    restored.view.camera.cameraOffsetX,
+                    restored.view.camera.cameraOffsetY);
+            }
             selection_.setObjectIds(restored.view.selectedObjectIds,
                                     restored.view.primaryObjectId);
             selection_.prune(document_);
@@ -6806,6 +6865,10 @@ public:
         const ViewportCameraState viewState = viewportTransform_.cameraState();
         const Point3D target = viewportTransform_.viewTarget();
         ProjectViewportViewState &storedView = cameraSettings.view;
+        storedView.cameraView = viewState.cameraView;
+        storedView.cameraZoom = viewState.cameraZoom;
+        storedView.cameraOffsetX = viewState.cameraOffsetX;
+        storedView.cameraOffsetY = viewState.cameraOffsetY;
         storedView.zoom = viewState.zoom;
         storedView.panX = viewState.pan.x();
         storedView.panY = viewState.pan.y();
@@ -7272,44 +7335,9 @@ public:
             if (storedView.cameraView) {
                 if (importedSceneCameraTransform(
                         document_, size(), &viewportTransform_, nullptr)) {
-                    const qreal cameraZoom =
-                        (std::sqrt(2.0) + storedView.cameraZoom / 50.0);
-                    const qreal frameZoom = cameraZoom * cameraZoom / 2.0;
-                    if (std::isfinite(frameZoom) && frameZoom > 0.0) {
-                        ViewportCameraState cameraState =
-                            viewportTransform_.cameraState();
-                        if (cameraState.perspective) {
-                            ViewportCameraPreferences preferences =
-                                viewportTransform_.cameraPreferences();
-                            preferences.sensorWidthMillimeters /= frameZoom;
-                            viewportTransform_.setCameraPreferences(preferences);
-                        } else {
-                            cameraState.zoom *= frameZoom;
-                            viewportTransform_.setCameraState(cameraState);
-                        }
-                        ViewportRenderCameraProjection projection =
-                            viewportTransform_.renderCameraProjection();
-                        projection.cameraViewZoom = frameZoom;
-                        // Blender's camera-view offsets move the camera frame
-                        // in proportion to its zoom. Express that motion in
-                        // the camera projection's normalized shift units.
-                        const qreal viewFactor = std::max<qreal>(
-                            1.0, std::max(width(), height()));
-                        projection.shiftX +=
-                            storedView.cameraOffsetX * frameZoom *
-                            width() / viewFactor;
-                        projection.shiftY +=
-                            storedView.cameraOffsetY * frameZoom *
-                            height() / viewFactor;
-                        viewportTransform_.setRenderCameraProjection(projection);
-
-                        const QPointF oldShift =
-                            viewportTransform_.projectionShiftPixels();
-                        viewportTransform_.setProjectionShiftPixels(
-                            oldShift + QPointF(
-                                storedView.cameraOffsetX * frameZoom * width(),
-                                storedView.cameraOffsetY * frameZoom * height()));
-                    }
+                    applyImportedCameraViewFraming(
+                        &viewportTransform_, size(), storedView.cameraZoom,
+                        storedView.cameraOffsetX, storedView.cameraOffsetY);
                     notifyViewStateChanged();
                     setCursor(Qt::ArrowCursor);
                     update();
@@ -7318,6 +7346,10 @@ public:
                 }
             }
             ViewportCameraState viewState;
+            viewState.cameraView = storedView.cameraView;
+            viewState.cameraZoom = storedView.cameraZoom;
+            viewState.cameraOffsetX = storedView.cameraOffsetX;
+            viewState.cameraOffsetY = storedView.cameraOffsetY;
             viewState.zoom = storedView.zoom;
             viewState.pan = QPointF(storedView.panX, storedView.panY);
             viewState.orbitPivot = {storedView.orbitPivotX,

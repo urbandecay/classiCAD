@@ -8927,7 +8927,7 @@ resolve remain open.
   Matched GPU shadow comparisons remain open; QPainter uses a separate
   approximate depth-map algorithm.
 
-### Blender saved viewport view on Open (2026-10-15)
+### Blender saved viewport view on Open and classiCAD project reopen (2026-10-15)
 
 - Ordinary `.blend` Open now reads a saved free `VIEW_3D` region's focus point,
   orientation, distance, and perspective/orthographic mode and applies them to
@@ -8936,8 +8936,10 @@ resolve remain open.
   views that use the active scene camera now restore that camera pose along
   with Blender's saved camera zoom and framing offset. Camera views that use a
   different per-space camera remain unsupported. If neither supported view is
-  available, classiCAD keeps its default view. Blender stores free-view values
-  on `SpaceView3D.region_3d`; see
+  available, classiCAD keeps its default view. The imported camera-view mode,
+  zoom, and offset are also stored in native classiCAD projects, preserving
+  their framing on save/reopen. Blender stores free-view values on
+  `SpaceView3D.region_3d`; see
   [`RegionView3D`](https://docs.blender.org/api/5.2/bpy.types.RegionView3D.html).
   The scene render camera remains a separate record for Workbench render
   results. The scene extractor record is now version 21, and the reader accepts

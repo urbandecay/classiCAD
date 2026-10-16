@@ -127,6 +127,10 @@ struct ViewportCameraState {
     qreal gridViewDistance = 60.0;
     ViewportOrientation orientation;
     bool hasOrientation = false;
+    bool cameraView = false;
+    qreal cameraZoom = 0.0;
+    qreal cameraOffsetX = 0.0;
+    qreal cameraOffsetY = 0.0;
 };
 
 class ViewportTransform final {
@@ -253,6 +257,10 @@ private:
     qreal gridViewDistance_ = 60.0;
     qreal gridSpacing_ = 1.0;
     ViewportCameraPreferences cameraPreferences_;
+    bool cameraView_ = false;
+    qreal cameraZoom_ = 0.0;
+    qreal cameraOffsetX_ = 0.0;
+    qreal cameraOffsetY_ = 0.0;
     QPointF projectionShiftPixels_;
     bool hasRenderCameraProjection_ = false;
     ViewportRenderCameraProjection renderCameraProjection_;

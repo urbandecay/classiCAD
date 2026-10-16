@@ -3466,8 +3466,18 @@ public:
 
     int beginPointExtrude()
     {
-        const QHash<quint64, QSet<int>> controlPointTargets =
-            selectedVertexControlPointTargets();
+        const bool editVertexMode =
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            componentSelectionMode_ == ComponentSelectionMode::Vertex;
+        const bool editEdgeMode =
+            interactionMode_ == ViewportInteractionMode::Edit &&
+            componentSelectionMode_ == ComponentSelectionMode::Edge;
+        QHash<quint64, QSet<int>> controlPointTargets;
+        if (editVertexMode) {
+            controlPointTargets = selectedVertexControlPointTargets();
+        } else if (editEdgeMode) {
+            controlPointTargets = selectedEditableControlPointTargets();
+        }
         const auto makeSolidCapSource =
             [this](ObjectId objectId, const Shape &shape,
                    const SceneObject &sceneObject, int capIndex,
@@ -3638,6 +3648,144 @@ public:
                 source->sourceControlPointIndices = {firstIndex, secondIndex};
                 return true;
             };
+
+        const auto startStagedExtrude =
+            [this](const QVector<PointExtrudeTool::ControlPointSource>
+                       &pointSources,
+                   const QVector<PointExtrudeTool::CurveSource> &curveSources,
+                   const QVector<PointExtrudeTool::SurfaceFaceSource>
+                       &surfaceFaceSources,
+                   const QVector<PointExtrudeTool::SolidCapSource>
+                       &solidCapSources) {
+                const int sourceCount = pointSources.size() +
+                                        curveSources.size() +
+                                        surfaceFaceSources.size() +
+                                        solidCapSources.size();
+                if (sourceCount == 0) {
+                    return 0;
+                }
+                auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                    toolRegistry_.find(Tool::PointExtrude));
+                if (extrudeTool == nullptr) {
+                    return 0;
+                }
+                extrudeTool->setControlPointSources(pointSources);
+                extrudeTool->setCurveSources(curveSources);
+                extrudeTool->setSurfaceFaceSources(surfaceFaceSources);
+                extrudeTool->setSolidCapSources(solidCapSources);
+                setTool(Tool::PointExtrude);
+                setFocus(Qt::OtherFocusReason);
+                setCursor(Qt::CrossCursor);
+                update();
+                DebugLog::instance().write(
+                    QStringLiteral("beginPointExtrude selectedControlPoints=%1")
+                        .arg(pointSources.size()) +
+                    QStringLiteral(" selectedCurves=%1")
+                        .arg(curveSources.size()) +
+                    QStringLiteral(" selectedSurfaceFaces=%1")
+                        .arg(surfaceFaceSources.size()) +
+                    QStringLiteral(" selectedSolidCaps=%1")
+                        .arg(solidCapSources.size()));
+                return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
+            };
+
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            componentSelectionMode_ == ComponentSelectionMode::Face) {
+            QVector<PointExtrudeTool::SurfaceFaceSource> surfaceFaceSources;
+            QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+            const auto &selectedFaces = componentSelections_[
+                static_cast<int>(ComponentSelectionMode::Face)];
+            for (auto selected = selectedFaces.cbegin();
+                 selected != selectedFaces.cend(); ++selected) {
+                const ObjectId objectId = ObjectId::fromValue(selected.key());
+                if (!isEditObject(objectId) ||
+                    !document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId)) {
+                    continue;
+                }
+                const Shape *shape = document_.shape(objectId);
+                const SceneObject *sceneObject = document_.object(objectId);
+                if (shape == nullptr || sceneObject == nullptr) {
+                    continue;
+                }
+                if (shape->geometryType == GeometryType::NurbsSurface) {
+                    if (selected.value().size() != 1 ||
+                        !selected.value().contains(0)) {
+                        return 0;
+                    }
+                    PointExtrudeTool::SurfaceFaceSource source;
+                    if (!makeSurfaceFaceSource(objectId, *shape, *sceneObject,
+                                               &source)) {
+                        return 0;
+                    }
+                    surfaceFaceSources.append(std::move(source));
+                    continue;
+                }
+                if (shape->geometryType != GeometryType::NurbsSolid) {
+                    continue;
+                }
+                if (selected.value().size() != 1) {
+                    return 0;
+                }
+                const int faceIndex = *selected.value().cbegin();
+                PointExtrudeTool::SolidCapSource source;
+                if (!makeSolidCapSource(objectId, *shape, *sceneObject,
+                                        faceIndex, &source)) {
+                    return 0;
+                }
+                solidCapSources.append(std::move(source));
+            }
+            return startStagedExtrude({}, {}, surfaceFaceSources,
+                                      solidCapSources);
+        }
+
+        if (editEdgeMode) {
+            const Shape *activeShape =
+                document_.shape(selection_.primaryObjectId());
+            if (activeShape != nullptr &&
+                (activeShape->geometryType == GeometryType::NurbsSurface ||
+                 activeShape->geometryType == GeometryType::NurbsSolid)) {
+                QVector<PointExtrudeTool::CurveSource> curveSources;
+                const auto &selectedEdges = componentSelections_[
+                    static_cast<int>(ComponentSelectionMode::Edge)];
+                for (quint64 objectValue : editObjectIds_) {
+                    const ObjectId objectId = ObjectId::fromValue(objectValue);
+                    const Shape *shape = document_.shape(objectId);
+                    const SceneObject *sceneObject =
+                        document_.object(objectId);
+                    const auto selected =
+                        selectedEdges.constFind(objectValue);
+                    if (shape == nullptr || sceneObject == nullptr ||
+                        selected == selectedEdges.cend() ||
+                        selected.value().isEmpty() ||
+                        !document_.isObjectVisible(objectId) ||
+                        !document_.isObjectEditable(objectId)) {
+                        continue;
+                    }
+
+                    // A NURBS surface edge is its exact boundary spline. The
+                    // control net's interior lines are not geometric edges,
+                    // even when those lines are visible for editing.
+                    for (const SurfaceBoundaryComponent &boundary :
+                         surfaceBoundaryComponents(*shape)) {
+                        if (!boundaryEdgeSelected(boundary,
+                                                  selected.value())) {
+                            continue;
+                        }
+                        PointExtrudeTool::CurveSource source;
+                        source.objectId = objectId;
+                        source.curve = boundary.boundary.curve;
+                        source.workPlaneFrame = makeWorkPlaneFrame(
+                            WorkPlane::XY);
+                        source.workPlaneFrame.origin =
+                            sceneObject->placementTranslation;
+                        curveSources.append(std::move(source));
+                    }
+                }
+                return startStagedExtrude({}, curveSources, {}, {});
+            }
+        }
+
         if (!controlPointTargets.isEmpty()) {
             struct DeferredCurvePointSource {
                 quint64 weldGroup = 0;
@@ -3766,7 +3914,7 @@ public:
                         const int countU = surface.controlVertexCountU;
                         const int countV = surface.controlVertexCountV;
                         const bool allFaceControlPointsSelected =
-                            countU == 2 && countV == 2 &&
+                            editEdgeMode && countU == 2 && countV == 2 &&
                             surface.controlPoints.size() == 4 &&
                             selectedIt.value().size() == 4 &&
                             selectedIt.value().contains(0) &&
@@ -3785,7 +3933,8 @@ public:
                             }
                         }
 
-                        if (!controlPointsVisible_ && !allFaceControlPointsSelected) {
+                        if (editEdgeMode && !controlPointsVisible_ &&
+                            !allFaceControlPointsSelected) {
                             for (const auto &boundary : surfaceBoundaryComponents(*shape)) {
                                 if (!selectedIt.value().contains(boundary.firstVertex) ||
                                     !selectedIt.value().contains(boundary.lastVertex)) continue;
@@ -3806,7 +3955,7 @@ public:
                         // than turning every selected CV into a loose edge.
                         const int curveSourceCountBeforeSurface =
                             curveSources.size();
-                        if (!allFaceControlPointsSelected &&
+                        if (editEdgeMode && !allFaceControlPointsSelected &&
                             consumedControlPoints.isEmpty() &&
                             countU >= 2 && countV == 2 &&
                             surface.degreeV == 1 && surface.orderV == 2 &&
@@ -3896,7 +4045,7 @@ public:
                                 curveSources.append(std::move(curveSource));
                             }
                         }
-                        if (!allFaceControlPointsSelected &&
+                        if (editEdgeMode && !allFaceControlPointsSelected &&
                             consumedControlPoints.isEmpty() &&
                             curveSources.size() ==
                                 curveSourceCountBeforeSurface &&
@@ -3961,7 +4110,7 @@ public:
                                               std::move(capPointIndices)));
                             }
                         }
-                        if (completeCaps.size() == 1) {
+                        if (editEdgeMode && completeCaps.size() == 1) {
                             PointExtrudeTool::SolidCapSource capSource;
                             if (makeSolidCapSource(
                                     objectId, *shape, *sceneObject,
@@ -3975,7 +4124,8 @@ public:
                         // edge extrusion. The solid cage uses deduplicated
                         // world-local points, so map the face's CVs back to
                         // that cage before promoting the edge to a curve.
-                        if (consumedControlPoints.isEmpty() &&
+                        if (editEdgeMode &&
+                            consumedControlPoints.isEmpty() &&
                             selectedIt.value().size() == 2) {
                             bool promotedEdge = false;
                             for (const NurbsSurface3D &face : faces) {
@@ -4326,6 +4476,12 @@ public:
                             mapping.curve.controlPoints.size()) {
                         continue;
                     }
+                    // In Vertex mode, a NURBS control point always creates an
+                    // edge. Only Edge mode promotes selected spline controls
+                    // to an entire spline or one of its spans.
+                    if (!editEdgeMode) {
+                        continue;
+                    }
                     const bool closed = curveIsClosed(mapping);
                     bool allDistinctControlPointsSelected = true;
                     for (int point = 0;
@@ -4601,37 +4757,15 @@ public:
                 }
             }
 
-            if (pointSources.isEmpty() && curveSources.isEmpty() &&
-                surfaceFaceSources.isEmpty() &&
-                solidCapSources.isEmpty()) {
-                DebugLog::instance().write(
-                    QStringLiteral("beginPointExtrude ignored selected control points with no editable source"));
-                return 0;
-            }
-            if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
-                    toolRegistry_.find(Tool::PointExtrude))) {
-                extrudeTool->setControlPointSources(pointSources);
-                extrudeTool->setCurveSources(curveSources);
-                extrudeTool->setSurfaceFaceSources(surfaceFaceSources);
-                extrudeTool->setSolidCapSources(solidCapSources);
-            } else {
-                return 0;
-            }
-            setTool(Tool::PointExtrude);
-            setFocus(Qt::OtherFocusReason);
-            setCursor(Qt::CrossCursor);
-            update();
-            DebugLog::instance().write(
-                QStringLiteral("beginPointExtrude selectedControlPoints=%1")
-                    .arg(pointSources.size()) +
-                QStringLiteral(" selectedCurves=%1")
-                    .arg(curveSources.size()) +
-                QStringLiteral(" selectedSolidCaps=%1")
-                    .arg(solidCapSources.size()));
-            const int sourceCount = pointSources.size() + curveSources.size() +
-                                    surfaceFaceSources.size() +
-                                    solidCapSources.size();
-            return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
+            return startStagedExtrude(pointSources, curveSources,
+                                      surfaceFaceSources, solidCapSources);
+        }
+
+        // Edit Mode sources must come from the selected component. Never let
+        // an empty or unsupported component selection reach the Object Mode
+        // whole-shape source path below.
+        if (interactionMode_ == ViewportInteractionMode::Edit) {
+            return 0;
         }
 
         QVector<ObjectId> selected = selectedShapeIndices_;

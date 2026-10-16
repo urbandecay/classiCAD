@@ -3924,9 +3924,19 @@ topology. Multi-object Edit Mode remains limited to the active geometry
 family.
 
 The user explicitly deferred polygon-mesh component work for now; this slice
-maps the existing NURBS control geometry to Blender's component concepts.
-Edit Mode Extrude still needs to honor the current component selection and
-must not fall back to whole-object extrusion when no component is selected.
+maps NURBS control points to vertices, curve splines to edges, and NURBS
+surface patches to faces. Edit Mode Extrude now uses the active component
+selection: selected control points create edges, selected curve splines create
+ruled NURBS surfaces, and selected untrimmed NURBS surface boundary splines
+create ruled surfaces from their exact boundary curves regardless of
+control-net visibility. Interior control-net lines are not geometric splines
+and do not start Extrude. A selected non-rational affine 2x2 planar NURBS
+surface patch can extrude to a closed solid, and exactly one selected NURBS
+solid cap can continue its extrusion. Selecting multiple solid faces, a wall
+face, a nonplanar or higher-order surface patch, or a trimmed surface boundary
+does not start the corresponding face/edge Extrude. An empty or unsupported
+component selection never falls back to extruding the whole object.
+Polygon-mesh component work remains deferred.
 Edit Mode's custom Mirror command is unavailable because it currently only
 mirrors whole objects. Partial surface CV deletion, individual solid-face
 deletion, exact active/selected outlines, mode-specific overlay visibility,

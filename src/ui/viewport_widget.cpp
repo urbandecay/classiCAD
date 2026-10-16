@@ -14071,22 +14071,63 @@ protected:
                                            renderObject.placementTranslation.y,
                                        secondLocal.z +
                                            renderObject.placementTranslation.z};
-                        QPointF firstScreen;
-                        QPointF secondScreen;
-                        if (!viewportTransform_.worldPointToScreen(
-                                first, renderFrame.viewportSize, &firstScreen) ||
-                            !viewportTransform_.worldPointToScreen(
-                                second, renderFrame.viewportSize, &secondScreen)) {
+                        qreal firstCameraDepth = -
+                            rasterWorkbenchCameraDepth(
+                                QVector3D(float(first.x), float(first.y),
+                                          float(first.z)),
+                                cameraPosition, viewDirection);
+                        qreal secondCameraDepth = -
+                            rasterWorkbenchCameraDepth(
+                                QVector3D(float(second.x), float(second.y),
+                                          float(second.z)),
+                                cameraPosition, viewDirection);
+                        if (!std::isfinite(firstCameraDepth) ||
+                            !std::isfinite(secondCameraDepth)) {
                             continue;
                         }
-                        const qreal screenLength = QLineF(
-                            firstScreen, secondScreen).length();
-                        const int subdivisions = std::max(
-                            1, qCeil(screenLength *
-                                     std::max(depthScaleX, depthScaleY)));
-                        qreal firstCameraDepth = 0.0;
-                        qreal secondCameraDepth = 0.0;
-                        if (viewportTransform_.isPerspectiveEnabled()) {
+                        const ViewportCameraPreferences &cameraPreferences =
+                            viewportTransform_.cameraPreferences();
+                        const qreal clipStart = cameraPreferences.clipStart;
+                        const qreal clipEnd = cameraPreferences.clipEnd;
+                        const qreal clipDepthOffset =
+                            viewportTransform_.isPerspectiveEnabled()
+                                ? 0.0 : clipEnd;
+                        const qreal firstClipDepth = firstCameraDepth +
+                                                     clipDepthOffset;
+                        const qreal secondClipDepth = secondCameraDepth +
+                                                      clipDepthOffset;
+                        const qreal depthDelta = secondClipDepth -
+                                                 firstClipDepth;
+                        qreal segmentStart = 0.0;
+                        qreal segmentEnd = 1.0;
+                        if (std::abs(depthDelta) <= 1.0e-12) {
+                            if (firstClipDepth < clipStart ||
+                                firstClipDepth > clipEnd) {
+                                continue;
+                            }
+                        } else {
+                            const qreal nearT =
+                                (clipStart - firstClipDepth) / depthDelta;
+                            const qreal farT =
+                                (clipEnd - firstClipDepth) / depthDelta;
+                            segmentStart = std::max(
+                                0.0, std::min(nearT, farT));
+                            segmentEnd = std::min(
+                                1.0, std::max(nearT, farT));
+                            if (segmentStart > segmentEnd) continue;
+                            const Point3D originalFirst = first;
+                            const Point3D originalSecond = second;
+                            const auto interpolateWorld = [&](qreal t) {
+                                return Point3D{
+                                    originalFirst.x +
+                                        (originalSecond.x - originalFirst.x) * t,
+                                    originalFirst.y +
+                                        (originalSecond.y - originalFirst.y) * t,
+                                    originalFirst.z +
+                                        (originalSecond.z - originalFirst.z) * t};
+                            };
+                            first = interpolateWorld(segmentStart);
+                            second = interpolateWorld(segmentEnd);
                             firstCameraDepth = -rasterWorkbenchCameraDepth(
                                 QVector3D(float(first.x), float(first.y),
                                           float(first.z)),
@@ -14096,6 +14137,20 @@ protected:
                                           float(second.z)),
                                 cameraPosition, viewDirection);
                         }
+                        QPointF firstScreen;
+                        QPointF secondScreen;
+                        if (!viewportTransform_.worldPointToScreenUnclipped(
+                                first, renderFrame.viewportSize, &firstScreen) ||
+                            !viewportTransform_.worldPointToScreenUnclipped(
+                                second, renderFrame.viewportSize, &secondScreen)) {
+                            continue;
+                        }
+                        const qreal screenLength = QLineF(
+                            firstScreen, secondScreen).length();
+                        const int subdivisions = std::max(
+                            1, qCeil(std::min<qreal>(8192.0,
+                                screenLength *
+                                std::max(depthScaleX, depthScaleY))));
                         for (int sample = 0; sample < subdivisions; ++sample) {
                             const qreal t0 = qreal(sample) / subdivisions;
                             const qreal t1 = qreal(sample + 1) / subdivisions;

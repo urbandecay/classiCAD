@@ -4389,7 +4389,24 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         alpha += sample.color.alpha * weight;
                         totalWeight += weight;
                     }
-                    if (totalWeight <= 0.0) continue;
+                    if (totalWeight <= 0.0) {
+                        const FilteredDofPixel center =
+                            sampleDofMip(x, y, 0.0f);
+                        if (sceneLinearDofActive) {
+                            const std::size_t pixelIndex =
+                                static_cast<std::size_t>(y) * outputWidth + x;
+                            gatheredLinear[pixelIndex] = {
+                                center.color.red, center.color.green,
+                                center.color.blue, center.color.alpha};
+                        } else {
+                            out[x] = qRgba(
+                                qRound(center.color.red),
+                                qRound(center.color.green),
+                                qRound(center.color.blue),
+                                qRound(center.color.alpha * 255.0f));
+                        }
+                        continue;
+                    }
                     if (sceneLinearDofActive) {
                         const std::size_t pixelIndex =
                             static_cast<std::size_t>(y) * outputWidth + x;

@@ -9906,9 +9906,7 @@ scene depth.
 - Blender 5.2.2 defines the coefficient and applies it in
   [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L142-L145)
   and its shared volume-step integration at [#L244-L251](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L244-L251).
-- A second, older QPainter slice-composition route still used `0.25` without
-  the GPU volume pass's compensating π multiplier. It now uses `1/(4π)` too.
-  C++ build passed; matched volume images remain open.
+  Build passed; matched volume images remain open.
 
 ### GPU hard-wire resolve neighbor guard (2026-10-16)
 

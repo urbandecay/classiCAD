@@ -221,7 +221,7 @@ StoredPreferences loadStoredPreferences()
     dialog.smoothWiresEditMode = settings.value(
         QStringLiteral("viewport/smoothWiresEditMode"), true).toBool();
     dialog.selectedOutlineWidth = std::clamp(
-        settings.value(QStringLiteral("viewport/selectedOutlineWidth"), 1)
+        settings.value(QStringLiteral("viewport/selectedOutlineWidth"), 2)
             .toInt(),
         1, 5);
 

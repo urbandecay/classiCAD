@@ -3910,7 +3910,10 @@ NURBS surface or solid patches map to faces. With the Select tool active, the
 1/2/3 keys switch among modes supported by the active geometry. Other CAD tools
 retain their number-key input for dimensions and parameters. The matching
 toolbar buttons are enabled only for component types supported by the active
-object. Component selection carries between modes: curve spline selection
+object. This is the user's requested classiCAD mapping, not Blender's native
+NURBS keymap: Blender 5.2.2 curve and surface Edit Modes select control points
+only, while the 1/2/3 vertex/edge/face modes are for meshes. Component
+selection carries between modes: curve spline selection
 expands to its control points, fully selected curve control nets map back to
 their splines, and surface control-net selections map to NURBS faces. With the
 Select tool active, `A` and `Alt+A` select and deselect all components in the

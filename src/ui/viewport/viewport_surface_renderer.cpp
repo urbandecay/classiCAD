@@ -3305,16 +3305,17 @@ bool ViewportSurfaceRenderer::ensureSelectedOutlineFramebuffers(
     if (outlineSceneDepthTexture_ == 0) {
         glGenTextures(1, &outlineSceneDepthTexture_);
         glBindTexture(GL_TEXTURE_2D, outlineSceneDepthTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
                      pixelSize.width(), pixelSize.height(), 0,
-                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+                     GL_DEPTH_STENCIL,
+                     GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glGenFramebuffers(1, &outlineSceneDepthFramebuffer_);
         glBindFramebuffer(GL_FRAMEBUFFER, outlineSceneDepthFramebuffer_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                                GL_TEXTURE_2D, outlineSceneDepthTexture_, 0);
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
@@ -8191,7 +8192,7 @@ bool ViewportSurfaceRenderer::draw(
                 glBindFramebuffer(GL_READ_FRAMEBUFFER,
                                   sourceDepthFramebuffer);
                 glFramebufferTexture2D(GL_READ_FRAMEBUFFER,
-                                      GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                                      GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
                                       sharedTargets->depthTexture, 0);
                 glReadBuffer(GL_NONE);
                 glBindFramebuffer(GL_DRAW_FRAMEBUFFER,

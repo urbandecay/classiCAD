@@ -9469,11 +9469,11 @@ moves them after scene effects and depth-tests them against the retained scene.
 ### GPU hidden selected-object contours (2026-10-16)
 
 - The GPU path now renders regular selected ranges into their own ID/depth
-  target, copies the resolved scene depth, and adds only selected contour
-  sections that are behind scene geometry at 35% opacity. Visible selection
-  contours continue through the existing pass. This avoids losing a selected
-  object's entire outline when a nearer unselected object wins the ordinary
-  scene ID/depth pass.
+  target, copies the resolved scene depth into a matching depth-stencil target,
+  and adds only selected contour sections that are behind scene geometry at
+  35% opacity. Visible selection contours continue through the existing pass.
+  This avoids losing a selected object's entire outline when a nearer
+  unselected object wins the ordinary scene ID/depth pass.
 - Blender 5.2.2 keeps selected-outline IDs and depth separate from scene depth,
   and uses 0.35 opacity for occluded outlines (1.0 in X-Ray), in
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L774-L820)

@@ -9881,3 +9881,17 @@ moves them after scene effects and depth-tests them against the retained scene.
   the composite resolve passes roughness and metallic to world lighting in
   [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
   Build passed; matched QPainter NURBS captures remain open.
+
+### GPU rotated-volume slice step restored (2026-10-16)
+
+- The GPU volume slice opacity step again uses the selected volume dimension
+  in object space multiplied by the corresponding object scale. A stale GPU
+  path had measured the rotated world-space AABB, making slices too opaque
+  for rotated anisotropic volumes. QPainter already uses the object-space
+  dimension and scale.
+- Blender 5.2.2 obtains dimensions before rotation and multiplies the selected
+  axis by `0.05` in
+  [`workbench_volume.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc#L1048-L1053);
+  the underlying dimension calculation is in
+  [`object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/object.cc#L3498-L3509).
+  Build passed; matched rotated-volume images remain open.

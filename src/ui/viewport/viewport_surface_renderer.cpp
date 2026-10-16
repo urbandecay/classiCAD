@@ -5944,29 +5944,34 @@ bool ViewportSurfaceRenderer::renderScalarVolumes(
                                  float(volume.activeBounds[4]) + 0.5f,
                                  float(volume.activeBounds[5]) + 0.5f);
         const QMatrix4x4 gridToWorld = objectToWorld * gridToObject;
-        QVector3D worldMin(std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::max());
-        QVector3D worldMax(std::numeric_limits<float>::lowest(),
-                           std::numeric_limits<float>::lowest(),
-                           std::numeric_limits<float>::lowest());
+        QVector3D objectMin(std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max(),
+                            std::numeric_limits<float>::max());
+        QVector3D objectMax(std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest(),
+                            std::numeric_limits<float>::lowest());
         for (int corner = 0; corner < 8; ++corner) {
             const QVector3D gridCorner((corner & 1) ? sliceMax.x() : sliceMin.x(),
                                        (corner & 2) ? sliceMax.y() : sliceMin.y(),
                                        (corner & 4) ? sliceMax.z() : sliceMin.z());
-            const QVector3D worldCorner = gridToWorld.map(gridCorner);
-            worldMin.setX(std::min(worldMin.x(), worldCorner.x()));
-            worldMin.setY(std::min(worldMin.y(), worldCorner.y()));
-            worldMin.setZ(std::min(worldMin.z(), worldCorner.z()));
-            worldMax.setX(std::max(worldMax.x(), worldCorner.x()));
-            worldMax.setY(std::max(worldMax.y(), worldCorner.y()));
-            worldMax.setZ(std::max(worldMax.z(), worldCorner.z()));
+            const QVector3D objectCorner = gridToObject.map(gridCorner);
+            objectMin.setX(std::min(objectMin.x(), objectCorner.x()));
+            objectMin.setY(std::min(objectMin.y(), objectCorner.y()));
+            objectMin.setZ(std::min(objectMin.z(), objectCorner.z()));
+            objectMax.setX(std::max(objectMax.x(), objectCorner.x()));
+            objectMax.setY(std::max(objectMax.y(), objectCorner.y()));
+            objectMax.setZ(std::max(objectMax.z(), objectCorner.z()));
         }
-        const QVector3D worldDimensions = worldMax - worldMin;
-        // Blender's VolumePass uses BKE_object_dimensions_get(), so slice
-        // opacity follows the world-aligned bounds after object rotation.
+        const QVector3D objectDimensions = objectMax - objectMin;
+        const QVector3D objectAxis(
+            sliceAxis == 0 ? 1.0f : 0.0f,
+            sliceAxis == 1 ? 1.0f : 0.0f,
+            sliceAxis == 2 ? 1.0f : 0.0f);
+        const float objectScale = objectToWorld.mapVector(objectAxis).length();
+        // Blender derives slice opacity from the object's dimension before
+        // rotation, then applies object scale along the selected local axis.
         const float sliceStepWorld = std::max(1.0e-16f,
-            worldDimensions[sliceAxis] * 0.05f);
+            objectDimensions[sliceAxis] * objectScale * 0.05f);
         scalarVolumeProgram_.setUniformValue("uUseSlice", volume.useSlice);
         scalarVolumeProgram_.setUniformValue("uSliceAxis", sliceAxis);
         scalarVolumeProgram_.setUniformValue("uSliceDepth",

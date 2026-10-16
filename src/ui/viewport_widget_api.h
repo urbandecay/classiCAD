@@ -38,7 +38,7 @@ struct ViewportUiCallbacks {
     std::function<void(const QString &)> subdivisionStatusUpdate;
     std::function<void(const QString &)> joinStatusUpdate;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate;
-    std::function<void(int, bool, bool)> viewportControlsChanged;
+    std::function<void(int, int, bool, bool)> viewportControlsChanged;
 };
 
 struct RotateToolPreferences {
@@ -73,6 +73,8 @@ public:
     virtual bool lineAutoWeldEnabled() const = 0;
     virtual void setComponentSelectionMode(int mode) = 0;
     virtual int componentSelectionMode() const = 0;
+    virtual bool setInteractionMode(int mode) = 0;
+    virtual int interactionMode() const = 0;
     virtual void activateViewportShadingControl(int control) = 0;
     virtual bool viewportXrayEnabled() const = 0;
     virtual bool viewportWireframeEnabled() const = 0;
@@ -187,7 +189,7 @@ protected:
     std::function<void(const QString &)> subdivisionStatusUpdate_;
     std::function<void(const QString &)> joinStatusUpdate_;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate_;
-    std::function<void(int, bool, bool)> viewportControlsChanged_;
+    std::function<void(int, int, bool, bool)> viewportControlsChanged_;
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent = nullptr);

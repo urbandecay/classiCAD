@@ -1570,7 +1570,28 @@ private:
             }
         };
         viewportCallbacks.viewportControlsChanged =
-            [this](int componentMode, bool xrayEnabled, bool wireframeEnabled) {
+            [this](int interactionMode, int componentMode,
+                   bool xrayEnabled, bool wireframeEnabled) {
+                if (interactionModeComboBox_ != nullptr) {
+                    const int index = interactionModeComboBox_->findData(
+                        interactionMode);
+                    if (index >= 0) {
+                        const QSignalBlocker blocker(interactionModeComboBox_);
+                        interactionModeComboBox_->setCurrentIndex(index);
+                    }
+                }
+                if (componentModeButtonGroup_ != nullptr) {
+                    for (QAbstractButton *button :
+                         componentModeButtonGroup_->buttons()) {
+                        button->setVisible(interactionMode == 1);
+                    }
+                }
+                if (controlPointsButton_ != nullptr) {
+                    controlPointsButton_->setEnabled(interactionMode == 1);
+                    controlPointsButton_->setChecked(
+                        interactionMode == 1 &&
+                        viewport_->controlPointsVisible());
+                }
                 if (componentModeButtonGroup_ != nullptr) {
                     if (QAbstractButton *button =
                             componentModeButtonGroup_->button(componentMode)) {
@@ -1689,6 +1710,7 @@ private:
         };
         viewport_->setUiCallbacks(viewportCallbacks);
         viewportCallbacks.viewportControlsChanged(
+            viewport_->interactionMode(),
             viewport_->componentSelectionMode(),
             viewport_->viewportXrayEnabled(),
             viewport_->viewportWireframeEnabled());
@@ -1706,6 +1728,24 @@ private:
         osnapLane_->setMovable(false);
         osnapLane_->setFloatable(false);
         osnapLane_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
+        interactionModeComboBox_ = new QComboBox(osnapLane_);
+        interactionModeComboBox_->setObjectName(
+            QStringLiteral("viewportInteractionMode"));
+        interactionModeComboBox_->addItem(QStringLiteral("Object Mode"), 0);
+        interactionModeComboBox_->addItem(QStringLiteral("Edit Mode"), 1);
+        interactionModeComboBox_->setToolTip(
+            QStringLiteral("Switch between Object Mode and Edit Mode (Tab)"));
+        osnapLane_->addWidget(interactionModeComboBox_);
+        connect(interactionModeComboBox_,
+                qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int index) {
+                    if (index >= 0 && interactionModeComboBox_ != nullptr) {
+                        viewport_->setInteractionMode(
+                            interactionModeComboBox_->currentData().toInt());
+                    }
+                });
+        osnapLane_->addSeparator();
 
         componentModeButtonGroup_ = new QButtonGroup(this);
         componentModeButtonGroup_->setExclusive(true);
@@ -2755,6 +2795,7 @@ private:
     QCheckBox *lineAutoWeldCheckBox_ = nullptr;
     QButtonGroup *componentModeButtonGroup_ = nullptr;
     QButtonGroup *shadingModeButtonGroup_ = nullptr;
+    QComboBox *interactionModeComboBox_ = nullptr;
     QToolButton *xrayToggleButton_ = nullptr;
     QToolBar *osnapLane_ = nullptr;
 };

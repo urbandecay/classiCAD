@@ -18,9 +18,9 @@ material values without replacing the native model or tessellation data.
 Blender's relevant rendering behavior and pass structure are implementation
 references; classiCAD remains a separate application rather than importing
 Blender's entire internal architecture. The work should leave clean seams for
-later Blender-like features, including an Outliner, Object Mode, and Edit Mode.
-Those interaction modes and panels are future work, not a reason to fabricate
-their geometry or UI contracts during this viewport phase.
+later Blender-like features, including an Outliner. Object Mode and Edit Mode
+interaction have been added as a separate parity category; the rendering work
+does not itself provide that interaction system.
 
 Use Blender 5.2.2 as the reference version. The bundled Workbench lights,
 MatCaps, and color-management data in this repository already come from
@@ -3884,10 +3884,51 @@ above is from scene-linear captures and remains the preferred color metric.
 Status: in progress; the implementation and source reviews found the blockers listed above. The team has not signed off on full parity.
 
 - The user clarified that classiCAD's current viewport should be treated as Edit Mode; its separate Object Mode is planned for later. Do not use the missing Object Mode as an explanation for base surface, background, or grid differences. The supplied screenshots still are not a controlled render comparison: classiCAD reports `Ortho`, Blender reports `User Perspective`, and the visible scene geometry differs. Blender's mesh edit edges and curve edit wires are separate Overlay-engine geometry; classiCAD's Solid-mode CAD curve strokes and `NurbsSolid` face boundaries use the configurable edit-wire theme setting, while control geometry and selection behavior remain a distinct implementation. Compare base rendering separately from mode-specific overlays, with matching camera and geometry.
+- Scope update (2026-10-16): the user has now directed that actual Object/Edit Mode interaction be ported. The earlier “current viewport is Edit Mode” note only described the comparison assumption; it did not mean the mode system existed. See the Object/Edit Mode section below.
 - This is an adaptation of selected Blender shading equations and passes into classiCAD's renderer, not a verbatim port of Blender's complete Workbench and Overlay engines. The table above and stage notes remain the parity record.
 - Imported camera views now retain Blender camera `show_passepartout` and `passepartout_alpha` and darken the viewport area outside the fitted, zoomed, and offset camera frame. The saved viewport's `show_camera_passepartout` overlay toggle gates it alongside the camera data setting; older bridge records default to enabled. This is a viewport overlay and does not alter rendered output. Blender's camera-view and camera-data rectangles apply the same lens shift, so it moves projected scene content without moving the passepartout border; classiCAD applies camera shift to its scene projection separately. Matched captures are still needed, and saved Blender data does not retain the source viewport dimensions. The extractor bridge is version 28.
 - Review execution confirmed the installed Blender runtime is 5.2.2 LTS and the classiCAD C++ build passes. Background extraction smoke checks now pass for original and evaluated mesh modes, POLY/BEZIER/NURBS curves, NURBS surface patches, nested collection parents and visibility records, and reporting omitted loose mesh geometry. An offscreen classiCAD startup reached viewport construction, but Qt could not create an OpenGL context; this does not validate the GPU renderer. A direct native-GPU offscreen cube render is now compared against Blender's background Workbench render at 640×480 for AA Off, Single Pass, and 8 samples. The Blender fixture can now independently render baseline, shadows, cavity, and outline modes. Blender 5.2.2 reference runs changed 111,858 pixels for shadows, 45,995 for cavity, and 2,410 for outline at an RGB threshold of 2. classiCAD's offscreen GPU contracts now require shadows to darken a pixel and World cavity to change a pixel against matching unselected, outline-free captures; cavity uses the shared-target scene-pass coordinator. These assert effect activation, not pixel parity. Scene-camera GPU projection now consumes Blender's sensor fit and dimensions, pixel aspect, camera shifts, orthographic scale, and exact clip range; depth readback uses that same range. A transform contract checks framing center, shift direction/magnitude, pixel-aspect scaling, and clip values. Matched Blender camera renders, annotation alignment with non-square pixels, direct internal Blender per-sample buffer reads, QPainter, and navigation cases remain open. Full parity is not signed off.
 - The AA capture comparison has a numerical edge-profile follow-up recorded in the [controlled cube baseline](#controlled-workbench-cube-baseline-2026-10-12). Orthographic matrix precision and vertical jitter sign are corrected; fresh captures confirm exact silhouette masks at Off, Single Pass, and 8 samples. The source-derived per-sample fixture isolates the previous 8-sample mismatch to projection jitter Y. Scene-linear foreground RGB MAE remains 0.00155 in the controlled cube comparison; broader QPainter AA and navigation image comparisons remain open.
+
+## Object Mode and Edit Mode interaction
+
+Status: first interaction slice implemented on 2026-10-16. classiCAD now starts
+in Object Mode, has an Object/Edit selector and a Tab toggle from the Select
+tool, routes ordinary clicks and box selection to whole objects in Object
+Mode, and exposes component selection controls and handles only in Edit Mode.
+Object selection remains the transform target in Object Mode. Entering Edit
+Mode requires at least one selected editable object; switching modes preserves
+the object selection and cached component selections. Existing component
+selection and curve control-point editing paths are reused in Edit Mode. Edit
+picking is limited to the selected objects compatible with the active object's
+geometry family (curves, NURBS surfaces/solids, or polygon meshes); selecting a
+component updates the active object while retaining the edit set.
+
+Still open: matched behavior for active versus selected object outlines,
+Blender's exact component selection defaults/conversion semantics, unsupported
+object-type handling, and mode-specific wire/overlay visibility across GPU and
+QPainter paths. Add offscreen contracts for mode switches,
+supported/unsupported selections, selection retention, and Object/Edit
+rendering and transform behavior before calling this category complete. Do not
+infer full Blender parity from the current mode switch alone.
+
+Port Blender 5.2.2's interaction behavior into the existing scene and geometry
+model, without importing Blender's architecture:
+
+- Object Mode selects and transforms whole objects. The primary selected object
+  is distinct from the other selected objects.
+- Tab enters Edit Mode for selected, editable objects and exits to Object Mode.
+  The mode selector and keyboard state must stay synchronized.
+- Edit Mode selects geometry within the edited object: mesh and surface
+  vertex/edge/face components, and curve control points/handles. The existing
+  per-component selection caches are retained and routed only while editing.
+- In Edit Mode, selecting a component makes its object primary. Multi-object
+  Edit Mode includes only selected objects in the active object's supported
+  geometry family; operations must never connect or merge geometry across
+  object boundaries implicitly.
+- Existing CAD creation tools remain usable and do not silently change modes.
+
+Blender references: [Object Modes](https://docs.blender.org/manual/en/5.2/editors/3dview/modes.html), [mesh selection modes](https://docs.blender.org/manual/en/5.2/modeling/meshes/selecting/introduction.html), and [curve editing](https://docs.blender.org/manual/en/5.2/modeling/curves/editing/curve.html).
 
 ### Final display dither (2026-10-12)
 

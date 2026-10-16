@@ -238,6 +238,7 @@ BoundedRasterTarget boundedRasterTarget(const QSize &viewportSize,
 }
 
 enum class ComponentSelectionMode { Vertex, Edge, Face };
+enum class ViewportInteractionMode { Object = 0, Edit = 1 };
 
 struct ComponentPickCycleState {
     bool valid = false;
@@ -2599,6 +2600,87 @@ public:
     int componentSelectionMode() const override
     {
         return static_cast<int>(componentSelectionMode_);
+    }
+
+    bool setInteractionMode(int mode) override
+    {
+        if (mode < static_cast<int>(ViewportInteractionMode::Object) ||
+            mode > static_cast<int>(ViewportInteractionMode::Edit)) {
+            return false;
+        }
+        const auto requested = static_cast<ViewportInteractionMode>(mode);
+        if (requested == interactionMode_) {
+            return true;
+        }
+        if (requested == ViewportInteractionMode::Edit) {
+            const auto geometryFamily = [this](ObjectId objectId) {
+                const Shape *shape = document_.shape(objectId);
+                if (shape == nullptr || !document_.isObjectEditable(objectId)) {
+                    return 0;
+                }
+                switch (shape->geometryType) {
+                case GeometryType::Point:
+                case GeometryType::Line:
+                case GeometryType::Arc:
+                case GeometryType::Bezier:
+                case GeometryType::Nurbs:
+                case GeometryType::Rectangle:
+                case GeometryType::Circle:
+                case GeometryType::PolyCurve:
+                case GeometryType::Ellipse:
+                case GeometryType::Polygon:
+                    return 1;
+                case GeometryType::NurbsSurface:
+                case GeometryType::NurbsSolid:
+                    return 2;
+                case GeometryType::PolygonMesh:
+                    return 3;
+                default:
+                    return 0;
+                }
+            };
+            const int activeFamily = geometryFamily(selection_.primaryObjectId());
+            if (activeFamily == 0) {
+                notifyViewportControlsChanged();
+                return false;
+            }
+            editObjectIds_.clear();
+            for (const ObjectId objectId : selection_.objectIds()) {
+                if (geometryFamily(objectId) == activeFamily) {
+                    editObjectIds_.insert(objectId.value());
+                }
+            }
+            if (editObjectIds_.isEmpty()) {
+                notifyViewportControlsChanged();
+                return false;
+            }
+        } else {
+            editObjectIds_.clear();
+        }
+        interactionMode_ = requested;
+        if (interactionMode_ == ViewportInteractionMode::Object &&
+            controlPointsVisible_) {
+            setControlPointsVisible(false);
+        }
+        componentBoxSelectionActive_ = false;
+        pendingComponentClickShapeIndex_ = -1;
+        pendingComponentClickIndex_ = -1;
+        selection_.clearActiveControlPoint();
+        clearSelectionDragState();
+        update();
+        notifyViewportControlsChanged();
+        DebugLog::instance().write(
+            QStringLiteral("viewport interaction mode=%1 selectedObjects=%2")
+                .arg(interactionMode_ == ViewportInteractionMode::Edit
+                         ? QStringLiteral("edit")
+                         : QStringLiteral("object"))
+                .arg(selection_.objectIds().size()));
+        return true;
+    }
+
+    int interactionMode() const override
+    {
+        return static_cast<int>(interactionMode_);
     }
 
     void activateViewportShadingControl(int control) override
@@ -7938,7 +8020,8 @@ protected:
         input.primarySelectedObjectId = selectedShapeIndex_;
         input.highlightedObjectIds = joinTool_.selectedObjectIds();
         input.activeToolPreview = toolPreview_;
-        if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            componentSelectionMode_ == ComponentSelectionMode::Edge) {
             input.blenderMeshEdgeSelections = componentSelections_[
                 static_cast<int>(ComponentSelectionMode::Edge)];
         }
@@ -9293,6 +9376,10 @@ protected:
 
     QSet<int> &componentSelectionForObject(ObjectId objectId)
     {
+        if (interactionMode_ != ViewportInteractionMode::Edit) {
+            inactiveComponentSelection_.clear();
+            return inactiveComponentSelection_;
+        }
         return componentSelections_[static_cast<int>(componentSelectionMode_)]
             [objectId.value()];
     }
@@ -9300,10 +9387,19 @@ protected:
     const QSet<int> &componentSelectionForObject(ObjectId objectId) const
     {
         static const QSet<int> emptySelection;
+        if (interactionMode_ != ViewportInteractionMode::Edit) {
+            return emptySelection;
+        }
         const auto &selections =
             componentSelections_[static_cast<int>(componentSelectionMode_)];
         const auto found = selections.constFind(objectId.value());
         return found == selections.cend() ? emptySelection : found.value();
+    }
+
+    bool isEditObject(ObjectId objectId) const
+    {
+        return interactionMode_ == ViewportInteractionMode::Edit &&
+               editObjectIds_.contains(objectId.value());
     }
 
     int &activeComponentIndex()
@@ -9339,7 +9435,8 @@ protected:
     void notifyViewportControlsChanged()
     {
         if (viewportControlsChanged_) {
-            viewportControlsChanged_(componentSelectionMode(),
+            viewportControlsChanged_(interactionMode(),
+                                     componentSelectionMode(),
                                      viewportXrayEnabled(),
                                      viewportWireframeEnabled());
         }
@@ -9500,6 +9597,7 @@ protected:
         }
         QVector<ViewportControlPointHandle> gpuControlPointHandles;
         const bool showCurveEndpointVertices =
+            interactionMode_ == ViewportInteractionMode::Edit &&
             componentSelectionMode_ == ComponentSelectionMode::Vertex &&
             !controlPointsVisible_;
         const auto appendSurfaceCornerHandles =
@@ -9541,7 +9639,8 @@ protected:
                     gpuControlPointHandles.append(handle);
                 }
             };
-        if ((controlPointsVisible_ || showCurveEndpointVertices) &&
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            (controlPointsVisible_ || showCurveEndpointVertices) &&
             controlPointRenderer != nullptr) {
             const QColor handleOutline(QStringLiteral("#77b7e6"));
             const QColor handleFill(QStringLiteral("#263b4b"));
@@ -15313,6 +15412,7 @@ protected:
 
         if (event->button() == Qt::LeftButton &&
             activeTool_ == Tool::Select && !syntheticSelectionInput_ &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
             (controlPointsVisible_ ||
              componentSelectionMode_ == ComponentSelectionMode::Vertex) &&
             !event->modifiers().testFlag(Qt::ShiftModifier)) {
@@ -15373,9 +15473,11 @@ protected:
         if (event->button() == Qt::LeftButton &&
             activeTool_ == Tool::Select && !syntheticSelectionInput_) {
             const int hitShapeIndex = hitTestShape(screenPosition);
-            if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
+            pendingObjectClickId_ = ObjectId::invalid();
+            if (interactionMode_ == ViewportInteractionMode::Edit &&
+                (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                 componentSelectionMode_ == ComponentSelectionMode::Edge ||
-                componentSelectionMode_ == ComponentSelectionMode::Face) {
+                componentSelectionMode_ == ComponentSelectionMode::Face)) {
                 // Defer a component click until release so a real drag can
                 // still become a marquee selection.
                 pendingComponentClickShapeIndex_ = -1;
@@ -15393,9 +15495,11 @@ protected:
                 componentBoxSelectionObject_ = ObjectId::invalid();
                 componentBoxStartedOnBlank_ = hitShapeIndex < 0;
             } else {
-                // Object mode still supports box selection from any point.
-                // A plain click on geometry leaves the current selection alone.
                 leftSelectionBoxStartedOnObject_ = hitShapeIndex >= 0;
+                if (hitShapeIndex >= 0 && hitShapeIndex < shapes_.size()) {
+                    pendingObjectClickId_ =
+                        shapes_.objectIdAt(hitShapeIndex);
+                }
             }
             beginSelectionBox(
                 screenPosition,
@@ -15406,6 +15510,28 @@ protected:
 
         if (event->button() == Qt::LeftButton &&
             activeTool_ == Tool::Select && syntheticSelectionInput_) {
+            if (interactionMode_ == ViewportInteractionMode::Object) {
+                const int hitShapeIndex = hitTestShape(screenPosition);
+                const bool additive =
+                    event->modifiers().testFlag(Qt::ShiftModifier);
+                if (hitShapeIndex >= 0 && hitShapeIndex < shapes_.size()) {
+                    const ObjectId objectId =
+                        shapes_.objectIdAt(hitShapeIndex);
+                    if (additive) {
+                        selection_.toggle(objectId);
+                        if (selection_.contains(objectId)) {
+                            selection_.setPrimaryObjectId(objectId);
+                        }
+                    } else {
+                        selection_.setObjectIds({objectId}, objectId);
+                    }
+                } else if (!additive) {
+                    selection_.clear();
+                }
+                update();
+                event->accept();
+                return;
+            }
             int componentShapeIndex = -1;
             const int componentIndex = hitTestComponent(screenPosition,
                                                        &componentShapeIndex);
@@ -15422,11 +15548,8 @@ protected:
                     event->modifiers().testFlag(Qt::ShiftModifier);
                 if (!additive) {
                     clearComponentSelections();
-                    selection_.setObjectIds({componentObject}, componentObject);
-                } else {
-                    selection_.add(componentObject);
-                    selection_.setPrimaryObjectId(componentObject);
                 }
+                selection_.setPrimaryObjectId(componentObject);
                 componentSelectionObject_ = componentObject;
                 QSet<int> &objectSelection =
                     componentSelectionForObject(componentObject);
@@ -16674,10 +16797,24 @@ protected:
         }
         if (activeTool_ == Tool::Select && !event->isAutoRepeat() &&
             event->modifiers() == Qt::NoModifier &&
+            interactionMode_ == ViewportInteractionMode::Edit &&
             (event->key() == Qt::Key_1 || event->key() == Qt::Key_2 ||
              event->key() == Qt::Key_3)) {
             setComponentSelectionMode(static_cast<ComponentSelectionMode>(
                 event->key() - Qt::Key_1));
+            event->accept();
+            return;
+        }
+        if (activeTool_ == Tool::Select && !event->isAutoRepeat() &&
+            event->key() == Qt::Key_Tab &&
+            event->modifiers() == Qt::NoModifier &&
+            !grabTool_.isActive() && !duplicateTool_.isActive() &&
+            !selectionBoxOverlayActive()) {
+            const int nextMode = interactionMode_ ==
+                                         ViewportInteractionMode::Object
+                                     ? static_cast<int>(ViewportInteractionMode::Edit)
+                                     : static_cast<int>(ViewportInteractionMode::Object);
+            setInteractionMode(nextMode);
             event->accept();
             return;
         }
@@ -18257,11 +18394,8 @@ private:
                 const bool clickAdditive = additive;
                 if (!clickAdditive) {
                     clearComponentSelections();
-                    selection_.setObjectIds({objectId}, objectId);
-                } else {
-                    selection_.add(objectId);
-                    selection_.setPrimaryObjectId(objectId);
                 }
+                selection_.setPrimaryObjectId(objectId);
                 componentSelectionObject_ = objectId;
                 QSet<int> &selected = componentSelectionForObject(objectId);
                 if (clickAdditive && selected.contains(pendingComponentIndex)) {
@@ -18292,7 +18426,6 @@ private:
             if (!moved && componentBoxStartedOnBlank_ && !additive) {
                 clearComponentSelections();
                 componentSelectionObject_ = ObjectId::invalid();
-                selection_.clear();
             }
             componentBoxStartedOnBlank_ = false;
             if (moved) {
@@ -18305,7 +18438,8 @@ private:
                         candidateId != requestedObjectId) {
                         continue;
                     }
-                    if (!document_.isObjectVisible(candidateId) ||
+                    if (!isEditObject(candidateId) ||
+                        !document_.isObjectVisible(candidateId) ||
                         !document_.isObjectEditable(candidateId)) {
                         continue;
                     }
@@ -18995,7 +19129,6 @@ private:
                 if (!boxedComponentsByObject.isEmpty()) {
                     if (!additive) {
                         clearComponentSelections();
-                        selection_.clear();
                     }
                     QVector<ObjectId> selectedObjects = selection_.objectIds();
                     ObjectId primaryObject = selection_.primaryObjectId();
@@ -19003,6 +19136,7 @@ private:
                         if (!selectedObjects.contains(objectId)) {
                             selectedObjects.append(objectId);
                         }
+                        primaryObject = objectId;
                         QSet<int> &objectSelection =
                             componentSelectionForObject(objectId);
                         const QSet<int> boxed =
@@ -19044,9 +19178,24 @@ private:
             emitCoordinateUpdate();
             return;
         }
-        if (!moved && leftSelectionBoxStartedOnObject_) {
+        if (!moved && interactionMode_ == ViewportInteractionMode::Object) {
+            const ObjectId clickedObject = pendingObjectClickId_;
+            pendingObjectClickId_ = ObjectId::invalid();
             leftSelectionBoxStartedOnObject_ = false;
             selectTool->cancelSelectionBox();
+            if (clickedObject.isValid() &&
+                document_.isObjectEditable(clickedObject)) {
+                if (additive) {
+                    selection_.toggle(clickedObject);
+                    if (selection_.contains(clickedObject)) {
+                        selection_.setPrimaryObjectId(clickedObject);
+                    }
+                } else {
+                    selection_.setObjectIds({clickedObject}, clickedObject);
+                }
+            } else if (!additive) {
+                selection_.clear();
+            }
             resetTrimSelectionBox();
             setCursor(joinTool_.isActive() ? Qt::CrossCursor : Qt::ArrowCursor);
             update();
@@ -20982,6 +21131,10 @@ private:
             }
 
             const ObjectId objectId = shapes_.objectIdAt(index);
+            if (interactionMode_ == ViewportInteractionMode::Edit &&
+                !isEditObject(objectId)) {
+                continue;
+            }
             if (document_.isObjectVisible(objectId) &&
                 document_.isObjectEditable(objectId) &&
                 !controlPointsForShape(shapes_[index]).isEmpty() &&
@@ -21827,7 +21980,8 @@ private:
                 QVector<PendingComponent> faceCandidates;
                 for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
                     const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-                    if (!document_.isObjectVisible(objectId) ||
+                    if (!isEditObject(objectId) ||
+                        !document_.isObjectVisible(objectId) ||
                         !document_.isObjectEditable(objectId)) {
                         continue;
                     }
@@ -21880,7 +22034,8 @@ private:
             }
             if (faceShapeIndex < 0 || faceShapeIndex >= shapes_.size()) return -1;
             const ObjectId objectId = shapes_.objectIdAt(faceShapeIndex);
-            if (!document_.isObjectEditable(objectId)) return -1;
+            if (!isEditObject(objectId) ||
+                !document_.isObjectEditable(objectId)) return -1;
             const Shape &shape = shapes_[faceShapeIndex];
             if (shape.geometryType == GeometryType::NurbsSurface && faceIndex > 0) {
                 return -1;
@@ -21893,7 +22048,8 @@ private:
 
         for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
             const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-            if (!document_.isObjectVisible(objectId) ||
+            if (!isEditObject(objectId) ||
+                !document_.isObjectVisible(objectId) ||
                 !document_.isObjectEditable(objectId)) {
                 continue;
             }
@@ -26702,15 +26858,20 @@ private:
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
     bool viewportPlaybackActive_ = false;
+    ViewportInteractionMode interactionMode_ =
+        ViewportInteractionMode::Object;
+    QSet<quint64> editObjectIds_;
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     bool componentBoxSelectionActive_ = false;
     bool componentBoxStartedOnBlank_ = false;
     int pendingComponentClickShapeIndex_ = -1;
     int pendingComponentClickIndex_ = -1;
+    ObjectId pendingObjectClickId_ = ObjectId::invalid();
     QPointF pendingComponentClickScreenPosition_;
     ObjectId componentBoxSelectionObject_ = ObjectId::invalid();
     ComponentPickCycleState componentPickCycleStates_[3];
     QHash<quint64, QSet<int>> componentSelections_[3];
+    QSet<int> inactiveComponentSelection_;
     QString lastSelectionRenderDiagnostic_;
     QHash<quint64, QSet<int>> surfaceControlPointGrabTargets_;
     QHash<quint64, QSet<int>> curveControlPointGrabTargets_;

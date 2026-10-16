@@ -5391,12 +5391,14 @@ resolve remain open.
   `viewport_render_contracts`. It uses the same sparse values, a +0.5
   grid-to-object translation, matching object color, background, and framing.
   This capture is diagnostic and does not run or write files by default.
-- The first paired display PNG comparison has exact foreground coverage
-  (181,476 foreground pixels in each image; IoU 1.0, XOR 0). Across their common
-  foreground, channel MAE is 6.78/255, p95 16/255, and max 22/255. The mask
-  agreement validates the fixture's camera framing and active support; the
-  color residual is still too large to call matched ray-integration parity and
-  is not yet localized to one sampling or density term.
+- The first paired display PNG comparison, captured before the 2026-10-16
+  isotropic-scattering correction below, had exact foreground coverage
+  (181,476 foreground pixels in each image; IoU 1.0, XOR 0). Across their
+  common foreground, channel MAE was 6.78/255, p95 16/255, and max 22/255.
+  The mask agreement validates the fixture's camera framing and active
+  support. Those historical color numbers do not describe the current volume
+  code; a fresh matched capture is still needed to measure the corrected
+  scattering result.
 - Pinned Blender 5.2.2 sources show Workbench uses five texture samples per
   axis, a Halton-3 sample offset, LINEAR hardware sampling, extinction and
   scattering integration, and early termination at transmittance 0.01 in

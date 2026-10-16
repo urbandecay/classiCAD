@@ -9439,7 +9439,8 @@ scene depth.
   normal scene depth, then fades hidden overlay color in its later X-Ray fade
   pass. classiCAD keeps the separate wire-depth domain and now applies the same
   `1 - xrayAlpha` attenuation per smooth-wire center and neighbor sample when
-  that sample falls behind scene depth. This preserves hidden wires while
+  that sample falls behind scene depth, using Blender's strict depth
+  comparison without an added epsilon. This preserves hidden wires while
   avoiding full-strength wires through surfaces. Sources:
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L56-L84),
   [`overlay_antialiasing.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_antialiasing.bsl.hh#L99-L115),

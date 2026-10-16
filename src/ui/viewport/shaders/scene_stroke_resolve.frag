@@ -31,7 +31,7 @@ float xrayFadeForSample(ivec2 pixel, float candidateDepth)
         return 1.0;
     }
     float sceneDepth = texelFetch(uSceneDepth, pixel, 0).r;
-    return candidateDepth > sceneDepth + 1.0e-6 ? uXrayHiddenFade : 1.0;
+    return candidateDepth > sceneDepth ? uXrayHiddenFade : 1.0;
 }
 
 vec4 fetchLineRecord(ivec2 pixel)

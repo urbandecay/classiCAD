@@ -2525,6 +2525,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<RasterOutlineSample> inFrontOutlineSamples;
     QVector<RasterOutlineSample> selectedOutlineSamples;
     QVector<RasterOutlineSample> inFrontSelectedOutlineSamples;
+    QSet<quint64> xraySelectedMeshOutlineIds;
     QVector<float> outlineOpaqueDepth;
     QVector<float> inFrontOutlineOpaqueDepth;
     if (rasterWorkbenchOutlineEnabled) {
@@ -3133,6 +3134,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 std::max({p0.y(), p1.y(), p2.y()}))), 0, height - 1);
             const quint64 id = object.objectId.value() |
                                (object.selected ? 0x80000000ull : 0ull);
+            if (rasterizeSelectedMeshEdges) {
+                xraySelectedMeshOutlineIds.insert(id);
+            }
             for (int y = minY; y <= maxY; ++y) {
                 for (int x = minX; x <= maxX; ++x) {
                     const qreal px = x + 0.5;
@@ -3511,26 +3515,38 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     selectedOutlineSamples[sampleIndex].objectId;
                 int differentNeighbors = 0;
                 float selectedOutlineCoverage = 0.0f;
+                float selectedOutlineHardOpacity = 0.0f;
+                float selectedOutlineWiderOpacity = 0.0f;
                 const std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(outlineSampleOffset, 0),
                     QPoint(-outlineSampleOffset, 0),
                     QPoint(0, outlineSampleOffset),
                     QPoint(0, -outlineSampleOffset),
                 };
-                for (const QPoint &offset : cardinalNeighbors) {
-                    const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
-                    const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
-                    const int neighborIndex = sy * width + sx;
-                    const quint64 neighborId = drawWorkbenchOutline
-                        ? outlineSamples[neighborIndex].objectId
-                        : samples[neighborIndex].objectId;
-                    const quint64 selectionNeighborId =
-                        selectedOutlineSamples[neighborIndex].objectId;
-                    differentNeighbors += neighborId != objectId;
-                    const bool selectionBoundary =
-                        selectionObjectId != selectionNeighborId &&
-                        (selectionObjectId != 0 || selectionNeighborId != 0);
-                    if (selectionBoundary) {
+                const auto addSelectedOutlineCoverage =
+                    [&](const QPoint &offset, bool widerRing) {
+                        const int sx = std::clamp(
+                            depthX + offset.x(), 0, width - 1);
+                        const int sy = std::clamp(
+                            depthY + offset.y(), 0, height - 1);
+                        const int neighborIndex = sy * width + sx;
+                        const quint64 neighborId =
+                            selectedOutlineSamples[neighborIndex].objectId;
+                        const bool xrayMeshEdge = xrayEnabled &&
+                            (xraySelectedMeshOutlineIds.contains(
+                                 selectionObjectId) ||
+                             xraySelectedMeshOutlineIds.contains(neighborId));
+                        // Blender's X-Ray wire resolve omits expansion toward
+                        // negative screen X/Y. QImage's Y axis points down, so
+                        // those directions are left and down here.
+                        if (xrayMeshEdge &&
+                            (offset.x() < 0 || offset.y() > 0)) {
+                            return;
+                        }
+                        const bool selectionBoundary =
+                            selectionObjectId != neighborId &&
+                            (selectionObjectId != 0 || neighborId != 0);
+                        if (!selectionBoundary) return;
                         const RasterOutlineSample &selectedSide =
                             selectionObjectId != 0
                                 ? selectedOutlineSamples[sampleIndex]
@@ -3538,9 +3554,41 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         const RasterSample &sceneSample = samples[sampleIndex];
                         const bool occluded = !xrayEnabled &&
                             sceneSample.objectId != 0 &&
-                            selectedSide.depth > sceneSample.depth + 1.0e-5f;
-                        selectedOutlineCoverage += occluded ? 0.35f : 1.0f;
+                            selectedSide.depth >
+                                sceneSample.depth + 1.0e-5f;
+                        const float boundaryOpacity = occluded ? 0.35f : 1.0f;
+                        if (widerRing) {
+                            selectedOutlineWiderOpacity = std::max(
+                                selectedOutlineWiderOpacity, boundaryOpacity);
+                        } else {
+                            selectedOutlineCoverage += boundaryOpacity;
+                            selectedOutlineHardOpacity = std::max(
+                                selectedOutlineHardOpacity, boundaryOpacity);
+                        }
+                    };
+                for (const QPoint &offset : cardinalNeighbors) {
+                    addSelectedOutlineCoverage(offset, false);
+                }
+                if (selectedOutlineCoverage <= 0.0f &&
+                    outlineSampleOffset > 1) {
+                    const std::array<QPoint, 4> widerCardinalNeighbors = {
+                        QPoint(outlineSampleOffset * 2, 0),
+                        QPoint(-outlineSampleOffset * 2, 0),
+                        QPoint(0, outlineSampleOffset * 2),
+                        QPoint(0, -outlineSampleOffset * 2),
+                    };
+                    for (const QPoint &offset : widerCardinalNeighbors) {
+                        addSelectedOutlineCoverage(offset, true);
                     }
+                }
+                for (const QPoint &offset : cardinalNeighbors) {
+                    const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
+                    const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
+                    const int neighborIndex = sy * width + sx;
+                    const quint64 neighborId = drawWorkbenchOutline
+                        ? outlineSamples[neighborIndex].objectId
+                        : samples[neighborIndex].objectId;
+                    differentNeighbors += neighborId != objectId;
                 }
                 const auto blend = [&](const QColor &color, float coverage) {
                     const float sourceAlpha =
@@ -3574,9 +3622,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                 }
                 if (drawSelectionOutline) {
-                    const float coverage = smoothWiresOverlay
-                        ? selectedOutlineCoverage / 4.0f
-                        : (selectedOutlineCoverage > 0.0f ? 1.0f : 0.0f);
+                    const float coverage = selectedOutlineCoverage > 0.0f
+                        ? (smoothWiresOverlay
+                               ? selectedOutlineCoverage / 4.0f
+                               : selectedOutlineHardOpacity)
+                        : (smoothWiresOverlay
+                               ? 0.25f * selectedOutlineWiderOpacity
+                               : selectedOutlineWiderOpacity);
                     blend(selectionOutline, coverage);
                 }
             }

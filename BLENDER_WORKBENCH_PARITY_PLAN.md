@@ -9538,3 +9538,22 @@ moves them after scene effects and depth-tests them against the retained scene.
   into the selected-outline resolve in
   [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913).
   Build passed; matched QPainter outline captures remain open.
+
+### QPainter selected-outline high-DPI expansion (2026-10-16)
+
+- At UI scales above one, the raster fallback now checks Blender's wider
+  second cardinal ring only when its first ring finds no selected boundary.
+  That outer ring uses fixed quarter coverage when Smooth Wires is enabled,
+  matching the GPU resolve; disabling smoothing gives a hard edge while
+  retaining Blender's 35% opacity for hidden contours. In X-Ray, selected
+  polygon-mesh outlines skip expansion toward screen-left and screen-down,
+  matching Blender's negative-axis rule after accounting for QImage's
+  downward Y axis. This is still a cardinal-sample approximation; Blender
+  also checks diagonal taps, and classiCAD does not carry Blender's theme
+  outline-width setting.
+- Blender 5.2.2 enables the wider outline footprint above UI scale one and
+  checks the second ring only when the first ring finds no edge in
+  [`overlay_outline.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_outline.hh#L801-L913)
+  and
+  [`overlay_outline_detect_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_outline_detect_frag.glsl#L1241-L1327).
+  Build passed; matched QPainter outline captures remain open.

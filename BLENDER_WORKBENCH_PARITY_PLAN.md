@@ -7600,10 +7600,11 @@ resolve remain open.
 
 ### X-Ray hidden-stroke fade (2026-10-15)
 
-- GPU and QPainter scene strokes behind geometry now fade by
-  `1 - xrayAlpha`, matching Blender 5.2.2's separate overlay X-Ray fade
-  multiplier. The previous fixed 0.5 matched only the default setting. Visible
-  strokes retain their configured color alpha. Blender's pinned
+- GPU and QPainter stroke categories that participate in the separate overlay
+  X-Ray fade now dim hidden portions by `1 - xrayAlpha`; visible strokes retain
+  their configured color alpha. This does not apply to Blender's legacy curve
+  edit-wire framebuffer, which is depth-cleared for X-Ray and corrected in the
+  following entry. Blender's pinned
   [`overlay_xray_fade.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_xray_fade.hh#L25-L43)
   sets the multiplier and its
   [`overlay_xray_fade.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_xray_fade.bsl.hh#L55-L87)
@@ -7612,15 +7613,18 @@ resolve remain open.
 
 ### QPainter committed-curve X-Ray visibility (2026-10-15)
 
-- The ordinary QPainter prepared-curve path now separates depth-visible and
-  hidden curve runs. Visible strokes keep their configured alpha; hidden runs
-  are drawn first with the Blender X-Ray fade `1 - xrayAlpha`. Previously this
-  path dimmed the whole curve by `xrayAlpha` and discarded hidden samples. The
-  GPU-stroke fallback's separate hidden/visible passes remain independently
-  handled. When the raster surface compositor retains depth, the curve path
-  uses its regular or in-front depth map, including accepted transparent
-  fragments. If surface composition cannot retain depth, curve strokes remain
-  unoccluded. A matched Blender comparison remains open.
+- The ordinary QPainter prepared-curve path separates depth-visible and
+  hidden curve runs. With the X-Ray checkbox enabled, both runs now draw at
+  their configured opacity; Blender clears depth for its legacy curve edit-wire
+  framebuffer, and its later color-only X-Ray fade does not process that pass.
+  The checkbox also controls this behavior at opacity 1. When the raster surface
+  compositor retains depth, ordinary curve drawing uses its regular or
+  in-front depth map, including accepted transparent fragments. If surface
+  composition cannot retain depth, curve strokes remain unoccluded. Blender
+  pass behavior is in
+  [`overlay_curve.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_curve.hh#L120-L125)
+  and [`overlay_instance.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_instance.cc#L829-L889).
+  C++ build passed; no matched hidden-curve image comparison has been run.
 
 ### QPainter control-cage depth visibility (2026-10-15)
 

@@ -1700,7 +1700,7 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                     hiddenRun = false;
                 } else {
                     visibleRun = false;
-                    if (!shadingSettings_.xrayEnabled()) {
+                    if (!shadingSettings_.xrayEnabledForMode()) {
                         hiddenRun = false;
                         continue;
                     }
@@ -1713,16 +1713,8 @@ bool ViewportRenderer::drawPreparedCurveSegments(
                 }
             }
         }
-        if (shadingSettings_.xrayEnabled() && !hiddenPath.isEmpty()) {
-            painter.save();
-            QPen hiddenPen = painter.pen();
-            QColor hiddenColor = hiddenPen.color();
-            hiddenColor.setAlphaF(hiddenColor.alphaF() *
-                (1.0 - std::clamp(shadingSettings_.xrayAlphaForMode(), 0.0, 1.0)));
-            hiddenPen.setColor(hiddenColor);
-            painter.setPen(hiddenPen);
+        if (shadingSettings_.xrayEnabledForMode() && !hiddenPath.isEmpty()) {
             painter.drawPath(hiddenPath);
-            painter.restore();
         }
         if (!visiblePath.isEmpty()) {
             painter.drawPath(visiblePath);
@@ -4048,6 +4040,11 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                                          const QSize &inFrontDepthSize,
                                          bool showInFront) const
 {
+    Q_UNUSED(regularSceneDepth)
+    Q_UNUSED(regularDepthSize)
+    Q_UNUSED(inFrontSceneDepth)
+    Q_UNUSED(inFrontDepthSize)
+    Q_UNUSED(showInFront)
     const QColor handleColor(QStringLiteral("#77b7e6"));
     const QColor handleFill(QStringLiteral("#263b4b"));
     painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));

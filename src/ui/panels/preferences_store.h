@@ -36,7 +36,6 @@ void saveNavigationPreferences(const ViewportNavigationPreferences &preferences)
 void saveRotateToolPreferences(const RotateToolPreferences &preferences);
 void saveViewportAaModePreference(int mode);
 void saveSmoothWirePreferences(bool overlay, bool editMode);
-void saveSelectedOutlineWidthPreference(int width);
 void saveOrthoPreference(bool enabled);
 void saveOsnapEnabledPreference(bool enabled);
 void saveSnapModesPreference(const StoredPreferences &preferences);

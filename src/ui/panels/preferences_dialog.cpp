@@ -42,7 +42,6 @@ public:
                                int viewportAaMode,
                                bool smoothWiresOverlay,
                                bool smoothWiresEditMode,
-                               int selectedOutlineWidth,
                                std::function<void(int, bool, bool)>
                                    viewportQualityPreview,
                                QWidget *parent = nullptr)
@@ -96,8 +95,7 @@ public:
                                                      rotateToolPreferences,
                                                      viewportAaMode,
                                                      smoothWiresOverlay,
-                                                     smoothWiresEditMode,
-                                                     selectedOutlineWidth));
+                                                     smoothWiresEditMode));
             } else if (category == QStringLiteral("Dimensions")) {
                 pages_->addWidget(createDimensionPage(architecturalDimensionFont));
             } else if (category == QStringLiteral("Navigation")) {
@@ -224,11 +222,6 @@ public:
     bool smoothWiresEditMode() const
     {
         return smoothWiresEditModeCheckBox_->isChecked();
-    }
-
-    int selectedOutlineWidth() const
-    {
-        return selectedOutlineWidthSpinBox_->value();
     }
 
 private:
@@ -378,8 +371,7 @@ private:
                                 const RotateToolPreferences &rotateToolPreferences,
                                 int viewportAaMode,
                                 bool smoothWiresOverlay,
-                                bool smoothWiresEditMode,
-                                int selectedOutlineWidth)
+                                bool smoothWiresEditMode)
     {
         gridAppearance_ = gridAppearance;
         themeBackground_ = themeBackground;
@@ -422,16 +414,6 @@ private:
         smoothWiresEditModeCheckBox_->setToolTip(
             QStringLiteral("Changes take effect after restarting classiCAD."));
         qualityLayout->addRow(QString(), smoothWiresEditModeCheckBox_);
-        selectedOutlineWidthSpinBox_ = new QSpinBox;
-        selectedOutlineWidthSpinBox_->setRange(1, 5);
-        selectedOutlineWidthSpinBox_->setValue(
-            std::clamp(selectedOutlineWidth, 1, 5));
-        selectedOutlineWidthSpinBox_->setObjectName(
-            QStringLiteral("selectedOutlineWidthPreference"));
-        selectedOutlineWidthSpinBox_->setToolTip(
-            QStringLiteral("Controls selected-object outline expansion."));
-        qualityLayout->addRow(QStringLiteral("Selected Outline Width"),
-                              selectedOutlineWidthSpinBox_);
         const auto previewQuality = [this] {
             if (viewportQualityPreview_) {
                 viewportQualityPreview_(this->viewportAaMode(),
@@ -964,7 +946,6 @@ private:
     QComboBox *viewportAaCombo_ = nullptr;
     QCheckBox *smoothWiresOverlayCheckBox_ = nullptr;
     QCheckBox *smoothWiresEditModeCheckBox_ = nullptr;
-    QSpinBox *selectedOutlineWidthSpinBox_ = nullptr;
     std::function<void(int, bool, bool)> viewportQualityPreview_;
 };
 
@@ -992,7 +973,6 @@ bool showPreferencesDialog(QWidget *parent,
                              initialValues.viewportAaMode,
                              initialValues.smoothWiresOverlay,
                              initialValues.smoothWiresEditMode,
-                             initialValues.selectedOutlineWidth,
                              std::move(viewportQualityPreview),
                              parent);
     if (dialog.exec() != QDialog::Accepted) {
@@ -1012,7 +992,6 @@ bool showPreferencesDialog(QWidget *parent,
     selectedValues->viewportAaMode = dialog.viewportAaMode();
     selectedValues->smoothWiresOverlay = dialog.smoothWiresOverlay();
     selectedValues->smoothWiresEditMode = dialog.smoothWiresEditMode();
-    selectedValues->selectedOutlineWidth = dialog.selectedOutlineWidth();
     return true;
 }
 

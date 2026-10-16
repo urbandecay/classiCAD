@@ -2562,7 +2562,6 @@ private:
         viewport_->setViewportAntiAliasingMode(preferences.viewportAaMode);
         viewport_->setSmoothWirePreferences(preferences.smoothWiresOverlay,
                                             preferences.smoothWiresEditMode);
-        viewport_->setSelectedOutlineWidth(preferences.selectedOutlineWidth);
         viewport_->setArchitecturalDimensionFont(
             preferences.architecturalDimensionFont);
 
@@ -2606,7 +2605,6 @@ private:
         initialValues.rotateToolPreferences = viewport_->rotateToolPreferences();
         initialValues.viewportAaMode = viewport_->viewportAntiAliasingMode();
         initialValues.smoothWiresOverlay = viewport_->smoothWiresOverlay();
-        initialValues.selectedOutlineWidth = viewport_->selectedOutlineWidth();
         // The saved checkbox value may differ from the active value until
         // restart. Keep showing the requested value while previewing only
         // settings that take effect live.
@@ -2644,7 +2642,6 @@ private:
         applyViewportAntiAliasingMode(selectedValues.viewportAaMode, true);
         applySmoothWirePreferences(selectedValues.smoothWiresOverlay,
                                    selectedValues.smoothWiresEditMode, true);
-        applySelectedOutlineWidth(selectedValues.selectedOutlineWidth, true);
         if (selectedValues.smoothWiresEditMode != activeSmoothWiresEditMode) {
             statusBar()->showMessage(
                 QStringLiteral("Edit Mode Smooth Wires will take effect after restarting classiCAD."),
@@ -2769,13 +2766,6 @@ private:
         viewport_->setSmoothWirePreferences(overlay,
                                             viewport_->smoothWiresEditMode());
         if (save) saveSmoothWirePreferences(overlay, editMode);
-    }
-
-    void applySelectedOutlineWidth(int width, bool save)
-    {
-        if (viewport_ == nullptr) return;
-        viewport_->setSelectedOutlineWidth(width);
-        if (save) saveSelectedOutlineWidthPreference(width);
     }
 
     void applySnapLabelsVisible(bool visible, bool save)

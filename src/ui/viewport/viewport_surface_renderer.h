@@ -34,7 +34,6 @@ public:
     // Select one Workbench cavity tap for opt-in per-pixel attribution.
     // A negative value preserves the aggregate diagnostic output.
     void setCavityDiagnosticTap(int tap) noexcept;
-    void setSelectedOutlineWidth(int width) noexcept;
 
     bool draw(const QVector<ViewportRenderObject> &objects,
               const ViewportTransform &transform,
@@ -210,7 +209,6 @@ private:
     GLuint outlineSceneDepthFramebuffer_ = 0;
     GLuint outlineSceneDepthTexture_ = 0;
     QSize selectedOutlineFramebufferSize_;
-    int selectedOutlineWidth_ = 2;
     bool cavityDiagnosticOutput_ = false;
     int cavityDiagnosticTap_ = -1;
     GLuint workbenchEffectFramebuffer_ = 0;

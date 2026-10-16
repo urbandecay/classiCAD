@@ -10231,6 +10231,14 @@ scene depth.
   geometry rather than dropping line sections. C++ build passed; matched
   large-curve occlusion images remain open.
 
+### Match Blender's orthographic grid LOD fade (2026-10-16)
+
+- A controlled visible-window comparison showed classiCAD kept the fine grid
+  subdivision visible at baseline and far zoom, while Blender faded it out.
+  The GPU shader and QPainter path now use Blender's orthographic pixel-size
+  thresholds: lines fade below 64 projected pixels and reach zero opacity at
+  four pixels. Matched captures after this change remain open.
+
 ### GPU open-surface shadow caps (2026-10-16)
 
 - The stencil shadow path now submits source and far caps for every triangle

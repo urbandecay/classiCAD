@@ -197,8 +197,9 @@ void main()
     vEmphasis = clamp(float(line.level) - uLevelFraction, 0.0, 1.0);
     vAlpha = clamp(float(line.level) + 1.0 - uLevelFraction, 0.0, 1.0);
     if (uMode == 0 && uPerspective == 0) {
-        // Keep the close subdivision visible while fading subpixel lines.
-        vAlpha *= smoothstep(0.25, 4.0, stepSize * uZoom);
+        // Blender fades orthographic lines from 64 px down to 4 px.
+        float pixelFactorOverStep = 1.0 / max(stepSize * uZoom, 1.0e-8);
+        vAlpha *= 1.0 - smoothstep(0.015625, 0.25, pixelFactorOverStep);
     }
     vLineAxis = line.axis;
     vRenderMode = uMode;

@@ -83,10 +83,18 @@ qreal blenderOrthographicGridPixelFade(qreal projectedStepPixels)
     if (!std::isfinite(projectedStepPixels)) {
         return projectedStepPixels > 0.0 ? 1.0 : 0.0;
     }
-    const qreal fraction = std::clamp((projectedStepPixels - 0.25) / 3.75,
-                                      0.0,
-                                      1.0);
-    return fraction * fraction * (3.0 - 2.0 * fraction);
+    if (projectedStepPixels <= 0.0) {
+        return 0.0;
+    }
+    // Blender fades orthographic lines using pixel_fac / step_size with the
+    // thresholds 0.25 and pow3(0.25). In projected pixels, that means the
+    // line fades out below 64 px and reaches zero opacity at 4 px.
+    const qreal pixelFactorOverStep = 1.0 / projectedStepPixels;
+    const qreal t = std::clamp((pixelFactorOverStep - 0.015625) /
+                                   (0.25 - 0.015625),
+                               0.0,
+                               1.0);
+    return 1.0 - t * t * (3.0 - 2.0 * t);
 }
 
 bool isBlenderAxisAlignedView(ViewportViewPreset preset)

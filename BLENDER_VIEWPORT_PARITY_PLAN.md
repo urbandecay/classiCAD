@@ -246,8 +246,11 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   median green-axis pixel in top view is classiCAD (102, 160, 28) versus
   Blender (107, 170, 22); the palette inputs are close, so the remaining
   difference is in final line coverage/compositing rather than a renderer
-  mismatch. Fine grid LOD lines are more visible in classiCAD at baseline and
-  far zoom. Neutral-pixel ROI MAE is 6.42 for top and 9.14 for perspective;
+  mismatch. Fine grid LOD lines were more visible in classiCAD at baseline and
+  far zoom. The GPU and QPainter fade now follow Blender's source thresholds,
+  fading lines below 64 pixels and suppressing them at four pixels or smaller.
+  Post-change matched captures remain open. Before this correction, neutral-
+  pixel ROI MAE was 6.42 for top and 9.14 for perspective;
   those values include the LOD visibility difference and viewport-specific UI,
   and are not pure background-color measurements. Exact background, fine-grid,
   and axis-pixel parity remain open, but the Stage 5 view/scale comparisons and

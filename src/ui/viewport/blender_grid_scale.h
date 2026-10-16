@@ -21,7 +21,8 @@ BlenderGridLevelSelection selectBlenderGridLevel(
 qreal blenderGridStepAtLevel(const BlenderGridLevelSelection &selection,
                              int lineLevel);
 
-// Fades orthographic grid lines below four pixels so close subdivisions remain visible.
+// Matches Blender's orthographic pixel-size fade: lines fade below 64 pixels
+// and reach zero opacity at four pixels or smaller.
 qreal blenderOrthographicGridPixelFade(qreal projectedStepPixels);
 
 bool isBlenderAxisAlignedView(ViewportViewPreset preset);

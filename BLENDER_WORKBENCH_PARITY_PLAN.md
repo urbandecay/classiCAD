@@ -3924,16 +3924,28 @@ and [surface](https://docs.blender.org/manual/en/5.2/modeling/surfaces/selecting
 Edit Mode. Grab, rotate, and scale transform curve and NURBS surface control
 points through their existing geometry paths. NURBS solid component transforms are
 suppressed because solid faces are derived from the exact base surface and
-extrusion vector; whole-object solid transforms remain supported. Surface CV
-propagation stays inside the selected surface or solid; matching coordinates
-on another object do not connect it. Curve control points propagate across
-objects only through the existing explicit weld groups. Component duplication
-uses the existing curve/surface component paths. Curve and point component
+extrusion vector; whole-object solid transforms remain supported. During
+component transforms, surface CV propagation stays inside the selected surface
+or solid; matching coordinates on another object do not connect it. Curve
+control points propagate across objects only through the existing explicit
+weld groups. Component duplication uses the existing curve/surface component
+paths. Curve and point component
 deletion use their existing geometry operations. A NURBS surface or solid can
 only be deleted as a whole through component deletion; deleting an individual
 closed-solid face is rejected because it would break the stored solid
 topology. Multi-object Edit Mode remains limited to the active geometry
 family.
+`Ctrl+L` now selects linked components from the active selection: curve control
+points expand to their containing spline, while a selected curve spline stays
+on that spline; surface and solid components map back to their owning patch and
+expand through patches sharing boundary edges. The selection is restricted to
+that connected island and the same object. `L` and `Shift+L` keep their cursor
+pick and deselect behavior, with curve picks limited to one spline and surface
+picks limited to the picked object's connected patches. This adapts Blender's
+curve and surface linked-selection behavior to the requested CV/spline/patch
+mapping; Blender's native NURBS modes do not have classiCAD's edge and face
+modes. References: [Blender 5.2 curve selection](https://docs.blender.org/manual/en/5.2/modeling/curves/selecting.html)
+and [surface selection](https://docs.blender.org/manual/en/5.2/modeling/surfaces/selecting.html).
 
 The user explicitly deferred polygon-mesh component work for now; this slice
 maps NURBS control points to vertices, curve splines to edges, and NURBS

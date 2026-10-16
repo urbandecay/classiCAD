@@ -12865,22 +12865,16 @@ protected:
             // from cached AA history. They depth-test against the regenerated
             // unjittered surface depth but never write into it.
             if (sceneRenderer != nullptr) {
-                const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
+                const bool xrayEnabled =
+                    viewportShadingSettings_.xrayEnabledForMode();
                 if (xrayEnabled) {
-                    // Blender fades overlay strokes behind scene geometry by
-                    // the inverse of X-Ray opacity, then draws visible strokes
-                    // at their configured opacity.
-                    const bool backWiresDrawn = sceneRenderer->draw(
+                    // Blender's scene wire framebuffer is depth-cleared while
+                    // X-Ray is active. Its wire opacity stays independent of
+                    // the surface X-Ray opacity.
+                    sceneDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,
-                        devicePixelRatioF(), false,
-                        1.0 - std::clamp(viewportShadingSettings_.xrayAlphaForMode(),
-                                         0.0, 1.0),
+                        devicePixelRatioF(), false, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_);
-                    const bool frontWiresDrawn = sceneRenderer->draw(
-                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
-                        devicePixelRatioF(), true, 1.0,
-                        smoothWiresOverlay_, smoothWiresEditMode_);
-                    sceneDrawn = backWiresDrawn && frontWiresDrawn;
                 } else {
                     sceneDrawn = sceneRenderer->draw(
                         gpuStrokes, overlayCamera, renderFrame.viewportSize,

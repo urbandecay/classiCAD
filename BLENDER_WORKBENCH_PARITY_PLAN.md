@@ -8974,3 +8974,12 @@ resolve remain open.
   overlay in
   [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L59-L74).
   C++ build passed; no matched X-Ray wire comparison has been run.
+
+### GPU scene-wire X-Ray depth and opacity (2026-10-15)
+
+- The native GPU scene-wire pass now follows the X-Ray checkbox even when its
+  opacity slider is at 1. With X-Ray enabled, strokes draw once without scene
+  depth testing and retain their configured opacity; the surface X-Ray opacity
+  does not fade hidden wires. This follows Blender 5.2.2's separate wire
+  framebuffer, whose depth is cleared for X-Ray independently of the surface
+  opacity. The C++ build passed; matched GPU X-Ray captures remain open.

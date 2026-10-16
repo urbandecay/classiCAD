@@ -8807,6 +8807,15 @@ resolve remain open.
   X-Ray opacity remains a separate later control. Matched image comparison
   remains open.
 
+### QPainter Attribute effect-depth alpha (2026-10-16)
+
+- The ordinary QPainter mesh color pass already treated Attribute mode as
+  opaque, but its separate raster effects/depth capture still borrowed alpha
+  from the assigned material. It now records Attribute triangles with source
+  alpha one there too, so cavity and outline depth classification agree with
+  the visible Attribute fill and Blender. Material and Texture retain their
+  material alpha. Build passed; matched effect captures remain open.
+
 ### QPainter textured shadow-caster audit correction (2026-10-15)
 
 - An attempted software shadow-map texture-alpha cutoff was removed after

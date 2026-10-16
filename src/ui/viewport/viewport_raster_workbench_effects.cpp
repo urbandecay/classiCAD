@@ -2699,9 +2699,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const QVector<int> &face = mesh.faces[faceIndex];
                 const int faceFirstCorner = firstCorner;
                 const int faceSlot = mesh.faceMaterialIndices.value(faceIndex, 0);
-                float triangleSourceAlpha = objectAlpha;
+                float triangleSourceAlpha =
+                    settings.colorMode == ViewportColorMode::Attribute
+                        ? 1.0f
+                        : objectAlpha;
                 if (settings.colorMode == ViewportColorMode::Material ||
-                    settings.colorMode == ViewportColorMode::Attribute ||
                     settings.colorMode == ViewportColorMode::Texture) {
                     float faceAlpha = object.workbenchMaterial.alpha;
                     if (faceSlot >= 0 && faceSlot < object.meshMaterials.size()) {

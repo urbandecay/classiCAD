@@ -1398,7 +1398,7 @@ images and image tint remain unsupported. Quad sizing and offset follow Blender 
 [`overlay_empty.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_empty.hh#L1432-L1548).
 
 **Viewport anti-aliasing import update (2026-10-16):** The extractor bridge
-now accepts versions 10 through 30 (the older scene-import summary above is
+now accepts versions 10 through 31 (the older scene-import summary above is
 stale). Blender's saved `scene.display.viewport_aa` is retained in the
 extracted scene record. Its initial application to the classiCAD Solid
 viewport is superseded by the precedence correction below; `scene.display.render_aa`
@@ -1410,6 +1410,16 @@ overlay settings. A disabled extras switch, or disabled global overlays, now
 hides imported Image Empty Picture geometry while retaining the underlying
 objects. Blender camera/light icons and other unsupported guides remain
 unrepresented.
+
+**Saved free-view optics update (2026-10-16):** Bridge version 31 now carries
+the active free view's lens and clipping distances alongside its orientation
+and view distance. Blender import applies these to the initial classiCAD view;
+they are kept separate from the imported scene camera. Matched captures with
+custom lens and clipping values remain open.
+
+**Extractor version correction (2026-10-16):** The reader accepts bridge
+versions 10 through 31. Version 31 adds the per-view lens and clip values
+described above; the earlier import summary's version range is historical.
 
 **Linked image path correction (2026-10-16):** Blender image paths beginning
 with `//` are now resolved with `bpy.path.abspath(..., library=image.library)`.
@@ -9147,6 +9157,11 @@ resolve remain open.
   their framing on save/reopen. Blender stores free-view values on
   `SpaceView3D.region_3d`; see
   [`RegionView3D`](https://docs.blender.org/api/5.2/bpy.types.RegionView3D.html).
+  The saved free view's `SpaceView3D.lens`, `clip_start`, and `clip_end` are
+  now imported into the initial classiCAD viewport camera preferences as well;
+  the scene render camera remains separate. Existing native project camera
+  settings already persist these preference values. Matched custom-lens and
+  clipping comparisons remain open.
   The scene render camera remains a separate record for Workbench render
   results. The scene extractor record is now version 21, and the reader accepts
   versions 10 through 21. C++ build passed; matched free-view and camera-view

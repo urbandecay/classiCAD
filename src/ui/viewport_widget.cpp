@@ -7580,6 +7580,14 @@ public:
                 cameraSettings.sensorWidthMillimeters,
                 cameraSettings.opticalSensorSizeMillimeters};
             viewportTransform_.setCameraPreferences(preferences);
+        } else if (cameraSettings.hasImportedViewOptics) {
+            ViewportCameraPreferences preferences =
+                viewportTransform_.cameraPreferences();
+            preferences.focalLengthMillimeters =
+                cameraSettings.focalLengthMillimeters;
+            preferences.clipStart = cameraSettings.clipStart;
+            preferences.clipEnd = cameraSettings.clipEnd;
+            viewportTransform_.setCameraPreferences(preferences);
         }
         if (cameraSettings.view.storedInProject) {
             const ProjectViewportViewState &storedView = cameraSettings.view;

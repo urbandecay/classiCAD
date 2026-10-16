@@ -39,6 +39,12 @@ struct ProjectViewportViewState {
     double targetX = 0.0;
     double targetY = 0.0;
     double targetZ = 0.0;
+    // Temporary transport for Blender's per-space free-view projection.
+    // Applied to viewport camera preferences during ordinary .blend import.
+    bool hasViewOptics = false;
+    double viewLensMillimeters = 50.0;
+    double viewClipStart = 0.01;
+    double viewClipEnd = 1000.0;
     bool storedInProject = false;
 };
 
@@ -54,6 +60,9 @@ struct ProjectViewportCameraSettings {
     double apertureRatio = 1.0;
     double sensorWidthMillimeters = 36.0;
     double opticalSensorSizeMillimeters = 36.0;
+    // Imported free-view lens/clipping values override only these viewport
+    // projection fields while preserving the user's other camera preferences.
+    bool hasImportedViewOptics = false;
     ProjectViewportViewState view;
     bool storedInProject = false;
 };

@@ -2712,6 +2712,15 @@ bool loadVignolaDocument(const QString &path,
         if (cameraSettings != nullptr) {
             *cameraSettings = ProjectViewportCameraSettings{};
             cameraSettings->view = importReport.initialViewportView;
+            if (cameraSettings->view.hasViewOptics) {
+                cameraSettings->focalLengthMillimeters =
+                    cameraSettings->view.viewLensMillimeters;
+                cameraSettings->clipStart =
+                    cameraSettings->view.viewClipStart;
+                cameraSettings->clipEnd =
+                    cameraSettings->view.viewClipEnd;
+                cameraSettings->hasImportedViewOptics = true;
+            }
         }
         if (ordinaryImportReport != nullptr)
             *ordinaryImportReport = std::move(importReport);
@@ -2812,7 +2821,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 22 && bridgeVersion != 23 && bridgeVersion != 24 &&
          bridgeVersion != 25 && bridgeVersion != 26 && bridgeVersion != 27 &&
          bridgeVersion != 28 && bridgeVersion != 29 &&
-         bridgeVersion != 30)) {
+         bridgeVersion != 30 && bridgeVersion != 31)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -2907,6 +2916,28 @@ bool importBlenderScene(const QString &path,
             initialViewportView.targetY = location[1];
             initialViewportView.targetZ = location[2];
             initialViewportView.storedInProject = true;
+            const QJsonValue viewLens = savedView.value(
+                QStringLiteral("view_lens"));
+            const QJsonValue clipStart = savedView.value(
+                QStringLiteral("clip_start"));
+            const QJsonValue clipEnd = savedView.value(
+                QStringLiteral("clip_end"));
+            if (viewLens.isDouble() && clipStart.isDouble() &&
+                clipEnd.isDouble() &&
+                std::isfinite(viewLens.toDouble()) &&
+                std::isfinite(clipStart.toDouble()) &&
+                std::isfinite(clipEnd.toDouble()) &&
+                viewLens.toDouble() >= 1.0 &&
+                viewLens.toDouble() <= 250.0 &&
+                clipStart.toDouble() >= 0.000001 &&
+                clipEnd.toDouble() > clipStart.toDouble() &&
+                clipEnd.toDouble() <= 1.0e9) {
+                initialViewportView.hasViewOptics = true;
+                initialViewportView.viewLensMillimeters =
+                    viewLens.toDouble();
+                initialViewportView.viewClipStart = clipStart.toDouble();
+                initialViewportView.viewClipEnd = clipEnd.toDouble();
+            }
         }
     }
     if (report != nullptr)

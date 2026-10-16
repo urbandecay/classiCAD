@@ -2137,6 +2137,8 @@ bool parseBlenderPictureItem(
         float(pictureColor[2]), float(pictureColor[3]));
     result.geometry.pictureUseAlphaBlend = item.value(
         QStringLiteral("picture_use_alpha_blend")).toBool(true);
+    result.geometry.pictureUseViewTransform = item.value(
+        QStringLiteral("picture_use_view_transform")).toBool(false);
     // This records Blender's image setting, independent of the storage format
     // selected by the active Qt image plugin.
     result.geometry.picturePremultipliedAlpha = item.value(

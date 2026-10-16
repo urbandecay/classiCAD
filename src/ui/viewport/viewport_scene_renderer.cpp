@@ -14,6 +14,7 @@
 #include "viewport_marker_style.h"
 #include "viewport_render_frame.h"
 #include "viewport_shading.h"
+#include "workbench_lighting.h"
 
 #include <QImage>
 #include <QCryptographicHash>
@@ -2517,7 +2518,8 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         float opacity,
                                         bool sceneLinearOutput,
                                         bool depthTest,
-                                        bool displayReferredOverlay)
+                                        bool displayReferredOverlay,
+                                        const ViewportShadingSettings *displaySettings)
 {
     if (picture.geometryType != GeometryType::Picture) return false;
     if (picture.pictureCameraViewOnly &&
@@ -2542,6 +2544,7 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     if (image.isNull()) {
         return false;
     }
+    const QImage unmodifiedImage = image;
     const qint64 pixelCount = qint64(image.width()) * image.height();
     const bool hasSceneLinearPayload =
         picture.pictureSceneLinearFloatWidth == image.width() &&
@@ -2610,18 +2613,112 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
             }
         }
     }
+    const bool applyViewTransform = picture.pictureUseViewTransform &&
+        !sceneLinearOutput && displaySettings != nullptr;
+    if (applyViewTransform) {
+        if (sceneLinearPixels.isEmpty()) {
+            sceneLinearPixels.resize(qsizetype(pixelCount) * 4);
+            const QString colorSpace = picture.pictureColorSpace.trimmed();
+            const bool sourceIsLinear =
+                colorSpace.startsWith(QStringLiteral("Linear"),
+                                      Qt::CaseInsensitive) ||
+                colorSpace.compare(QStringLiteral("Non-Color"),
+                                   Qt::CaseInsensitive) == 0;
+            const auto decodeSrgb = [](float value) {
+                return value <= 0.04045f
+                    ? value / 12.92f
+                    : std::pow((value + 0.055f) / 1.055f, 2.4f);
+            };
+            for (int y = 0; y < unmodifiedImage.height(); ++y) {
+                const uchar *row = unmodifiedImage.constScanLine(y);
+                for (int x = 0; x < unmodifiedImage.width(); ++x) {
+                    const uchar *pixel = row + x * 4;
+                    const float alpha = float(pixel[3]) / 255.0f;
+                    float *destination = sceneLinearPixels.data() +
+                        (qsizetype(y) * unmodifiedImage.width() + x) * 4;
+                    for (int channel = 0; channel < 3; ++channel) {
+                        float value = float(pixel[channel]) / 255.0f;
+                        if (!sourceIsLinear) value = decodeSrgb(value);
+                        const float tint = channel == 0
+                            ? picture.pictureColorSceneLinear.x()
+                            : channel == 1
+                                ? picture.pictureColorSceneLinear.y()
+                                : picture.pictureColorSceneLinear.z();
+                        destination[channel] = value * tint;
+                    }
+                    destination[3] = alpha *
+                        picture.pictureColorSceneLinear.w();
+                }
+            }
+        } else {
+            for (qsizetype index = 0; index < pixelCount; ++index) {
+                float *pixel = sceneLinearPixels.data() + index * 4;
+                float alpha = pixel[3];
+                if (picture.picturePremultipliedAlpha) {
+                    if (alpha > 1.0e-8f) {
+                        pixel[0] /= alpha;
+                        pixel[1] /= alpha;
+                        pixel[2] /= alpha;
+                    } else {
+                        pixel[0] = pixel[1] = pixel[2] = 0.0f;
+                    }
+                }
+                pixel[0] *= picture.pictureColorSceneLinear.x();
+                pixel[1] *= picture.pictureColorSceneLinear.y();
+                pixel[2] *= picture.pictureColorSceneLinear.z();
+                pixel[3] *= picture.pictureColorSceneLinear.w();
+            }
+        }
+        for (qsizetype index = 0; index < pixelCount; ++index) {
+            float *pixel = sceneLinearPixels.data() + index * 4;
+            const QVector3D transformed = workbenchSceneLinearToDisplaySrgb(
+                QVector3D(pixel[0], pixel[1], pixel[2]),
+                displaySettings->colorTransform,
+                displaySettings->colorExposure,
+                displaySettings->colorGamma,
+                displaySettings->colorLutData,
+                displaySettings->colorLutMetadata);
+            pixel[0] = transformed.x();
+            pixel[1] = transformed.y();
+            pixel[2] = transformed.z();
+        }
+        internalFormat = GL_RGBA32F;
+        uploadType = GL_FLOAT;
+        uploadData = sceneLinearPixels.constData();
+    }
     const QByteArray payloadHash = hasSceneLinearPayload
         ? QCryptographicHash::hash(picture.pictureSceneLinearFloatData,
                                    QCryptographicHash::Sha256).toHex()
         : QByteArrayLiteral("byte");
-    const QString imageCacheKey = QStringLiteral("%1|%2|%3|%4|%5|%6")
+    QByteArray displayTransformData;
+    if (applyViewTransform) {
+        displayTransformData = displaySettings->colorLutData;
+        displayTransformData += QByteArray::number(
+            picture.pictureColorSceneLinear.x(), 'g', 9);
+        displayTransformData += QByteArray::number(
+            picture.pictureColorSceneLinear.y(), 'g', 9);
+        displayTransformData += QByteArray::number(
+            picture.pictureColorSceneLinear.z(), 'g', 9);
+        displayTransformData += QByteArray::number(
+            picture.pictureColorSceneLinear.w(), 'g', 9);
+    }
+    const QByteArray displayLutHash = applyViewTransform
+        ? QCryptographicHash::hash(displayTransformData,
+                                   QCryptographicHash::Sha256).toHex()
+        : QByteArray{};
+    const QString imageCacheKey = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10")
         .arg(picture.pictureImage.cacheKey())
         .arg(picture.pictureSourceTransformId,
              picture.pictureColorSpace,
              QString::fromLatin1(payloadHash),
              picture.picturePremultipliedAlpha
                  ? QStringLiteral("premul") : QStringLiteral("straight"),
-             QString::number(internalFormat));
+             QString::number(internalFormat),
+             applyViewTransform ? QStringLiteral("view") : QStringLiteral("source"),
+             QString::number(applyViewTransform ? displaySettings->colorTransform : 0),
+             QString::number(applyViewTransform ? displaySettings->colorExposure : 0.0),
+             QString::number(applyViewTransform ? displaySettings->colorGamma : 1.0),
+             QString::fromLatin1(displayLutHash));
     auto texture = pictureTextures_.find(imageCacheKey);
     if (texture == pictureTextures_.end()) {
         PictureTexture newTexture;
@@ -2686,6 +2783,7 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     const qint64 viewportPixelCount = qint64(pixelSize.width()) *
                                       pixelSize.height();
     const bool linearDestinationBlend = displayReferredOverlay &&
+        !applyViewTransform &&
         useAlphaBlend && viewportPixelCount > 0 &&
         viewportPixelCount <= maximumLinearBlendPixels;
     GLint previousFramebuffer = 0;
@@ -2779,13 +2877,19 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     pictureProgram_.setUniformValue("uOpacity", std::clamp(opacity, 0.0f, 1.0f));
     pictureProgram_.setUniformValue("uSceneLinearOutput",
                                     sceneLinearOutput ? 1 : 0);
+    pictureProgram_.setUniformValue("uDisplayReferredInput",
+                                    applyViewTransform ? 1 : 0);
     pictureProgram_.setUniformValue(
-        "uColor", picture.pictureColorSceneLinear);
+        "uColor", applyViewTransform
+            ? QVector4D(1.0f, 1.0f, 1.0f, 1.0f)
+            : picture.pictureColorSceneLinear);
     pictureProgram_.setUniformValue("uUseAlphaBlend", useAlphaBlend ? 1 : 0);
     pictureProgram_.setUniformValue("uLinearDestinationBlend",
                                     linearDestinationBlend ? 1 : 0);
     pictureProgram_.setUniformValue("uPremultipliedAlpha",
-                                    picture.picturePremultipliedAlpha ? 1 : 0);
+                                    picture.picturePremultipliedAlpha &&
+                                            !applyViewTransform
+                                        ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
     pictureProgram_.release();
     pictureVertexBuffer_.release();

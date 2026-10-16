@@ -9118,3 +9118,17 @@ resolve remain open.
   been run.
   Blender routes curves through its mesh passes before DOF in
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L429-L446).
+
+### Image Empty View as Render (2026-10-15)
+
+- Blender Image Empty imports now retain `Image.use_view_as_render` in native
+  picture data. The GPU overlay and QPainter display paths apply the active
+  Workbench color transform, exposure, gamma, and custom LUT when this option
+  is enabled; ordinary Image Empties with it disabled keep their existing
+  display path. Scene-linear image payloads retain their HDR values until the
+  selected transform is applied. Camera background images use the same
+  setting through their synthetic Image Empty source. The transformed images
+  still composite as overlays after the main scene transform, so transparent
+  image edges can differ from Blender's scene-linear alpha-under compositing.
+  The extractor bridge is version 24. C++ build passed; matched image captures
+  have not been run.

@@ -30,6 +30,7 @@ namespace classiCAD {
 
 struct ViewportDepthGeometry;
 struct ViewportRenderObject;
+struct ViewportShadingSettings;
 
 enum class ViewportSceneLineStyle : int {
     Solid = 0,
@@ -238,7 +239,8 @@ public:
                      float opacity,
                      bool sceneLinearOutput = false,
                      bool depthTest = false,
-                     bool displayReferredOverlay = false);
+                     bool displayReferredOverlay = false,
+                     const ViewportShadingSettings *displaySettings = nullptr);
 
 private:
     struct PictureTexture {

@@ -973,6 +973,8 @@ QJsonObject shapeToJson(const Shape &shape)
                                  shape.pictureColorSceneLinear.w()});
         object.insert(QStringLiteral("pictureUseAlphaBlend"),
                       shape.pictureUseAlphaBlend);
+        object.insert(QStringLiteral("pictureUseViewTransform"),
+                      shape.pictureUseViewTransform);
         object.insert(QStringLiteral("picturePremultipliedAlpha"),
                       shape.picturePremultipliedAlpha);
         object.insert(QStringLiteral("pictureColorSpace"),
@@ -1154,6 +1156,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     PictureImageDepth pictureImageDepth = PictureImageDepth::Default;
     QVector4D pictureColorSceneLinear(1.0f, 1.0f, 1.0f, 1.0f);
     bool pictureUseAlphaBlend = true;
+    bool pictureUseViewTransform = false;
     bool picturePremultipliedAlpha = false;
     QString pictureColorSpace = QStringLiteral("sRGB");
     QString pictureSourceTransformId = QStringLiteral("identity");
@@ -1201,6 +1204,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         }
         if (!readBoolean(QStringLiteral("pictureUseAlphaBlend"), true,
                          &pictureUseAlphaBlend) ||
+            !readBoolean(QStringLiteral("pictureUseViewTransform"), false,
+                         &pictureUseViewTransform) ||
             !readBoolean(QStringLiteral("picturePremultipliedAlpha"), false,
                          &picturePremultipliedAlpha)) {
             return false;
@@ -1561,6 +1566,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->pictureImageDepth = pictureImageDepth;
     shape->pictureColorSceneLinear = pictureColorSceneLinear;
     shape->pictureUseAlphaBlend = pictureUseAlphaBlend;
+    shape->pictureUseViewTransform = pictureUseViewTransform;
     shape->picturePremultipliedAlpha = picturePremultipliedAlpha;
     shape->pictureColorSpace = pictureColorSpace;
     shape->pictureSourceTransformId = pictureSourceTransformId;

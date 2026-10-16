@@ -75,6 +75,9 @@ struct Shape {
     // Blender camera background images are viewport-only and appear solely
     // while viewing their imported scene camera.
     bool pictureCameraViewOnly = false;
+    // Blender Image Empties can request the scene's view transform when
+    // displayed. Camera background images use the same image property.
+    bool pictureUseViewTransform = false;
     QVector4D pictureColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
     bool pictureUseAlphaBlend = true;
     bool picturePremultipliedAlpha = false;

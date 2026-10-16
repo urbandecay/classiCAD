@@ -12970,7 +12970,8 @@ protected:
                         if (!sceneRenderer->drawPicture(
                                 preview->image, overlayCamera,
                                 renderFrame.viewportSize, devicePixelRatioF(),
-                                preview->opacity, false, depthTest, true)) {
+                                preview->opacity, false, depthTest, true,
+                                &renderShadingSettings)) {
                             failedScenePicturePreviews.append(&preview->image);
                         }
                     }
@@ -13041,7 +13042,9 @@ protected:
                                                       overlayCamera,
                                                       renderFrame.viewportSize,
                                                       devicePixelRatioF(),
-                                                      preview.opacity)) {
+                                                      preview.opacity,
+                                                      false, false, false,
+                                                      &renderShadingSettings)) {
                         continue;
                     }
                     if (preview.duplicateIndex >= 0 &&
@@ -13145,7 +13148,8 @@ protected:
                     if (!sceneRenderer->drawPicture(
                             preview->image, overlayCamera,
                             renderFrame.viewportSize, devicePixelRatioF(),
-                            preview->opacity, false, false, true)) {
+                            preview->opacity, false, false, true,
+                            &renderShadingSettings)) {
                         failedScenePicturePreviews.append(&preview->image);
                     }
                 }

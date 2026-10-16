@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 23
+BRIDGE_FORMAT_VERSION = 24
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -775,6 +775,8 @@ def extract_image_empty(obj, scene, packed_payload_budget,
         "picture_color_linear": [finite_number(value) for value in evaluated.color],
         "picture_use_alpha_blend": bool(getattr(
             evaluated, "use_empty_image_alpha", False)),
+        "picture_use_view_transform": bool(getattr(
+            image, "use_view_as_render", False)),
         "picture_premultiplied_alpha": str(
             image_alpha_mode) == "PREMUL",
         "picture_color_space": image.colorspace_settings.name,

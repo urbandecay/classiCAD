@@ -67,7 +67,8 @@ QVector3D pictureLinearToSrgb(const QVector3D &linear)
 QImage pictureImageForPainter(const Shape &picture,
                               bool deferCutoutAlphaThreshold,
                               bool keepSceneLinear,
-                              bool *preparedSceneLinear = nullptr)
+                              bool *preparedSceneLinear = nullptr,
+                              const ViewportShadingSettings *displaySettings = nullptr)
 {
     if (preparedSceneLinear != nullptr) *preparedSceneLinear = false;
     if (picture.pictureImage.isNull()) return {};
@@ -167,7 +168,15 @@ QImage pictureImageForPainter(const Shape &picture,
                 pixel[2] = linearColor.z();
                 pixel[3] = float(alpha) / 255.0f;
             } else {
-                const QVector3D displayColor = pictureLinearToSrgb(linearColor);
+                const QVector3D displayColor =
+                    picture.pictureUseViewTransform && displaySettings != nullptr
+                        ? workbenchSceneLinearToDisplaySrgb(
+                              linearColor, displaySettings->colorTransform,
+                              displaySettings->colorExposure,
+                              displaySettings->colorGamma,
+                              displaySettings->colorLutData,
+                              displaySettings->colorLutMetadata)
+                        : pictureLinearToSrgb(linearColor);
                 const int red = qRound(std::clamp(displayColor.x(), 0.0f, 1.0f) * 255.0f);
                 const int green = qRound(std::clamp(displayColor.y(), 0.0f, 1.0f) * 255.0f);
                 const int blue = qRound(std::clamp(displayColor.z(), 0.0f, 1.0f) * 255.0f);
@@ -3464,7 +3473,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             ? pictureImageForPainter(
                   shape, rasterizePicture && !shape.pictureUseAlphaBlend,
                   sceneLinearRasterPicture,
-                  &painterImagePreparedSceneLinear)
+                  &painterImagePreparedSceneLinear, &shadingSettings_)
             : QImage{};
         sceneLinearRasterPicture = sceneLinearRasterPicture &&
                                    painterImagePreparedSceneLinear;
@@ -3652,7 +3661,15 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 pixel[1] * inverseAlpha,
                                 pixel[2] * inverseAlpha);
                             const QVector3D displayColor =
-                                pictureLinearToSrgb(linearColor);
+                                shape.pictureUseViewTransform
+                                    ? workbenchSceneLinearToDisplaySrgb(
+                                          linearColor,
+                                          shadingSettings_.colorTransform,
+                                          shadingSettings_.colorExposure,
+                                          shadingSettings_.colorGamma,
+                                          shadingSettings_.colorLutData,
+                                          shadingSettings_.colorLutMetadata)
+                                    : pictureLinearToSrgb(linearColor);
                             pixel[0] = std::clamp(displayColor.x(), 0.0f, 1.0f) * alpha;
                             pixel[1] = std::clamp(displayColor.y(), 0.0f, 1.0f) * alpha;
                             pixel[2] = std::clamp(displayColor.z(), 0.0f, 1.0f) * alpha;
@@ -3683,7 +3700,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     ? pictureImageForPainter(
                           shape,
                           rasterizePicture && !shape.pictureUseAlphaBlend,
-                          false)
+                          false, nullptr, &shadingSettings_)
                     : painterImage;
                 painter.setTransform(
                     sceneLinearRasterPicture ? imageTransform

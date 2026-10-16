@@ -6,6 +6,7 @@ uniform sampler2D uPicture;
 uniform sampler2D uDestination;
 uniform float uOpacity;
 uniform int uSceneLinearOutput;
+uniform int uDisplayReferredInput;
 uniform int uLinearDestinationBlend;
 uniform vec4 uColor;
 uniform int uUseAlphaBlend;
@@ -24,7 +25,7 @@ void main()
         linearColor /= texColor.a;
     }
     linearColor *= uColor.rgb;
-    color.rgb = uSceneLinearOutput != 0
+    color.rgb = uSceneLinearOutput != 0 || uDisplayReferredInput != 0
         ? linearColor
         : mix(linearColor * 12.92,
               1.055 * pow(linearColor, vec3(1.0 / 2.4)) - 0.055,

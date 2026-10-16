@@ -9210,9 +9210,11 @@ layers after the scene's DOF and AA resolve. Back images are masked by resolved
 scene depth; Front images composite after Back. The presentation shader blends
 both layers before applying the Workbench display transform, and the layers
 stay outside cached AA history so they are rebuilt on each viewport redraw.
-The QPainter fallback still uses its display-referred image path, and
-transparent scene/image interaction remains approximate. Build passed; runtime
-GPU and matched Blender comparisons remain unverified.
+The QPainter fallback now precomposes bounded camera-only BACK images with
+View as Render before its scene pass; Front and other Image Empties retain the
+deferred display-referred path. Transparent scene/image interaction remains
+approximate. Build passed; runtime GPU and matched Blender comparisons remain
+unverified.
 
 **QPainter camera BACK Image Empty composition (2026-10-16):** Camera-view-only
 BACK images with View as Render enabled now enter the existing bounded

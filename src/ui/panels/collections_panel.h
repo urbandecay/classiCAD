@@ -53,9 +53,17 @@ struct OutlinerViewLayerEntry {
     QString displayName;
 };
 
+struct OutlinerSceneEntry {
+    QString key;
+    QString displayName;
+};
+
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
+    std::function<QVector<OutlinerSceneEntry>()> scenes;
+    std::function<QString()> activeSceneKey;
+    std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
     std::function<QString()> activeViewLayerKey;
     std::function<void(const QString &)> setActiveViewLayer;
@@ -130,6 +138,7 @@ private:
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
     QLineEdit *filterEdit_ = nullptr;
+    QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;

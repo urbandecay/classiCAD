@@ -10738,14 +10738,9 @@ scene depth.
   restrictions. The remaining Blender hierarchy, recursive Shift behavior,
   and drag-toggle gestures are not implemented by this checkbox. The full
   `cmake --build build -j4` passed; no GUI comparison was run.
-- The eighth tree update adds a selector for the imported active scene's view
-  layers. It reads Blender's extracted `view_layers` records, changes the
-  document's active view-layer key through a transaction, and restores that
-  layer's imported selected and active objects. The restriction columns and
-  viewport visibility then read the newly active layer. It deliberately limits
-  the selector to the scene whose layer was active on import; changing scenes
-  and switching scene-specific geometry are still unsupported. The full build
-  passed; no GUI interaction comparison was run.
+- The eighth tree update initially added a selector for the imported active
+  scene's view layers. The eleventh update below supersedes its original
+  single-scene limitation.
 - The ninth tree update ports Blender 5.2.2's Shift-click recursive restriction
   behavior from
   [`outliner_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L251-L305)
@@ -10770,9 +10765,24 @@ scene depth.
   modifiers are held, matching Blender's callback. Object rows keep their
   normal Ctrl-click toggle and only use Shift to affect parented children. The
   full `cmake --build build -j4` passed; no GUI interaction comparison was run.
+- The eleventh tree update adds active-scene switching for multi-scene Blender
+  imports. A scene selector switches the active view layer, filters the
+  Outliner to that scene's collection/object memberships, and restores the
+  selected and active objects for a previously visited view layer. Scene and
+  view-layer selections both refresh the viewport so scene camera, visibility,
+  and shading lookups that depend on the active layer are redrawn. New
+  classiCAD objects and collections are assigned to the active imported scene;
+  local collections receive a view-layer path so their contents remain
+  visible/selectable. Selection caches are cleared on document replacement.
+  Blender's scene and view-layer context is backed by the active window and
+  scene tree described by the pinned
+  [view-layer tree builder](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L69-L189);
+  classiCAD exposes the scene switch in its Collections panel as an adaptation.
+  The full `cmake --build build -j4` passed; no GUI interaction comparison was
+  run.
 - Remaining Outliner scope includes carrying row state inside the project file,
-  other Blender datablock rows and restriction controls, scene switching, and a
-  matched Blender/classiCAD interaction comparison. Do not
+  other Blender datablock rows and restriction controls, and a matched
+  Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

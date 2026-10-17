@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QStringList>
 #include <QSet>
+#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -302,6 +303,9 @@ ObjectId Document::insertObject(int index, SceneObject object)
     } else {
         nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
     }
+    if (object.defaultViewLayerKey.isEmpty()) {
+        object.defaultViewLayerKey = settings_.activeViewLayerKey;
+    }
     index = std::clamp(index, 0, static_cast<int>(objects_.size()));
     objects_.insert(index, object);
     for (int objectIndex = index; objectIndex < objects_.size(); ++objectIndex) {
@@ -343,6 +347,9 @@ QVector<ObjectId> Document::insertObjects(
             object.id = allocateObjectId();
         } else {
             nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
+        }
+        if (object.defaultViewLayerKey.isEmpty()) {
+            object.defaultViewLayerKey = settings_.activeViewLayerKey;
         }
         insertedPlacementChanged = insertedPlacementChanged ||
             object.placementTranslation.x != 0.0 ||
@@ -578,6 +585,76 @@ CollectionId Document::insertCollection(DocumentCollection value)
         if (parent.isValid() && parent == value.id) return CollectionId::invalid();
     }
     value.name = value.name.trimmed();
+    const bool localCollection = value.sourceId.isEmpty();
+    if (localCollection) {
+        value.sourceId = QStringLiteral("classiCAD-local-collection:%1")
+                            .arg(QUuid::createUuid().toString(
+                                QUuid::WithoutBraces));
+    }
+    if (value.sourceSceneNames.isEmpty() &&
+        !settings_.activeViewLayerKey.isEmpty()) {
+        for (const QJsonValue &sceneValue : settings_.importedBlenderScenes) {
+            const QJsonObject scene = sceneValue.toObject();
+            for (const QJsonValue &layerValue : scene.value(
+                     QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key"))
+                        .toString() != settings_.activeViewLayerKey) {
+                    continue;
+                }
+                value.sourceSceneName = scene.value(
+                    QStringLiteral("name")).toString();
+                if (!value.sourceSceneName.isEmpty()) {
+                    value.sourceSceneNames.append(value.sourceSceneName);
+                }
+                break;
+            }
+            if (!value.sourceSceneName.isEmpty()) break;
+        }
+    }
+    if (localCollection && value.viewLayerStates.isEmpty() &&
+        !settings_.activeViewLayerKey.isEmpty()) {
+        QVector<QStringList> paths;
+        if (value.parentIds.isEmpty()) {
+            paths.append({value.sourceId});
+        } else {
+            for (const CollectionId parentId : value.parentIds) {
+                const DocumentCollection *parent = collection(parentId);
+                if (parent == nullptr) continue;
+                for (const QJsonValue &parentStateValue : parent->viewLayerStates) {
+                    const QJsonObject parentState = parentStateValue.toObject();
+                    if (parentState.value(QStringLiteral("view_layer_key"))
+                            .toString() != settings_.activeViewLayerKey) {
+                        continue;
+                    }
+                    QStringList path;
+                    bool valid = true;
+                    for (const QJsonValue &part : parentState.value(
+                             QStringLiteral("path")).toArray()) {
+                        if (!part.isString()) {
+                            valid = false;
+                            break;
+                        }
+                        path.append(part.toString());
+                    }
+                    if (valid && !path.isEmpty()) {
+                        path.append(value.sourceId);
+                        paths.append(path);
+                    }
+                }
+            }
+        }
+        if (paths.isEmpty()) paths.append({value.sourceId});
+        for (const QStringList &path : paths) {
+            QJsonArray storedPath;
+            for (const QString &part : path) storedPath.append(part);
+            value.viewLayerStates.append(QJsonObject{
+                {QStringLiteral("view_layer_key"), settings_.activeViewLayerKey},
+                {QStringLiteral("path"), storedPath},
+                {QStringLiteral("exclude"), false},
+                {QStringLiteral("hide_viewport"), false},
+                {QStringLiteral("hide_render"), false}});
+        }
+    }
     collections_.append(value);
     nextCollectionValue_ = qMax(nextCollectionValue_, value.id.value() + 1);
     DocumentChangeSet changes;

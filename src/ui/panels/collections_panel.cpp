@@ -336,6 +336,9 @@ void CollectionsPanel::createLayout()
     auto *filterRow = new QHBoxLayout;
     filterRow->setContentsMargins(0, 0, 0, 0);
     filterRow->addWidget(filterEdit_, 1);
+    sceneCombo_ = new QComboBox(this);
+    sceneCombo_->setToolTip(QStringLiteral("Active Blender scene"));
+    filterRow->addWidget(sceneCombo_);
     viewLayerCombo_ = new QComboBox(this);
     viewLayerCombo_->setToolTip(QStringLiteral("Active Blender view layer"));
     filterRow->addWidget(viewLayerCombo_);
@@ -392,6 +395,11 @@ void CollectionsPanel::createLayout()
         if (index < 0 || !callbacks_.setActiveViewLayer) return;
         const QString key = viewLayerCombo_->itemData(index).toString();
         if (!key.isEmpty()) callbacks_.setActiveViewLayer(key);
+    });
+    connect(sceneCombo_, &QComboBox::activated, this, [this](int index) {
+        if (index < 0 || !callbacks_.setActiveScene) return;
+        const QString key = sceneCombo_->itemData(index).toString();
+        if (!key.isEmpty()) callbacks_.setActiveScene(key);
     });
     connect(tree_, &QTreeWidget::itemExpanded, this,
             [this](QTreeWidgetItem *) { saveTreeState(); });
@@ -1119,10 +1127,27 @@ void CollectionsPanel::refresh()
     const QVector<CollectionPanelEntry> entries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> objects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
+    const QVector<OutlinerSceneEntry> scenes = callbacks_.scenes
+        ? callbacks_.scenes() : QVector<OutlinerSceneEntry>{};
     const QVector<OutlinerViewLayerEntry> viewLayers = callbacks_.viewLayers
         ? callbacks_.viewLayers() : QVector<OutlinerViewLayerEntry>{};
+    const QString activeSceneKey = callbacks_.activeSceneKey
+        ? callbacks_.activeSceneKey() : QString{};
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
+    {
+        const QSignalBlocker blocker(sceneCombo_);
+        sceneCombo_->clear();
+        int activeIndex = -1;
+        for (const OutlinerSceneEntry &scene : scenes) {
+            sceneCombo_->addItem(scene.displayName, scene.key);
+            if (scene.key == activeSceneKey) {
+                activeIndex = sceneCombo_->count() - 1;
+            }
+        }
+        sceneCombo_->setCurrentIndex(activeIndex);
+        sceneCombo_->setVisible(scenes.size() > 1);
+    }
     {
         const QSignalBlocker blocker(viewLayerCombo_);
         viewLayerCombo_->clear();

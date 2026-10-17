@@ -88,16 +88,26 @@ public:
             case ApplicationSessionChange::History:
                 updateHistoryActions();
                 refreshCollections();
+                if (viewport_ != nullptr) viewport_->update();
                 markDocumentModified();
                 break;
             case ApplicationSessionChange::Collections:
                 refreshCollections();
+                if (viewport_ != nullptr) viewport_->update();
                 markDocumentModified();
                 break;
             case ApplicationSessionChange::Selection:
+                if (!session_.document().settings().activeViewLayerKey.isEmpty()) {
+                    SavedViewLayerSelection &saved = viewLayerSelections_[
+                        session_.document().settings().activeViewLayerKey];
+                    saved.objectIds = session_.selection().objectIds();
+                    saved.activeObjectId =
+                        session_.selection().activeObjectId();
+                }
                 if (collectionsPanel_ != nullptr) {
                     collectionsPanel_->syncSelection();
                 }
+                if (viewport_ != nullptr) viewport_->update();
                 break;
             case ApplicationSessionChange::DocumentWillBeReplaced:
                 if (viewport_ != nullptr) {
@@ -105,6 +115,8 @@ public:
                 }
                 break;
             case ApplicationSessionChange::DocumentReplaced:
+                activeViewLayerByScene_.clear();
+                viewLayerSelections_.clear();
                 updateHistoryActions();
                 refreshCollections();
                 markDocumentModified();
@@ -2761,19 +2773,93 @@ private:
     QWidget *createRightPanel()
     {
         CollectionsPanelCallbacks collectionCallbacks;
-        collectionCallbacks.entries = [this]() {
+        const auto activeSceneRecord = [this]() {
+            const DocumentSettings &settings = session_.document().settings();
+            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    if (layerValue.toObject().value(QStringLiteral("key"))
+                            .toString() == settings.activeViewLayerKey) {
+                        return scene;
+                    }
+                }
+            }
+            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                if (scene.value(QStringLiteral("is_active_scene")).toBool()) {
+                    return scene;
+                }
+            }
+            return settings.importedBlenderScenes.isEmpty()
+                ? QJsonObject{}
+                : settings.importedBlenderScenes.first().toObject();
+        };
+        const auto collectionBelongsToActiveScene =
+            [activeSceneRecord](const DocumentCollection &collection) {
+                const QString sceneName = activeSceneRecord().value(
+                    QStringLiteral("name")).toString();
+                return sceneName.isEmpty() ||
+                    collection.sourceSceneNames.isEmpty() ||
+                    collection.sourceSceneNames.contains(sceneName);
+            };
+        collectionCallbacks.entries =
+            [this, collectionBelongsToActiveScene]() {
             QVector<CollectionPanelEntry> entries;
             const Document &document = session_.document();
+            QSet<quint64> activeCollectionIds;
+            for (const DocumentCollection &collection : document.collections()) {
+                if (collectionBelongsToActiveScene(collection)) {
+                    activeCollectionIds.insert(collection.id.value());
+                }
+            }
             entries.reserve(document.collections().size());
             for (const DocumentCollection &collection : document.collections()) {
-                entries.append({collection});
+                if (!activeCollectionIds.contains(collection.id.value())) continue;
+                DocumentCollection visibleCollection = collection;
+                visibleCollection.parentIds.erase(
+                    std::remove_if(visibleCollection.parentIds.begin(),
+                                   visibleCollection.parentIds.end(),
+                                   [&activeCollectionIds](CollectionId parentId) {
+                                       return !activeCollectionIds.contains(
+                                           parentId.value());
+                                   }),
+                    visibleCollection.parentIds.end());
+                entries.append({std::move(visibleCollection)});
             }
             return entries;
         };
-        collectionCallbacks.objects = [this]() {
+        collectionCallbacks.objects =
+            [this, activeSceneRecord, collectionBelongsToActiveScene]() {
             QVector<OutlinerObjectEntry> objects;
             const Document &document = session_.document();
             objects.reserve(document.objects().size());
+            const QJsonObject activeScene = activeSceneRecord();
+            const QString activeSceneId = activeScene.value(
+                QStringLiteral("scene_id")).toString();
+            QSet<quint64> activeCollectionIds;
+            for (const DocumentCollection &collection : document.collections()) {
+                if (collectionBelongsToActiveScene(collection)) {
+                    activeCollectionIds.insert(collection.id.value());
+                }
+            }
+            const auto sceneForViewLayer =
+                [&document](const QString &viewLayerKey) {
+                    for (const QJsonValue &sceneValue :
+                         document.settings().importedBlenderScenes) {
+                        const QJsonObject scene = sceneValue.toObject();
+                        for (const QJsonValue &layerValue : scene.value(
+                                 QStringLiteral("view_layers")).toArray()) {
+                            if (layerValue.toObject().value(
+                                    QStringLiteral("key")).toString() ==
+                                viewLayerKey) {
+                                return scene.value(
+                                    QStringLiteral("scene_id")).toString();
+                            }
+                        }
+                    }
+                    return QString{};
+                };
             QHash<QString, ObjectId> objectIdsByIdentity;
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
@@ -2785,60 +2871,69 @@ private:
             }
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
+                QVector<CollectionId> sceneMemberships;
+                for (const CollectionId collectionId : object.collectionIds) {
+                    if (activeCollectionIds.contains(collectionId.value())) {
+                        sceneMemberships.append(collectionId);
+                    }
+                }
+                const bool belongsToActiveScene =
+                    !object.collectionIds.isEmpty()
+                        ? !sceneMemberships.isEmpty()
+                        : (object.defaultViewLayerKey.isEmpty() ||
+                           sceneForViewLayer(object.defaultViewLayerKey) ==
+                               activeSceneId);
+                if (!belongsToActiveScene) continue;
                 QString name = object.displayName.trimmed();
                 if (name.isEmpty()) {
                     name = QStringLiteral("Object %1").arg(object.id.value());
                 }
                 const ObjectId parentObjectId = objectIdsByIdentity.value(
                     object.blenderParentObjectId, ObjectId::invalid());
-                objects.append({object.id, name, object.collectionIds,
+                objects.append({object.id, name, sceneMemberships,
                                 object.hideViewport, object.hideRender,
                                 object.hideSelect,
                                 object.viewLayerHidden, parentObjectId});
             }
             return objects;
         };
+        collectionCallbacks.scenes = [this]() {
+            QVector<OutlinerSceneEntry> scenes;
+            for (const QJsonValue &sceneValue :
+                 session_.document().settings().importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                const QString key = scene.value(
+                    QStringLiteral("scene_id")).toString();
+                const QString name = scene.value(
+                    QStringLiteral("name")).toString();
+                if (!key.isEmpty() && !name.isEmpty()) {
+                    scenes.append({key, name});
+                }
+            }
+            return scenes;
+        };
+        collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
+            return activeSceneRecord().value(
+                QStringLiteral("scene_id")).toString();
+        };
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;
         };
-        collectionCallbacks.viewLayers = [this]() {
+        collectionCallbacks.viewLayers = [activeSceneRecord]() {
             QVector<OutlinerViewLayerEntry> viewLayers;
-            const DocumentSettings &settings = session_.document().settings();
-            QString activeSceneId;
-            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
-                const QJsonObject scene = sceneValue.toObject();
-                for (const QJsonValue &layerValue : scene.value(
-                         QStringLiteral("view_layers")).toArray()) {
-                    if (layerValue.toObject().value(QStringLiteral("key"))
-                            .toString() == settings.activeViewLayerKey) {
-                        activeSceneId = scene.value(
-                            QStringLiteral("scene_id")).toString();
-                        break;
-                    }
-                }
-                if (!activeSceneId.isEmpty()) break;
-            }
-            if (activeSceneId.isEmpty()) return viewLayers;
-            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
-                const QJsonObject scene = sceneValue.toObject();
-                if (scene.value(QStringLiteral("scene_id")).toString() !=
-                    activeSceneId) {
-                    continue;
-                }
-                const QString sceneName = scene.value(
+            const QJsonObject scene = activeSceneRecord();
+            const QString sceneName = scene.value(
+                QStringLiteral("name")).toString();
+            for (const QJsonValue &layerValue : scene.value(
+                     QStringLiteral("view_layers")).toArray()) {
+                const QJsonObject layer = layerValue.toObject();
+                const QString key = layer.value(
+                    QStringLiteral("key")).toString();
+                const QString name = layer.value(
                     QStringLiteral("name")).toString();
-                for (const QJsonValue &layerValue : scene.value(
-                         QStringLiteral("view_layers")).toArray()) {
-                    const QJsonObject layer = layerValue.toObject();
-                    const QString key = layer.value(
-                        QStringLiteral("key")).toString();
-                    const QString name = layer.value(
-                        QStringLiteral("name")).toString();
-                    if (key.isEmpty() || name.isEmpty()) continue;
-                    viewLayers.append({key, QStringLiteral("%1 / %2")
-                                                .arg(sceneName, name)});
-                }
-                break;
+                if (key.isEmpty() || name.isEmpty()) continue;
+                viewLayers.append({key, QStringLiteral("%1 / %2")
+                                            .arg(sceneName, name)});
             }
             return viewLayers;
         };
@@ -2849,6 +2944,14 @@ private:
             if (key.isEmpty() || key ==
                     session_.document().settings().activeViewLayerKey) {
                 return;
+            }
+            const QString previousKey =
+                session_.document().settings().activeViewLayerKey;
+            if (!previousKey.isEmpty()) {
+                SavedViewLayerSelection &saved =
+                    viewLayerSelections_[previousKey];
+                saved.objectIds = session_.selection().objectIds();
+                saved.activeObjectId = session_.selection().activeObjectId();
             }
             DocumentSettings settings = session_.document().settings();
             settings.activeViewLayerKey = key;
@@ -2861,6 +2964,20 @@ private:
                 return;
             }
 
+            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    if (layerValue.toObject().value(QStringLiteral("key"))
+                            .toString() == key) {
+                        activeViewLayerByScene_.insert(
+                            scene.value(QStringLiteral("scene_id")).toString(),
+                            key);
+                        break;
+                    }
+                }
+            }
+
             QHash<QString, ObjectId> objectIdsBySourceId;
             for (const SceneObject &object : session_.document().objects()) {
                 if (!object.blenderLooseMeshEdgeCompanion &&
@@ -2871,33 +2988,47 @@ private:
             }
             QVector<ObjectId> selectedIds;
             ObjectId activeId = ObjectId::invalid();
-            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
-                const QJsonObject scene = sceneValue.toObject();
-                for (const QJsonValue &layerValue : scene.value(
-                         QStringLiteral("view_layers")).toArray()) {
-                    const QJsonObject layer = layerValue.toObject();
-                    if (layer.value(QStringLiteral("key")).toString() != key) {
-                        continue;
+            const auto saved = viewLayerSelections_.constFind(key);
+            if (saved != viewLayerSelections_.cend()) {
+                for (const ObjectId id : saved->objectIds) {
+                    if (id.isValid() &&
+                        session_.document().isObjectEditable(id) &&
+                        !selectedIds.contains(id)) {
+                        selectedIds.append(id);
                     }
-                    for (const QJsonValue &sourceIdValue : layer.value(
-                             QStringLiteral("selected_object_ids")).toArray()) {
-                        const ObjectId id = objectIdsBySourceId.value(
-                            sourceIdValue.toString(), ObjectId::invalid());
-                        if (id.isValid() &&
-                            session_.document().isObjectEditable(id) &&
-                            !selectedIds.contains(id)) {
-                            selectedIds.append(id);
-                        }
-                    }
-                    const ObjectId requestedActiveId = objectIdsBySourceId.value(
-                        layer.value(QStringLiteral("active_object_id")).toString(),
-                        ObjectId::invalid());
-                    if (selectedIds.contains(requestedActiveId)) {
-                        activeId = requestedActiveId;
-                    }
-                    break;
                 }
-                if (activeId.isValid() || !selectedIds.isEmpty()) break;
+                if (selectedIds.contains(saved->activeObjectId)) {
+                    activeId = saved->activeObjectId;
+                }
+            } else {
+                for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                    const QJsonObject scene = sceneValue.toObject();
+                    for (const QJsonValue &layerValue : scene.value(
+                             QStringLiteral("view_layers")).toArray()) {
+                        const QJsonObject layer = layerValue.toObject();
+                        if (layer.value(QStringLiteral("key")).toString() != key) {
+                            continue;
+                        }
+                        for (const QJsonValue &sourceIdValue : layer.value(
+                                 QStringLiteral("selected_object_ids")).toArray()) {
+                            const ObjectId id = objectIdsBySourceId.value(
+                                sourceIdValue.toString(), ObjectId::invalid());
+                            if (id.isValid() &&
+                                session_.document().isObjectEditable(id) &&
+                                !selectedIds.contains(id)) {
+                                selectedIds.append(id);
+                            }
+                        }
+                        const ObjectId requestedActiveId = objectIdsBySourceId.value(
+                            layer.value(QStringLiteral("active_object_id")).toString(),
+                            ObjectId::invalid());
+                        if (selectedIds.contains(requestedActiveId)) {
+                            activeId = requestedActiveId;
+                        }
+                        break;
+                    }
+                    if (activeId.isValid() || !selectedIds.isEmpty()) break;
+                }
             }
             if (!activeId.isValid() && !selectedIds.isEmpty()) {
                 activeId = selectedIds.back();
@@ -2906,6 +3037,48 @@ private:
             session_.selection().setActiveObjectId(activeId);
             refreshCollections();
         };
+        const auto setActiveViewLayer = collectionCallbacks.setActiveViewLayer;
+        collectionCallbacks.setActiveScene =
+            [this, setActiveViewLayer](const QString &sceneKey) {
+                if (sceneKey.isEmpty()) return;
+                for (const QJsonValue &sceneValue :
+                     session_.document().settings().importedBlenderScenes) {
+                    const QJsonObject scene = sceneValue.toObject();
+                    if (scene.value(QStringLiteral("scene_id")).toString() !=
+                        sceneKey) {
+                        continue;
+                    }
+                    QString layerKey;
+                    const QJsonArray layers = scene.value(
+                        QStringLiteral("view_layers")).toArray();
+                    const QString savedLayerKey =
+                        activeViewLayerByScene_.value(sceneKey);
+                    for (const QJsonValue &layerValue : layers) {
+                        const QJsonObject layer = layerValue.toObject();
+                        if (layer.value(QStringLiteral("key")).toString() ==
+                            savedLayerKey) {
+                            layerKey = savedLayerKey;
+                            break;
+                        }
+                    }
+                    for (const QJsonValue &layerValue : layers) {
+                        if (!layerKey.isEmpty()) break;
+                        const QJsonObject layer = layerValue.toObject();
+                        if (layer.value(QStringLiteral("is_active_view_layer"))
+                                .toBool()) {
+                            layerKey = layer.value(
+                                QStringLiteral("key")).toString();
+                            break;
+                        }
+                    }
+                    if (layerKey.isEmpty() && !layers.isEmpty()) {
+                        layerKey = layers.first().toObject().value(
+                            QStringLiteral("key")).toString();
+                    }
+                    if (!layerKey.isEmpty()) setActiveViewLayer(layerKey);
+                    return;
+                }
+            };
         collectionCallbacks.selectedObjectIds = [this]() {
             return session_.selection().objectIds();
         };
@@ -2933,10 +3106,20 @@ private:
                 session_.selection().setActiveObjectId(active);
             };
         collectionCallbacks.createCollection =
-            [this](const QString &name, CollectionId parentId) {
+            [this, activeSceneRecord](const QString &name,
+                                      CollectionId parentId) {
                 DocumentCollection collection;
                 collection.name = name;
                 if (parentId.isValid()) collection.parentIds = {parentId};
+                const QJsonObject activeScene = activeSceneRecord();
+                const QString sceneId = activeScene.value(
+                    QStringLiteral("scene_id")).toString();
+                const QString sceneName = activeScene.value(
+                    QStringLiteral("name")).toString();
+                if (!sceneId.isEmpty() && !sceneName.isEmpty()) {
+                    collection.sourceSceneName = sceneName;
+                    collection.sourceSceneNames.append(sceneName);
+                }
                 DocumentTransaction transaction = session_.beginTransaction();
                 const CollectionId id = transaction.insertCollection(collection);
                 if (!id.isValid() ||
@@ -3159,9 +3342,15 @@ private:
             }
             return result;
         };
-        const auto collectionHierarchyIds = [this](CollectionId root) {
+        const auto collectionHierarchyIds =
+            [this, collectionBelongsToActiveScene](CollectionId root) {
             QVector<CollectionId> result;
-            if (session_.document().collection(root) == nullptr) return result;
+            const DocumentCollection *rootCollection =
+                session_.document().collection(root);
+            if (rootCollection == nullptr ||
+                !collectionBelongsToActiveScene(*rootCollection)) {
+                return result;
+            }
             result.append(root);
             QSet<quint64> visited{root.value()};
             const QVector<DocumentCollection> collections =
@@ -3169,7 +3358,8 @@ private:
             for (qsizetype index = 0; index < result.size(); ++index) {
                 const CollectionId parentId = result[index];
                 for (const DocumentCollection &candidate : collections) {
-                    if (candidate.parentIds.contains(parentId) &&
+                    if (collectionBelongsToActiveScene(candidate) &&
+                        candidate.parentIds.contains(parentId) &&
                         !visited.contains(candidate.id.value())) {
                         visited.insert(candidate.id.value());
                         result.append(candidate.id);
@@ -3179,7 +3369,8 @@ private:
             return result;
         };
         const auto collectionRelationIds =
-            [this, collectionHierarchyIds](CollectionId root) {
+            [this, collectionHierarchyIds,
+             collectionBelongsToActiveScene](CollectionId root) {
                 QVector<CollectionId> result = collectionHierarchyIds(root);
                 QSet<quint64> visited;
                 for (const CollectionId id : result) visited.insert(id.value());
@@ -3190,6 +3381,12 @@ private:
                     if (collection == nullptr) continue;
                     for (const CollectionId parentId : collection->parentIds) {
                         if (visited.contains(parentId.value())) continue;
+                        const DocumentCollection *parent =
+                            session_.document().collection(parentId);
+                        if (parent == nullptr ||
+                            !collectionBelongsToActiveScene(*parent)) {
+                            continue;
+                        }
                         visited.insert(parentId.value());
                         result.append(parentId);
                         pending.append(parentId);
@@ -3198,7 +3395,7 @@ private:
                 return result;
             };
         const auto collectionIsolationPlan =
-            [this, collectionRelationIds](
+            [this, collectionRelationIds, collectionBelongsToActiveScene](
                 CollectionId root,
                 bool clickedHidden,
                 const std::function<bool(const DocumentCollection &)> &flagValue) {
@@ -3214,7 +3411,8 @@ private:
                 bool alreadyIsolated = clickedHidden && !related.isEmpty();
                 if (alreadyIsolated) {
                     for (const DocumentCollection &candidate : collections) {
-                        if (candidate.id == root ||
+                        if (!collectionBelongsToActiveScene(candidate) ||
+                            candidate.id == root ||
                             !candidate.libraryPath.isEmpty()) {
                             continue;
                         }
@@ -3229,6 +3427,7 @@ private:
 
                 QHash<quint64, bool> plan;
                 for (const DocumentCollection &candidate : collections) {
+                    if (!collectionBelongsToActiveScene(candidate)) continue;
                     const bool hidden = alreadyIsolated
                         ? false : !related.contains(candidate.id.value());
                     plan.insert(candidate.id.value(), hidden);
@@ -3353,8 +3552,9 @@ private:
         };
         collectionCallbacks.setViewportVisibility =
             [this, collectionHierarchyIds, objectsInCollections,
-             collectionIsolationPlan](CollectionId id, bool hideViewport,
-                                      bool recursive, bool isolate) {
+             collectionIsolationPlan, collectionBelongsToActiveScene](
+                CollectionId id, bool hideViewport, bool recursive,
+                bool isolate) {
                 if (isolate) {
                     const QHash<quint64, bool> plan = collectionIsolationPlan(
                         id, hideViewport, [](const DocumentCollection &entry) {
@@ -3364,7 +3564,11 @@ private:
                     bool changed = false;
                     for (const DocumentCollection &entry :
                          session_.document().collections()) {
-                        if (!entry.libraryPath.isEmpty()) continue;
+                        if (!collectionBelongsToActiveScene(entry) ||
+                            !entry.libraryPath.isEmpty() ||
+                            !plan.contains(entry.id.value())) {
+                            continue;
+                        }
                         const bool hidden = plan.value(entry.id.value());
                         if (entry.hideViewport == hidden) continue;
                         changed = transaction.setCollectionVisibility(
@@ -3419,8 +3623,9 @@ private:
             };
         collectionCallbacks.setCollectionRenderVisibility =
             [this, collectionHierarchyIds, objectsInCollections,
-             collectionIsolationPlan](CollectionId id, bool hideRender,
-                                      bool recursive, bool isolate) {
+             collectionIsolationPlan, collectionBelongsToActiveScene](
+                CollectionId id, bool hideRender, bool recursive,
+                bool isolate) {
                 if (isolate) {
                     const QHash<quint64, bool> plan = collectionIsolationPlan(
                         id, hideRender, [](const DocumentCollection &entry) {
@@ -3430,7 +3635,11 @@ private:
                     bool changed = false;
                     for (const DocumentCollection &entry :
                          session_.document().collections()) {
-                        if (!entry.libraryPath.isEmpty()) continue;
+                        if (!collectionBelongsToActiveScene(entry) ||
+                            !entry.libraryPath.isEmpty() ||
+                            !plan.contains(entry.id.value())) {
+                            continue;
+                        }
                         const bool hidden = plan.value(entry.id.value());
                         if (entry.hideRender == hidden) continue;
                         changed = transaction.setCollectionVisibility(
@@ -3480,8 +3689,9 @@ private:
             };
         collectionCallbacks.setCollectionSelectability =
             [this, collectionHierarchyIds, objectsInCollections,
-             collectionIsolationPlan](CollectionId id, bool hideSelect,
-                                      bool recursive, bool isolate) {
+             collectionIsolationPlan, collectionBelongsToActiveScene](
+                CollectionId id, bool hideSelect, bool recursive,
+                bool isolate) {
                 if (isolate) {
                     const QHash<quint64, bool> plan = collectionIsolationPlan(
                         id, hideSelect, [](const DocumentCollection &entry) {
@@ -3491,7 +3701,11 @@ private:
                     bool changed = false;
                     for (const DocumentCollection &entry :
                          session_.document().collections()) {
-                        if (!entry.libraryPath.isEmpty()) continue;
+                        if (!collectionBelongsToActiveScene(entry) ||
+                            !entry.libraryPath.isEmpty() ||
+                            !plan.contains(entry.id.value())) {
+                            continue;
+                        }
                         const bool hidden = plan.value(entry.id.value());
                         if (entry.hideSelect == hidden) continue;
                         changed = transaction.setCollectionHideSelect(
@@ -3652,7 +3866,8 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setCollectionViewLayerState =
-            [this, objectsInCollections, collectionRelationIds](
+            [this, objectsInCollections, collectionRelationIds,
+             collectionBelongsToActiveScene](
                    CollectionId id,
                    const QString &viewLayerKey,
                    const QStringList &sourcePath,
@@ -3697,6 +3912,7 @@ private:
                     QVector<LayerCollectionPath> allPaths;
                     for (const DocumentCollection &collection :
                          session_.document().collections()) {
+                        if (!collectionBelongsToActiveScene(collection)) continue;
                         for (const QJsonValue &stateValue :
                              collection.viewLayerStates) {
                             const QJsonObject state = stateValue.toObject();
@@ -3810,7 +4026,8 @@ private:
                     for (qsizetype index = 0; index < paths.size(); ++index) {
                         const LayerCollectionPath parent = paths[index];
                         for (const DocumentCollection &candidate : collections) {
-                            if (!candidate.parentIds.contains(parent.id) ||
+                            if (!collectionBelongsToActiveScene(candidate) ||
+                                !candidate.parentIds.contains(parent.id) ||
                                 parent.ancestors.contains(candidate.id.value())) {
                                 continue;
                             }
@@ -3897,6 +4114,12 @@ private:
     }
 
     ApplicationSession session_;
+    struct SavedViewLayerSelection {
+        QVector<ObjectId> objectIds;
+        ObjectId activeObjectId = ObjectId::invalid();
+    };
+    QHash<QString, SavedViewLayerSelection> viewLayerSelections_;
+    QHash<QString, QString> activeViewLayerByScene_;
     ProjectController projectController_{session_};
     UpdateController updateController_;
     ViewportWidgetApi *viewport_ = nullptr;

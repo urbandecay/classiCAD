@@ -1964,6 +1964,27 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
     } else if (kind == OutlinerRowKind::Object) {
         const ObjectId objectId = ObjectId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
+        if (callbacks_.copyOutlinerObject && objectId.isValid()) {
+            QAction *copy = menu.addAction(QStringLiteral("Copy"));
+            connect(copy, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.copyOutlinerObject(objectId);
+            });
+        }
+        if (callbacks_.pasteOutlinerObjects &&
+            callbacks_.hasOutlinerObjectClipboard &&
+            callbacks_.hasOutlinerObjectClipboard()) {
+            QAction *paste = menu.addAction(QStringLiteral("Paste"));
+            connect(paste, &QAction::triggered, this, [this]() {
+                callbacks_.pasteOutlinerObjects();
+            });
+        }
+        if ((callbacks_.copyOutlinerObject && objectId.isValid()) ||
+            (callbacks_.pasteOutlinerObjects &&
+             callbacks_.hasOutlinerObjectClipboard &&
+             callbacks_.hasOutlinerObjectClipboard())) {
+            menu.addSeparator();
+        }
         if (callbacks_.deleteObjectSelection) {
             QAction *deleteObjects = menu.addAction(QStringLiteral("Delete"));
             connect(deleteObjects, &QAction::triggered, this,

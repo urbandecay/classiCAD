@@ -3997,6 +3997,21 @@ private:
                 const ObjectId destinationObject =
                     target.kind == OutlinerRowKind::Object
                         ? target.objectId : ObjectId::invalid();
+                if (parentObjects && destinationObject.isValid() &&
+                    !target.sceneKey.isEmpty()) {
+                    for (const OutlinerRowReference &source : sources) {
+                        if (source.kind != OutlinerRowKind::Object ||
+                            !source.objectId.isValid()) {
+                            continue;
+                        }
+                        const bool sourceBelongsToTargetScene =
+                            source.sceneMembershipKeys.contains(
+                                target.sceneKey) ||
+                            (source.sceneMembershipKeys.isEmpty() &&
+                             source.sceneKey == target.sceneKey);
+                        if (!sourceBelongsToTargetScene) return;
+                    }
+                }
                 QSet<quint64> handledObjects;
                 QSet<quint64> handledCollections;
                 QVector<OutlinerRowReference> orderedSources = sources;

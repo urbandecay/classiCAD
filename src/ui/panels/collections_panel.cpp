@@ -92,6 +92,7 @@ constexpr int itemDataApiNodeRole = Qt::UserRole + 17;
 constexpr int itemDataApiChildrenBuiltRole = Qt::UserRole + 18;
 constexpr int itemDataApiTruncatedRole = Qt::UserRole + 19;
 constexpr int itemDataApiPlaceholderRole = Qt::UserRole + 20;
+constexpr int itemSceneMembershipsRole = Qt::UserRole + 21;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -446,6 +447,8 @@ private:
                 item->data(nameColumn, itemLinkedCollectionRole).toULongLong());
             reference.syntheticParentRow =
                 item->data(nameColumn, itemNotInCollectionRole).toBool();
+            reference.sceneMembershipKeys = item->data(
+                nameColumn, itemSceneMembershipsRole).toStringList();
             QTreeWidgetItem *ancestor = item->parent();
             while (ancestor != nullptr &&
                    ancestor->data(nameColumn, itemKindRole).toInt() ==
@@ -457,6 +460,16 @@ private:
                     static_cast<int>(OutlinerRowKind::Collection)) {
                 reference.parentCollectionId = CollectionId::fromValue(
                     ancestor->data(nameColumn, itemIdRole).toULongLong());
+            }
+            ancestor = item->parent();
+            while (ancestor != nullptr) {
+                if (ancestor->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::SceneRoot)) {
+                    reference.sceneKey = ancestor->data(
+                        nameColumn, itemSceneKeyRole).toString();
+                    if (!reference.sceneKey.isEmpty()) break;
+                }
+                ancestor = ancestor->parent();
             }
         } else if (reference.kind == OutlinerRowKind::Collection) {
             reference.collectionId = CollectionId::fromValue(value);
@@ -2051,6 +2064,7 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                   QVariant::fromValue<qulonglong>(
                       linkedCollectionId.isValid()
                           ? linkedCollectionId.value() : 0));
+    item->setData(nameColumn, itemSceneMembershipsRole, entry.sceneKeys);
     item->setData(nameColumn, itemViewLayerKeyRole, activeViewLayerKey);
     QStringList objectPath = path;
     if (entry.outlinerOnly) {

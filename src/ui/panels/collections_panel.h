@@ -6,6 +6,7 @@
 #include "core/document/object_id.h"
 
 #include <QFrame>
+#include <QJsonObject>
 #include <QPoint>
 #include <QSet>
 #include <QStringList>
@@ -28,11 +29,13 @@ struct OutlinerObjectEntry {
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
     bool hideSelect = false;
+    QJsonObject viewLayerHidden;
 };
 
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
+    std::function<QString()> activeViewLayerKey;
     std::function<QVector<ObjectId>()> selectedObjectIds;
     std::function<ObjectId()> activeObjectId;
     std::function<bool(ObjectId)> canSelectObject;
@@ -47,6 +50,12 @@ struct CollectionsPanelCallbacks {
     std::function<void(CollectionId, bool)> setCollectionSelectability;
     std::function<void(ObjectId, bool)> setObjectViewportVisibility;
     std::function<void(ObjectId, bool)> setObjectSelectability;
+    std::function<void(ObjectId, const QString &, bool)> setObjectViewLayerHidden;
+    std::function<void(CollectionId,
+                       const QString &,
+                       const QStringList &,
+                       const QString &,
+                       bool)> setCollectionViewLayerState;
 };
 
 // Displays linked collections and scene objects with Blender-style selection
@@ -71,10 +80,13 @@ private:
                          const QVector<OutlinerObjectEntry> &objects,
                          QTreeWidgetItem *parent,
                          QSet<quint64> ancestors,
-                         QStringList path);
+                         QStringList path,
+                         QStringList sourcePath,
+                         const QString &activeViewLayerKey);
     QTreeWidgetItem *appendObject(QTreeWidgetItem *parent,
                                   const OutlinerObjectEntry &entry,
-                                  const QStringList &path);
+                                  const QStringList &path,
+                                  const QString &activeViewLayerKey);
 
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;

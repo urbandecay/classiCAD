@@ -10670,13 +10670,22 @@ scene depth.
   SelectionModel. Adapted source attribution is kept in the panel code under
   Blender's GPL-2.0-or-later license.
 - The planned UI slice also includes collection/object restriction toggles
-  and transaction-backed collection/object actions. Remaining Outliner scope
-  must be checked against the pinned source before marking complete: exact
-  per-view-layer `LayerCollection` restriction state, object-parent nesting,
-  drag/drop and reparenting, row-state persistence/filtering, other Blender
-  datablock rows, and a matched Blender/classiCAD interaction comparison.
-  `git diff --check` and `cmake --build build -j4` passed for this slice; no
-  GUI comparison was run.
+  and transaction-backed collection/object actions.
+- The second restriction-control slice uses the imported active view-layer
+  metadata: object `hide_get`, plus `LayerCollection.hide_viewport` and
+  `exclude` for the exact collection path. Those controls are separate from
+  global object/collection viewport hide and select locks. Writes go through
+  Document transactions and are included in undo snapshots. The data layout
+  follows Blender 5.2.2's
+  [view-layer collection tree](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L107-L189)
+  and [restriction-column state rules](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1025-L1130).
+  `git diff --check` and `cmake --build build -j4` passed; no GUI comparison
+  was run.
+- Remaining Outliner scope includes Blender object-parent nesting, drag/drop
+  and reparenting, row-state persistence/filtering, other Blender datablock
+  rows and restriction controls, multiple view-layer switching, and a matched
+  Blender/classiCAD interaction comparison. Do not mark this port complete
+  until the remaining items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

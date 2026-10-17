@@ -38,6 +38,14 @@ public:
     bool setObjectVisibilityFlags(ObjectId objectId,
                                   bool hideViewport,
                                   bool hideSelect);
+    bool setObjectViewLayerHidden(ObjectId objectId,
+                                  const QString &viewLayerKey,
+                                  bool hidden);
+    bool setCollectionViewLayerState(CollectionId collectionId,
+                                     const QString &viewLayerKey,
+                                     const QStringList &sourcePath,
+                                     const QString &stateKey,
+                                     bool value);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
     bool renameCollection(CollectionId collectionId, const QString &name);
     bool setCollectionParents(CollectionId collectionId,

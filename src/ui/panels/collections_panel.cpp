@@ -9,6 +9,7 @@
 #include "collections_panel.h"
 
 #include <QAbstractItemView>
+#include <QAbstractItemModel>
 #include <QAction>
 #include <QHash>
 #include <QInputDialog>
@@ -22,6 +23,7 @@
 #include <QMouseEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -37,9 +39,53 @@ namespace {
 constexpr int itemKindRole = Qt::UserRole + 1;
 constexpr int itemIdRole = Qt::UserRole + 2;
 constexpr int itemPathRole = Qt::UserRole + 3;
+constexpr int itemViewLayerEditableRole = Qt::UserRole + 4;
+constexpr int itemSourcePathRole = Qt::UserRole + 5;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
-constexpr int selectColumn = 2;
+constexpr int viewLayerViewportColumn = 2;
+constexpr int selectColumn = 3;
+constexpr int excludeColumn = 4;
+
+QJsonObject viewLayerState(const DocumentCollection &collection,
+                           const QString &viewLayerKey,
+                           const QStringList &sourcePath)
+{
+    if (viewLayerKey.isEmpty() || sourcePath.isEmpty()) return {};
+    for (const QJsonValue &stateValue : collection.viewLayerStates) {
+        const QJsonObject state = stateValue.toObject();
+        if (state.value(QStringLiteral("view_layer_key")).toString() !=
+            viewLayerKey) {
+            continue;
+        }
+        const QJsonArray storedPath = state.value(QStringLiteral("path")).toArray();
+        if (storedPath.size() != sourcePath.size()) continue;
+        bool matches = true;
+        for (int index = 0; index < sourcePath.size(); ++index) {
+            if (!storedPath[index].isString() ||
+                storedPath[index].toString() != sourcePath[index]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return state;
+    }
+    return {};
+}
+
+class ViewLayerCheckDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    bool editorEvent(QEvent *event,
+                     QAbstractItemModel *model,
+                     const QStyleOptionViewItem &option,
+                     const QModelIndex &index) override
+    {
+        if (!index.data(itemViewLayerEditableRole).toBool()) return false;
+        return QStyledItemDelegate::editorEvent(event, model, option, index);
+    }
+};
 
 class OutlinerTreeWidget final : public QTreeWidget {
 public:
@@ -110,10 +156,20 @@ void CollectionsPanel::createLayout()
     layout->setContentsMargins(4, 4, 4, 4);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
-    tree_->setColumnCount(3);
+    tree_->setColumnCount(5);
     tree_->setHeaderLabels({QStringLiteral("Name"),
                             QStringLiteral("Viewport"),
-                            QStringLiteral("Select")});
+                            QStringLiteral("Layer View"),
+                            QStringLiteral("Select"),
+                            QStringLiteral("Exclude")});
+    tree_->headerItem()->setToolTip(viewportColumn,
+                                    QStringLiteral("Hide globally in the viewport"));
+    tree_->headerItem()->setToolTip(viewLayerViewportColumn,
+                                    QStringLiteral("Hide in the active Blender view layer"));
+    tree_->headerItem()->setToolTip(selectColumn,
+                                    QStringLiteral("Prevent selection"));
+    tree_->headerItem()->setToolTip(excludeColumn,
+                                    QStringLiteral("Exclude this collection path from the active view layer"));
     tree_->setRootIsDecorated(true);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
@@ -124,6 +180,14 @@ void CollectionsPanel::createLayout()
                                           QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(selectColumn,
                                           QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(viewLayerViewportColumn,
+                                          QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(excludeColumn,
+                                          QHeaderView::ResizeToContents);
+    tree_->setItemDelegateForColumn(viewLayerViewportColumn,
+                                    new ViewLayerCheckDelegate(tree_));
+    tree_->setItemDelegateForColumn(excludeColumn,
+                                    new ViewLayerCheckDelegate(tree_));
     tree_->setToolTip(QStringLiteral(
         "Scene objects and collection memberships. Click to select and activate; Ctrl-click toggles selection. The restriction columns control viewport visibility and selection."));
     layout->addWidget(tree_);
@@ -145,7 +209,8 @@ void CollectionsPanel::createLayout()
     connect(tree_, &QTreeWidget::itemChanged, this,
             [this](QTreeWidgetItem *item, int column) {
         if (refreshing_ || item == nullptr ||
-            (column != viewportColumn && column != selectColumn)) {
+            (column != viewportColumn && column != viewLayerViewportColumn &&
+             column != selectColumn && column != excludeColumn)) {
             return;
         }
         const ItemKind kind = static_cast<ItemKind>(
@@ -153,24 +218,43 @@ void CollectionsPanel::createLayout()
         const bool hidden = item->checkState(column) != Qt::Checked;
         const quint64 value =
             item->data(nameColumn, itemIdRole).toULongLong();
+        const QString viewLayerKey = callbacks_.activeViewLayerKey
+            ? callbacks_.activeViewLayerKey() : QString{};
+        const QStringList sourcePath =
+            item->data(nameColumn, itemSourcePathRole).toStringList();
         // Applying a transaction notifies MainWindow synchronously, and its
         // observer rebuilds this tree. Defer the write until Qt has finished
         // dispatching itemChanged so the active QTreeWidgetItem is not deleted
         // from inside its own check-state update.
-        QTimer::singleShot(0, this, [this, kind, column, hidden, value]() {
+        QTimer::singleShot(0, this, [this, kind, column, hidden, value,
+                                     viewLayerKey, sourcePath]() {
             if (kind == ItemKind::Collection) {
                 const CollectionId id = CollectionId::fromValue(value);
                 if (column == viewportColumn && callbacks_.setViewportVisibility) {
                     callbacks_.setViewportVisibility(id, hidden);
+                } else if (column == viewLayerViewportColumn &&
+                           callbacks_.setCollectionViewLayerState) {
+                    callbacks_.setCollectionViewLayerState(
+                        id, viewLayerKey, sourcePath,
+                        QStringLiteral("hide_viewport"), hidden);
                 } else if (column == selectColumn &&
                            callbacks_.setCollectionSelectability) {
                     callbacks_.setCollectionSelectability(id, hidden);
+                } else if (column == excludeColumn &&
+                           callbacks_.setCollectionViewLayerState) {
+                    callbacks_.setCollectionViewLayerState(
+                        id, viewLayerKey, sourcePath,
+                        QStringLiteral("exclude"), hidden);
                 }
             } else if (kind == ItemKind::Object) {
                 const ObjectId id = ObjectId::fromValue(value);
                 if (column == viewportColumn &&
                     callbacks_.setObjectViewportVisibility) {
                     callbacks_.setObjectViewportVisibility(id, hidden);
+                } else if (column == viewLayerViewportColumn &&
+                           callbacks_.setObjectViewLayerHidden) {
+                    callbacks_.setObjectViewLayerHidden(id, viewLayerKey,
+                                                        hidden);
                 } else if (column == selectColumn &&
                            callbacks_.setObjectSelectability) {
                     callbacks_.setObjectSelectability(id, hidden);
@@ -424,7 +508,9 @@ void CollectionsPanel::appendCollection(
     const QVector<OutlinerObjectEntry> &objects,
     QTreeWidgetItem *parent,
     QSet<quint64> ancestors,
-    QStringList path)
+    QStringList path,
+    QStringList sourcePath,
+    const QString &activeViewLayerKey)
 {
     if (!entry.collection.id.isValid() ||
         ancestors.contains(entry.collection.id.value())) {
@@ -440,23 +526,38 @@ void CollectionsPanel::appendCollection(
                   QVariant::fromValue<qulonglong>(entry.collection.id.value()));
     path.append(QStringLiteral("c%1").arg(entry.collection.id.value()));
     item->setData(nameColumn, itemPathRole, path.join(QLatin1Char('/')));
+    sourcePath.append(entry.collection.sourceId);
+    item->setData(nameColumn, itemSourcePathRole,
+                  QVariant::fromValue(sourcePath));
     item->setFlags((item->flags() | Qt::ItemIsUserCheckable) &
                    ~Qt::ItemIsSelectable);
     item->setCheckState(viewportColumn, entry.collection.hideViewport
                                ? Qt::Unchecked : Qt::Checked);
     item->setCheckState(selectColumn, entry.collection.hideSelect
                                ? Qt::Unchecked : Qt::Checked);
+    const QJsonObject layerState = viewLayerState(
+        entry.collection, activeViewLayerKey, sourcePath);
+    if (!layerState.isEmpty()) {
+        item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
+        item->setData(excludeColumn, itemViewLayerEditableRole, true);
+        item->setCheckState(viewLayerViewportColumn,
+            layerState.value(QStringLiteral("hide_viewport")).toBool()
+                ? Qt::Unchecked : Qt::Checked);
+        item->setCheckState(excludeColumn,
+            layerState.value(QStringLiteral("exclude")).toBool()
+                ? Qt::Unchecked : Qt::Checked);
+    }
 
     ancestors.insert(entry.collection.id.value());
     for (const CollectionPanelEntry &candidate : entries) {
         if (candidate.collection.parentIds.contains(entry.collection.id)) {
             appendCollection(tree, candidate, entries, objects, item, ancestors,
-                             path);
+                             path, sourcePath, activeViewLayerKey);
         }
     }
     for (const OutlinerObjectEntry &object : objects) {
         if (object.collectionIds.contains(entry.collection.id)) {
-            appendObject(item, object, path);
+            appendObject(item, object, path, activeViewLayerKey);
         }
     }
 }
@@ -464,7 +565,8 @@ void CollectionsPanel::appendCollection(
 QTreeWidgetItem *CollectionsPanel::appendObject(
     QTreeWidgetItem *parent,
     const OutlinerObjectEntry &entry,
-    const QStringList &path)
+    const QStringList &path,
+    const QString &activeViewLayerKey)
 {
     if (parent == nullptr || !entry.id.isValid()) return nullptr;
     auto *item = new QTreeWidgetItem(parent);
@@ -483,6 +585,12 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                                ? Qt::Unchecked : Qt::Checked);
     item->setCheckState(selectColumn, entry.hideSelect
                                ? Qt::Unchecked : Qt::Checked);
+    if (!activeViewLayerKey.isEmpty()) {
+        item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
+        item->setCheckState(viewLayerViewportColumn,
+            entry.viewLayerHidden.value(activeViewLayerKey).toBool()
+                ? Qt::Unchecked : Qt::Checked);
+    }
     return item;
 }
 
@@ -510,6 +618,11 @@ void CollectionsPanel::refresh()
     const QVector<CollectionPanelEntry> entries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> objects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
+    const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+        ? callbacks_.activeViewLayerKey() : QString{};
+    tree_->setColumnHidden(viewLayerViewportColumn,
+                           activeViewLayerKey.isEmpty());
+    tree_->setColumnHidden(excludeColumn, activeViewLayerKey.isEmpty());
     auto *sceneRoot = new QTreeWidgetItem(tree_);
     sceneRoot->setText(nameColumn, QStringLiteral("Scene Collection"));
     sceneRoot->setData(nameColumn, itemKindRole,
@@ -527,13 +640,15 @@ void CollectionsPanel::refresh()
         }
         if (!hasKnownParent) {
             appendCollection(tree_, entry, entries, objects, sceneRoot, {},
-                             {QStringLiteral("scene")});
+                             {QStringLiteral("scene")}, {},
+                             activeViewLayerKey);
         }
     }
     for (const OutlinerObjectEntry &object : objects) {
         if (object.collectionIds.isEmpty()) {
             appendObject(sceneRoot, object,
-                         {QStringLiteral("scene"), QStringLiteral("root")});
+                         {QStringLiteral("scene"), QStringLiteral("root")},
+                         activeViewLayerKey);
         }
     }
     if (!hasRefreshed_) {

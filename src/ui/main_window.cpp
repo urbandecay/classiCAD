@@ -2779,9 +2779,13 @@ private:
                     name = QStringLiteral("Object %1").arg(object.id.value());
                 }
                 objects.append({object.id, name, object.collectionIds,
-                                object.hideViewport, object.hideSelect});
+                                object.hideViewport, object.hideSelect,
+                                object.viewLayerHidden});
             }
             return objects;
+        };
+        collectionCallbacks.activeViewLayerKey = [this]() {
+            return session_.document().settings().activeViewLayerKey;
         };
         collectionCallbacks.selectedObjectIds = [this]() {
             return session_.selection().objectIds();
@@ -2941,6 +2945,36 @@ private:
                     !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update object selection lock"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.setObjectViewLayerHidden =
+            [this](ObjectId id, const QString &viewLayerKey, bool hidden) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectViewLayerHidden(id, viewLayerKey,
+                                                          hidden) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update active view layer visibility"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.setCollectionViewLayerState =
+            [this](CollectionId id,
+                   const QString &viewLayerKey,
+                   const QStringList &sourcePath,
+                   const QString &stateKey,
+                   bool value) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setCollectionViewLayerState(
+                        id, viewLayerKey, sourcePath, stateKey, value) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update active view layer collection state"),
                         4000);
                     return;
                 }

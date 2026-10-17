@@ -219,6 +219,35 @@ bool DocumentTransaction::setObjectVisibilityFlags(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::setObjectViewLayerHidden(ObjectId objectId,
+                                                   const QString &viewLayerKey,
+                                                   bool hidden)
+{
+    if (!document_.setObjectViewLayerHidden(objectId, viewLayerKey, hidden)) {
+        return false;
+    }
+    changes_.addObject(objectId);
+    changes_.visibilityChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setCollectionViewLayerState(
+    CollectionId collectionId,
+    const QString &viewLayerKey,
+    const QStringList &sourcePath,
+    const QString &stateKey,
+    bool value)
+{
+    if (!document_.setCollectionViewLayerState(collectionId, viewLayerKey,
+                                                sourcePath, stateKey, value)) {
+        return false;
+    }
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectDisplayName(ObjectId objectId,
                                                 const QString &name)
 {

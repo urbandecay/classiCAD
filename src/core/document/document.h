@@ -6,6 +6,7 @@
 #include "scene_object.h"
 
 #include <QHash>
+#include <QStringList>
 #include <QVector>
 
 #include <functional>
@@ -94,6 +95,14 @@ public:
     bool setObjectVisibilityFlags(ObjectId objectId,
                                   bool hideViewport,
                                   bool hideSelect);
+    bool setObjectViewLayerHidden(ObjectId objectId,
+                                  const QString &viewLayerKey,
+                                  bool hidden);
+    bool setCollectionViewLayerState(CollectionId collectionId,
+                                     const QString &viewLayerKey,
+                                     const QStringList &sourcePath,
+                                     const QString &stateKey,
+                                     bool value);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
     bool isObjectVisible(ObjectId objectId) const;
     // Render visibility follows Blender's hide_render/excluded collection

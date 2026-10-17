@@ -1,6 +1,7 @@
 #include "document.h"
 
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QStringList>
 #include <QSet>
 
@@ -720,6 +721,73 @@ bool Document::setObjectVisibilityFlags(ObjectId objectId,
     changes.visibilityChanged = true;
     applyChanges(changes);
     return true;
+}
+
+bool Document::setObjectViewLayerHidden(ObjectId objectId,
+                                       const QString &viewLayerKey,
+                                       bool hidden)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr || viewLayerKey.isEmpty()) return false;
+    if (candidate->viewLayerHidden.value(viewLayerKey).toBool() == hidden &&
+        candidate->viewLayerHidden.contains(viewLayerKey)) {
+        return true;
+    }
+    candidate->viewLayerHidden.insert(viewLayerKey, hidden);
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setCollectionViewLayerState(CollectionId collectionId,
+                                           const QString &viewLayerKey,
+                                           const QStringList &sourcePath,
+                                           const QString &stateKey,
+                                           bool value)
+{
+    DocumentCollection *candidate = mutableCollection(collectionId);
+    if (candidate == nullptr || viewLayerKey.isEmpty() || sourcePath.isEmpty() ||
+        (stateKey != QStringLiteral("exclude") &&
+         stateKey != QStringLiteral("hide_viewport"))) {
+        return false;
+    }
+
+    const auto pathMatches = [&sourcePath](const QJsonArray &storedPath) {
+        if (storedPath.size() != sourcePath.size()) return false;
+        for (int index = 0; index < sourcePath.size(); ++index) {
+            if (!storedPath[index].isString() ||
+                storedPath[index].toString() != sourcePath[index]) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    QJsonArray states = candidate->viewLayerStates;
+    for (qsizetype index = 0; index < states.size(); ++index) {
+        QJsonObject state = states[index].toObject();
+        if (state.value(QStringLiteral("view_layer_key")).toString() !=
+                viewLayerKey ||
+            !pathMatches(state.value(QStringLiteral("path")).toArray())) {
+            continue;
+        }
+        if (state.value(stateKey).toBool() == value &&
+            state.value(stateKey).isBool()) {
+            return true;
+        }
+        state.insert(stateKey, value);
+        states[index] = state;
+        candidate->viewLayerStates = states;
+        DocumentChangeSet changes;
+        changes.addCollection(collectionId);
+        changes.collectionsChanged = true;
+        changes.visibilityChanged = true;
+        applyChanges(changes);
+        return true;
+    }
+    return false;
 }
 
 bool Document::setObjectDisplayName(ObjectId objectId, const QString &name)

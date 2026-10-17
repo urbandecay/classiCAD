@@ -1954,6 +1954,12 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.selectObjectHierarchy(objectId);
             });
         }
+        if (callbacks_.deselectSelectedObjects) {
+            QAction *deselect = menu.addAction(QStringLiteral("Deselect"));
+            connect(deselect, &QAction::triggered, this, [this]() {
+                callbacks_.deselectSelectedObjects();
+            });
+        }
         if (callbacks_.renameObject) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, objectId]() {

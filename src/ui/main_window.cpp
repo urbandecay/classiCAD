@@ -3830,6 +3830,11 @@ private:
                 session_.selection().setObjectIds(selectableIds, active);
                 session_.selection().setActiveObjectId(active);
             };
+        collectionCallbacks.deselectSelectedObjects = [this]() {
+            SelectionModel &selection = session_.selection();
+            if (selection.objectIds().isEmpty()) return;
+            selection.setObjectIds({}, ObjectId::invalid());
+        };
         collectionCallbacks.createCollection =
             [this, activeSceneRecord](const QString &name,
                                       CollectionId parentId) {

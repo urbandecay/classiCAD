@@ -31,6 +31,8 @@ struct OutlinerObjectEntry {
     ObjectId id = ObjectId::invalid();
     QString name;
     QString blenderType;
+    QString dataBlockName;
+    QStringList materialNames;
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
     bool hideRender = false;
@@ -41,7 +43,7 @@ struct OutlinerObjectEntry {
     ObjectId parentObjectId = ObjectId::invalid();
 };
 
-enum class OutlinerRowKind { Collection, Object, SceneRoot };
+enum class OutlinerRowKind { Collection, Object, SceneRoot, ObjectContent };
 enum class OutlinerObjectStateFilter {
     All,
     Visible,
@@ -170,6 +172,7 @@ private:
         OutlinerObjectStateFilter::All;
     bool showCollections_ = true;
     bool showObjects_ = true;
+    bool showObjectContents_ = true;
     bool showObjectChildren_ = true;
     bool showAllViewLayers_ = false;
     bool invertObjectStateFilter_ = false;

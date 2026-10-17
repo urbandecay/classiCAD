@@ -2817,7 +2817,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 25 && bridgeVersion != 26 && bridgeVersion != 27 &&
          bridgeVersion != 28 && bridgeVersion != 29 &&
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
-         bridgeVersion != 33 && bridgeVersion != 34)) {
+         bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3418,6 +3418,12 @@ bool importBlenderScene(const QString &path,
             source.value(QStringLiteral("blender_version")).toString();
         sceneObject.blenderMeshImportMode = mode;
         sceneObject.blenderSourceObjectType = objectType;
+        sceneObject.blenderSourceDataName = item.value(
+            QStringLiteral("data_name")).toString();
+        if (sceneObject.blenderSourceDataName.isEmpty()) {
+            sceneObject.blenderSourceDataName = item.value(
+                QStringLiteral("mesh_name")).toString();
+        }
         sceneObject.defaultViewLayerKey =
             item.value(QStringLiteral("default_view_layer_key")).toString();
         if (!sceneObject.defaultViewLayerKey.isEmpty() &&

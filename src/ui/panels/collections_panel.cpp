@@ -199,7 +199,8 @@ protected:
         const auto append = [this, &seen](QTreeWidgetItem *item) {
             if (item == nullptr) return;
             const OutlinerRowReference reference = rowReference(item);
-            if (reference.kind == OutlinerRowKind::SceneRoot) return;
+            if (reference.kind != OutlinerRowKind::Object &&
+                reference.kind != OutlinerRowKind::Collection) return;
             const QString key = reference.kind == OutlinerRowKind::Object
                 ? QStringLiteral("o%1").arg(reference.objectId.value())
                 : QStringLiteral("c%1").arg(reference.collectionId.value());
@@ -242,6 +243,10 @@ protected:
         QTreeWidgetItem *targetItem = itemAt(event->position().toPoint());
         OutlinerRowReference target = targetItem == nullptr
             ? OutlinerRowReference{} : rowReference(targetItem);
+        if (target.kind == OutlinerRowKind::ObjectContent) {
+            event->ignore();
+            return;
+        }
         if (target.kind == OutlinerRowKind::Object &&
             !event->modifiers().testFlag(Qt::ShiftModifier)) {
             target.kind = target.parentCollectionId.isValid()
@@ -422,6 +427,8 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/filterCollections"), true).toBool();
     showObjects_ = outlinerSettings.value(
         QStringLiteral("outliner/filterObjects"), true).toBool();
+    showObjectContents_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterObjectContents"), true).toBool();
     showObjectChildren_ = outlinerSettings.value(
         QStringLiteral("outliner/filterObjectChildren"), true).toBool();
     showAllViewLayers_ = outlinerSettings.value(
@@ -454,6 +461,18 @@ void CollectionsPanel::createLayout()
 
     auto *filterMenu = new QMenu(filterButton_);
     filterButton_->setMenu(filterMenu);
+    QAction *allViewLayersAction = filterMenu->addAction(
+        QStringLiteral("All View Layers"));
+    allViewLayersAction->setCheckable(true);
+    allViewLayersAction->setChecked(showAllViewLayers_);
+    connect(allViewLayersAction, &QAction::toggled, this,
+            [this](bool visible) {
+        showAllViewLayers_ = visible;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterAllViewLayers"),
+                          visible);
+        refresh();
+    });
     QAction *collectionsAction = filterMenu->addAction(
         QStringLiteral("Collections"));
     collectionsAction->setCheckable(true);
@@ -467,8 +486,22 @@ void CollectionsPanel::createLayout()
     QAction *objectsAction = filterMenu->addAction(QStringLiteral("Objects"));
     objectsAction->setCheckable(true);
     objectsAction->setChecked(showObjects_);
-    connect(objectsAction, &QAction::toggled, this, [this](bool visible) {
+    QAction *contentsAction = filterMenu->addAction(
+        QStringLiteral("Object Contents"));
+    contentsAction->setCheckable(true);
+    contentsAction->setChecked(showObjectContents_);
+    contentsAction->setEnabled(showObjects_);
+    connect(contentsAction, &QAction::toggled, this, [this](bool visible) {
+        showObjectContents_ = visible;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterObjectContents"),
+                          visible);
+        refresh();
+    });
+    connect(objectsAction, &QAction::toggled, this,
+            [this, contentsAction](bool visible) {
         showObjects_ = visible;
+        contentsAction->setEnabled(visible);
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjects"), visible);
         refresh();
@@ -481,18 +514,6 @@ void CollectionsPanel::createLayout()
         showObjectChildren_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjectChildren"),
-                          visible);
-        refresh();
-    });
-    QAction *allViewLayersAction = filterMenu->addAction(
-        QStringLiteral("All View Layers"));
-    allViewLayersAction->setCheckable(true);
-    allViewLayersAction->setChecked(showAllViewLayers_);
-    connect(allViewLayersAction, &QAction::toggled, this,
-            [this](bool visible) {
-        showAllViewLayers_ = visible;
-        QSettings settings;
-        settings.setValue(QStringLiteral("outliner/filterAllViewLayers"),
                           visible);
         refresh();
     });
@@ -1046,8 +1067,9 @@ bool CollectionsPanel::activateObjectRow(
     QTreeWidgetItem *item, Qt::KeyboardModifiers modifiers)
 {
     if (refreshing_ || item == nullptr) return false;
-    if (item->data(nameColumn, itemKindRole).toInt() !=
-        static_cast<int>(OutlinerRowKind::Object)) {
+    const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
+        item->data(nameColumn, itemKindRole).toInt());
+    if (kind == OutlinerRowKind::SceneRoot) {
         const QString viewLayerKey = item->data(
             nameColumn, itemViewLayerKeyRole).toString();
         if (viewLayerKey.isEmpty()) return false;
@@ -1060,6 +1082,7 @@ bool CollectionsPanel::activateObjectRow(
         }
         return true;
     }
+    if (kind != OutlinerRowKind::Object) return false;
     const ObjectId clickedId = ObjectId::fromValue(
         item->data(nameColumn, itemIdRole).toULongLong());
     const QString rowViewLayerKey = item->data(
@@ -1181,6 +1204,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
     if (item == nullptr) return;
     const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
         item->data(nameColumn, itemKindRole).toInt());
+    if (kind == OutlinerRowKind::ObjectContent) return;
     QMenu menu(this);
 
     if (kind == OutlinerRowKind::SceneRoot &&
@@ -1463,6 +1487,32 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     }
     objectRows_[entry.id.value()].append(item);
     objectEntries_.insert(entry.id.value(), entry);
+    if (showObjectContents_) {
+        const auto appendContentRow =
+            [item, &objectPath, &activeViewLayerKey](
+                const QString &name, const QString &suffix,
+                const QString &description) {
+            if (name.isEmpty()) return;
+            auto *content = new QTreeWidgetItem(item);
+            content->setText(nameColumn, name);
+            content->setData(nameColumn, itemKindRole,
+                             static_cast<int>(OutlinerRowKind::ObjectContent));
+            content->setData(nameColumn, itemViewLayerKeyRole,
+                             activeViewLayerKey);
+            content->setData(nameColumn, itemPathRole,
+                             objectPath.join(QLatin1Char('/')) + suffix);
+            content->setToolTip(nameColumn, description);
+            content->setFlags(Qt::ItemIsEnabled);
+        };
+        appendContentRow(entry.dataBlockName, QStringLiteral("/data"),
+                         QStringLiteral("Blender object data block"));
+        for (qsizetype index = 0; index < entry.materialNames.size(); ++index) {
+            appendContentRow(
+                entry.materialNames[index],
+                QStringLiteral("/material-%1").arg(index),
+                QStringLiteral("Blender material data block"));
+        }
+    }
     return item;
 }
 

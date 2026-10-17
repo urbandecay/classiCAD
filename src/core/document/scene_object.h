@@ -133,6 +133,8 @@ struct SceneObject {
     // Blender parent identity retained for Outliner hierarchy. Geometry has
     // already been imported in world space, so this does not apply transforms.
     QString blenderParentObjectId;
+    // Name of the Blender ID stored in Object.data, used by the Outliner.
+    QString blenderSourceDataName;
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;

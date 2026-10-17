@@ -10827,10 +10827,24 @@ scene depth.
   installation-local QSettings. The document model still keeps its classiCAD
   object selection separate from Blender's per-view-layer Base selection, and
   All View Layers has not had a matched Blender UI interaction comparison.
-  The full build is running; its result will be recorded with this change.
+  `cmake --build build -j4` passed; no GUI interaction comparison was run.
+- The sixteenth tree update adds Blender's View Layer "Object Contents" filter
+  from [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L456-L533)
+  and follows its object expansion behavior in
+  [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L25-L123).
+  The extractor now retains each object's data-block name; expanded object
+  rows can show that data block and the material slots retained for polygon
+  meshes. The native document format advances to version 28 and the Blender
+  scene extraction bridge to version 35. This is a supported subset: animation
+  data, poses, constraints, modifiers, vertex groups, grease-pencil effects,
+  and instanced-collection rows are not retained by classiCAD yet, and these
+  child rows do not have Blender's separate data-block selection or context
+  actions. The preference is installation-local. `cmake --build build -j4`
+  passed; no GUI interaction comparison was run.
 - Remaining Outliner scope includes Blender's additional display modes and
-  datablock rows, Object Contents, other unported view-layer restriction
-  toggles, and a matched Blender/classiCAD interaction comparison. Do not
+  data-block subtrees beyond the supported Object Contents rows, other
+  unported view-layer restriction toggles, and a matched Blender/classiCAD
+  interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

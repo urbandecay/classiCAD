@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 27);
+    serialized.insert(QStringLiteral("version"), 28);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -533,6 +533,8 @@ QJsonObject documentToJson(const Document &document)
                                 sceneObject.blenderMeshImportMode);
         serializedObject.insert(QStringLiteral("blenderSourceObjectType"),
                                 sceneObject.blenderSourceObjectType);
+        serializedObject.insert(QStringLiteral("blenderSourceDataName"),
+                                sceneObject.blenderSourceDataName);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         if (!sceneObject.blenderSurfaceWireVerticesWorld.isEmpty()) {
             QJsonArray wireVertices;
@@ -639,7 +641,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 27) {
+    if (version < 1 || version > 28) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1491,6 +1493,16 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.geometry = std::move(shape);
         sceneObject.blenderSourceObjectType = serializedObject.value(
             QStringLiteral("blenderSourceObjectType")).toString();
+        if (version >= 28) {
+            const QJsonValue dataName = serializedObject.value(
+                QStringLiteral("blenderSourceDataName"));
+            if (!dataName.isString()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender data-block identity"));
+                return false;
+            }
+            sceneObject.blenderSourceDataName = dataName.toString();
+        }
         const QJsonValue surfaceWireValue = serializedObject.value(
             QStringLiteral("blenderSurfaceWireVerticesWorld"));
         if (!surfaceWireValue.isUndefined()) {

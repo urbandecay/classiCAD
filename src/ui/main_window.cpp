@@ -2843,6 +2843,10 @@ private:
                     activeCollectionIds.insert(collection.id.value());
                 }
             }
+            QHash<QString, QString> materialNamesById;
+            for (const DocumentMaterial &material : document.materials()) {
+                materialNamesById.insert(material.id, material.name);
+            }
             const auto sceneForViewLayer =
                 [&document](const QString &viewLayerKey) {
                     for (const QJsonValue &sceneValue :
@@ -2894,6 +2898,26 @@ private:
                 entry.id = object.id;
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
+                entry.dataBlockName = object.blenderSourceDataName;
+                if (object.geometry.geometryType == GeometryType::PolygonMesh) {
+                    const PolygonMesh3D &mesh = object.geometry.polygonMesh;
+                    if (!mesh.materialSlotIds.isEmpty()) {
+                        for (const QString &materialId : mesh.materialSlotIds) {
+                            const QString materialName =
+                                materialNamesById.value(materialId);
+                            if (!materialName.isEmpty()) {
+                                entry.materialNames.append(materialName);
+                            }
+                        }
+                    } else {
+                        for (const PolygonMeshMaterialSlot &material :
+                             mesh.materialSlots) {
+                            if (!material.name.isEmpty()) {
+                                entry.materialNames.append(material.name);
+                            }
+                        }
+                    }
+                }
                 entry.collectionIds = sceneMemberships;
                 entry.hideViewport = object.hideViewport;
                 entry.hideRender = object.hideRender;

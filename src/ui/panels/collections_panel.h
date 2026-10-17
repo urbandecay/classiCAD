@@ -151,6 +151,12 @@ struct OutlinerRowReference {
     bool syntheticParentRow = false;
 };
 
+struct OutlinerCollectionContext {
+    CollectionId collectionId = CollectionId::invalid();
+    QString viewLayerKey;
+    QStringList sourcePath;
+};
+
 struct OutlinerViewLayerEntry {
     QString key;
     QString displayName;
@@ -272,12 +278,12 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId, CollectionId)> unlinkObject;
     std::function<void(CollectionId)> removeCollectionHierarchy;
     std::function<void(CollectionId, bool, bool, bool)> setViewportVisibility;
-    std::function<void(CollectionId,
-                       const QString &,
-                       const QStringList &,
-                       bool)> setCollectionViewportEnabled;
+    std::function<void(const QVector<OutlinerCollectionContext> &, bool)>
+        setCollectionsViewportEnabled;
     std::function<void(CollectionId, bool, bool, bool)>
         setCollectionRenderVisibility;
+    std::function<void(const QVector<OutlinerCollectionContext> &, bool)>
+        setCollectionsRenderVisibility;
     std::function<void(CollectionId, bool, bool, bool)>
         setCollectionSelectability;
     std::function<void(ObjectId, bool, bool)> setObjectViewportVisibility;
@@ -292,6 +298,11 @@ struct CollectionsPanelCallbacks {
                        bool,
                        bool,
                        bool)> setCollectionViewLayerState;
+    std::function<void(const QVector<OutlinerCollectionContext> &,
+                       const QString &,
+                       bool,
+                       bool,
+                       bool)> setCollectionsViewLayerState;
     std::function<void(const QVector<OutlinerRowReference> &,
                        const OutlinerRowReference &,
                        bool,

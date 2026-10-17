@@ -2824,7 +2824,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 39 && bridgeVersion != 40 && bridgeVersion != 41 &&
          bridgeVersion != 42 && bridgeVersion != 43 &&
          bridgeVersion != 44 && bridgeVersion != 45 &&
-         bridgeVersion != 46)) {
+         bridgeVersion != 46 && bridgeVersion != 47)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3680,6 +3680,42 @@ bool importBlenderScene(const QString &path,
                 }
             }
         }
+        if (bridgeVersion >= 47) {
+            const QJsonValue layerTreeValue = item.value(
+                QStringLiteral("grease_pencil_layer_tree"));
+            int nodeCount = 0;
+            const auto validLayerNodes = [](
+                const auto &self, const QJsonArray &nodes, int depth,
+                int &count) -> bool {
+                if (nodes.isEmpty()) return true;
+                if (depth >= 128 || nodes.size() > 1024) return false;
+                for (const QJsonValue &nodeValue : nodes) {
+                    if (!nodeValue.isObject() || ++count > 1024) return false;
+                    const QJsonObject node = nodeValue.toObject();
+                    const QJsonValue nameValue = node.value(
+                        QStringLiteral("name"));
+                    const QJsonValue groupValue = node.value(
+                        QStringLiteral("is_group"));
+                    const QJsonValue childrenValue = node.value(
+                        QStringLiteral("children"));
+                    if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                        !groupValue.isBool() || !childrenValue.isArray() ||
+                        (!groupValue.toBool() &&
+                         !childrenValue.toArray().isEmpty()) ||
+                        !self(self, childrenValue.toArray(), depth + 1, count)) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (!layerTreeValue.isArray() ||
+                !validLayerNodes(validLayerNodes, layerTreeValue.toArray(), 0,
+                                 nodeCount)) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender Grease Pencil layer tree is invalid"));
+                return false;
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3922,6 +3958,10 @@ bool importBlenderScene(const QString &path,
                     sourceEffect.value(QStringLiteral("linked_name")).toString(),
                     sourceEffect.value(QStringLiteral("linked_type")).toString()});
             }
+        }
+        if (bridgeVersion >= 47) {
+            sceneObject.blenderSourceGreasePencilLayerTree = item.value(
+                QStringLiteral("grease_pencil_layer_tree")).toArray();
         }
         sceneObject.defaultViewLayerKey =
             item.value(QStringLiteral("default_view_layer_key")).toString();

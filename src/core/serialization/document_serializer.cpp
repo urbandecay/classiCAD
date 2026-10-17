@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 38);
+    serialized.insert(QStringLiteral("version"), 39);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -651,6 +651,8 @@ QJsonObject documentToJson(const Document &document)
         }
         serializedObject.insert(QStringLiteral("blenderSourceShaderEffects"),
                                 blenderSourceShaderEffects);
+        serializedObject.insert(QStringLiteral("blenderSourceGreasePencilLayerTree"),
+                                sceneObject.blenderSourceGreasePencilLayerTree);
         insertBlenderNameList(QStringLiteral("blenderSourceConstraintNames"),
                               sceneObject.blenderSourceConstraintNames);
         insertBlenderNameList(QStringLiteral("blenderSourceVertexGroupNames"),
@@ -787,7 +789,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 38) {
+    if (version < 1 || version > 39) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1875,6 +1877,44 @@ bool documentFromJson(const QJsonValue &value,
                 sceneObject.blenderSourceShaderEffects.append({
                     nameValue.toString(), linkedNameValue.toString(), linkedType});
             }
+        }
+        if (version >= 39) {
+            const QJsonValue layerTreeValue = serializedObject.value(
+                QStringLiteral("blenderSourceGreasePencilLayerTree"));
+            int nodeCount = 0;
+            const auto validLayerNodes = [](
+                const auto &self, const QJsonArray &nodes, int depth,
+                int &count) -> bool {
+                if (nodes.isEmpty()) return true;
+                if (depth >= 128 || nodes.size() > 1024) return false;
+                for (const QJsonValue &nodeValue : nodes) {
+                    if (!nodeValue.isObject() || ++count > 1024) return false;
+                    const QJsonObject node = nodeValue.toObject();
+                    const QJsonValue nameValue = node.value(
+                        QStringLiteral("name"));
+                    const QJsonValue groupValue = node.value(
+                        QStringLiteral("is_group"));
+                    const QJsonValue childrenValue = node.value(
+                        QStringLiteral("children"));
+                    if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                        !groupValue.isBool() || !childrenValue.isArray() ||
+                        (!groupValue.toBool() &&
+                         !childrenValue.toArray().isEmpty()) ||
+                        !self(self, childrenValue.toArray(), depth + 1, count)) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (!layerTreeValue.isArray() ||
+                !validLayerNodes(validLayerNodes, layerTreeValue.toArray(), 0,
+                                 nodeCount)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender Grease Pencil layer tree"));
+                return false;
+            }
+            sceneObject.blenderSourceGreasePencilLayerTree =
+                layerTreeValue.toArray();
         }
         if (version >= 33) {
             const QJsonValue shapeKeyDataNameValue = serializedObject.value(

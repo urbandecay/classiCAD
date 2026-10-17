@@ -67,6 +67,7 @@ struct OutlinerObjectEntry {
     QJsonArray poseBoneTree;
     QJsonArray armatureBoneTree;
     QJsonArray boneCollectionTree;
+    QJsonArray greasePencilLayerTree;
     QString name;
     QString blenderType;
     QString dataBlockName;

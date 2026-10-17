@@ -5,6 +5,7 @@
 #include "shape.h"
 
 #include <QVector3D>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QVector4D>
 #include <QString>
@@ -174,6 +175,7 @@ struct SceneObject {
     QStringList blenderSourceModifierNames;
     QVector<BlenderSourceModifier> blenderSourceModifiers;
     QVector<BlenderSourceShaderEffect> blenderSourceShaderEffects;
+    QJsonArray blenderSourceGreasePencilLayerTree;
     QStringList blenderSourceConstraintNames;
     QStringList blenderSourceVertexGroupNames;
     bool blenderSourceHasAnimationData = false;

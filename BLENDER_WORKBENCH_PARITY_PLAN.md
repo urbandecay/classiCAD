@@ -11023,10 +11023,20 @@ scene depth.
   child row for an object not in the parent's collection stays collapsed and
   does not expand its contents. Cyclic parent links are safely broken. Build
   passed; no matched Blender Outliner UI comparison was run.
-- Remaining Outliner scope includes unsupported display modes, data-block
-  subtrees beyond the currently supported rows and a matched Blender/classiCAD
-  interaction comparison. Do not
-  mark this port complete until the remaining
+- The thirty-third tree update follows Blender 5.2.2's Grease Pencil data-block
+  expansion in
+  [`tree_element_id_grease_pencil.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_grease_pencil.cc#L25-L36)
+  and
+  [`tree_element_grease_pencil_node.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_grease_pencil_node.cc#L26-L39).
+  The Blender bridge now retains the ordered layer/group tree for imported and
+  display-only Grease Pencil objects; Object Contents shows those rows below
+  the data block, with nested groups expanded on demand. Extraction and JSON
+  validation cap the tree at 1,024 nodes and 128 levels. Blender bridge version
+  47 and native document version 39 preserve the tree. `cmake --build build
+  -j4` passed; no matched Blender Outliner UI comparison was run.
+- Remaining Outliner scope includes unsupported display modes, specialized
+  data-block branches still under source review, and a matched Blender/classiCAD
+  interaction comparison. Do not mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including

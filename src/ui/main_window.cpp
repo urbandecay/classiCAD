@@ -2958,6 +2958,8 @@ private:
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
                 entry.dataBlockName = object.blenderSourceDataName;
+                entry.greasePencilLayerTree =
+                    object.blenderSourceGreasePencilLayerTree;
                 entry.shapeKeyDataName =
                     object.blenderSourceShapeKeyDataName;
                 entry.shapeKeyNames = object.blenderSourceShapeKeyNames;
@@ -3108,6 +3110,8 @@ private:
                 entry.blenderType = objectType;
                 entry.dataBlockName = record.value(
                     QStringLiteral("data_name")).toString();
+                entry.greasePencilLayerTree = record.value(
+                    QStringLiteral("grease_pencil_layer_tree")).toArray();
                 entry.shapeKeyDataName = record.value(
                     QStringLiteral("shape_key_data_name")).toString();
                 entry.shapeKeyNames = jsonStringList(record.value(

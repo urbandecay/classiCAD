@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 46
+BRIDGE_FORMAT_VERSION = 47
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -695,6 +695,45 @@ def outliner_name_tree(items, include_constraints=False):
     return rows
 
 
+def outliner_grease_pencil_layer_tree(obj):
+    """Capture the Blender 5.2 Grease Pencil data-block's layer tree."""
+    if obj.type != "GREASEPENCIL" or getattr(obj, "data", None) is None:
+        return []
+
+    remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+
+    def convert(node, depth):
+        if remaining[0] <= 0 or depth >= 128:
+            return None
+        remaining[0] -= 1
+        is_group = (
+            getattr(getattr(node, "bl_rna", None), "identifier", "") ==
+            "GreasePencilLayerGroup"
+        )
+        children = []
+        if is_group:
+            for child in reversed(list(getattr(node, "children", ()))):
+                row = convert(child, depth + 1)
+                if row is not None:
+                    children.append(row)
+                if remaining[0] <= 0:
+                    break
+        return {
+            "name": str(node.name),
+            "is_group": is_group,
+            "children": children,
+        }
+
+    rows = []
+    for node in reversed(list(getattr(obj.data, "root_nodes", ()))):
+        row = convert(node, 0)
+        if row is not None:
+            rows.append(row)
+        if remaining[0] <= 0:
+            break
+    return rows
+
+
 def object_metadata(obj, scene, depsgraph=None):
     parent = obj.parent
     library_path = source_library_path(obj)
@@ -753,6 +792,7 @@ def object_metadata(obj, scene, depsgraph=None):
             "linked_name": linked_id.name if linked_id is not None else "",
             "linked_type": "object" if linked_id is not None else "",
         })
+    grease_pencil_layer_tree = outliner_grease_pencil_layer_tree(obj)
     record = {
         "object_id": stable_id(obj),
         # Workbench Random hashes ID.name, which is obj.name in Blender's
@@ -792,6 +832,7 @@ def object_metadata(obj, scene, depsgraph=None):
         "modifier_names": [modifier.name for modifier in obj.modifiers][:1024],
         "modifier_entries": modifier_entries,
         "shader_effect_entries": shader_effect_entries,
+        "grease_pencil_layer_tree": grease_pencil_layer_tree,
         "constraint_names": [
             constraint.name for constraint in obj.constraints
         ][:1024],

@@ -1882,6 +1882,10 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                 }
             }
             appendNamedTree(
+                appendNamedTree, dataBlock, entry.greasePencilLayerTree,
+                QStringLiteral("/data/grease-pencil-layers"),
+                QStringLiteral("Blender Grease Pencil layer or group"), false);
+            appendNamedTree(
                 appendNamedTree, dataBlock, entry.armatureBoneTree,
                 QStringLiteral("/data/bones"),
                 QStringLiteral("Blender armature bone"), false);

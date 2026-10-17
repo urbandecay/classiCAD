@@ -231,6 +231,16 @@ bool DocumentTransaction::setObjectViewLayerHidden(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::setObjectParent(ObjectId objectId,
+                                          ObjectId parentObjectId)
+{
+    if (!document_.setObjectParent(objectId, parentObjectId)) return false;
+    changes_.addObject(objectId);
+    if (parentObjectId.isValid()) changes_.addObject(parentObjectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setCollectionViewLayerState(
     CollectionId collectionId,
     const QString &viewLayerKey,

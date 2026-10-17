@@ -5,12 +5,16 @@
  * The view-layer tree ordering, repeated collection-membership rows, and
  * select/activate, Ctrl-toggle, and range-selection rules are adapted from
  * Blender 5.2.2's tree_display_view_layer.cc and outliner_select.cc.
+ * Collection and object drop outcomes are adapted from outliner_dragdrop.cc.
  */
 #include "collections_panel.h"
 
 #include <QAbstractItemView>
 #include <QAbstractItemModel>
 #include <QAction>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QHash>
 #include <QInputDialog>
 #include <QFont>
@@ -43,6 +47,7 @@ constexpr int itemViewLayerEditableRole = Qt::UserRole + 4;
 constexpr int itemSourcePathRole = Qt::UserRole + 5;
 constexpr int itemLinkedCollectionRole = Qt::UserRole + 6;
 constexpr int itemNotInCollectionRole = Qt::UserRole + 7;
+constexpr int itemParentCollectionRole = Qt::UserRole + 8;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int viewLayerViewportColumn = 2;
@@ -93,6 +98,11 @@ class OutlinerTreeWidget final : public QTreeWidget {
 public:
     using ActivateObject =
         std::function<bool(QTreeWidgetItem *, Qt::KeyboardModifiers)>;
+    using ApplyDrop = std::function<void(
+        const QVector<OutlinerRowReference> &,
+        const OutlinerRowReference &,
+        bool,
+        bool)>;
 
     explicit OutlinerTreeWidget(QWidget *parent = nullptr)
         : QTreeWidget(parent)
@@ -100,10 +110,14 @@ public:
     }
 
     void setActivationHandlers(ActivateObject activateObject,
-                               std::function<void()> clickEmpty)
+                               std::function<void()> clickEmpty,
+                               std::function<void()> syncSelection,
+                               ApplyDrop applyDrop)
     {
         activateObject_ = std::move(activateObject);
         clickEmpty_ = std::move(clickEmpty);
+        syncSelection_ = std::move(syncSelection);
+        applyDrop_ = std::move(applyDrop);
     }
 
 protected:
@@ -116,11 +130,15 @@ protected:
             } else if (columnAt(event->position().toPoint().x()) == nameColumn &&
                        activateObject_ &&
                        activateObject_(item, event->modifiers())) {
-                event->accept();
+                QTreeWidget::mousePressEvent(event);
+                if (syncSelection_) syncSelection_();
                 return;
             }
         }
         QTreeWidget::mousePressEvent(event);
+        if (event->button() == Qt::LeftButton && syncSelection_) {
+            syncSelection_();
+        }
     }
 
     void keyPressEvent(QKeyEvent *event) override
@@ -129,17 +147,130 @@ protected:
             QTreeWidget::keyPressEvent(event);
             if (activateObject_ && activateObject_(currentItem(),
                                                     event->modifiers())) {
-                event->accept();
-                return;
+                if (syncSelection_) syncSelection_();
             }
             return;
         }
         QTreeWidget::keyPressEvent(event);
     }
 
+    void startDrag(Qt::DropActions supportedActions) override
+    {
+        draggedRows_.clear();
+        QSet<QString> seen;
+        const auto append = [this, &seen](QTreeWidgetItem *item) {
+            if (item == nullptr) return;
+            const OutlinerRowReference reference = rowReference(item);
+            if (reference.kind == OutlinerRowKind::SceneRoot) return;
+            const QString key = reference.kind == OutlinerRowKind::Object
+                ? QStringLiteral("o%1").arg(reference.objectId.value())
+                : QStringLiteral("c%1").arg(reference.collectionId.value());
+            if (seen.contains(key)) return;
+            seen.insert(key);
+            draggedRows_.append(reference);
+        };
+        append(currentItem());
+        for (QTreeWidgetItem *item : selectedItems()) append(item);
+        QTreeWidget::startDrag(supportedActions);
+        draggedRows_.clear();
+    }
+
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (event->source() == this) {
+            event->acceptProposedAction();
+            return;
+        }
+        QTreeWidget::dragEnterEvent(event);
+    }
+
+    void dragMoveEvent(QDragMoveEvent *event) override
+    {
+        if (event->source() == this) {
+            QTreeWidget::dragMoveEvent(event);
+            if (!event->isAccepted()) event->acceptProposedAction();
+            return;
+        }
+        QTreeWidget::dragMoveEvent(event);
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        if (event->source() != this || draggedRows_.isEmpty() || !applyDrop_) {
+            event->ignore();
+            return;
+        }
+
+        QTreeWidgetItem *targetItem = itemAt(event->position().toPoint());
+        OutlinerRowReference target = targetItem == nullptr
+            ? OutlinerRowReference{} : rowReference(targetItem);
+        if (target.kind == OutlinerRowKind::Object &&
+            !event->modifiers().testFlag(Qt::ShiftModifier)) {
+            target.kind = target.parentCollectionId.isValid()
+                ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
+            target.collectionId = target.parentCollectionId;
+        } else if (target.kind == OutlinerRowKind::Collection &&
+                   dropIndicatorPosition() != OnItem) {
+            target.collectionId = target.parentCollectionId;
+            target.kind = target.collectionId.isValid()
+                ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
+        } else if (target.kind == OutlinerRowKind::Object &&
+                   dropIndicatorPosition() != OnItem) {
+            target.collectionId = target.parentCollectionId;
+            target.kind = target.collectionId.isValid()
+                ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
+        }
+
+        const QVector<OutlinerRowReference> sources = draggedRows_;
+        const bool link = event->modifiers().testFlag(Qt::ControlModifier);
+        const bool parent = event->modifiers().testFlag(Qt::ShiftModifier) &&
+                            target.kind == OutlinerRowKind::Object;
+        QTimer::singleShot(0, this, [this, sources, target, link, parent]() {
+            if (applyDrop_) applyDrop_(sources, target, link, parent);
+        });
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+    }
+
 private:
+    static OutlinerRowReference rowReference(const QTreeWidgetItem *item)
+    {
+        OutlinerRowReference reference;
+        if (item == nullptr) return reference;
+        reference.kind = static_cast<OutlinerRowKind>(
+            item->data(nameColumn, itemKindRole).toInt());
+        const quint64 value = item->data(nameColumn, itemIdRole).toULongLong();
+        if (reference.kind == OutlinerRowKind::Object) {
+            reference.objectId = ObjectId::fromValue(value);
+            reference.linkedCollectionId = CollectionId::fromValue(
+                item->data(nameColumn, itemLinkedCollectionRole).toULongLong());
+            reference.syntheticParentRow =
+                item->data(nameColumn, itemNotInCollectionRole).toBool();
+            QTreeWidgetItem *ancestor = item->parent();
+            while (ancestor != nullptr &&
+                   ancestor->data(nameColumn, itemKindRole).toInt() ==
+                       static_cast<int>(OutlinerRowKind::Object)) {
+                ancestor = ancestor->parent();
+            }
+            if (ancestor != nullptr &&
+                ancestor->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::Collection)) {
+                reference.parentCollectionId = CollectionId::fromValue(
+                    ancestor->data(nameColumn, itemIdRole).toULongLong());
+            }
+        } else if (reference.kind == OutlinerRowKind::Collection) {
+            reference.collectionId = CollectionId::fromValue(value);
+            reference.parentCollectionId = CollectionId::fromValue(
+                item->data(nameColumn, itemParentCollectionRole).toULongLong());
+        }
+        return reference;
+    }
+
     ActivateObject activateObject_;
     std::function<void()> clickEmpty_;
+    std::function<void()> syncSelection_;
+    ApplyDrop applyDrop_;
+    QVector<OutlinerRowReference> draggedRows_;
 };
 
 } // namespace
@@ -177,6 +308,10 @@ void CollectionsPanel::createLayout()
     tree_->setUniformRowHeights(true);
     tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    tree_->setDragEnabled(true);
+    tree_->setAcceptDrops(true);
+    tree_->setDropIndicatorShown(true);
+    tree_->setDragDropMode(QAbstractItemView::InternalMove);
     tree_->header()->setSectionResizeMode(nameColumn, QHeaderView::Stretch);
     tree_->header()->setSectionResizeMode(viewportColumn,
                                           QHeaderView::ResizeToContents);
@@ -203,6 +338,15 @@ void CollectionsPanel::createLayout()
                 callbacks_.setObjectSelection({}, ObjectId::invalid());
             }
             rangeAnchorItem_ = nullptr;
+        },
+        [this]() { syncSelection(); },
+        [this](const QVector<OutlinerRowReference> &sources,
+               const OutlinerRowReference &target,
+               bool link,
+               bool parent) {
+            if (callbacks_.dropRows) {
+                callbacks_.dropRows(sources, target, link, parent);
+            }
         });
     tree_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(tree_, &QTreeWidget::customContextMenuRequested, this,
@@ -215,7 +359,7 @@ void CollectionsPanel::createLayout()
              column != selectColumn && column != excludeColumn)) {
             return;
         }
-        const ItemKind kind = static_cast<ItemKind>(
+        const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
             item->data(nameColumn, itemKindRole).toInt());
         const bool hidden = item->checkState(column) != Qt::Checked;
         const quint64 value =
@@ -230,7 +374,7 @@ void CollectionsPanel::createLayout()
         // from inside its own check-state update.
         QTimer::singleShot(0, this, [this, kind, column, hidden, value,
                                      viewLayerKey, sourcePath]() {
-            if (kind == ItemKind::Collection) {
+            if (kind == OutlinerRowKind::Collection) {
                 const CollectionId id = CollectionId::fromValue(value);
                 if (column == viewportColumn && callbacks_.setViewportVisibility) {
                     callbacks_.setViewportVisibility(id, hidden);
@@ -248,7 +392,7 @@ void CollectionsPanel::createLayout()
                         id, viewLayerKey, sourcePath,
                         QStringLiteral("exclude"), hidden);
                 }
-            } else if (kind == ItemKind::Object) {
+            } else if (kind == OutlinerRowKind::Object) {
                 const ObjectId id = ObjectId::fromValue(value);
                 if (column == viewportColumn &&
                     callbacks_.setObjectViewportVisibility) {
@@ -273,7 +417,7 @@ bool CollectionsPanel::activateObjectRow(
 {
     if (refreshing_ || item == nullptr ||
         item->data(nameColumn, itemKindRole).toInt() !=
-            static_cast<int>(ItemKind::Object)) return false;
+            static_cast<int>(OutlinerRowKind::Object)) return false;
     if (!callbacks_.setObjectSelection) return true;
     const ObjectId clickedId = ObjectId::fromValue(
         item->data(nameColumn, itemIdRole).toULongLong());
@@ -301,7 +445,7 @@ bool CollectionsPanel::activateObjectRow(
                                                QTreeWidgetItem *parent) -> void {
             if (parent == nullptr) return;
             if (parent->data(nameColumn, itemKindRole).toInt() ==
-                static_cast<int>(ItemKind::Object)) {
+                static_cast<int>(OutlinerRowKind::Object)) {
                 visibleObjectRows.append(parent);
             }
             if (!parent->isExpanded()) return;
@@ -361,11 +505,11 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
 {
     QTreeWidgetItem *item = tree_ != nullptr ? tree_->itemAt(position) : nullptr;
     if (item == nullptr) return;
-    const ItemKind kind = static_cast<ItemKind>(
+    const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
         item->data(nameColumn, itemKindRole).toInt());
     QMenu menu(this);
 
-    if (kind == ItemKind::SceneRoot && callbacks_.createCollection) {
+    if (kind == OutlinerRowKind::SceneRoot && callbacks_.createCollection) {
         QAction *create = menu.addAction(QStringLiteral("New Collection"));
         connect(create, &QAction::triggered, this, [this]() {
             bool accepted = false;
@@ -376,7 +520,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.createCollection(name, CollectionId::invalid());
             }
         });
-    } else if (kind == ItemKind::Collection) {
+    } else if (kind == OutlinerRowKind::Collection) {
         const CollectionId collectionId = CollectionId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
         if (callbacks_.createCollection) {
@@ -415,7 +559,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 while (!pending.isEmpty()) {
                     QTreeWidgetItem *current = pending.takeLast();
                     if (current->data(nameColumn, itemKindRole).toInt() ==
-                        static_cast<int>(ItemKind::Object)) {
+                        static_cast<int>(OutlinerRowKind::Object)) {
                         const ObjectId id = ObjectId::fromValue(
                             current->data(nameColumn, itemIdRole)
                                 .toULongLong());
@@ -460,7 +604,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
-    } else if (kind == ItemKind::Object) {
+    } else if (kind == OutlinerRowKind::Object) {
         const ObjectId objectId = ObjectId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
         if (callbacks_.setObjectSelection) {
@@ -521,16 +665,24 @@ void CollectionsPanel::appendCollection(
         : new QTreeWidgetItem(parent);
     item->setText(nameColumn, entry.collection.name);
     item->setData(nameColumn, itemKindRole,
-                  static_cast<int>(ItemKind::Collection));
+                  static_cast<int>(OutlinerRowKind::Collection));
     item->setData(nameColumn, itemIdRole,
                   QVariant::fromValue<qulonglong>(entry.collection.id.value()));
+    item->setData(nameColumn, itemParentCollectionRole,
+                  QVariant::fromValue<qulonglong>(
+                      parent != nullptr &&
+                              parent->data(nameColumn, itemKindRole).toInt() ==
+                                  static_cast<int>(OutlinerRowKind::Collection)
+                          ? parent->data(nameColumn, itemIdRole).toULongLong()
+                          : 0));
     path.append(QStringLiteral("c%1").arg(entry.collection.id.value()));
     item->setData(nameColumn, itemPathRole, path.join(QLatin1Char('/')));
     sourcePath.append(entry.collection.sourceId);
     item->setData(nameColumn, itemSourcePathRole,
                   QVariant::fromValue(sourcePath));
-    item->setFlags((item->flags() | Qt::ItemIsUserCheckable) &
-                   ~Qt::ItemIsSelectable);
+    item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
+                   Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
+                   Qt::ItemIsDropEnabled);
     item->setCheckState(viewportColumn, entry.collection.hideViewport
                                ? Qt::Unchecked : Qt::Checked);
     item->setCheckState(selectColumn, entry.collection.hideSelect
@@ -574,7 +726,7 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     auto *item = new QTreeWidgetItem(parent);
     item->setText(nameColumn, entry.name);
     item->setData(nameColumn, itemKindRole,
-                  static_cast<int>(ItemKind::Object));
+                  static_cast<int>(OutlinerRowKind::Object));
     item->setData(nameColumn, itemIdRole,
                   QVariant::fromValue<qulonglong>(entry.id.value()));
     item->setData(nameColumn, itemLinkedCollectionRole,
@@ -586,7 +738,8 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     item->setData(nameColumn, itemPathRole,
                   objectPath.join(QLatin1Char('/')));
     item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
-                   Qt::ItemIsSelectable);
+                   Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
+                   Qt::ItemIsDropEnabled);
     item->setCheckState(viewportColumn, entry.hideViewport
                                ? Qt::Unchecked : Qt::Checked);
     item->setCheckState(selectColumn, entry.hideSelect
@@ -650,7 +803,7 @@ void CollectionsPanel::buildObjectParentHierarchy(
             QTreeWidgetItem *collectionRow = parentRow->parent();
             while (collectionRow != nullptr &&
                    collectionRow->data(nameColumn, itemKindRole).toInt() ==
-                       static_cast<int>(ItemKind::Object)) {
+                       static_cast<int>(OutlinerRowKind::Object)) {
                 collectionRow = collectionRow->parent();
             }
             if (collectionRow == nullptr) continue;
@@ -727,9 +880,10 @@ void CollectionsPanel::refresh()
     auto *sceneRoot = new QTreeWidgetItem(tree_);
     sceneRoot->setText(nameColumn, QStringLiteral("Scene Collection"));
     sceneRoot->setData(nameColumn, itemKindRole,
-                       static_cast<int>(ItemKind::SceneRoot));
+                       static_cast<int>(OutlinerRowKind::SceneRoot));
     sceneRoot->setData(nameColumn, itemPathRole, QStringLiteral("scene"));
-    sceneRoot->setFlags(sceneRoot->flags() & ~Qt::ItemIsSelectable);
+    sceneRoot->setFlags((sceneRoot->flags() & ~Qt::ItemIsSelectable) |
+                        Qt::ItemIsDropEnabled);
     for (const CollectionPanelEntry &entry : entries) {
         bool hasKnownParent = false;
         for (const CollectionId parentId : entry.collection.parentIds) {
@@ -772,7 +926,7 @@ void CollectionsPanel::refresh()
             if (saved != expandedPaths.cend()) {
                 item->setExpanded(saved.value());
             } else if (item->data(nameColumn, itemKindRole).toInt() ==
-                       static_cast<int>(ItemKind::Collection)) {
+                       static_cast<int>(OutlinerRowKind::Collection)) {
                 item->setExpanded(true);
             }
             for (int childIndex = 0; childIndex < item->childCount();
@@ -809,7 +963,7 @@ void CollectionsPanel::syncSelection()
         while (!pending.isEmpty()) {
             QTreeWidgetItem *item = pending.takeLast();
             if (item->data(nameColumn, itemKindRole).toInt() ==
-                static_cast<int>(ItemKind::Object)) {
+                static_cast<int>(OutlinerRowKind::Object)) {
                 const quint64 value =
                     item->data(nameColumn, itemIdRole).toULongLong();
                 item->setSelected(selectedValues.contains(value));

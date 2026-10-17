@@ -741,6 +741,53 @@ bool Document::setObjectViewLayerHidden(ObjectId objectId,
     return true;
 }
 
+bool Document::setObjectParent(ObjectId objectId, ObjectId parentObjectId)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr || !candidate->libraryPath.isEmpty()) return false;
+
+    QString parentIdentity;
+    if (parentObjectId.isValid()) {
+        const SceneObject *parent = object(parentObjectId);
+        if (parent == nullptr || parentObjectId == objectId) return false;
+        parentIdentity = parent->blenderSourceObjectId.isEmpty()
+            ? QStringLiteral("classiCAD-local-object:%1").arg(parentObjectId.value())
+            : parent->blenderSourceObjectId;
+
+        QHash<QString, ObjectId> objectIdsByIdentity;
+        for (const SceneObject &sceneObject : objects_) {
+            if (sceneObject.blenderLooseMeshEdgeCompanion) continue;
+            const QString identity = sceneObject.blenderSourceObjectId.isEmpty()
+                ? QStringLiteral("classiCAD-local-object:%1")
+                      .arg(sceneObject.id.value())
+                : sceneObject.blenderSourceObjectId;
+            objectIdsByIdentity.insert(identity, sceneObject.id);
+        }
+
+        QSet<quint64> visited;
+        ObjectId current = parentObjectId;
+        while (current.isValid() && !visited.contains(current.value())) {
+            if (current == objectId) return false;
+            visited.insert(current.value());
+            const SceneObject *currentObject = object(current);
+            if (currentObject == nullptr ||
+                currentObject->blenderParentObjectId.isEmpty()) {
+                break;
+            }
+            current = objectIdsByIdentity.value(
+                currentObject->blenderParentObjectId, ObjectId::invalid());
+        }
+    }
+
+    if (candidate->blenderParentObjectId == parentIdentity) return true;
+    candidate->blenderParentObjectId = parentIdentity;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::setCollectionViewLayerState(CollectionId collectionId,
                                            const QString &viewLayerKey,
                                            const QStringList &sourcePath,

@@ -43,6 +43,7 @@
 #include <QPixmap>
 #include <QShortcut>
 #include <QSettings>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSplitter>
@@ -2773,13 +2774,14 @@ private:
             QVector<OutlinerObjectEntry> objects;
             const Document &document = session_.document();
             objects.reserve(document.objects().size());
-            QHash<QString, ObjectId> objectIdsBySourceId;
+            QHash<QString, ObjectId> objectIdsByIdentity;
             for (const SceneObject &object : document.objects()) {
-                if (!object.blenderLooseMeshEdgeCompanion &&
-                    !object.blenderSourceObjectId.isEmpty()) {
-                    objectIdsBySourceId.insert(object.blenderSourceObjectId,
-                                               object.id);
-                }
+                if (object.blenderLooseMeshEdgeCompanion) continue;
+                const QString identity = object.blenderSourceObjectId.isEmpty()
+                    ? QStringLiteral("classiCAD-local-object:%1")
+                          .arg(object.id.value())
+                    : object.blenderSourceObjectId;
+                objectIdsByIdentity.insert(identity, object.id);
             }
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
@@ -2787,7 +2789,7 @@ private:
                 if (name.isEmpty()) {
                     name = QStringLiteral("Object %1").arg(object.id.value());
                 }
-                const ObjectId parentObjectId = objectIdsBySourceId.value(
+                const ObjectId parentObjectId = objectIdsByIdentity.value(
                     object.blenderParentObjectId, ObjectId::invalid());
                 objects.append({object.id, name, object.collectionIds,
                                 object.hideViewport, object.hideSelect,
@@ -2878,6 +2880,108 @@ private:
                         QStringLiteral("Could not link objects to collection"),
                         4000);
                 }
+            };
+        collectionCallbacks.dropRows =
+            [this](const QVector<OutlinerRowReference> &sources,
+                   const OutlinerRowReference &target,
+                   bool link,
+                   bool parentObjects) {
+                if (sources.isEmpty()) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                CollectionId destinationCollection =
+                    target.kind == OutlinerRowKind::Collection
+                        ? target.collectionId
+                        : CollectionId::invalid();
+                if (target.kind == OutlinerRowKind::Object) {
+                    destinationCollection = target.parentCollectionId;
+                }
+                const ObjectId destinationObject =
+                    target.kind == OutlinerRowKind::Object
+                        ? target.objectId : ObjectId::invalid();
+                QSet<quint64> handledObjects;
+                QSet<quint64> handledCollections;
+                for (const OutlinerRowReference &source : sources) {
+                    if (source.kind == OutlinerRowKind::Collection) {
+                        const CollectionId collectionId = source.collectionId;
+                        const DocumentCollection *collection =
+                            session_.document().collection(collectionId);
+                        if (collection == nullptr ||
+                            !collection->libraryPath.isEmpty() ||
+                            handledCollections.contains(collectionId.value())) {
+                            continue;
+                        }
+                        handledCollections.insert(collectionId.value());
+                        if (target.kind == OutlinerRowKind::Collection &&
+                            target.collectionId == collectionId) {
+                            continue;
+                        }
+                        QVector<CollectionId> parents = collection->parentIds;
+                        if (!link && source.parentCollectionId.isValid()) {
+                            parents.removeAll(source.parentCollectionId);
+                        }
+                        if (destinationCollection.isValid() &&
+                            !parents.contains(destinationCollection)) {
+                            parents.append(destinationCollection);
+                        }
+                        if (parents != collection->parentIds) {
+                            changed = transaction.setCollectionParents(
+                                          collectionId, parents) || changed;
+                        }
+                        continue;
+                    }
+
+                    if (source.kind != OutlinerRowKind::Object ||
+                        !source.objectId.isValid() ||
+                        handledObjects.contains(source.objectId.value())) {
+                        continue;
+                    }
+                    handledObjects.insert(source.objectId.value());
+                    const SceneObject *object =
+                        session_.document().object(source.objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty()) {
+                        continue;
+                    }
+                    if (parentObjects && destinationObject.isValid()) {
+                        const SceneObject *parentObject =
+                            session_.document().object(destinationObject);
+                        const QString parentIdentity = parentObject == nullptr
+                            ? QString{}
+                            : (parentObject->blenderSourceObjectId.isEmpty()
+                                   ? QStringLiteral("classiCAD-local-object:%1")
+                                         .arg(destinationObject.value())
+                                   : parentObject->blenderSourceObjectId);
+                        if (source.objectId != destinationObject &&
+                            !parentIdentity.isEmpty() &&
+                            object->blenderParentObjectId != parentIdentity) {
+                            changed = transaction.setObjectParent(
+                                          source.objectId, destinationObject) ||
+                                      changed;
+                        }
+                        continue;
+                    }
+                    if (link && !destinationCollection.isValid()) continue;
+
+                    QVector<CollectionId> memberships = object->collectionIds;
+                    if (!link && source.linkedCollectionId.isValid() &&
+                        !source.syntheticParentRow) {
+                        memberships.removeAll(source.linkedCollectionId);
+                    }
+                    if (destinationCollection.isValid() &&
+                        !memberships.contains(destinationCollection)) {
+                        memberships.append(destinationCollection);
+                    }
+                    if (memberships != object->collectionIds) {
+                        changed = transaction.setObjectCollections(
+                                      source.objectId, memberships) || changed;
+                    }
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not apply Outliner drop"), 4000);
+                    return;
+                }
+                if (changed) pruneOutlinerSelection();
             };
         collectionCallbacks.renameObject =
             [this](ObjectId id, const QString &name) {

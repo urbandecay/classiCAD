@@ -98,6 +98,7 @@ public:
     bool setObjectViewLayerHidden(ObjectId objectId,
                                   const QString &viewLayerKey,
                                   bool hidden);
+    bool setObjectParent(ObjectId objectId, ObjectId parentObjectId);
     bool setCollectionViewLayerState(CollectionId collectionId,
                                      const QString &viewLayerKey,
                                      const QStringList &sourcePath,

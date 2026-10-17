@@ -34,6 +34,17 @@ struct OutlinerObjectEntry {
     ObjectId parentObjectId = ObjectId::invalid();
 };
 
+enum class OutlinerRowKind { Collection, Object, SceneRoot };
+
+struct OutlinerRowReference {
+    OutlinerRowKind kind = OutlinerRowKind::SceneRoot;
+    ObjectId objectId = ObjectId::invalid();
+    CollectionId collectionId = CollectionId::invalid();
+    CollectionId linkedCollectionId = CollectionId::invalid();
+    CollectionId parentCollectionId = CollectionId::invalid();
+    bool syntheticParentRow = false;
+};
+
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
@@ -58,6 +69,10 @@ struct CollectionsPanelCallbacks {
                        const QStringList &,
                        const QString &,
                        bool)> setCollectionViewLayerState;
+    std::function<void(const QVector<OutlinerRowReference> &,
+                       const OutlinerRowReference &,
+                       bool,
+                       bool)> dropRows;
 };
 
 // Displays linked collections and scene objects with Blender-style selection
@@ -70,8 +85,6 @@ public:
     void syncSelection();
 
 private:
-    enum class ItemKind { Collection, Object, SceneRoot };
-
     void createLayout();
     void showContextMenu(const QPoint &position);
     bool activateObjectRow(QTreeWidgetItem *item,

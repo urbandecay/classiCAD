@@ -10693,7 +10693,25 @@ scene depth.
   Blender's stored tree state does for new rows. `git diff --check` and the
   full `cmake --build build -j4` passed after this change; no GUI comparison
   was run.
-- Remaining Outliner scope includes drag/drop and reparenting, row-state
+- The fourth tree update adapts the main collection/object drop operations in
+  Blender 5.2.2's
+  [`outliner_dragdrop.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_dragdrop.cc#L305-L478)
+  and
+  [collection drop handling](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_dragdrop.cc#L1156-L1430).
+  Outliner rows can be dragged into collections; ordinary drops move the
+  dragged object membership or collection parent link, Ctrl drops link an
+  additional membership, and Shift-dropping an object onto an object stores a
+  parent relationship. Object parenting keeps imported Blender IDs and uses a
+  classiCAD-local ID marker for newly created relationships; hierarchy cycles
+  are rejected. Collection-parent, object-membership, and parent changes are
+  undoable Document transactions. A drop onto an object's row targets its
+  enclosing collection unless Shift requests parenting. The implicit Scene
+  Collection can be used as the move-to-root target, while Ctrl-linking a
+  collection to that implicit root is not representable in the current model.
+  Sibling before/after ordering and Blender's full drag-source operator matrix
+  remain unported. `git diff --check` and `cmake --build build -j4` passed;
+  no GUI interaction comparison was run.
+- Remaining Outliner scope includes row-state
   persistence/filtering, other Blender datablock rows and restriction
   controls, multiple view-layer switching, and a matched Blender/classiCAD
   interaction comparison. Do not mark this port complete until the remaining

@@ -279,6 +279,7 @@ private:
     void applyNameFilter(const QString &text);
     void restoreTreeState();
     void saveTreeState();
+    void populateDataApiChildren(QTreeWidgetItem *item);
     void showContextMenu(const QPoint &position);
     bool activateObjectRow(QTreeWidgetItem *item,
                            Qt::KeyboardModifiers modifiers);

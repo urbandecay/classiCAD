@@ -87,6 +87,10 @@ constexpr int itemSequencerStripIdRole = Qt::UserRole + 13;
 constexpr int itemSequencerStripActiveRole = Qt::UserRole + 14;
 constexpr int itemDataApiKindRole = Qt::UserRole + 15;
 constexpr int itemDataApiTypeRole = Qt::UserRole + 16;
+constexpr int itemDataApiNodeRole = Qt::UserRole + 17;
+constexpr int itemDataApiChildrenBuiltRole = Qt::UserRole + 18;
+constexpr int itemDataApiTruncatedRole = Qt::UserRole + 19;
+constexpr int itemDataApiPlaceholderRole = Qt::UserRole + 20;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -95,6 +99,21 @@ constexpr int holdoutColumn = 4;
 constexpr int indirectOnlyColumn = 5;
 constexpr int selectColumn = 6;
 constexpr int excludeColumn = 7;
+
+bool isDataApiPointerStruct(const QTreeWidgetItem *item)
+{
+    if (item == nullptr ||
+        item->data(nameColumn, itemDataApiKindRole).toString() !=
+            QLatin1String("STRUCT")) {
+        return false;
+    }
+    const QTreeWidgetItem *parent = item->parent();
+    return parent != nullptr &&
+           parent->data(nameColumn, itemDataApiKindRole).toString() ==
+               QLatin1String("PROPERTY") &&
+           parent->data(nameColumn, itemDataApiTypeRole).toString() ==
+               QLatin1String("POINTER");
+}
 
 QJsonObject viewLayerState(const DocumentCollection &collection,
                            const QString &viewLayerKey,
@@ -866,7 +885,10 @@ void CollectionsPanel::createLayout()
         if (!key.isEmpty()) callbacks_.setActiveScene(key);
     });
     connect(tree_, &QTreeWidget::itemExpanded, this,
-            [this](QTreeWidgetItem *) { saveTreeState(); });
+            [this](QTreeWidgetItem *item) {
+                populateDataApiChildren(item);
+                saveTreeState();
+            });
     connect(tree_, &QTreeWidget::itemCollapsed, this,
             [this](QTreeWidgetItem *) { saveTreeState(); });
 
@@ -1282,12 +1304,95 @@ void CollectionsPanel::restoreTreeState()
     while (!pending.isEmpty()) {
         QTreeWidgetItem *item = pending.takeLast();
         const QString path = item->data(nameColumn, itemPathRole).toString();
-        if (!path.isEmpty()) item->setExpanded(expanded.contains(path));
+        if (!path.isEmpty()) {
+            item->setExpanded(
+                expanded.contains(path) ||
+                (dataApiDisplayMode_ && isDataApiPointerStruct(item)));
+        }
         for (int index = 0; index < item->childCount(); ++index) {
             pending.append(item->child(index));
         }
     }
     restoringTreeState_ = false;
+}
+
+void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
+{
+    if (item == nullptr ||
+        item->data(nameColumn, itemKindRole).toInt() !=
+            static_cast<int>(OutlinerRowKind::DataApi) ||
+        item->data(nameColumn, itemDataApiChildrenBuiltRole).toBool()) {
+        return;
+    }
+    const QJsonObject source = item->data(
+        nameColumn, itemDataApiNodeRole).toJsonObject();
+    item->setData(nameColumn, itemDataApiChildrenBuiltRole, true);
+    while (item->childCount() > 0 &&
+           item->child(0)->data(nameColumn,
+                                itemDataApiPlaceholderRole).toBool()) {
+        delete item->takeChild(0);
+    }
+
+    for (const QJsonValue &childValue : source.value(
+             QStringLiteral("children")).toArray()) {
+        if (!childValue.isObject()) continue;
+        const QJsonObject child = childValue.toObject();
+        const QString kind = child.value(
+            QStringLiteral("kind")).toString();
+        const QString key = child.value(
+            QStringLiteral("key")).toString();
+        const QString path = item->data(nameColumn, itemPathRole).toString() +
+            QLatin1Char('/') + kind.toLower() + QLatin1Char(':') + key;
+        auto *row = new QTreeWidgetItem;
+        row->setText(nameColumn, child.value(
+            QStringLiteral("name")).toString());
+        row->setData(nameColumn, itemKindRole,
+                     static_cast<int>(OutlinerRowKind::DataApi));
+        row->setData(nameColumn, itemPathRole, path);
+        row->setData(nameColumn, itemDataApiKindRole, kind);
+        row->setData(nameColumn, itemDataApiNodeRole,
+                     QVariant::fromValue(child));
+        const QString type = child.value(
+            QStringLiteral("type")).toString();
+        row->setData(nameColumn, itemDataApiTypeRole, type);
+        row->setToolTip(
+            nameColumn,
+            type.isEmpty()
+                ? QStringLiteral("Blender RNA %1").arg(kind)
+                : QStringLiteral("Blender RNA %1 (%2)").arg(kind, type));
+        row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+
+        const bool hasChildren = !child.value(
+            QStringLiteral("children")).toArray().isEmpty();
+        if (hasChildren) {
+            auto *placeholder = new QTreeWidgetItem(row);
+            placeholder->setData(nameColumn, itemDataApiPlaceholderRole, true);
+            placeholder->setFlags(Qt::NoItemFlags);
+        }
+        const bool pointerStruct =
+            kind == QLatin1String("STRUCT") &&
+            item->data(nameColumn, itemDataApiKindRole).toString() ==
+                QLatin1String("PROPERTY") &&
+            item->data(nameColumn, itemDataApiTypeRole).toString() ==
+                QLatin1String("POINTER");
+        item->addChild(row);
+        if (pointerStruct && hasChildren) row->setExpanded(true);
+    }
+
+    if (item->data(nameColumn, itemDataApiTruncatedRole).toBool()) {
+        auto *truncatedRow = new QTreeWidgetItem(item);
+        truncatedRow->setText(
+            nameColumn,
+            QStringLiteral("Additional RNA data omitted"));
+        truncatedRow->setData(nameColumn, itemKindRole,
+                              static_cast<int>(OutlinerRowKind::DataApi));
+        truncatedRow->setData(nameColumn, itemPathRole,
+                              QStringLiteral("data-api/truncated"));
+        truncatedRow->setToolTip(
+            nameColumn,
+            QStringLiteral("The 20,000-row or 32-level capture limit was reached"));
+        truncatedRow->setFlags(Qt::ItemIsEnabled);
+    }
 }
 
 void CollectionsPanel::saveTreeState()
@@ -2617,61 +2722,18 @@ void CollectionsPanel::refresh()
                       rootNode.value(QStringLiteral("kind")).toString());
         root->setData(nameColumn, itemDataApiTypeRole,
                       rootNode.value(QStringLiteral("type")).toString());
+        root->setData(nameColumn, itemDataApiNodeRole,
+                      QVariant::fromValue(rootNode));
+        root->setData(nameColumn, itemDataApiTruncatedRole,
+                      dataApi.value(QStringLiteral("truncated")).toBool());
         root->setToolTip(
             nameColumn,
             QStringLiteral("Blender RNA Data API, captured read-only at import"));
         root->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        auto *placeholder = new QTreeWidgetItem(root);
+        placeholder->setData(nameColumn, itemDataApiPlaceholderRole, true);
+        placeholder->setFlags(Qt::NoItemFlags);
         sceneRoots.append(root);
-        const auto appendDataApiChildren = [this](
-            const auto &self, const QJsonObject &source,
-            QTreeWidgetItem *parent, const QString &parentPath) -> void {
-            const QJsonArray children = source.value(
-                QStringLiteral("children")).toArray();
-            for (const QJsonValue &childValue : children) {
-                if (!childValue.isObject()) continue;
-                const QJsonObject child = childValue.toObject();
-                const QString kind = child.value(
-                    QStringLiteral("kind")).toString();
-                const QString key = child.value(
-                    QStringLiteral("key")).toString();
-                const QString path = parentPath + QLatin1Char('/') +
-                    kind.toLower() + QLatin1Char(':') + key;
-                auto *row = new QTreeWidgetItem(parent);
-                row->setText(nameColumn, child.value(
-                    QStringLiteral("name")).toString());
-                row->setData(nameColumn, itemKindRole,
-                             static_cast<int>(OutlinerRowKind::DataApi));
-                row->setData(nameColumn, itemPathRole, path);
-                row->setData(nameColumn, itemDataApiKindRole, kind);
-                const QString type = child.value(
-                    QStringLiteral("type")).toString();
-                row->setData(nameColumn, itemDataApiTypeRole, type);
-                row->setToolTip(
-                    nameColumn,
-                    type.isEmpty()
-                        ? QStringLiteral("Blender RNA %1").arg(kind)
-                        : QStringLiteral("Blender RNA %1 (%2)")
-                              .arg(kind, type));
-                row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
-                self(self, child, row, path);
-            }
-        };
-        appendDataApiChildren(appendDataApiChildren, rootNode, root,
-                             QStringLiteral("data-api/main"));
-        if (dataApi.value(QStringLiteral("truncated")).toBool()) {
-            auto *truncatedRow = new QTreeWidgetItem(root);
-            truncatedRow->setText(
-                nameColumn,
-                QStringLiteral("Additional RNA data omitted"));
-            truncatedRow->setData(nameColumn, itemKindRole,
-                                  static_cast<int>(OutlinerRowKind::DataApi));
-            truncatedRow->setData(nameColumn, itemPathRole,
-                                  QStringLiteral("data-api/truncated"));
-            truncatedRow->setToolTip(
-                nameColumn,
-                QStringLiteral("The 20,000-row or 32-level capture limit was reached"));
-            truncatedRow->setFlags(Qt::ItemIsEnabled);
-        }
     } else if (libraryOverridesMode) {
         if (overridePropertiesMode) {
             const QJsonObject properties = libraryOverrides.value(
@@ -4156,7 +4218,7 @@ void CollectionsPanel::refresh()
         buildObjectParentHierarchy(displayObjects);
     }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
-        tree_->expandAll();
+        if (!dataApiMode) tree_->expandAll();
         for (const QVector<QTreeWidgetItem *> &rows : objectRows_) {
             for (QTreeWidgetItem *row : rows) {
                 if (row != nullptr && row->childCount() > 0) {
@@ -4198,29 +4260,7 @@ void CollectionsPanel::refresh()
             }
         } else if (dataApiMode) {
             for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-                QTreeWidgetItem *root = tree_->topLevelItem(index);
-                root->setExpanded(true);
-                QVector<QTreeWidgetItem *> pending;
-                for (int childIndex = 0; childIndex < root->childCount();
-                     ++childIndex) {
-                    pending.append(root->child(childIndex));
-                }
-                while (!pending.isEmpty()) {
-                    QTreeWidgetItem *item = pending.takeLast();
-                    const QTreeWidgetItem *parent = item->parent();
-                    const bool pointerStruct =
-                        item->data(nameColumn, itemDataApiKindRole).toString() ==
-                            QLatin1String("STRUCT") && parent != nullptr &&
-                        parent->data(nameColumn, itemDataApiKindRole).toString() ==
-                            QLatin1String("PROPERTY") &&
-                        parent->data(nameColumn, itemDataApiTypeRole).toString() ==
-                            QLatin1String("POINTER");
-                    item->setExpanded(pointerStruct);
-                    for (int childIndex = 0; childIndex < item->childCount();
-                         ++childIndex) {
-                        pending.append(item->child(childIndex));
-                    }
-                }
+                tree_->topLevelItem(index)->setExpanded(true);
             }
         } else if (libraryOverridesMode) {
             QVector<QTreeWidgetItem *> pending;
@@ -4255,7 +4295,8 @@ void CollectionsPanel::refresh()
             if (saved != expandedPaths.cend()) {
                 item->setExpanded(saved.value());
             } else if (dataApiMode) {
-                item->setExpanded(path == QStringLiteral("data-api/main"));
+                item->setExpanded(path == QStringLiteral("data-api/main") ||
+                                   isDataApiPointerStruct(item));
             } else if (libraryOverridesMode) {
                 const int kind = item->data(nameColumn, itemKindRole).toInt();
                 if (kind == static_cast<int>(OutlinerRowKind::Library)) {

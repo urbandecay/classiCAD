@@ -1695,10 +1695,33 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                         QStringLiteral("/constraints"),
                         QStringLiteral("Blender object constraints"),
                         entry.constraintNames, QStringLiteral("/constraint"));
-        appendNameGroup(item, QStringLiteral("Modifiers"),
-                        QStringLiteral("/modifiers"),
-                        QStringLiteral("Blender object modifiers"),
-                        entry.modifierNames, QStringLiteral("/modifier"));
+        if (entry.modifiers.isEmpty()) {
+            appendNameGroup(item, QStringLiteral("Modifiers"),
+                            QStringLiteral("/modifiers"),
+                            QStringLiteral("Blender object modifiers"),
+                            entry.modifierNames, QStringLiteral("/modifier"));
+        } else {
+            QTreeWidgetItem *modifiers = appendContentRow(
+                item, QStringLiteral("Modifiers"), QStringLiteral("/modifiers"),
+                QStringLiteral("Blender object modifiers"));
+            for (qsizetype index = 0; index < entry.modifiers.size(); ++index) {
+                const OutlinerModifierEntry &sourceModifier = entry.modifiers[index];
+                QTreeWidgetItem *modifier = appendContentRow(
+                    modifiers, sourceModifier.name,
+                    QStringLiteral("/modifier-%1").arg(index),
+                    QStringLiteral("Blender object modifier"));
+                if (sourceModifier.linkedName.isEmpty()) continue;
+                const QString linkedDescription =
+                    sourceModifier.linkedType == QLatin1String("node_tree")
+                    ? QStringLiteral("Blender modifier node group")
+                    : sourceModifier.linkedType == QLatin1String("particle_system")
+                        ? QStringLiteral("Blender particle system")
+                        : QStringLiteral("Blender linked modifier object");
+                appendContentRow(modifier, sourceModifier.linkedName,
+                                 QStringLiteral("/modifier-%1/linked").arg(index),
+                                 linkedDescription);
+            }
+        }
         appendNameGroup(item, QStringLiteral("Vertex Groups"),
                         QStringLiteral("/vertex-groups"),
                         QStringLiteral("Blender mesh vertex groups"),

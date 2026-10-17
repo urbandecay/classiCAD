@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 31);
+    serialized.insert(QStringLiteral("version"), 32);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -549,6 +549,16 @@ QJsonObject documentToJson(const Document &document)
         };
         insertBlenderNameList(QStringLiteral("blenderSourceModifierNames"),
                               sceneObject.blenderSourceModifierNames);
+        QJsonArray blenderSourceModifiers;
+        for (const BlenderSourceModifier &modifier :
+             sceneObject.blenderSourceModifiers) {
+            blenderSourceModifiers.append(QJsonObject{
+                {QStringLiteral("name"), modifier.name},
+                {QStringLiteral("linkedName"), modifier.linkedName},
+                {QStringLiteral("linkedType"), modifier.linkedType}});
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceModifiers"),
+                                blenderSourceModifiers);
         insertBlenderNameList(QStringLiteral("blenderSourceConstraintNames"),
                               sceneObject.blenderSourceConstraintNames);
         insertBlenderNameList(QStringLiteral("blenderSourceVertexGroupNames"),
@@ -682,7 +692,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 31) {
+    if (version < 1 || version > 32) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1657,6 +1667,43 @@ bool documentFromJson(const QJsonValue &value,
                     track.actionNames.append(actionValue.toString());
                 }
                 sceneObject.blenderSourceNlaTracks.append(std::move(track));
+            }
+        }
+        if (version >= 32) {
+            const QJsonValue modifiersValue = serializedObject.value(
+                QStringLiteral("blenderSourceModifiers"));
+            if (!modifiersValue.isArray() || modifiersValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender modifier entries"));
+                return false;
+            }
+            for (const QJsonValue &modifierValue : modifiersValue.toArray()) {
+                if (!modifierValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender modifier entry"));
+                    return false;
+                }
+                const QJsonObject modifierObject = modifierValue.toObject();
+                const QJsonValue nameValue = modifierObject.value(
+                    QStringLiteral("name"));
+                const QJsonValue linkedNameValue = modifierObject.value(
+                    QStringLiteral("linkedName"));
+                const QJsonValue linkedTypeValue = modifierObject.value(
+                    QStringLiteral("linkedType"));
+                const QString linkedType = linkedTypeValue.toString();
+                if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !linkedNameValue.isString() ||
+                    linkedNameValue.toString().size() > 4096 ||
+                    !linkedTypeValue.isString() || linkedType.size() > 32 ||
+                    (!linkedType.isEmpty() && linkedType != QLatin1String("object") &&
+                     linkedType != QLatin1String("node_tree") &&
+                     linkedType != QLatin1String("particle_system"))) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender modifier link"));
+                    return false;
+                }
+                sceneObject.blenderSourceModifiers.append({
+                    nameValue.toString(), linkedNameValue.toString(), linkedType});
             }
         }
         const QJsonValue surfaceWireValue = serializedObject.value(

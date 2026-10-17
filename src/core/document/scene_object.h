@@ -113,6 +113,12 @@ struct BlenderSourceNlaTrack {
     QStringList actionNames;
 };
 
+struct BlenderSourceModifier {
+    QString name;
+    QString linkedName;
+    QString linkedType;
+};
+
 struct SceneObject {
     ObjectId id = ObjectId::invalid();
     QVector<CollectionId> collectionIds;
@@ -145,6 +151,7 @@ struct SceneObject {
     QStringList blenderSourceMaterialNames;
     // Blender Outliner object subtrees retained from the source file.
     QStringList blenderSourceModifierNames;
+    QVector<BlenderSourceModifier> blenderSourceModifiers;
     QStringList blenderSourceConstraintNames;
     QStringList blenderSourceVertexGroupNames;
     bool blenderSourceHasAnimationData = false;

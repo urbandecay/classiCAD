@@ -32,6 +32,12 @@ struct OutlinerNlaTrackEntry {
     QStringList actionNames;
 };
 
+struct OutlinerModifierEntry {
+    QString name;
+    QString linkedName;
+    QString linkedType;
+};
+
 struct OutlinerObjectEntry {
     ObjectId id = ObjectId::invalid();
     QString name;
@@ -39,6 +45,7 @@ struct OutlinerObjectEntry {
     QString dataBlockName;
     QStringList materialNames;
     QStringList modifierNames;
+    QVector<OutlinerModifierEntry> modifiers;
     QStringList constraintNames;
     QStringList vertexGroupNames;
     bool hasAnimationData = false;

@@ -2818,7 +2818,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 28 && bridgeVersion != 29 &&
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
-         bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38)) {
+         bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38 &&
+         bridgeVersion != 39)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3426,6 +3427,40 @@ bool importBlenderScene(const QString &path,
                 }
             }
         }
+        if (bridgeVersion >= 39) {
+            const QJsonValue modifiersValue = item.value(
+                QStringLiteral("modifier_entries"));
+            if (!modifiersValue.isArray() || modifiersValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender modifier entry list is invalid"));
+                return false;
+            }
+            for (const QJsonValue &modifierValue : modifiersValue.toArray()) {
+                if (!modifierValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender modifier entry is invalid"));
+                    return false;
+                }
+                const QJsonObject modifier = modifierValue.toObject();
+                const QJsonValue nameValue = modifier.value(QStringLiteral("name"));
+                const QJsonValue linkedNameValue = modifier.value(
+                    QStringLiteral("linked_name"));
+                const QJsonValue linkedTypeValue = modifier.value(
+                    QStringLiteral("linked_type"));
+                const QString linkedType = linkedTypeValue.toString();
+                if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !linkedNameValue.isString() ||
+                    linkedNameValue.toString().size() > 4096 ||
+                    !linkedTypeValue.isString() || linkedType.size() > 32 ||
+                    (!linkedType.isEmpty() && linkedType != QLatin1String("object") &&
+                     linkedType != QLatin1String("node_tree") &&
+                     linkedType != QLatin1String("particle_system"))) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender modifier link is invalid"));
+                    return false;
+                }
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3559,6 +3594,16 @@ bool importBlenderScene(const QString &path,
                     track.actionNames.append(actionValue.toString());
                 }
                 sceneObject.blenderSourceNlaTracks.append(std::move(track));
+            }
+        }
+        if (bridgeVersion >= 39) {
+            for (const QJsonValue &modifierValue : item.value(
+                     QStringLiteral("modifier_entries")).toArray()) {
+                const QJsonObject sourceModifier = modifierValue.toObject();
+                sceneObject.blenderSourceModifiers.append({
+                    sourceModifier.value(QStringLiteral("name")).toString(),
+                    sourceModifier.value(QStringLiteral("linked_name")).toString(),
+                    sourceModifier.value(QStringLiteral("linked_type")).toString()});
             }
         }
         sceneObject.defaultViewLayerKey =

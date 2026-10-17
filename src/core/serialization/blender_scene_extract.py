@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 38
+BRIDGE_FORMAT_VERSION = 39
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -640,6 +640,24 @@ def object_metadata(obj, scene, depsgraph=None):
                     if strip.action is not None
                 ][:1024],
             })
+    modifier_entries = []
+    for modifier in list(obj.modifiers)[:1024]:
+        linked_id = None
+        linked_type = ""
+        if modifier.type in ("LATTICE", "CURVE", "ARMATURE", "HOOK"):
+            linked_id = getattr(modifier, "object", None)
+            linked_type = "object"
+        elif modifier.type == "NODES":
+            linked_id = getattr(modifier, "node_group", None)
+            linked_type = "node_tree"
+        elif modifier.type == "PARTICLE_SYSTEM":
+            linked_id = getattr(modifier, "particle_system", None)
+            linked_type = "particle_system"
+        modifier_entries.append({
+            "name": modifier.name,
+            "linked_name": linked_id.name if linked_id is not None else "",
+            "linked_type": linked_type if linked_id is not None else "",
+        })
     record = {
         "object_id": stable_id(obj),
         # Workbench Random hashes ID.name, which is obj.name in Blender's
@@ -652,6 +670,7 @@ def object_metadata(obj, scene, depsgraph=None):
             if slot.material is not None
         ],
         "modifier_names": [modifier.name for modifier in obj.modifiers][:1024],
+        "modifier_entries": modifier_entries,
         "constraint_names": [
             constraint.name for constraint in obj.constraints
         ][:1024],

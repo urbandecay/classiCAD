@@ -10900,8 +10900,8 @@ scene depth.
   Blender modifier and constraint names now appear under their own expandable
   object groups, and mesh vertex-group names appear under Vertex Groups. The
   extraction bridge advances to version 37 and native documents to version
-  30; older formats still load. Modifier target links, pose subtrees,
-  grease-pencil effects, and matched UI interaction remain
+  30; older formats still load. At this step modifier target links, pose
+  subtrees, grease-pencil effects, and matched UI interaction remain
   unported. Build passed; no matched Outliner UI comparison was run.
 - The twenty-second tree update follows Blender 5.2.2's object animation rows
   in [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L35-L43),
@@ -10914,6 +10914,14 @@ scene depth.
   and native documents to version 31; older formats still load. The data is
   display-only, and linked-ID selection/context actions are not ported. Build
   passed; no matched Outliner UI comparison was run.
+- The twenty-third tree update follows the linked data rows created when a
+  Blender modifier is expanded in
+  [`tree_element_modifier.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_modifier.cc#L41-L102).
+  Expanded modifier rows now show their linked object, Geometry Nodes group,
+  or particle system when present. These source references are retained in
+  Blender bridge version 39 and native document version 32. The linked rows
+  are display-only and do not activate or select the referenced data block.
+  Build passed; no matched Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

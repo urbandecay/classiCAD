@@ -2879,6 +2879,11 @@ private:
                 entry.blenderType = object.blenderSourceObjectType;
                 entry.dataBlockName = object.blenderSourceDataName;
                 entry.modifierNames = object.blenderSourceModifierNames;
+                for (const BlenderSourceModifier &modifier :
+                     object.blenderSourceModifiers) {
+                    entry.modifiers.append({modifier.name, modifier.linkedName,
+                                            modifier.linkedType});
+                }
                 entry.constraintNames = object.blenderSourceConstraintNames;
                 entry.vertexGroupNames = object.blenderSourceVertexGroupNames;
                 entry.hasAnimationData = object.blenderSourceHasAnimationData;

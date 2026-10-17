@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 55
+BRIDGE_FORMAT_VERSION = 56
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -49,6 +49,7 @@ MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID = 512
 MAX_OUTLINER_OVERRIDE_DEPTH = 128
 MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID = 2048
 MAX_OUTLINER_ACTION_SLOTS = 20000
+MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS = 20000
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -627,48 +628,103 @@ def visibility_metadata(obj):
     }
 
 
-def data_block_animation_metadata(data_block):
+def data_block_animation_metadata(data_block, remaining_rows=None):
     animation_data = getattr(data_block, "animation_data", None)
     action = getattr(animation_data, "action", None)
     action_slot = getattr(animation_data, "action_slot", None)
     drivers = getattr(animation_data, "drivers", ())
     nla_track_collection = getattr(animation_data, "nla_tracks", ())
     driver_target_names = []
-    if animation_data is not None:
-        last_added_target = None
-        for fcurve in drivers:
-            driver = fcurve.driver
-            if driver is None or not driver.variables:
-                continue
-            for variable in driver.variables:
-                for target in variable.targets:
-                    target_id = target.id
-                    if target_id is not None and target_id != last_added_target:
+    result = {
+        "has_animation_data": False,
+        "action_name": "",
+        "action_slot_name": "",
+        "has_drivers": False,
+        "driver_target_names": driver_target_names,
+        "nla_tracks": [],
+        "truncated": False,
+    }
+    if animation_data is None or not (action is not None or drivers or
+                                      nla_track_collection):
+        return result
+
+    local_rows = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    budgets = [local_rows]
+    if remaining_rows is not None:
+        budgets.append(remaining_rows)
+    truncated = [False]
+
+    def reserve_rows(count=1):
+        if any(budget[0] < count for budget in budgets):
+            truncated[0] = True
+            return False
+        for budget in budgets:
+            budget[0] -= count
+        return True
+
+    if not reserve_rows():
+        result["truncated"] = True
+        return result
+    result["has_animation_data"] = True
+
+    if action is not None:
+        if reserve_rows():
+            result["action_name"] = action.name
+            if action_slot is not None and reserve_rows():
+                result["action_slot_name"] = getattr(
+                    action_slot, "name_display", "")
+
+    if drivers:
+        if reserve_rows():
+            result["has_drivers"] = True
+            last_added_target = None
+            for fcurve_index, fcurve in enumerate(drivers):
+                if fcurve_index >= MAX_OUTLINER_HIERARCHY_ITEMS:
+                    truncated[0] = True
+                    break
+                driver = fcurve.driver
+                if driver is None or not driver.variables:
+                    continue
+                stop_targets = False
+                for variable in driver.variables:
+                    for target in variable.targets:
+                        target_id = target.id
+                        if target_id is None or target_id == last_added_target:
+                            continue
+                        if not reserve_rows():
+                            stop_targets = True
+                            break
                         driver_target_names.append(target_id.name)
                         last_added_target = target_id
+                    if stop_targets:
+                        break
+                if stop_targets:
+                    break
+
     nla_tracks = []
-    for track in list(nla_track_collection)[:1024]:
-        nla_tracks.append({
-            "name": track.name,
-            "action_names": [
-                strip.action.name for strip in track.strips
-                if strip.action is not None
-            ][:1024],
-        })
-    return {
-        "has_animation_data": bool(
-            animation_data is not None and
-            (action is not None or drivers or nla_track_collection)
-        ),
-        "action_name": action.name if action is not None else "",
-        "action_slot_name": (
-            getattr(action_slot, "name_display", "")
-            if action_slot is not None else ""
-        ),
-        "has_drivers": bool(drivers),
-        "driver_target_names": driver_target_names[:1024],
-        "nla_tracks": nla_tracks,
-    }
+    for track_index, track in enumerate(nla_track_collection):
+        if track_index >= MAX_OUTLINER_HIERARCHY_ITEMS:
+            truncated[0] = True
+            break
+        if track_index == 0:
+            if not reserve_rows(2):
+                break
+        elif not reserve_rows():
+            break
+        action_names = []
+        for strip_index, strip in enumerate(track.strips):
+            if strip_index >= MAX_OUTLINER_HIERARCHY_ITEMS:
+                truncated[0] = True
+                break
+            if strip.action is not None:
+                if not reserve_rows():
+                    break
+                action_names.append(strip.action.name)
+        nla_tracks.append({"name": track.name, "action_names": action_names})
+    result["nla_tracks"] = nla_tracks
+    result["driver_target_names"] = driver_target_names
+    result["truncated"] = truncated[0]
+    return result
 
 
 def outliner_name_tree(items, include_constraints=False):
@@ -786,7 +842,7 @@ def outliner_library_tree():
         parent = getattr(library, "parent", None)
         record = {
             "id": library_id,
-            "name": str(library.filepath or library.name_full),
+            "name": str(library.filepath),
             "filepath": str(library.filepath),
             "parent_library_id": stable_id(parent) if parent is not None else "",
             "is_current_file": False,
@@ -800,6 +856,7 @@ def outliner_library_tree():
     seen_ids = set()
     row_count = 0
     action_slot_count = 0
+    library_animation_rows_remaining = [MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS]
     for property_rna in bpy.data.bl_rna.properties:
         if getattr(property_rna, "type", "") != "COLLECTION":
             continue
@@ -827,11 +884,28 @@ def outliner_library_tree():
             group_name = str(property_rna.name)
             group = groups.get(group_name)
             if group is None:
-                group = {"name": group_name, "names": [], "action_slots": []}
+                group = {
+                    "name": group_name,
+                    "names": [],
+                    "animations": [],
+                    "action_slots": [],
+                }
                 groups[group_name] = group
                 record["data_blocks"].append(group)
-            data_block_name = str(id_block.name_full)
+            # Blender's tree_element_id.cc displays ID.name + 2, which maps to
+            # RNA ID.name (without name_full's linked-library suffix).
+            data_block_name = str(id_block.name)
             group["names"].append(data_block_name)
+            if id_block.bl_rna.identifier != "Action":
+                animation = data_block_animation_metadata(
+                    id_block, library_animation_rows_remaining)
+                if animation["truncated"]:
+                    record["truncated"] = True
+                if animation["has_animation_data"]:
+                    group["animations"].append({
+                        "data_block_name": data_block_name,
+                        "animation": animation,
+                    })
             if id_block.bl_rna.identifier == "Action":
                 slots = []
                 try:

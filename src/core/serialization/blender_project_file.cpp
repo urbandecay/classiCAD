@@ -2838,7 +2838,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 48 && bridgeVersion != 49 &&
          bridgeVersion != 50 && bridgeVersion != 51 &&
          bridgeVersion != 52 && bridgeVersion != 53 &&
-         bridgeVersion != 54 && bridgeVersion != 55)) {
+         bridgeVersion != 54 && bridgeVersion != 55 &&
+         bridgeVersion != 56)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3096,6 +3097,7 @@ bool importBlenderScene(const QString &path,
         int currentFileCount = 0;
         int totalDataBlockRows = 0;
         int totalActionSlotRows = 0;
+        int totalLibraryAnimationRows = 0;
         QSet<QString> libraryIds;
         const QJsonArray libraryRecords = librariesValue.toArray();
         for (qsizetype libraryIndex = 0;
@@ -3153,13 +3155,18 @@ bool importBlenderScene(const QString &path,
                     QStringLiteral("names"));
                 const QJsonValue actionSlotsValue = group.value(
                     QStringLiteral("action_slots"));
+                const QJsonValue animationsValue = group.value(
+                    QStringLiteral("animations"));
                 if (!groupNameValue.isString() ||
                     groupNameValue.toString().size() > 256 ||
                     !namesValue.isArray() || namesValue.toArray().size() > 20000 ||
                     totalDataBlockRows + namesValue.toArray().size() > 20000 ||
                     (bridgeVersion >= 55 &&
                      (!actionSlotsValue.isArray() ||
-                      actionSlotsValue.toArray().size() > 20000))) {
+                      actionSlotsValue.toArray().size() > 20000)) ||
+                    (bridgeVersion >= 56 &&
+                     (!animationsValue.isArray() ||
+                      animationsValue.toArray().size() > 20000))) {
                     setError(errorMessage,
                              QStringLiteral("A Blender Outliner ID group is invalid"));
                     return false;
@@ -3174,6 +3181,119 @@ bool importBlenderScene(const QString &path,
                         return false;
                     }
                     dataBlockNames.insert(dataNameValue.toString());
+                }
+                if (bridgeVersion >= 56) {
+                    QSet<QString> animatedDataBlockNames;
+                    for (const QJsonValue &animationValue :
+                         animationsValue.toArray()) {
+                        if (!animationValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library animation row is invalid"));
+                            return false;
+                        }
+                        const QJsonObject animationRecord =
+                            animationValue.toObject();
+                        const QJsonValue dataNameValue = animationRecord.value(
+                            QStringLiteral("data_block_name"));
+                        const QJsonValue metadataValue = animationRecord.value(
+                            QStringLiteral("animation"));
+                        const QString dataName = dataNameValue.toString();
+                        if (!dataNameValue.isString() ||
+                            dataName.size() > 4096 ||
+                            !dataBlockNames.contains(dataName) ||
+                            animatedDataBlockNames.contains(dataName) ||
+                            !metadataValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library animation row is invalid"));
+                            return false;
+                        }
+                        animatedDataBlockNames.insert(dataName);
+                        const QJsonObject metadata = metadataValue.toObject();
+                        const QJsonValue actionName = metadata.value(
+                            QStringLiteral("action_name"));
+                        const QJsonValue actionSlotName = metadata.value(
+                            QStringLiteral("action_slot_name"));
+                        const QJsonValue driverNames = metadata.value(
+                            QStringLiteral("driver_target_names"));
+                        const QJsonValue tracks = metadata.value(
+                            QStringLiteral("nla_tracks"));
+                        if (!metadata.value(QStringLiteral("has_animation_data")).toBool() ||
+                            !metadata.value(QStringLiteral("has_animation_data")).isBool() ||
+                            !actionName.isString() || actionName.toString().size() > 4096 ||
+                            !actionSlotName.isString() ||
+                            actionSlotName.toString().size() > 4096 ||
+                            !metadata.value(QStringLiteral("has_drivers")).isBool() ||
+                            !metadata.value(QStringLiteral("truncated")).isBool() ||
+                            !driverNames.isArray() || driverNames.toArray().size() > 1024 ||
+                            !tracks.isArray() || tracks.toArray().size() > 1024) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library animation record is invalid"));
+                            return false;
+                        }
+                        for (const QJsonValue &targetName : driverNames.toArray()) {
+                            if (!targetName.isString() ||
+                                targetName.toString().size() > 4096) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library driver target is invalid"));
+                                return false;
+                            }
+                        }
+                        int animationRowCount = 1;
+                        if (!actionName.toString().isEmpty()) {
+                            ++animationRowCount;
+                            if (!actionSlotName.toString().isEmpty()) {
+                                ++animationRowCount;
+                            }
+                        } else if (!actionSlotName.toString().isEmpty()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library action slot has no Action row"));
+                            return false;
+                        }
+                        if (metadata.value(QStringLiteral("has_drivers")).toBool()) {
+                            animationRowCount += 1 + driverNames.toArray().size();
+                        } else if (!driverNames.toArray().isEmpty()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library driver target has no Drivers row"));
+                            return false;
+                        }
+                        if (!tracks.toArray().isEmpty()) {
+                            ++animationRowCount;
+                        }
+                        for (const QJsonValue &trackValue : tracks.toArray()) {
+                            if (!trackValue.isObject()) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library NLA track is invalid"));
+                                return false;
+                            }
+                            const QJsonObject track = trackValue.toObject();
+                            const QJsonValue trackName = track.value(
+                                QStringLiteral("name"));
+                            const QJsonValue actions = track.value(
+                                QStringLiteral("action_names"));
+                            if (!trackName.isString() || trackName.toString().size() > 4096 ||
+                                !actions.isArray() || actions.toArray().size() > 1024) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library NLA track is invalid"));
+                                return false;
+                            }
+                            animationRowCount += 1 + actions.toArray().size();
+                            for (const QJsonValue &actionValue : actions.toArray()) {
+                                if (!actionValue.isString() ||
+                                    actionValue.toString().size() > 4096) {
+                                    setError(errorMessage,
+                                             QStringLiteral("A Blender library NLA action is invalid"));
+                                    return false;
+                                }
+                            }
+                        }
+                        if (animationRowCount > 1024 ||
+                            totalLibraryAnimationRows + animationRowCount > 20000) {
+                            setError(errorMessage,
+                                     QStringLiteral("The Blender library animation tree exceeded its row limit"));
+                            return false;
+                        }
+                        totalLibraryAnimationRows += animationRowCount;
+                    }
                 }
                 if (bridgeVersion >= 55) {
                     QSet<QString> actionNames;

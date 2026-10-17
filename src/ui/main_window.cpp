@@ -3303,6 +3303,41 @@ private:
         };
         collectionCallbacks.libraries = [this]() {
             QVector<OutlinerLibraryEntry> libraries;
+            const auto readAnimationData = [](
+                const QJsonObject &source) {
+                OutlinerAnimationEntry result;
+                result.hasAnimationData = source.value(
+                    QStringLiteral("has_animation_data")).toBool();
+                result.actionName = source.value(
+                    QStringLiteral("action_name")).toString();
+                result.actionSlotName = source.value(
+                    QStringLiteral("action_slot_name")).toString();
+                result.hasDrivers = source.value(
+                    QStringLiteral("has_drivers")).toBool();
+                for (const QJsonValue &targetValue : source.value(
+                         QStringLiteral("driver_target_names")).toArray()) {
+                    const QString targetName = targetValue.toString();
+                    if (!targetName.isEmpty()) {
+                        result.driverTargetNames.append(targetName);
+                    }
+                }
+                for (const QJsonValue &trackValue : source.value(
+                         QStringLiteral("nla_tracks")).toArray()) {
+                    const QJsonObject sourceTrack = trackValue.toObject();
+                    OutlinerNlaTrackEntry track;
+                    track.name = sourceTrack.value(
+                        QStringLiteral("name")).toString();
+                    for (const QJsonValue &actionValue : sourceTrack.value(
+                             QStringLiteral("action_names")).toArray()) {
+                        const QString actionName = actionValue.toString();
+                        if (!actionName.isEmpty()) {
+                            track.actionNames.append(actionName);
+                        }
+                    }
+                    result.nlaTracks.append(std::move(track));
+                }
+                return result;
+            };
             for (const QJsonValue &libraryValue :
                  session_.document().settings().importedBlenderLibraries) {
                 const QJsonObject record = libraryValue.toObject();
@@ -3326,6 +3361,21 @@ private:
                              QStringLiteral("names")).toArray()) {
                         const QString name = nameValue.toString();
                         if (!name.isEmpty()) group.dataBlockNames.append(name);
+                    }
+                    for (const QJsonValue &animationValue : groupRecord.value(
+                             QStringLiteral("animations")).toArray()) {
+                        const QJsonObject animationRecord =
+                            animationValue.toObject();
+                        const QString dataBlockName = animationRecord.value(
+                            QStringLiteral("data_block_name")).toString();
+                        const OutlinerAnimationEntry animation = readAnimationData(
+                            animationRecord.value(
+                                QStringLiteral("animation")).toObject());
+                        if (!dataBlockName.isEmpty() &&
+                            animation.hasAnimationData) {
+                            group.animationsByDataBlockName.insert(
+                                dataBlockName, animation);
+                        }
                     }
                     for (const QJsonValue &actionValue : groupRecord.value(
                              QStringLiteral("action_slots")).toArray()) {

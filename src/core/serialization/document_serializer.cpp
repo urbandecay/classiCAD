@@ -349,13 +349,14 @@ bool isValidImportedBlenderLibraryOverrides(const QJsonValue &value)
     return currentFileCount == 1;
 }
 
-bool isValidImportedBlenderActionSlots(const QJsonValue &value)
+bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
 {
     if (!value.isArray() || value.toArray().size() > 1024) return false;
     int totalSlots = 0;
     int totalActionGroups = 0;
     int totalDataBlockGroups = 0;
     int totalDataBlocks = 0;
+    int totalAnimationRows = 0;
     for (const QJsonValue &libraryValue : value.toArray()) {
         if (!libraryValue.isObject()) return false;
         const QJsonValue groupsValue = libraryValue.toObject().value(
@@ -371,17 +372,13 @@ bool isValidImportedBlenderActionSlots(const QJsonValue &value)
             const QJsonValue namesValue = group.value(QStringLiteral("names"));
             const QJsonValue actionSlotsValue = group.value(
                 QStringLiteral("action_slots"));
+            const QJsonValue animationsValue = group.value(
+                QStringLiteral("animations"));
             if (!namesValue.isArray() || namesValue.toArray().size() > 20000) {
                 return false;
             }
             totalDataBlocks += namesValue.toArray().size();
             if (totalDataBlocks > 20000) return false;
-            if (actionSlotsValue.isUndefined()) continue;
-            if (!actionSlotsValue.isArray() ||
-                actionSlotsValue.toArray().size() > 20000 ||
-                totalActionGroups + actionSlotsValue.toArray().size() > 20000) {
-                return false;
-            }
             QSet<QString> dataBlockNames;
             for (const QJsonValue &nameValue : namesValue.toArray()) {
                 if (!nameValue.isString() || nameValue.toString().size() > 4096) {
@@ -389,35 +386,118 @@ bool isValidImportedBlenderActionSlots(const QJsonValue &value)
                 }
                 dataBlockNames.insert(nameValue.toString());
             }
-            QSet<QString> actionNames;
-            for (const QJsonValue &actionValue : actionSlotsValue.toArray()) {
-                if (!actionValue.isObject() || ++totalActionGroups > 20000) {
+
+            if (!actionSlotsValue.isUndefined()) {
+                if (!actionSlotsValue.isArray() ||
+                    actionSlotsValue.toArray().size() > 20000 ||
+                    totalActionGroups + actionSlotsValue.toArray().size() > 20000) {
                     return false;
                 }
-                const QJsonObject action = actionValue.toObject();
-                const QJsonValue actionNameValue = action.value(
-                    QStringLiteral("action_name"));
-                const QJsonValue slotsValue = action.value(QStringLiteral("slots"));
-                const QString actionName = actionNameValue.toString();
-                if (!actionNameValue.isString() || actionName.size() > 4096 ||
-                    !dataBlockNames.contains(actionName) ||
-                    actionNames.contains(actionName) || !slotsValue.isArray() ||
-                    slotsValue.toArray().size() > 20000 ||
-                    totalSlots + slotsValue.toArray().size() > 20000) {
-                    return false;
+                QSet<QString> actionNames;
+                for (const QJsonValue &actionValue : actionSlotsValue.toArray()) {
+                    if (!actionValue.isObject() || ++totalActionGroups > 20000) {
+                        return false;
+                    }
+                    const QJsonObject action = actionValue.toObject();
+                    const QJsonValue actionNameValue = action.value(
+                        QStringLiteral("action_name"));
+                    const QJsonValue slotsValue = action.value(
+                        QStringLiteral("slots"));
+                    const QString actionName = actionNameValue.toString();
+                    if (!actionNameValue.isString() || actionName.size() > 4096 ||
+                        !dataBlockNames.contains(actionName) ||
+                        actionNames.contains(actionName) || !slotsValue.isArray() ||
+                        slotsValue.toArray().size() > 20000 ||
+                        totalSlots + slotsValue.toArray().size() > 20000) {
+                        return false;
+                    }
+                    actionNames.insert(actionName);
+                    totalSlots += slotsValue.toArray().size();
+                    for (const QJsonValue &slotValue : slotsValue.toArray()) {
+                        if (!slotValue.isObject()) return false;
+                        const QJsonObject slot = slotValue.toObject();
+                        const QJsonValue name = slot.value(QStringLiteral("name"));
+                        const QJsonValue identifier = slot.value(
+                            QStringLiteral("identifier"));
+                        if (!name.isString() || name.toString().isEmpty() ||
+                            name.toString().size() > 4096 || !identifier.isString() ||
+                            identifier.toString().size() < 3 ||
+                            identifier.toString().size() > 256) return false;
+                    }
                 }
-                actionNames.insert(actionName);
-                totalSlots += slotsValue.toArray().size();
-                for (const QJsonValue &slotValue : slotsValue.toArray()) {
-                    if (!slotValue.isObject()) return false;
-                    const QJsonObject slot = slotValue.toObject();
-                    const QJsonValue name = slot.value(QStringLiteral("name"));
-                    const QJsonValue identifier = slot.value(
-                        QStringLiteral("identifier"));
-                    if (!name.isString() || name.toString().isEmpty() ||
-                        name.toString().size() > 4096 || !identifier.isString() ||
-                        identifier.toString().size() < 3 ||
-                        identifier.toString().size() > 256) return false;
+            }
+
+            if (!animationsValue.isUndefined()) {
+                if (!animationsValue.isArray() ||
+                    animationsValue.toArray().size() > 20000) return false;
+                QSet<QString> animatedDataBlockNames;
+                for (const QJsonValue &animationValue : animationsValue.toArray()) {
+                    if (!animationValue.isObject()) return false;
+                    const QJsonObject animationRecord = animationValue.toObject();
+                    const QJsonValue dataNameValue = animationRecord.value(
+                        QStringLiteral("data_block_name"));
+                    const QJsonValue metadataValue = animationRecord.value(
+                        QStringLiteral("animation"));
+                    const QString dataName = dataNameValue.toString();
+                    if (!dataNameValue.isString() || dataName.size() > 4096 ||
+                        !dataBlockNames.contains(dataName) ||
+                        animatedDataBlockNames.contains(dataName) ||
+                        !metadataValue.isObject()) return false;
+                    animatedDataBlockNames.insert(dataName);
+                    const QJsonObject metadata = metadataValue.toObject();
+                    const QJsonValue actionName = metadata.value(
+                        QStringLiteral("action_name"));
+                    const QJsonValue actionSlotName = metadata.value(
+                        QStringLiteral("action_slot_name"));
+                    const QJsonValue driverNames = metadata.value(
+                        QStringLiteral("driver_target_names"));
+                    const QJsonValue tracks = metadata.value(
+                        QStringLiteral("nla_tracks"));
+                    if (!metadata.value(QStringLiteral("has_animation_data")).isBool() ||
+                        !metadata.value(QStringLiteral("has_animation_data")).toBool() ||
+                        !actionName.isString() || actionName.toString().size() > 4096 ||
+                        !actionSlotName.isString() || actionSlotName.toString().size() > 4096 ||
+                        !metadata.value(QStringLiteral("has_drivers")).isBool() ||
+                        !metadata.value(QStringLiteral("truncated")).isBool() ||
+                        !driverNames.isArray() || driverNames.toArray().size() > 1024 ||
+                        !tracks.isArray() || tracks.toArray().size() > 1024) return false;
+                    int animationRowCount = 1;
+                    if (!actionName.toString().isEmpty()) {
+                        ++animationRowCount;
+                        if (!actionSlotName.toString().isEmpty()) ++animationRowCount;
+                    } else if (!actionSlotName.toString().isEmpty()) {
+                        return false;
+                    }
+                    if (metadata.value(QStringLiteral("has_drivers")).toBool()) {
+                        animationRowCount += 1 + driverNames.toArray().size();
+                    } else if (!driverNames.toArray().isEmpty()) {
+                        return false;
+                    }
+                    for (const QJsonValue &targetName : driverNames.toArray()) {
+                        if (!targetName.isString() ||
+                            targetName.toString().size() > 4096) return false;
+                    }
+                    if (!tracks.toArray().isEmpty()) ++animationRowCount;
+                    for (const QJsonValue &trackValue : tracks.toArray()) {
+                        if (!trackValue.isObject()) return false;
+                        const QJsonObject track = trackValue.toObject();
+                        const QJsonValue trackName = track.value(
+                            QStringLiteral("name"));
+                        const QJsonValue actions = track.value(
+                            QStringLiteral("action_names"));
+                        if (!trackName.isString() || trackName.toString().size() > 4096 ||
+                            !actions.isArray() || actions.toArray().size() > 1024) {
+                            return false;
+                        }
+                        animationRowCount += 1 + actions.toArray().size();
+                        for (const QJsonValue &actionNameValue : actions.toArray()) {
+                            if (!actionNameValue.isString() ||
+                                actionNameValue.toString().size() > 4096) return false;
+                        }
+                    }
+                    if (animationRowCount > 1024 ||
+                        totalAnimationRows + animationRowCount > 20000) return false;
+                    totalAnimationRows += animationRowCount;
                 }
             }
         }
@@ -643,7 +723,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 45);
+    serialized.insert(QStringLiteral("version"), 46);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1099,7 +1179,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 45) {
+    if (version < 1 || version > 46) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1516,7 +1596,7 @@ bool documentFromJson(const QJsonValue &value,
             if (!importedLibraries.isArray() ||
                 importedLibraries.toArray().size() > 1024 ||
                 (version >= 45 &&
-                 !isValidImportedBlenderActionSlots(importedLibraries))) {
+                 !isValidImportedBlenderLibraryRows(importedLibraries))) {
                 setError(errorMessage,
                          QStringLiteral("invalid imported Blender library metadata"));
                 return false;

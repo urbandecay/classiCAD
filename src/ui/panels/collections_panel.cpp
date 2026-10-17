@@ -2912,6 +2912,77 @@ void CollectionsPanel::refresh()
             truncatedRow->setFlags(Qt::ItemIsEnabled);
         }
     } else if (librariesMode) {
+        const auto appendLibraryContentRow = [this](
+            QTreeWidgetItem *parent, const QString &name,
+            const QString &path, const QString &description)
+                -> QTreeWidgetItem * {
+            if (parent == nullptr || name.isEmpty()) return nullptr;
+            auto *row = new QTreeWidgetItem(parent);
+            row->setText(nameColumn, name);
+            row->setData(nameColumn, itemKindRole,
+                static_cast<int>(OutlinerRowKind::ObjectContent));
+            row->setData(nameColumn, itemPathRole, path);
+            row->setToolTip(nameColumn, description);
+            row->setFlags(Qt::ItemIsEnabled);
+            return row;
+        };
+        const auto appendLibraryAnimation = [&appendLibraryContentRow](
+            QTreeWidgetItem *parent, const OutlinerAnimationEntry &animation,
+            const QString &path) {
+            if (!animation.hasAnimationData) return;
+            QTreeWidgetItem *animationRow = appendLibraryContentRow(
+                parent, QStringLiteral("Animation"), path,
+                QStringLiteral("Blender data-block animation data"));
+            const QString animationPath = path;
+            if (!animation.actionName.isEmpty()) {
+                QTreeWidgetItem *actionRow = appendLibraryContentRow(
+                    animationRow, animation.actionName,
+                    animationPath + QStringLiteral("/action"),
+                    QStringLiteral("Blender active Action data block"));
+                appendLibraryContentRow(
+                    actionRow, animation.actionSlotName,
+                    animationPath + QStringLiteral("/action/slot"),
+                    QStringLiteral("Blender assigned Action slot"));
+            }
+            if (animation.hasDrivers) {
+                QTreeWidgetItem *driversRow = appendLibraryContentRow(
+                    animationRow, QStringLiteral("Drivers"),
+                    animationPath + QStringLiteral("/drivers"),
+                    QStringLiteral("Blender animation drivers"));
+                for (qsizetype index = 0;
+                     index < animation.driverTargetNames.size(); ++index) {
+                    appendLibraryContentRow(
+                        driversRow, animation.driverTargetNames[index],
+                        animationPath + QStringLiteral("/driver-target-%1")
+                            .arg(index),
+                        QStringLiteral("Blender driver target data block"));
+                }
+            }
+            if (!animation.nlaTracks.isEmpty()) {
+                QTreeWidgetItem *tracksRow = appendLibraryContentRow(
+                    animationRow, QStringLiteral("NLA Tracks"),
+                    animationPath + QStringLiteral("/nla-tracks"),
+                    QStringLiteral("Blender non-linear animation tracks"));
+                for (qsizetype trackIndex = 0;
+                     trackIndex < animation.nlaTracks.size(); ++trackIndex) {
+                    const OutlinerNlaTrackEntry &track =
+                        animation.nlaTracks[trackIndex];
+                    const QString trackPath = animationPath +
+                        QStringLiteral("/nla-track-%1").arg(trackIndex);
+                    QTreeWidgetItem *trackRow = appendLibraryContentRow(
+                        tracksRow, track.name, trackPath,
+                        QStringLiteral("Blender NLA track"));
+                    for (qsizetype actionIndex = 0;
+                         actionIndex < track.actionNames.size(); ++actionIndex) {
+                        appendLibraryContentRow(
+                            trackRow, track.actionNames[actionIndex],
+                            trackPath + QStringLiteral("/action-%1")
+                                .arg(actionIndex),
+                            QStringLiteral("Blender NLA Action data block"));
+                    }
+                }
+            }
+        };
         QHash<QString, QTreeWidgetItem *> libraryRows;
         for (const OutlinerLibraryEntry &library : libraries) {
             auto *row = new QTreeWidgetItem;
@@ -2985,25 +3056,39 @@ void CollectionsPanel::refresh()
                         QStringLiteral("Blender data block"));
                     dataRow->setFlags(Qt::ItemIsEnabled |
                                       Qt::ItemIsSelectable);
-                    const QVector<OutlinerActionSlotEntry> actionSlots =
-                        sourceGroup.actionSlotsByDataBlockName.value(dataBlockName);
-                    for (qsizetype slotIndex = 0;
-                         slotIndex < actionSlots.size(); ++slotIndex) {
-                        const OutlinerActionSlotEntry &slot = actionSlots[slotIndex];
-                        auto *slotRow = new QTreeWidgetItem(dataRow);
-                        slotRow->setText(nameColumn, slot.displayName);
-                        slotRow->setData(nameColumn, itemKindRole,
-                            static_cast<int>(OutlinerRowKind::ObjectContent));
-                        slotRow->setData(
-                            nameColumn, itemPathRole,
-                            dataPath + QStringLiteral("/item-%1/slot-%2")
-                                           .arg(dataIndex).arg(slotIndex));
-                        slotRow->setToolTip(
-                            nameColumn,
-                            QStringLiteral("Blender Action slot: %1")
-                                .arg(slot.identifier));
-                        slotRow->setFlags(Qt::ItemIsEnabled |
-                                          Qt::ItemIsSelectable);
+                    if (!idTypeFilter_.isEmpty()) {
+                        const QVector<OutlinerActionSlotEntry> actionSlots =
+                            sourceGroup.actionSlotsByDataBlockName.value(
+                                dataBlockName);
+                        for (qsizetype slotIndex = 0;
+                             slotIndex < actionSlots.size(); ++slotIndex) {
+                            const OutlinerActionSlotEntry &slot =
+                                actionSlots[slotIndex];
+                            auto *slotRow = new QTreeWidgetItem(dataRow);
+                            slotRow->setText(nameColumn, slot.displayName);
+                            slotRow->setData(nameColumn, itemKindRole,
+                                static_cast<int>(OutlinerRowKind::ObjectContent));
+                            slotRow->setData(
+                                nameColumn, itemPathRole,
+                                dataPath + QStringLiteral("/item-%1/slot-%2")
+                                               .arg(dataIndex).arg(slotIndex));
+                            slotRow->setToolTip(
+                                nameColumn,
+                                QStringLiteral("Blender Action slot: %1")
+                                    .arg(slot.identifier));
+                            slotRow->setFlags(Qt::ItemIsEnabled |
+                                              Qt::ItemIsSelectable);
+                        }
+                        const auto animation =
+                            sourceGroup.animationsByDataBlockName.constFind(
+                                dataBlockName);
+                        if (animation !=
+                            sourceGroup.animationsByDataBlockName.cend()) {
+                            appendLibraryAnimation(
+                                dataRow, animation.value(),
+                                dataPath + QStringLiteral("/item-%1/animation")
+                                    .arg(dataIndex));
+                        }
                     }
                 }
             }
@@ -3019,7 +3104,7 @@ void CollectionsPanel::refresh()
                     libraryPath + QStringLiteral("/truncated"));
                 truncatedRow->setToolTip(
                     nameColumn,
-                    QStringLiteral("The 20,000 data-block or Action-slot extraction limit was reached"));
+                    QStringLiteral("A 20,000 data-block, Action-slot, or animation-row limit was reached"));
                 truncatedRow->setFlags(Qt::ItemIsEnabled);
             }
         }

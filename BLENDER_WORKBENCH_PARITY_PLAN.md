@@ -11129,16 +11129,32 @@ scene depth.
   Blender Outliner UI comparison was run.
 - The forty-first tree update follows Blender 5.2.2's [Action expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_action.cc)
   and [Action-slot row](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_action_slot.cc)
-  implementations. In Libraries mode, classiCAD now captures and displays
-  every Action slot beneath its Action, using Blender's slot display name and
-  retaining the full identifier in the row tooltip. Existing scene/object
-  animation rows continue to show only their assigned slot. Blender bridge
+  implementations. In Libraries mode, selecting the Actions type filter now
+  shows every Action slot beneath its Action, using Blender's slot display
+  name and retaining the full identifier in the row tooltip. This follows
+  Blender's rule that data-block children expand only when an ID type filter
+  is active. Existing scene/object animation rows continue to show only their
+  assigned slot. Blender bridge
   version 55 and native document version 45 add bounded slot metadata, capped
   at 20,000 slots and validated on import and document load; saved projects
   without the added field remain supported. This is a read-only snapshot, so
   Blender's slot editing and live expansion behavior are not ported. `cmake --build build -j4`
   passed, as did Python syntax parsing and `git diff --check`; no matched
   Blender Outliner UI comparison was run.
+- The forty-second tree update follows Blender 5.2.2's [Libraries display](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_libraries.cc), [generic ID expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id.cc), [library labels](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_library.cc), and [Animation rows](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_anim_data.cc).
+  Filtered Libraries data-block rows now expand to show their Animation group,
+  active Action and assigned slot, driver targets, NLA tracks, and strip
+  Actions when present. As in Blender, these children are shown only while an
+  ID type filter is active. The extractor limits each animation subtree to
+  1,024 rows and all library animation subtrees together to 20,000 rows;
+  truncation is reported on the library row. Blender bridge version 56 and
+  native document version 46 retain and validate the hierarchy, while older
+  snapshots without animation rows remain loadable. Library paths use
+  `Library.filepath`, and data-block labels use `ID.name` without the linked
+  suffix added by `name_full`. Data-block row selection and animation editing
+  remain display-only. `cmake --build build -j4` passed, as did Python syntax
+  parsing and `git diff --check`; no matched Blender Outliner UI comparison
+  was run.
 - Remaining Outliner scope still includes further specialized ID branches,
   Data API edit/keying-set interactions, Sequencer selection synchronization,
   and a matched Blender/classiCAD interaction comparison. Do not mark this

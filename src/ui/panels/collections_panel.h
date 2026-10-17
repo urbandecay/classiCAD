@@ -157,6 +157,7 @@ struct OutlinerActionSlotEntry {
 struct OutlinerLibraryDataGroup {
     QString displayName;
     QStringList dataBlockNames;
+    QHash<QString, OutlinerAnimationEntry> animationsByDataBlockName;
     QHash<QString, QVector<OutlinerActionSlotEntry>> actionSlotsByDataBlockName;
 };
 

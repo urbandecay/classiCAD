@@ -5115,8 +5115,56 @@ private:
             [this, linkedObjectDataUsers](ObjectId id) {
                 const QVector<ObjectId> users = linkedObjectDataUsers(id);
                 if (users.isEmpty()) return;
-                const ObjectId active = users.contains(id) ? id : users.back();
-                session_.selection().setObjectIds(users, active);
+                QVector<ObjectId> selectedIds = session_.selection().objectIds();
+                for (const ObjectId user : users) {
+                    if (!selectedIds.contains(user)) selectedIds.append(user);
+                }
+                ObjectId active = session_.selection().activeObjectId();
+                if (!selectedIds.contains(active)) {
+                    active = users.contains(id) ? id : users.front();
+                }
+                session_.selection().setObjectIds(selectedIds, active);
+                session_.selection().setActiveObjectId(active);
+            };
+        const auto linkedMaterialUsers = [this](const QString &materialId) {
+            QVector<ObjectId> users;
+            if (materialId.isEmpty()) return users;
+            const Document &document = session_.document();
+            for (const SceneObject &candidate : document.objects()) {
+                bool usesMaterial =
+                    candidate.geometry.geometryType ==
+                        GeometryType::PolygonMesh &&
+                    candidate.geometry.polygonMesh.materialSlotIds.contains(
+                        materialId);
+                if (!usesMaterial && candidate.nurbsSolidFaceMaterialIds
+                        .values().contains(materialId)) {
+                    usesMaterial = true;
+                }
+                if (usesMaterial && document.isObjectEditable(candidate.id)) {
+                    users.append(candidate.id);
+                }
+            }
+            return users;
+        };
+        collectionCallbacks.hasLinkedMaterial =
+            [linkedMaterialUsers](const QString &materialId) {
+                return !linkedMaterialUsers(materialId).isEmpty();
+            };
+        collectionCallbacks.selectLinkedMaterial =
+            [this, linkedMaterialUsers](const QString &materialId,
+                                        ObjectId clickedObjectId) {
+                const QVector<ObjectId> users = linkedMaterialUsers(materialId);
+                if (users.isEmpty()) return;
+                QVector<ObjectId> selectedIds = session_.selection().objectIds();
+                for (const ObjectId user : users) {
+                    if (!selectedIds.contains(user)) selectedIds.append(user);
+                }
+                ObjectId active = session_.selection().activeObjectId();
+                if (!selectedIds.contains(active)) {
+                    active = users.contains(clickedObjectId)
+                        ? clickedObjectId : users.front();
+                }
+                session_.selection().setObjectIds(selectedIds, active);
                 session_.selection().setActiveObjectId(active);
             };
         collectionCallbacks.deselectSelectedObjects = [this]() {

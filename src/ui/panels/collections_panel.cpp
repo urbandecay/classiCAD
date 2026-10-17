@@ -2988,6 +2988,30 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.selectLinkedObjectData(objectId);
             });
         }
+    } else if (kind == OutlinerRowKind::Material) {
+        const QString materialId = item->data(
+            nameColumn, itemIdRole).toString();
+        if (!materialId.isEmpty() && callbacks_.hasLinkedMaterial &&
+            callbacks_.hasLinkedMaterial(materialId) &&
+            callbacks_.selectLinkedMaterial) {
+            QMenu *idDataMenu = menu.addMenu(QStringLiteral("ID Data"));
+            QAction *selectLinked = idDataMenu->addAction(
+                QStringLiteral("Select Linked"));
+            ObjectId clickedObjectId = ObjectId::invalid();
+            for (QTreeWidgetItem *ancestor = item->parent();
+                 ancestor != nullptr; ancestor = ancestor->parent()) {
+                if (ancestor->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::Object)) {
+                    clickedObjectId = ObjectId::fromValue(
+                        ancestor->data(nameColumn, itemIdRole).toULongLong());
+                    break;
+                }
+            }
+            connect(selectLinked, &QAction::triggered, this,
+                    [this, materialId, clickedObjectId]() {
+                callbacks_.selectLinkedMaterial(materialId, clickedObjectId);
+            });
+        }
     }
 
     if (!menu.actions().isEmpty()) {

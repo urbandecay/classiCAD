@@ -268,6 +268,8 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<ObjectId> &, ObjectId)> setObjectSelection;
     std::function<bool(ObjectId)> hasLinkedObjectData;
     std::function<void(ObjectId)> selectLinkedObjectData;
+    std::function<bool(const QString &)> hasLinkedMaterial;
+    std::function<void(const QString &, ObjectId)> selectLinkedMaterial;
     std::function<void(ObjectId)> selectObjectHierarchy;
     std::function<void()> deselectSelectedObjects;
     std::function<bool()> hasOutlinerObjectClipboard;

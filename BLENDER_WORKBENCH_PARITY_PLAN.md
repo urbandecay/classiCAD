@@ -11416,10 +11416,24 @@ scene depth.
   Object rows with imported Blender data identity now show ID Data > Select
   Linked. It selects visible, selectable classiCAD objects whose retained
   Blender object-data type and full data-block name match the clicked object.
+  Selection adds the linked objects to the current selection and preserves its
+  active object, matching Blender's operation over previously unselected
+  visible bases.
   The extractor supplies `data_name` from Blender's `ID.name_full`, which
   distinguishes same-named IDs from linked libraries. This reproduces linked
   selection from the imported identity snapshot; classiCAD still has per-object
   geometry snapshots rather than Blender's shared datablock pointers. Objects
   without source data identity do not show the action. `cmake --build build
   -j4` and `git diff --check` passed; no matched Blender Outliner interaction
+  comparison was run.
+- The hundred-seventh tree update follows Blender 5.2.2's material branch in
+  [`select_linked_by_id()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/object/object_select.cc#L589-L602)
+  and [`object_select_all_by_material()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/object/object_select.cc#L482-L503).
+  Imported Outliner material rows with a retained material ID now offer ID Data
+  > Select Linked. The action adds currently selectable objects whose polygon
+  mesh slot or NURBS-solid face assignment references that same material ID,
+  while preserving existing selection and active-object state. It uses
+  classiCAD's shared document-material IDs; display-only material names without
+  an ID do not expose the action. `cmake --build build -j4` and
+  `git diff --check` passed; no matched Blender Outliner interaction
   comparison was run.

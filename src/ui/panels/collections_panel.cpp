@@ -1906,19 +1906,24 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.linkObjects(selectedIds, collectionId);
             });
         }
-        if (callbacks_.removeCollection) {
+        if (callbacks_.removeCollection ||
+            callbacks_.removeCollectionHierarchy) {
             menu.addSeparator();
-            QAction *remove = menu.addAction(
-                QStringLiteral("Remove Collection"));
-            connect(remove, &QAction::triggered, this,
-                    [this, collectionId]() {
-                if (QMessageBox::question(
-                        this, QStringLiteral("Remove Collection"),
-                        QStringLiteral("Remove this collection? Objects linked only here will become unlinked.")) ==
-                    QMessageBox::Yes) {
+            if (callbacks_.removeCollection) {
+                QAction *remove = menu.addAction(QStringLiteral("Delete"));
+                connect(remove, &QAction::triggered, this,
+                        [this, collectionId]() {
                     callbacks_.removeCollection(collectionId);
-                }
-            });
+                });
+            }
+            if (callbacks_.removeCollectionHierarchy) {
+                QAction *removeHierarchy = menu.addAction(
+                    QStringLiteral("Delete Hierarchy"));
+                connect(removeHierarchy, &QAction::triggered, this,
+                        [this, collectionId]() {
+                    callbacks_.removeCollectionHierarchy(collectionId);
+                });
+            }
         }
     } else if (kind == OutlinerRowKind::Object) {
         const ObjectId objectId = ObjectId::fromValue(

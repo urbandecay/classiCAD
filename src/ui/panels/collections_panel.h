@@ -258,6 +258,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;
     std::function<void(ObjectId, const QString &)> renameObject;
     std::function<void(ObjectId, CollectionId)> unlinkObject;
+    std::function<void(CollectionId)> removeCollectionHierarchy;
     std::function<void(CollectionId, bool, bool, bool)> setViewportVisibility;
     std::function<void(CollectionId, bool, bool, bool)>
         setCollectionRenderVisibility;

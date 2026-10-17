@@ -3870,6 +3870,14 @@ private:
                 }
             };
         collectionCallbacks.removeCollection = [this](CollectionId id) {
+            const DocumentCollection *collection =
+                session_.document().collection(id);
+            if (collection == nullptr || !collection->libraryPath.isEmpty()) {
+                statusBar()->showMessage(
+                    QStringLiteral("Cannot delete a linked collection"),
+                    4000);
+                return;
+            }
             DocumentTransaction transaction = session_.beginTransaction();
             if (!transaction.removeCollection(id) ||
                 !session_.commitTransaction(transaction)) {
@@ -4460,6 +4468,40 @@ private:
                 const ObjectId active = selection.activeObjectId();
                 selection.setObjectIds(selectedIds, primary);
                 selection.setActiveObjectId(active);
+            };
+        collectionCallbacks.removeCollectionHierarchy =
+            [this, collectionHierarchyIds](CollectionId root) {
+                const DocumentCollection *rootCollection =
+                    session_.document().collection(root);
+                if (rootCollection == nullptr ||
+                    !rootCollection->libraryPath.isEmpty()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Cannot delete a linked collection"),
+                        4000);
+                    return;
+                }
+                const QVector<CollectionId> hierarchy =
+                    collectionHierarchyIds(root);
+                if (hierarchy.isEmpty()) return;
+
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                for (const CollectionId id : hierarchy) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection == nullptr ||
+                        !collection->libraryPath.isEmpty()) {
+                        continue;
+                    }
+                    changed = transaction.removeCollection(id) || changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not delete collection hierarchy"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
             };
         const auto collectionRelationIds =
             [this, collectionHierarchyIds,

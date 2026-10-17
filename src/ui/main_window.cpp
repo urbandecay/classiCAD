@@ -239,7 +239,7 @@ private:
             (collectionClipboard &&
              outlinerCollectionClipboardCollections_.isEmpty()) ||
             (collectionClipboard &&
-             !outlinerCollectionClipboardRootId_.isValid())) {
+             outlinerCollectionClipboardRootIds_.isEmpty())) {
             return false;
         }
 
@@ -355,9 +355,23 @@ private:
             {QStringLiteral("instance_collection_references"),
              instanceReferences}};
         if (collectionClipboard) {
-            payload.insert(QStringLiteral("root_collection_id"),
-                           QString::number(
-                               outlinerCollectionClipboardRootId_.value()));
+            QJsonArray rootCollectionIds;
+            for (const CollectionId rootId :
+                 outlinerCollectionClipboardRootIds_) {
+                if (!rootId.isValid() ||
+                    !clipboardCollectionIds.contains(rootId.value())) {
+                    return false;
+                }
+                rootCollectionIds.append(QString::number(rootId.value()));
+            }
+            payload.insert(QStringLiteral("root_collection_ids"),
+                           rootCollectionIds);
+            if (outlinerCollectionClipboardRootIds_.size() == 1) {
+                payload.insert(QStringLiteral("root_collection_id"),
+                               QString::number(
+                                   outlinerCollectionClipboardRootIds_.first()
+                                       .value()));
+            }
         }
         const QByteArray serialized =
             QJsonDocument(payload).toJson(QJsonDocument::Compact);
@@ -491,17 +505,44 @@ private:
         }
 
         if (collectionClipboard) {
-            bool rootIdValid = false;
-            const quint64 rootId = payload.value(
-                QStringLiteral("root_collection_id")).toString()
-                .toULongLong(&rootIdValid);
-            if (!rootIdValid || rootId == 0 ||
-                clipboardDocument.collection(CollectionId::fromValue(rootId)) ==
-                    nullptr) {
+            QVector<CollectionId> rootIds;
+            const QJsonValue rootIdsValue = payload.value(
+                QStringLiteral("root_collection_ids"));
+            if (rootIdsValue.isArray()) {
+                const QJsonArray rootIdsArray = rootIdsValue.toArray();
+                if (rootIdsArray.isEmpty() || rootIdsArray.size() > 100000) {
+                    return;
+                }
+                QSet<quint64> uniqueRootIds;
+                for (const QJsonValue &rootIdValue : rootIdsArray) {
+                    bool rootIdValid = false;
+                    const quint64 rootId = rootIdValue.toString()
+                        .toULongLong(&rootIdValid);
+                    if (!rootIdValid || rootId == 0 ||
+                        uniqueRootIds.contains(rootId) ||
+                        clipboardDocument.collection(
+                            CollectionId::fromValue(rootId)) == nullptr) {
+                        return;
+                    }
+                    uniqueRootIds.insert(rootId);
+                    rootIds.append(CollectionId::fromValue(rootId));
+                }
+            } else {
+                bool rootIdValid = false;
+                const quint64 rootId = payload.value(
+                    QStringLiteral("root_collection_id")).toString()
+                    .toULongLong(&rootIdValid);
+                if (!rootIdValid || rootId == 0 ||
+                    clipboardDocument.collection(
+                        CollectionId::fromValue(rootId)) == nullptr) {
+                    return;
+                }
+                rootIds.append(CollectionId::fromValue(rootId));
+            }
+            if (rootIds.isEmpty()) {
                 return;
             }
-            outlinerCollectionClipboardRootId_ =
-                CollectionId::fromValue(rootId);
+            outlinerCollectionClipboardRootIds_ = std::move(rootIds);
             outlinerCollectionClipboardCollections_ =
                 clipboardDocument.collections();
             outlinerCollectionClipboardObjects_ = std::move(restoredObjects);
@@ -4220,7 +4261,7 @@ private:
             outlinerObjectClipboardMaterials_.clear();
             outlinerObjectClipboardAnchorIdentities_.clear();
             outlinerObjectClipboardCollectionIdentities_.clear();
-            outlinerCollectionClipboardRootId_ = CollectionId::invalid();
+            outlinerCollectionClipboardRootIds_.clear();
             outlinerCollectionClipboardCollections_.clear();
             outlinerCollectionClipboardObjects_.clear();
             outlinerCollectionClipboardMaterials_.clear();
@@ -5313,16 +5354,65 @@ private:
             return !outlinerCollectionClipboardCollections_.isEmpty();
         };
         collectionCallbacks.copyOutlinerCollection =
-            [this](CollectionId rootId) {
+            [this](const QVector<CollectionId> &requestedRootIds) {
                 const Document &document = session_.document();
-                const DocumentCollection *root = document.collection(rootId);
-                if (root == nullptr) return;
+                QVector<CollectionId> rootIds;
+                QSet<quint64> rootValues;
+                for (const CollectionId rootId : requestedRootIds) {
+                    const DocumentCollection *root =
+                        document.collection(rootId);
+                    if (root == nullptr || rootValues.contains(rootId.value())) {
+                        continue;
+                    }
+                    rootValues.insert(rootId.value());
+                    rootIds.append(rootId);
+                }
+                if (rootIds.isEmpty()) return;
+                QVector<CollectionId> topLevelRootIds;
+                for (const CollectionId rootId : rootIds) {
+                    QVector<CollectionId> pendingParents;
+                    const DocumentCollection *root =
+                        document.collection(rootId);
+                    if (root != nullptr) pendingParents = root->parentIds;
+                    QSet<quint64> visitedParents;
+                    bool hasSelectedAncestor = false;
+                    while (!pendingParents.isEmpty() &&
+                           !hasSelectedAncestor) {
+                        const CollectionId parentId = pendingParents.takeLast();
+                        if (!parentId.isValid() ||
+                            visitedParents.contains(parentId.value())) {
+                            continue;
+                        }
+                        visitedParents.insert(parentId.value());
+                        if (rootValues.contains(parentId.value())) {
+                            hasSelectedAncestor = true;
+                            break;
+                        }
+                        const DocumentCollection *parent =
+                            document.collection(parentId);
+                        if (parent != nullptr) {
+                            for (const CollectionId ancestorId :
+                                 parent->parentIds) {
+                                pendingParents.append(ancestorId);
+                            }
+                        }
+                    }
+                    if (!hasSelectedAncestor) {
+                        topLevelRootIds.append(rootId);
+                    }
+                }
+                rootIds = std::move(topLevelRootIds);
+                rootValues.clear();
+                for (const CollectionId rootId : rootIds) {
+                    rootValues.insert(rootId.value());
+                }
+                if (rootIds.isEmpty()) return;
 
                 outlinerObjectClipboard_.clear();
                 outlinerObjectClipboardMaterials_.clear();
                 outlinerObjectClipboardAnchorIdentities_.clear();
                 outlinerObjectClipboardCollectionIdentities_.clear();
-                outlinerCollectionClipboardRootId_ = rootId;
+                outlinerCollectionClipboardRootIds_ = rootIds;
                 outlinerCollectionClipboardCollections_.clear();
                 outlinerCollectionClipboardObjects_.clear();
                 outlinerCollectionClipboardMaterials_.clear();
@@ -5341,8 +5431,8 @@ private:
                         collection.id.value(), identity);
                 }
 
-                QVector<CollectionId> hierarchy{rootId};
-                QSet<quint64> hierarchyValues{rootId.value()};
+                QVector<CollectionId> hierarchy = rootIds;
+                QSet<quint64> hierarchyValues = rootValues;
                 for (qsizetype index = 0; index < hierarchy.size(); ++index) {
                     const CollectionId parentId = hierarchy[index];
                     for (const DocumentCollection &candidate :
@@ -5427,20 +5517,20 @@ private:
                     });
                 if (!persistOutlinerClipboard()) {
                     statusBar()->showMessage(
-                        QStringLiteral("Copied collection %1, but could not save the Outliner clipboard")
-                            .arg(root->name),
+                        QStringLiteral("Copied %1 collection(s), but could not save the Outliner clipboard")
+                            .arg(rootIds.size()),
                         4000);
                 } else {
                     statusBar()->showMessage(
-                        QStringLiteral("Copied collection %1 and %2 object(s) to the Outliner clipboard")
-                            .arg(root->name)
+                        QStringLiteral("Copied %1 collection(s) and %2 object(s) to the Outliner clipboard")
+                            .arg(rootIds.size())
                             .arg(copiedObjectCount),
                         4000);
                 }
             };
         collectionCallbacks.duplicateCollection =
             [this, activeSceneRecord, collectionBelongsToScene,
-             updateSceneCollectionIds](CollectionId rootId,
+             updateSceneCollectionIds](const QVector<CollectionId> &requestedRootIds,
                                       CollectionId contextParentId,
                                       bool linkedData,
                                       bool fromClipboard) {
@@ -5456,8 +5546,55 @@ private:
                 for (const DocumentCollection &collection : sourceCollections) {
                     collectionsById.insert(collection.id.value(), collection);
                 }
-                const auto rootIt = collectionsById.constFind(rootId.value());
-                if (rootIt == collectionsById.cend()) return;
+                QVector<CollectionId> rootIds;
+                QSet<quint64> rootValues;
+                for (const CollectionId rootId : requestedRootIds) {
+                    if (!rootId.isValid() ||
+                        !collectionsById.contains(rootId.value()) ||
+                        rootValues.contains(rootId.value())) {
+                        continue;
+                    }
+                    rootValues.insert(rootId.value());
+                    rootIds.append(rootId);
+                }
+                if (rootIds.isEmpty()) return;
+                QVector<CollectionId> topLevelRootIds;
+                for (const CollectionId rootId : rootIds) {
+                    QVector<CollectionId> pendingParents =
+                        collectionsById.value(rootId.value()).parentIds;
+                    QSet<quint64> visitedParents;
+                    bool hasSelectedAncestor = false;
+                    while (!pendingParents.isEmpty() &&
+                           !hasSelectedAncestor) {
+                        const CollectionId parentId = pendingParents.takeLast();
+                        if (!parentId.isValid() ||
+                            visitedParents.contains(parentId.value())) {
+                            continue;
+                        }
+                        visitedParents.insert(parentId.value());
+                        if (rootValues.contains(parentId.value())) {
+                            hasSelectedAncestor = true;
+                            break;
+                        }
+                        const auto parent = collectionsById.constFind(
+                            parentId.value());
+                        if (parent != collectionsById.cend()) {
+                            for (const CollectionId ancestorId :
+                                 parent->parentIds) {
+                                pendingParents.append(ancestorId);
+                            }
+                        }
+                    }
+                    if (!hasSelectedAncestor) {
+                        topLevelRootIds.append(rootId);
+                    }
+                }
+                rootIds = std::move(topLevelRootIds);
+                rootValues.clear();
+                for (const CollectionId rootId : rootIds) {
+                    rootValues.insert(rootId.value());
+                }
+                if (rootIds.isEmpty()) return;
                 if (fromClipboard) {
                     const DocumentCollection *destination =
                         contextParentId.isValid()
@@ -5469,9 +5606,8 @@ private:
                         contextParentId = CollectionId::invalid();
                     }
                 } else if (contextParentId.isValid() &&
-                           (!collectionsById.contains(
-                                contextParentId.value()) ||
-                            !rootIt->parentIds.contains(contextParentId))) {
+                           !collectionsById.contains(
+                               contextParentId.value())) {
                     contextParentId = CollectionId::invalid();
                 }
                 if (!fromClipboard && contextParentId.isValid() &&
@@ -5480,8 +5616,8 @@ private:
                     contextParentId = CollectionId::invalid();
                 }
 
-                QVector<CollectionId> hierarchy{rootId};
-                QSet<quint64> hierarchyValues{rootId.value()};
+                QVector<CollectionId> hierarchy = rootIds;
+                QSet<quint64> hierarchyValues = rootValues;
                 for (qsizetype index = 0; index < hierarchy.size(); ++index) {
                     const CollectionId parentId = hierarchy[index];
                     for (const DocumentCollection &candidate :
@@ -5583,7 +5719,7 @@ private:
                     }
                 }
                 QHash<quint64, CollectionId> clonedCollectionIds;
-                CollectionId clonedRootId = CollectionId::invalid();
+                QVector<CollectionId> clonedRootIds;
                 for (const CollectionId sourceId : hierarchy) {
                     const DocumentCollection source =
                         collectionsById.value(sourceId.value());
@@ -5603,9 +5739,11 @@ private:
                     clone.parentOrders.clear();
                     clone.rootOrder = -1;
                     clone.viewLayerStates = {};
-                    if (sourceId == rootId) {
+                    if (rootValues.contains(sourceId.value())) {
                         if (contextParentId.isValid()) {
-                            clone.parentIds.append(contextParentId);
+                            if (fromClipboard) {
+                                clone.parentIds.append(contextParentId);
+                            }
                         }
                     } else {
                         for (const CollectionId sourceParentId :
@@ -5628,11 +5766,28 @@ private:
                         return;
                     }
                     clonedCollectionIds.insert(sourceId.value(), cloneId);
-                    if (sourceId == rootId) clonedRootId = cloneId;
+                    if (rootValues.contains(sourceId.value())) {
+                        clonedRootIds.append(cloneId);
+                    }
                 }
-                if (clonedRootId.isValid() && !fromClipboard) {
-                    transaction.moveCollectionRelative(
-                        clonedRootId, rootId, contextParentId, true);
+                if (!fromClipboard) {
+                    for (qsizetype index = 0;
+                         index < clonedRootIds.size(); ++index) {
+                        const DocumentCollection sourceRoot =
+                            collectionsById.value(rootIds[index].value());
+                        CollectionId destinationParentId =
+                            contextParentId;
+                        if (!sourceRoot.parentIds.contains(
+                                destinationParentId)) {
+                            destinationParentId = rootIds.size() > 1 &&
+                                    !sourceRoot.parentIds.isEmpty()
+                                ? sourceRoot.parentIds.first()
+                                : CollectionId::invalid();
+                        }
+                        transaction.moveCollectionRelative(
+                            clonedRootIds[index], rootIds[index],
+                            destinationParentId, true);
+                    }
                 }
 
                 struct ObjectCloneSource {
@@ -5960,8 +6115,8 @@ private:
                         6000);
                 } else if (fromClipboard) {
                     statusBar()->showMessage(
-                        QStringLiteral("Pasted collection %1")
-                            .arg(rootIt->name),
+                        QStringLiteral("Pasted %1 collection(s)")
+                            .arg(rootIds.size()),
                         4000);
                 }
             };
@@ -5970,11 +6125,11 @@ private:
         collectionCallbacks.pasteOutlinerCollection =
             [this, duplicateCollectionForPaste](CollectionId parentId) {
                 if (outlinerCollectionClipboardCollections_.isEmpty() ||
-                    !outlinerCollectionClipboardRootId_.isValid()) {
+                    outlinerCollectionClipboardRootIds_.isEmpty()) {
                     return;
                 }
                 duplicateCollectionForPaste(
-                    outlinerCollectionClipboardRootId_, parentId, false, true);
+                    outlinerCollectionClipboardRootIds_, parentId, false, true);
             };
         collectionCallbacks.renameCollection =
             [this](CollectionId id, const QString &name) {
@@ -7720,8 +7875,7 @@ private:
     QVector<DocumentMaterial> outlinerObjectClipboardMaterials_;
     QHash<quint64, QString> outlinerObjectClipboardAnchorIdentities_;
     QHash<quint64, QString> outlinerObjectClipboardCollectionIdentities_;
-    CollectionId outlinerCollectionClipboardRootId_ =
-        CollectionId::invalid();
+    QVector<CollectionId> outlinerCollectionClipboardRootIds_;
     QVector<DocumentCollection> outlinerCollectionClipboardCollections_;
     QVector<SceneObject> outlinerCollectionClipboardObjects_;
     QVector<DocumentMaterial> outlinerCollectionClipboardMaterials_;

@@ -2049,8 +2049,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         if (callbacks_.copyOutlinerCollection) {
             QAction *copy = menu.addAction(QStringLiteral("Copy"));
             connect(copy, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.copyOutlinerCollection(collectionId);
+                    [this, topLevelCollectionIds]() {
+                callbacks_.copyOutlinerCollection(topLevelCollectionIds);
             });
         }
         if (callbacks_.pasteOutlinerCollection) {
@@ -2069,15 +2069,15 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             QAction *duplicate = menu.addAction(
                 QStringLiteral("Duplicate Collection"));
             connect(duplicate, &QAction::triggered, this,
-                    [this, collectionId, parentId]() {
-                callbacks_.duplicateCollection(collectionId, parentId,
-                                               false, false);
+                    [this, topLevelCollectionIds, parentId]() {
+                callbacks_.duplicateCollection(topLevelCollectionIds,
+                                               parentId, false, false);
             });
             QAction *duplicateLinked = menu.addAction(
                 QStringLiteral("Duplicate Linked"));
             connect(duplicateLinked, &QAction::triggered, this,
-                    [this, collectionId, parentId]() {
-                callbacks_.duplicateCollection(collectionId, parentId, true,
+                    [this, topLevelCollectionIds, parentId]() {
+                callbacks_.duplicateCollection(topLevelCollectionIds, parentId, true,
                                                false);
             });
         }

@@ -262,13 +262,13 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId)> copyOutlinerObject;
     std::function<void()> pasteOutlinerObjects;
     std::function<bool()> hasOutlinerCollectionClipboard;
-    std::function<void(CollectionId)> copyOutlinerCollection;
+    std::function<void(const QVector<CollectionId> &)> copyOutlinerCollection;
     std::function<void(CollectionId)> pasteOutlinerCollection;
     std::function<void(ObjectId, bool)> deleteObjectSelection;
     std::function<void(const QVector<CollectionId> &, bool)>
         setCollectionsObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
-    std::function<void(CollectionId, CollectionId, bool, bool)>
+    std::function<void(const QVector<CollectionId> &, CollectionId, bool, bool)>
         duplicateCollection;
     std::function<void(const QVector<CollectionId> &)>
         linkCollectionsToActiveScene;

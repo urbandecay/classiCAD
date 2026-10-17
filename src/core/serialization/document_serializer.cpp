@@ -1185,13 +1185,15 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 63);
+    serialized.insert(QStringLiteral("version"), 64);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
     settings.insert(QStringLiteral("gridSpacing"), document.settings().gridSpacing);
     settings.insert(QStringLiteral("activeViewLayerKey"),
                     document.settings().activeViewLayerKey);
+    settings.insert(QStringLiteral("activeCollectionPathsByViewLayer"),
+                    document.settings().activeCollectionPathsByViewLayer);
     settings.insert(QStringLiteral("importedBlenderScenes"),
                     document.settings().importedBlenderScenes);
     settings.insert(QStringLiteral("importedBlenderLibraries"),
@@ -1663,7 +1665,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 63) {
+    if (version < 1 || version > 64) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -2206,6 +2208,17 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.activeViewLayerKey = activeViewLayerKey.toString();
+        }
+        if (version >= 64) {
+            const QJsonValue activeCollectionPaths = settingsObject.value(
+                QStringLiteral("activeCollectionPathsByViewLayer"));
+            if (!activeCollectionPaths.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid active Blender collection paths"));
+                return false;
+            }
+            settings.activeCollectionPathsByViewLayer =
+                activeCollectionPaths.toObject();
         }
         if (version >= 14) {
             const QJsonValue importedScenes =

@@ -2714,6 +2714,8 @@ bool loadVignolaDocument(const QString &path,
         snapshot.settings.importedBlenderColorLutMetadata =
             importReport.importedBlenderColorLutMetadata;
         snapshot.settings.activeViewLayerKey = importReport.activeViewLayerKey;
+        snapshot.settings.activeCollectionPathsByViewLayer =
+            importReport.activeCollectionPathsByViewLayer;
         restored.restoreSnapshot(snapshot);
         *document = std::move(restored);
         if (cameraSettings != nullptr) {
@@ -2846,7 +2848,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 64 && bridgeVersion != 65 &&
          bridgeVersion != 66 && bridgeVersion != 67 &&
          bridgeVersion != 68 && bridgeVersion != 69 && bridgeVersion != 70 &&
-         bridgeVersion != 71 && bridgeVersion != 72)) {
+         bridgeVersion != 71 && bridgeVersion != 72 &&
+         bridgeVersion != 73)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -5473,6 +5476,47 @@ bool importBlenderScene(const QString &path,
         activeObjectIndex = -1;
     }
 
+    QJsonObject activeCollectionPathsByViewLayer;
+    if (bridgeVersion >= 73) {
+        for (const QJsonValue &sceneValue : importedSceneRecords) {
+            const QJsonObject scene = sceneValue.toObject();
+            for (const QJsonValue &viewLayerValue : scene.value(
+                     QStringLiteral("view_layers")).toArray()) {
+                const QJsonObject viewLayer = viewLayerValue.toObject();
+                const QString key = viewLayer.value(
+                    QStringLiteral("key")).toString();
+                const QJsonValue pathValue = viewLayer.value(
+                    QStringLiteral("active_collection_path"));
+                if (key.isEmpty() || !pathValue.isArray() ||
+                    pathValue.toArray().isEmpty() ||
+                    pathValue.toArray().size() > 256) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender active collection path is invalid"));
+                    return false;
+                }
+                QSet<QString> uniqueSourceIds;
+                for (const QJsonValue &sourceIdValue : pathValue.toArray()) {
+                    const QString sourceId = sourceIdValue.toString();
+                    if (!sourceIdValue.isString() || sourceId.isEmpty() ||
+                        !collectionIdsBySource.contains(sourceId) ||
+                        uniqueSourceIds.contains(sourceId)) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender active collection path references an invalid collection"));
+                        return false;
+                    }
+                    uniqueSourceIds.insert(sourceId);
+                }
+                if (activeCollectionPathsByViewLayer.contains(key)) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender view-layer key is duplicated"));
+                    return false;
+                }
+                activeCollectionPathsByViewLayer.insert(
+                    key, pathValue.toArray());
+            }
+        }
+    }
+
     if (report != nullptr) {
         report->importedObjectCount = imported.size();
         report->skippedObjectCount = skippedCount;
@@ -5490,6 +5534,8 @@ bool importBlenderScene(const QString &path,
         report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;
+        report->activeCollectionPathsByViewLayer =
+            activeCollectionPathsByViewLayer;
         report->selectedObjectIndices = selectedObjectIndices;
         report->activeObjectIndex = activeObjectIndex;
         report->importedBlenderColorLuts = importedBlenderColorLuts;

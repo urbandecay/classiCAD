@@ -1794,6 +1794,32 @@ bool CollectionsPanel::activateObjectRow(
     if (kind == OutlinerRowKind::SequencerStrip) {
         return sequencerDisplayMode_;
     }
+    if (kind == OutlinerRowKind::Collection) {
+        const CollectionId clickedId = CollectionId::fromValue(
+            item->data(nameColumn, itemIdRole).toULongLong());
+        const QString rowViewLayerKey = item->data(
+            nameColumn, itemViewLayerKeyRole).toString();
+        const QStringList sourcePath = item->data(
+            nameColumn, itemSourcePathRole).toStringList();
+        if (!clickedId.isValid() || sourcePath.isEmpty() ||
+            !callbacks_.setActiveCollection) {
+            return false;
+        }
+        QTimer::singleShot(0, this,
+                           [this, clickedId, rowViewLayerKey, sourcePath]() {
+            if (callbacks_.setActiveViewLayer &&
+                callbacks_.activeViewLayerKey &&
+                !rowViewLayerKey.isEmpty() &&
+                callbacks_.activeViewLayerKey() != rowViewLayerKey) {
+                callbacks_.setActiveViewLayer(rowViewLayerKey);
+            }
+            if (callbacks_.setActiveCollection) {
+                callbacks_.setActiveCollection(clickedId, rowViewLayerKey,
+                                              sourcePath);
+            }
+        });
+        return true;
+    }
     if (kind != OutlinerRowKind::Object) return false;
     const ObjectId clickedId = ObjectId::fromValue(
         item->data(nameColumn, itemIdRole).toULongLong());
@@ -2730,6 +2756,22 @@ void CollectionsPanel::appendCollection(
     item->setData(nameColumn, itemSourcePathRole,
                   QVariant::fromValue(sourcePath));
     item->setData(nameColumn, itemViewLayerKeyRole, rowViewLayerKey);
+    const QString currentViewLayerKey = callbacks_.activeViewLayerKey
+        ? callbacks_.activeViewLayerKey() : QString{};
+    if (rowViewLayerKey == currentViewLayerKey &&
+        callbacks_.activeCollectionSourcePath &&
+        sourcePath == callbacks_.activeCollectionSourcePath()) {
+        QFont activeFont = item->font(nameColumn);
+        activeFont.setBold(true);
+        item->setFont(nameColumn, activeFont);
+        QStringList tooltip{QStringLiteral("Active collection")};
+        if (entry.collection.colorTag != QLatin1String("NONE")) {
+            tooltip.append(QStringLiteral("Color tag: %1")
+                               .arg(collectionColorTagLabel(
+                                   entry.collection.colorTag)));
+        }
+        item->setToolTip(nameColumn, tooltip.join(QLatin1Char('\n')));
+    }
     item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
                    Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
                    Qt::ItemIsDropEnabled);

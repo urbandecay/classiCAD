@@ -76,6 +76,7 @@ struct BlenderSceneImportReport {
     QString warningMessage;
     QString activeSceneId;
     QString activeViewLayerKey;
+    QJsonObject activeCollectionPathsByViewLayer;
     ProjectViewportViewState initialViewportView;
     QJsonArray scenes;
     QJsonArray outlinerLibraries;

@@ -44,6 +44,8 @@ public:
     const QVector<DocumentMaterial> &materials() const;
     const QVector<DocumentCollection> &collections() const;
     const DocumentSettings &settings() const;
+    QStringList activeCollectionSourcePath() const;
+    CollectionId activeCollectionId() const;
     bool setSettings(const DocumentSettings &settings);
     // Outliner expansion belongs to saved workspace state, not geometry undo
     // snapshots. It is serialized with the project outside document history.

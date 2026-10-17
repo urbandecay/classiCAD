@@ -78,6 +78,99 @@ const DocumentSettings &Document::settings() const
     return settings_;
 }
 
+QStringList Document::activeCollectionSourcePath() const
+{
+    const QJsonArray storedPath = settings_.activeCollectionPathsByViewLayer
+        .value(settings_.activeViewLayerKey).toArray();
+    QStringList sourcePath;
+    sourcePath.reserve(storedPath.size());
+    for (const QJsonValue &value : storedPath) {
+        if (!value.isString() || value.toString().isEmpty()) {
+            sourcePath.clear();
+            break;
+        }
+        sourcePath.append(value.toString());
+    }
+
+    const auto collectionForSourceId = [this](const QString &sourceId)
+        -> const DocumentCollection * {
+        for (const DocumentCollection &candidate : collections_) {
+            if (candidate.sourceId == sourceId) return &candidate;
+        }
+        return nullptr;
+    };
+    bool pathIsValid = !sourcePath.isEmpty();
+    const DocumentCollection *previous = nullptr;
+    for (const QString &sourceId : sourcePath) {
+        const DocumentCollection *current = collectionForSourceId(sourceId);
+        if (current == nullptr ||
+            (previous == nullptr && !current->parentIds.isEmpty()) ||
+            (previous != nullptr && !current->parentIds.contains(previous->id))) {
+            pathIsValid = false;
+            break;
+        }
+        previous = current;
+    }
+    if (pathIsValid) return sourcePath;
+
+    QString activeSceneName;
+    for (const QJsonValue &sceneValue : settings_.importedBlenderScenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        for (const QJsonValue &layerValue : scene.value(
+                 QStringLiteral("view_layers")).toArray()) {
+            if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                settings_.activeViewLayerKey) {
+                activeSceneName = scene.value(QStringLiteral("name")).toString();
+                break;
+            }
+        }
+        if (!activeSceneName.isEmpty()) break;
+    }
+    if (activeSceneName.isEmpty()) {
+        for (const QJsonValue &sceneValue : settings_.importedBlenderScenes) {
+            const QJsonObject scene = sceneValue.toObject();
+            if (scene.value(QStringLiteral("is_active_scene")).toBool()) {
+                activeSceneName = scene.value(QStringLiteral("name")).toString();
+                break;
+            }
+        }
+    }
+    const DocumentCollection *onlyMaster = nullptr;
+    bool hasSeveralMasters = false;
+    for (const DocumentCollection &candidate : collections_) {
+        if (!candidate.isSceneMaster || !candidate.parentIds.isEmpty() ||
+            !candidate.libraryPath.isEmpty() || candidate.sourceId.isEmpty()) {
+            continue;
+        }
+        if (activeSceneName.isEmpty() ||
+            candidate.sourceSceneNames.contains(activeSceneName)) {
+            return {candidate.sourceId};
+        }
+        if (onlyMaster == nullptr) {
+            onlyMaster = &candidate;
+        } else {
+            hasSeveralMasters = true;
+        }
+    }
+    if (!hasSeveralMasters && onlyMaster != nullptr) {
+        return {onlyMaster->sourceId};
+    }
+    return {};
+}
+
+CollectionId Document::activeCollectionId() const
+{
+    const QStringList sourcePath = activeCollectionSourcePath();
+    if (sourcePath.isEmpty()) return CollectionId::invalid();
+    for (const DocumentCollection &candidate : collections_) {
+        if (candidate.sourceId == sourcePath.constLast()) {
+            return candidate.libraryPath.isEmpty()
+                ? candidate.id : CollectionId::invalid();
+        }
+    }
+    return CollectionId::invalid();
+}
+
 bool Document::setSettings(const DocumentSettings &settings)
 {
     if (!isValidDocumentSettings(settings)) {

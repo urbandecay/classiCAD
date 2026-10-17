@@ -3,6 +3,7 @@
 #include "document_settings.h"
 
 #include <QCryptographicHash>
+#include <QSet>
 #include <QtEndian>
 #include <QStringList>
 
@@ -53,6 +54,31 @@ bool areImportedColorLutsValid(
         }
         totalBytes += bytes.size();
         if (totalBytes > kColorLutTotalByteLimit) return false;
+    }
+    return true;
+}
+
+bool areActiveCollectionPathsValid(const QJsonObject &pathsByViewLayer)
+{
+    if (pathsByViewLayer.size() > 2048) return false;
+    qsizetype totalCharacters = 0;
+    for (auto it = pathsByViewLayer.begin(); it != pathsByViewLayer.end(); ++it) {
+        if (it.key().size() > 16384 || !it.value().isArray()) return false;
+        const QJsonArray path = it.value().toArray();
+        if (path.isEmpty() || path.size() > 256) return false;
+        totalCharacters += it.key().size();
+        QSet<QString> uniqueSourceIds;
+        for (const QJsonValue &sourceIdValue : path) {
+            if (!sourceIdValue.isString()) return false;
+            const QString sourceId = sourceIdValue.toString();
+            if (sourceId.isEmpty() || sourceId.size() > 16384 ||
+                uniqueSourceIds.contains(sourceId)) {
+                return false;
+            }
+            uniqueSourceIds.insert(sourceId);
+            totalCharacters += sourceId.size();
+            if (totalCharacters > 2 * 1024 * 1024) return false;
+        }
     }
     return true;
 }
@@ -176,6 +202,8 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
     const bool validUnit = documentLengthUnitKey(settings.lengthUnit).size() > 0;
     return validUnit && std::isfinite(settings.gridSpacing) &&
            settings.gridSpacing >= 1.0e-9 && settings.gridSpacing <= 1.0e9 &&
+           areActiveCollectionPathsValid(
+               settings.activeCollectionPathsByViewLayer) &&
            settings.importedBlenderLibraries.size() <= 1024 &&
            settings.importedBlenderOrphans.size() <= 1024 &&
            settings.importedBlenderSequencer.value(

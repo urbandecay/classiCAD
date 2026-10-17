@@ -35,6 +35,9 @@ struct DocumentSettings {
     // Active imported Blender view layer. Empty keeps legacy documents on
     // each object's first imported view layer.
     QString activeViewLayerKey;
+    // Blender's active collection is view-layer-specific. Values are source
+    // collection ID paths from the scene root to the active collection.
+    QJsonObject activeCollectionPathsByViewLayer;
     // Imported Blender scene metadata, including each scene's active camera.
     // Kept scene-qualified because Blender files may contain multiple scenes.
     QJsonArray importedBlenderScenes;

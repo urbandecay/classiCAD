@@ -1251,6 +1251,11 @@ private:
                     }
                 }
             }
+            for (auto it = report.activeCollectionPathsByViewLayer.begin();
+                 it != report.activeCollectionPathsByViewLayer.end(); ++it) {
+                settings.activeCollectionPathsByViewLayer.insert(
+                    it.key(), it.value());
+            }
             transaction.setSettings(settings);
             const QVector<ObjectId> insertedObjectIds =
                 transaction.insertObjects(session_.document().size(),
@@ -4053,6 +4058,9 @@ private:
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;
         };
+        collectionCallbacks.activeCollectionSourcePath = [this]() {
+            return session_.document().activeCollectionSourcePath();
+        };
         collectionCallbacks.viewLayers = [activeSceneRecord]() {
             QVector<OutlinerViewLayerEntry> viewLayers;
             const QJsonObject scene = activeSceneRecord();
@@ -4200,6 +4208,34 @@ private:
             session_.selection().setActiveObjectId(activeId);
             refreshCollections();
         };
+        collectionCallbacks.setActiveCollection =
+            [this](CollectionId id, const QString &viewLayerKey,
+                   const QStringList &sourcePath) {
+                const Document &document = session_.document();
+                const DocumentCollection *collection = document.collection(id);
+                if (collection == nullptr || sourcePath.isEmpty() ||
+                    sourcePath.constLast() != collection->sourceId) {
+                    return;
+                }
+                QJsonArray path;
+                for (const QString &sourceId : sourcePath) {
+                    path.append(sourceId);
+                }
+                DocumentSettings settings = document.settings();
+                if (settings.activeCollectionPathsByViewLayer.value(
+                        viewLayerKey).toArray() == path) {
+                    return;
+                }
+                settings.activeCollectionPathsByViewLayer.insert(
+                    viewLayerKey, path);
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setSettings(settings) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not activate the collection"),
+                        4000);
+                }
+            };
         const auto setActiveViewLayer = collectionCallbacks.setActiveViewLayer;
         collectionCallbacks.setActiveScene =
             [this, setActiveViewLayer](const QString &sceneKey) {
@@ -4451,20 +4487,30 @@ private:
                     QStringLiteral("scene_id")).toString();
                 const QString activeSceneName = activeScene.value(
                     QStringLiteral("name")).toString();
-                CollectionId destinationCollection = CollectionId::invalid();
+                CollectionId destinationCollection =
+                    document.activeCollectionId();
+                const DocumentCollection *activeCollection =
+                    document.collection(destinationCollection);
+                if (activeCollection == nullptr ||
+                    !activeCollection->libraryPath.isEmpty() ||
+                    !collectionBelongsToActiveScene(*activeCollection)) {
+                    destinationCollection = CollectionId::invalid();
+                }
                 int destinationRootOrder = std::numeric_limits<int>::max();
-                for (const DocumentCollection &collection :
-                     document.collections()) {
-                    if (!collection.parentIds.isEmpty() ||
-                        !collectionBelongsToActiveScene(collection)) {
-                        continue;
-                    }
-                    const int rootOrder = collection.rootOrder < 0
-                        ? std::numeric_limits<int>::max() - 1
-                        : collection.rootOrder;
-                    if (rootOrder < destinationRootOrder) {
-                        destinationRootOrder = rootOrder;
-                        destinationCollection = collection.id;
+                if (!destinationCollection.isValid()) {
+                    for (const DocumentCollection &collection :
+                         document.collections()) {
+                        if (!collection.parentIds.isEmpty() ||
+                            !collectionBelongsToActiveScene(collection)) {
+                            continue;
+                        }
+                        const int rootOrder = collection.rootOrder < 0
+                            ? std::numeric_limits<int>::max() - 1
+                            : collection.rootOrder;
+                        if (rootOrder < destinationRootOrder) {
+                            destinationRootOrder = rootOrder;
+                            destinationCollection = collection.id;
+                        }
                     }
                 }
                 if (destinationCollection.isValid()) {
@@ -5201,10 +5247,24 @@ private:
                                            sceneCursor[1].toDouble(),
                                            sceneCursor[2].toDouble()};
                 }
-                CollectionId destinationId =
-                    activeCollectionContext.collectionId;
-                CollectionId activeParentId =
-                    activeCollectionContext.parentCollectionId;
+                const QStringList activeCollectionPath =
+                    document.activeCollectionSourcePath();
+                CollectionId destinationId = document.activeCollectionId();
+                CollectionId activeParentId = CollectionId::invalid();
+                if (activeCollectionPath.size() > 1) {
+                    const QString parentSourceId = activeCollectionPath.at(
+                        activeCollectionPath.size() - 2);
+                    for (const DocumentCollection &candidate : allCollections) {
+                        if (candidate.sourceId == parentSourceId) {
+                            activeParentId = candidate.id;
+                            break;
+                        }
+                    }
+                } else if (activeCollectionPath.isEmpty()) {
+                    destinationId = activeCollectionContext.collectionId;
+                    activeParentId =
+                        activeCollectionContext.parentCollectionId;
+                }
                 while (destinationId.isValid() &&
                        targetHierarchy.contains(destinationId.value())) {
                     const DocumentCollection *activeCollection =

@@ -113,6 +113,10 @@ ObjectId DocumentTransaction::addShape(const Shape &shape)
 {
     SceneObject object;
     object.geometry = shape;
+    const CollectionId activeCollection = document_.activeCollectionId();
+    if (activeCollection.isValid()) {
+        object.collectionIds.append(activeCollection);
+    }
     return insertObject(document_.size(), object);
 }
 

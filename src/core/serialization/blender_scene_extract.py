@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 72
+BRIDGE_FORMAT_VERSION = 73
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -3392,12 +3392,14 @@ def view_layer_key(scene, view_layer):
 
 def layer_collection_records(scene, view_layer):
     records = []
+    active_layer_collection = view_layer.active_layer_collection
     def visit(node, path):
         collection_id = stable_id(node.collection)
         current_path = path + [collection_id]
         records.append({
             "collection_id": collection_id,
             "path": current_path,
+            "active": node == active_layer_collection,
             "exclude": bool(node.exclude),
             "hide_viewport": bool(node.hide_viewport),
             "hide_render": bool(node.hide_render),
@@ -3408,6 +3410,34 @@ def layer_collection_records(scene, view_layer):
             visit(child, current_path)
     visit(view_layer.layer_collection, [])
     return records
+
+
+def view_layer_record(scene, view_layer, active_scene, active_view_layer):
+    collection_instances = layer_collection_records(scene, view_layer)
+    active_collection_path = next(
+        (record["path"] for record in collection_instances
+         if record["active"]),
+        [],
+    )
+    return {
+        "name": view_layer.name,
+        "key": view_layer_key(scene, view_layer),
+        "is_active_view_layer": (
+            scene == active_scene and view_layer == active_view_layer
+        ),
+        "selected_object_ids": sorted(
+            stable_id(obj) for obj in scene.objects
+            if obj.select_get(view_layer=view_layer)
+        ),
+        "active_object_id": (
+            stable_id(view_layer.objects.active)
+            if view_layer.objects.active is not None else ""
+        ),
+        "use_pass_combined": bool(view_layer.use_pass_combined),
+        "use_pass_z": bool(view_layer.use_pass_z),
+        "active_collection_path": active_collection_path,
+        "collection_instances": collection_instances,
+    }
 
 
 def object_hidden_in_layer(obj, view_layer):
@@ -4696,24 +4726,11 @@ def extract_scene(input_path, mode):
             "world_animation_data": data_block_animation_metadata(scene.world),
             "scene_animation_data": data_block_animation_metadata(scene),
             "view_layer_names": [view_layer.name for view_layer in scene.view_layers],
-            "view_layers": [{
-                "name": view_layer.name,
-                "key": view_layer_key(scene, view_layer),
-                "is_active_view_layer": (
-                    scene == active_scene and view_layer == active_view_layer
-                ),
-                "selected_object_ids": sorted(
-                    stable_id(obj) for obj in scene.objects
-                    if obj.select_get(view_layer=view_layer)
-                ),
-                "active_object_id": (
-                    stable_id(view_layer.objects.active)
-                    if view_layer.objects.active is not None else ""
-                ),
-                "use_pass_combined": bool(view_layer.use_pass_combined),
-                "use_pass_z": bool(view_layer.use_pass_z),
-                "collection_instances": layer_collection_records(scene, view_layer),
-            } for view_layer in scene.view_layers],
+            "view_layers": [
+                view_layer_record(scene, view_layer, active_scene,
+                                  active_view_layer)
+                for view_layer in scene.view_layers
+            ],
             "collection_ids": sorted(
                 collection_id for collection_id, scene_names in scene_names_by_collection.items()
                 if scene.name_full in scene_names

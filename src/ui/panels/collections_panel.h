@@ -250,6 +250,9 @@ struct CollectionsPanelCallbacks {
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
     std::function<QString()> activeViewLayerKey;
     std::function<void(const QString &)> setActiveViewLayer;
+    std::function<QStringList()> activeCollectionSourcePath;
+    std::function<void(CollectionId, const QString &, const QStringList &)>
+        setActiveCollection;
     std::function<QVector<ObjectId>()> selectedObjectIds;
     std::function<ObjectId()> activeObjectId;
     std::function<bool(ObjectId)> canSelectObject;

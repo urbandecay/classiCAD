@@ -185,6 +185,17 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
                  QStringLiteral("root")).isObject() &&
              settings.importedBlenderDataApi.value(
                  QStringLiteral("truncated")).isBool())) &&
+           (settings.importedBlenderLibraryOverrides.isEmpty() ||
+            (settings.importedBlenderLibraryOverrides.value(
+                 QStringLiteral("properties")).isObject() &&
+             settings.importedBlenderLibraryOverrides.value(
+                 QStringLiteral("hierarchies")).isArray() &&
+             settings.importedBlenderLibraryOverrides.value(
+                 QStringLiteral("truncated")).isBool() &&
+             settings.importedBlenderLibraryOverrides.value(
+                 QStringLiteral("has_libraries")).isBool() &&
+             settings.importedBlenderLibraryOverrides.value(
+                 QStringLiteral("hierarchies")).toArray().size() <= 1024)) &&
            settings.importedBlenderOutlinerOnlyObjects.size() <= 100000 &&
            areImportedColorLutsValid(settings.importedBlenderColorLuts,
                                      settings.importedBlenderColorLutMetadata);

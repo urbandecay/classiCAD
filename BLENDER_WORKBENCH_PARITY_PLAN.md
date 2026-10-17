@@ -11107,11 +11107,31 @@ scene depth.
   it at import and does not edit the source Blender data. `cmake --build
   build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
   Blender Outliner UI comparison was run.
-- Remaining Outliner scope includes Blender's Library Overrides display modes,
-  further specialized ID branches, Data API edit/keying-set interactions,
-  Sequencer selection synchronization, and a matched Blender/classiCAD
-  interaction comparison. Do not mark this port complete until the remaining
-  items have been reviewed against pinned Blender source.
+- The fortieth tree update follows Blender 5.2.2's Library Overrides
+  [Properties display](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_override_library_properties.cc),
+  [Hierarchy display](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_override_library_hierarchies.cc),
+  [RNA override-path rows](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_overrides.cc),
+  and the [Outliner header controls](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py).
+  classiCAD now offers Properties and Hierarchies views, shows override IDs
+  grouped by Blender data-block type, shows captured property paths and values,
+  and provides Blender's System Overrides filter in Properties view. The
+  hierarchy view groups roots under Current File or their linked library and
+  nests related override IDs, including Blender's special object-parent
+  relationship. Blender bridge version 54 and native document version 44
+  retain a bounded read-only snapshot: at most 20,000 override IDs, 512
+  properties per ID, 2,048 discovered ID references per ID, and 128 hierarchy
+  levels. Hierarchy relationships are reconstructed from RNA ID references;
+  Blender's in-memory Main relation graph and lazy expansion are not retained,
+  so virtual or non-RNA relations can differ. The property tree reports
+  captured values and operation labels but does not provide Blender's live
+  property widgets or override create/reset/clear actions. `cmake --build
+  build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
+  Blender Outliner UI comparison was run.
+- Remaining Outliner scope includes further specialized ID branches, Data API
+  edit/keying-set interactions, Sequencer selection synchronization, and a
+  matched Blender/classiCAD interaction comparison. Do not mark this port
+  complete until the remaining items have been reviewed against pinned
+  Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

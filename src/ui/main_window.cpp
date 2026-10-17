@@ -3401,6 +3401,9 @@ private:
         collectionCallbacks.dataApi = [this]() {
             return session_.document().settings().importedBlenderDataApi;
         };
+        collectionCallbacks.libraryOverrides = [this]() {
+            return session_.document().settings().importedBlenderLibraryOverrides;
+        };
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

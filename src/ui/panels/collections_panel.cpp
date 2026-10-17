@@ -19,6 +19,10 @@
  * tree_display_orphaned.cc and BKE_idtype.hh.
  * Sequencer strip nesting, current meta level, and duplicate-file grouping
  * follow tree_display_sequencer.cc and tree_element_seq.cc.
+ * Library Overrides Properties and Hierarchies views follow
+ * tree_display_override_library_properties.cc,
+ * tree_display_override_library_hierarchies.cc, tree_element_overrides.cc,
+ * and space_outliner.py.
  * Generic object contents follow tree_element_id_object.cc, with Animation
  * rows following tree_element_anim_data.cc, tree_element_driver.cc, and
  * tree_element_nla.cc.
@@ -31,6 +35,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QCryptographicHash>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
@@ -377,9 +382,23 @@ void CollectionsPanel::createLayout()
     displayModeCombo_->addItem(QStringLiteral("Data API"));
     displayModeCombo_->addItem(QStringLiteral("Libraries"));
     displayModeCombo_->addItem(QStringLiteral("Orphan Data"));
+    displayModeCombo_->addItem(QStringLiteral("Library Overrides"));
     displayModeCombo_->setToolTip(QStringLiteral(
         "Choose the Blender Outliner tree display."));
     filterRow->addWidget(displayModeCombo_);
+    libraryOverrideViewCombo_ = new QComboBox(this);
+    libraryOverrideViewCombo_->addItem(QStringLiteral("Properties"),
+                                       QStringLiteral("PROPERTIES"));
+    libraryOverrideViewCombo_->addItem(QStringLiteral("Hierarchies"),
+                                       QStringLiteral("HIERARCHIES"));
+    libraryOverrideViewCombo_->setToolTip(QStringLiteral(
+        "Choose the Blender Library Overrides view."));
+    filterRow->addWidget(libraryOverrideViewCombo_);
+    showSystemOverridesCheck_ = new QCheckBox(
+        QStringLiteral("System Overrides"), this);
+    showSystemOverridesCheck_->setToolTip(QStringLiteral(
+        "Show Blender's system-generated library override properties."));
+    filterRow->addWidget(showSystemOverridesCheck_);
     idTypeCombo_ = new QComboBox(this);
     idTypeCombo_->setToolTip(QStringLiteral(
         "Filter Blender data-block rows by ID type."));
@@ -497,16 +516,30 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/displayMode"),
         QStringLiteral("VIEW_LAYER")).toString() ==
         QLatin1String("DATA_API");
+    libraryOverridesDisplayMode_ = outlinerSettings.value(
+        QStringLiteral("outliner/displayMode"),
+        QStringLiteral("VIEW_LAYER")).toString() ==
+        QLatin1String("LIBRARY_OVERRIDES");
+    overrideHierarchiesView_ = outlinerSettings.value(
+        QStringLiteral("outliner/libraryOverrideViewMode"),
+        QStringLiteral("PROPERTIES")).toString() ==
+        QLatin1String("HIERARCHIES");
+    showSystemOverrides_ = outlinerSettings.value(
+        QStringLiteral("outliner/showSystemOverrides"), false).toBool();
     idTypeFilter_ = outlinerSettings.value(
         QStringLiteral("outliner/idTypeFilter"),
         outlinerSettings.value(
             QStringLiteral("outliner/libraries/typeFilter"))).toString();
     displayModeCombo_->setCurrentIndex(
-        orphanDataDisplayMode_ ? 5
+        libraryOverridesDisplayMode_ ? 6
+            : (orphanDataDisplayMode_ ? 5
             : (librariesDisplayMode_ ? 4
                 : (dataApiDisplayMode_ ? 3
                     : (sequencerDisplayMode_ ? 2
-                        : (scenesDisplayMode_ ? 1 : 0)))));
+                        : (scenesDisplayMode_ ? 1 : 0))))));
+    libraryOverrideViewCombo_->setCurrentIndex(
+        overrideHierarchiesView_ ? 1 : 0);
+    showSystemOverridesCheck_->setChecked(showSystemOverrides_);
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -542,7 +575,7 @@ void CollectionsPanel::createLayout()
     allViewLayersAction->setEnabled(
         !scenesDisplayMode_ && !librariesDisplayMode_ &&
         !orphanDataDisplayMode_ && !sequencerDisplayMode_ &&
-        !dataApiDisplayMode_);
+        !dataApiDisplayMode_ && !libraryOverridesDisplayMode_);
     connect(allViewLayersAction, &QAction::toggled, this,
             [this](bool visible) {
         showAllViewLayers_ = visible;
@@ -558,6 +591,7 @@ void CollectionsPanel::createLayout()
         dataApiDisplayMode_ = index == 3;
         librariesDisplayMode_ = index == 4;
         orphanDataDisplayMode_ = index == 5;
+        libraryOverridesDisplayMode_ = index == 6;
         QString displayModeKey = QStringLiteral("VIEW_LAYER");
         if (scenesDisplayMode_) {
             displayModeKey = QStringLiteral("SCENES");
@@ -569,6 +603,8 @@ void CollectionsPanel::createLayout()
             displayModeKey = QStringLiteral("LIBRARIES");
         } else if (orphanDataDisplayMode_) {
             displayModeKey = QStringLiteral("ORPHAN_DATA");
+        } else if (libraryOverridesDisplayMode_) {
+            displayModeKey = QStringLiteral("LIBRARY_OVERRIDES");
         }
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/displayMode"),
@@ -576,7 +612,24 @@ void CollectionsPanel::createLayout()
         allViewLayersAction->setEnabled(
             !scenesDisplayMode_ && !librariesDisplayMode_ &&
             !orphanDataDisplayMode_ && !sequencerDisplayMode_ &&
-            !dataApiDisplayMode_);
+            !dataApiDisplayMode_ && !libraryOverridesDisplayMode_);
+        refresh();
+    });
+    connect(libraryOverrideViewCombo_, &QComboBox::activated, this,
+            [this](int index) {
+        overrideHierarchiesView_ = index == 1;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/libraryOverrideViewMode"),
+                          overrideHierarchiesView_
+                              ? QStringLiteral("HIERARCHIES")
+                              : QStringLiteral("PROPERTIES"));
+        refresh();
+    });
+    connect(showSystemOverridesCheck_, &QCheckBox::toggled, this,
+            [this](bool visible) {
+        showSystemOverrides_ = visible;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/showSystemOverrides"), visible);
         refresh();
     });
     connect(idTypeCombo_, &QComboBox::activated, this,
@@ -1166,25 +1219,29 @@ void CollectionsPanel::restoreTreeState()
         QCryptographicHash::hash(scope.toUtf8(),
                                  QCryptographicHash::Sha256)
             .toHex());
-    const QString settingsKey = scenesDisplayMode_
-        ? QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash)
-        : (sequencerDisplayMode_
-               ? QStringLiteral("outliner/%1/sequenceExpandedPaths")
-                     .arg(scopeHash)
-               : (dataApiDisplayMode_
-                      ? QStringLiteral("outliner/%1/dataApiExpandedPaths")
-                            .arg(scopeHash)
-               : (librariesDisplayMode_
-               ? QStringLiteral("outliner/%1/librariesExpandedPaths").arg(scopeHash)
-               : (orphanDataDisplayMode_
-                      ? QStringLiteral("outliner/%1/orphanDataExpandedPaths")
-                            .arg(scopeHash)
-                      : QStringLiteral("outliner/%1/expandedPaths")
-                            .arg(scopeHash)))));
+    QString expansionMode = QStringLiteral("expandedPaths");
+    if (scenesDisplayMode_) {
+        expansionMode = QStringLiteral("scenesExpandedPaths");
+    } else if (sequencerDisplayMode_) {
+        expansionMode = QStringLiteral("sequenceExpandedPaths");
+    } else if (dataApiDisplayMode_) {
+        expansionMode = QStringLiteral("dataApiExpandedPaths");
+    } else if (libraryOverridesDisplayMode_) {
+        expansionMode = QStringLiteral("libraryOverrides%1ExpandedPaths")
+            .arg(overrideHierarchiesView_
+                     ? QStringLiteral("Hierarchies")
+                     : QStringLiteral("Properties"));
+    } else if (librariesDisplayMode_) {
+        expansionMode = QStringLiteral("librariesExpandedPaths");
+    } else if (orphanDataDisplayMode_) {
+        expansionMode = QStringLiteral("orphanDataExpandedPaths");
+    }
+    const QString settingsKey = QStringLiteral("outliner/%1/%2")
+                                    .arg(scopeHash, expansionMode);
     bool hasSavedState = false;
     if (scenesDisplayMode_ || librariesDisplayMode_ ||
         orphanDataDisplayMode_ || sequencerDisplayMode_ ||
-        dataApiDisplayMode_) {
+        dataApiDisplayMode_ || libraryOverridesDisplayMode_) {
         QSettings settings;
         if (!scope.isEmpty() && settings.contains(settingsKey)) {
             expandedPaths = settings.value(settingsKey).toStringList();
@@ -1245,7 +1302,7 @@ void CollectionsPanel::saveTreeState()
     expandedPaths.removeDuplicates();
     if (scenesDisplayMode_ || librariesDisplayMode_ ||
         orphanDataDisplayMode_ || sequencerDisplayMode_ ||
-        dataApiDisplayMode_) {
+        dataApiDisplayMode_ || libraryOverridesDisplayMode_) {
         const QString scope = callbacks_.stateScopeKey
             ? callbacks_.stateScopeKey() : QString{};
         if (scope.isEmpty()) return;
@@ -1254,17 +1311,24 @@ void CollectionsPanel::saveTreeState()
                                      QCryptographicHash::Sha256)
                 .toHex());
         QSettings settings;
+        QString modeKey = QStringLiteral("orphanData");
+        if (scenesDisplayMode_) {
+            modeKey = QStringLiteral("scenes");
+        } else if (sequencerDisplayMode_) {
+            modeKey = QStringLiteral("sequence");
+        } else if (dataApiDisplayMode_) {
+            modeKey = QStringLiteral("dataApi");
+        } else if (libraryOverridesDisplayMode_) {
+            modeKey = QStringLiteral("libraryOverrides%1")
+                .arg(overrideHierarchiesView_
+                         ? QStringLiteral("Hierarchies")
+                         : QStringLiteral("Properties"));
+        } else if (librariesDisplayMode_) {
+            modeKey = QStringLiteral("libraries");
+        }
         settings.setValue(
             QStringLiteral("outliner/%1/%2ExpandedPaths")
-                .arg(scopeHash,
-                     scenesDisplayMode_ ? QStringLiteral("scenes")
-                         : (sequencerDisplayMode_
-                                ? QStringLiteral("sequence")
-                                : (dataApiDisplayMode_
-                                       ? QStringLiteral("dataApi")
-                                       : (librariesDisplayMode_
-                                ? QStringLiteral("libraries")
-                                : QStringLiteral("orphanData"))))),
+                .arg(scopeHash, modeKey),
             expandedPaths);
     } else if (callbacks_.saveExpandedTreePaths) {
         callbacks_.saveExpandedTreePaths(expandedPaths);
@@ -2225,19 +2289,26 @@ void CollectionsPanel::refresh()
         ? callbacks_.stateScopeKey() : QString{};
     const bool stateScopeChanged = stateScopeKey != currentStateScopeKey_;
     currentStateScopeKey_ = stateScopeKey;
+    QString treeModeContext = QStringLiteral("/ViewLayer");
+    if (scenesDisplayMode_) {
+        treeModeContext = QStringLiteral("/Scenes");
+    } else if (sequencerDisplayMode_) {
+        treeModeContext = QStringLiteral("/Sequence");
+    } else if (dataApiDisplayMode_) {
+        treeModeContext = QStringLiteral("/DataAPI");
+    } else if (libraryOverridesDisplayMode_) {
+        treeModeContext = QStringLiteral("/LibraryOverrides/%1")
+            .arg(overrideHierarchiesView_
+                     ? QStringLiteral("Hierarchies")
+                     : QStringLiteral("Properties"));
+    } else if (librariesDisplayMode_) {
+        treeModeContext = QStringLiteral("/Libraries/%1").arg(idTypeFilter_);
+    } else if (orphanDataDisplayMode_) {
+        treeModeContext = QStringLiteral("/OrphanData/%1").arg(idTypeFilter_);
+    }
     const QString treeStateContextKey =
         (callbacks_.treeStateContextKey
-             ? callbacks_.treeStateContextKey() : QString{}) +
-        (scenesDisplayMode_ ? QStringLiteral("/Scenes")
-             : (sequencerDisplayMode_
-                    ? QStringLiteral("/Sequence")
-                    : (dataApiDisplayMode_
-                           ? QStringLiteral("/DataAPI")
-                           : (librariesDisplayMode_
-                    ? QStringLiteral("/Libraries/%1").arg(idTypeFilter_)
-                    : (orphanDataDisplayMode_
-                           ? QStringLiteral("/OrphanData/%1").arg(idTypeFilter_)
-                           : QStringLiteral("/ViewLayer"))))));
+             ? callbacks_.treeStateContextKey() : QString{}) + treeModeContext;
     const bool treeStateContextChanged =
         treeStateContextKey != currentTreeStateContextKey_;
     currentTreeStateContextKey_ = treeStateContextKey;
@@ -2277,13 +2348,37 @@ void CollectionsPanel::refresh()
         ? callbacks_.sequencer() : OutlinerSequenceTree{};
     const QJsonObject dataApi = callbacks_.dataApi
         ? callbacks_.dataApi() : QJsonObject{};
+    const QJsonObject libraryOverrides = callbacks_.libraryOverrides
+        ? callbacks_.libraryOverrides() : QJsonObject{};
     const bool librariesMode = librariesDisplayMode_;
     const bool orphanDataMode = orphanDataDisplayMode_;
     const bool sequencerMode = sequencerDisplayMode_;
     const bool dataApiMode = dataApiDisplayMode_;
+    const bool libraryOverridesMode = libraryOverridesDisplayMode_;
+    const bool overrideHierarchiesMode = libraryOverridesMode &&
+                                          overrideHierarchiesView_;
+    const bool overridePropertiesMode = libraryOverridesMode &&
+                                         !overrideHierarchiesView_;
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
+    libraryOverrideViewCombo_->setVisible(libraryOverridesMode);
+    libraryOverrideViewCombo_->setEnabled(libraryOverridesMode);
+    showSystemOverridesCheck_->setVisible(
+        overridePropertiesMode && libraryOverrides.value(
+            QStringLiteral("has_libraries")).toBool());
+    showSystemOverridesCheck_->setEnabled(
+        overridePropertiesMode && libraryOverrides.value(
+            QStringLiteral("has_libraries")).toBool());
+    filterEdit_->setVisible(!overrideHierarchiesMode);
+    filterEdit_->setEnabled(!overrideHierarchiesMode);
+    if (overrideHierarchiesMode && !filterEdit_->text().isEmpty()) {
+        const QSignalBlocker filterBlocker(filterEdit_);
+        filterEdit_->clear();
+        activeFilterText_.clear();
+        expandedBeforeFilter_.clear();
+    }
     filterButton_->setVisible(!librariesMode && !orphanDataMode &&
-                              !sequencerMode && !dataApiMode);
+                              !sequencerMode && !dataApiMode &&
+                              !libraryOverridesMode);
     {
         const QSignalBlocker blocker(idTypeCombo_);
         idTypeCombo_->clear();
@@ -2388,7 +2483,7 @@ void CollectionsPanel::refresh()
         sceneCombo_->setCurrentIndex(activeIndex);
         sceneCombo_->setVisible(
             !scenesMode && !librariesMode && !orphanDataMode &&
-            !sequencerMode && !dataApiMode &&
+            !sequencerMode && !dataApiMode && !libraryOverridesMode &&
             scenes.size() > 1);
     }
     {
@@ -2404,47 +2499,52 @@ void CollectionsPanel::refresh()
         viewLayerCombo_->setCurrentIndex(activeIndex);
         viewLayerCombo_->setVisible(
             !scenesMode && !librariesMode && !orphanDataMode &&
-            !sequencerMode && !dataApiMode &&
+            !sequencerMode && !dataApiMode && !libraryOverridesMode &&
             viewLayers.size() > 1);
     }
     tree_->headerItem()->setText(
         viewportColumn,
-        dataApiMode ? QStringLiteral("Value") : QStringLiteral("Viewport"));
+        (dataApiMode || overridePropertiesMode)
+            ? (dataApiMode ? QStringLiteral("Value")
+                           : QStringLiteral("Value / Operation"))
+            : QStringLiteral("Viewport"));
     tree_->headerItem()->setToolTip(
         viewportColumn,
         dataApiMode ? QStringLiteral("Read-only Blender RNA property value")
-                    : QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
+            : (overridePropertiesMode
+                   ? QStringLiteral("Read-only value and operation from Blender's library override")
+                   : QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants; Ctrl-click on a collection isolates it.")));
     tree_->setColumnHidden(
         viewportColumn,
-        dataApiMode ? false
+        (dataApiMode || overridePropertiesMode) ? false
                     : (librariesMode || orphanDataMode || sequencerMode ||
-                       !showViewportColumn_));
+                       overrideHierarchiesMode || !showViewportColumn_));
     tree_->setColumnHidden(renderColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode ||
+                           dataApiMode || libraryOverridesMode ||
                                !showRenderColumn_);
     tree_->setColumnHidden(selectColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode ||
+                               dataApiMode || libraryOverridesMode ||
                                !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode || scenesMode ||
+                               dataApiMode || libraryOverridesMode || scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode || scenesMode ||
+                               dataApiMode || libraryOverridesMode || scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showHoldoutColumn_);
     tree_->setColumnHidden(indirectOnlyColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode || scenesMode ||
+                               dataApiMode || libraryOverridesMode || scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showIndirectOnlyColumn_);
     tree_->setColumnHidden(excludeColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode || scenesMode ||
+                               dataApiMode || libraryOverridesMode || scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
@@ -2551,6 +2651,264 @@ void CollectionsPanel::refresh()
             truncatedRow->setToolTip(
                 nameColumn,
                 QStringLiteral("The 20,000-row or 32-level capture limit was reached"));
+            truncatedRow->setFlags(Qt::ItemIsEnabled);
+        }
+    } else if (libraryOverridesMode) {
+        if (overridePropertiesMode) {
+            const QJsonObject properties = libraryOverrides.value(
+                QStringLiteral("properties")).toObject();
+            const QJsonArray groups = properties.value(
+                QStringLiteral("groups")).toArray();
+            for (qsizetype groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+                const QJsonObject sourceGroup = groups[groupIndex].toObject();
+                auto *groupRow = new QTreeWidgetItem(tree_);
+                groupRow->setText(nameColumn, sourceGroup.value(
+                    QStringLiteral("name")).toString());
+                groupRow->setData(nameColumn, itemKindRole,
+                                  static_cast<int>(OutlinerRowKind::SceneGroup));
+                const QString groupPath = QStringLiteral("overrides/properties/type-%1")
+                                              .arg(groupIndex);
+                groupRow->setData(nameColumn, itemPathRole, groupPath);
+                groupRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("Blender library overrides of this data-block type"));
+                groupRow->setFlags(Qt::ItemIsEnabled);
+                bool hasVisibleItems = false;
+                const QJsonArray items = sourceGroup.value(
+                    QStringLiteral("items")).toArray();
+                for (qsizetype itemIndex = 0; itemIndex < items.size(); ++itemIndex) {
+                    const QJsonObject sourceItem = items[itemIndex].toObject();
+                    QVector<QJsonObject> visibleProperties;
+                    for (const QJsonValue &propertyValue : sourceItem.value(
+                             QStringLiteral("properties")).toArray()) {
+                        if (!propertyValue.isObject()) continue;
+                        const QJsonObject property = propertyValue.toObject();
+                        if (!showSystemOverrides_ &&
+                            property.value(QStringLiteral("system")).toBool()) {
+                            continue;
+                        }
+                        visibleProperties.append(property);
+                    }
+                    if (visibleProperties.isEmpty()) continue;
+                    hasVisibleItems = true;
+                    auto *idRow = new QTreeWidgetItem(groupRow);
+                    const QString id = sourceItem.value(
+                        QStringLiteral("id")).toString();
+                    const QString idPath = groupPath + QStringLiteral("/id-%1")
+                                               .arg(id);
+                    idRow->setText(nameColumn, sourceItem.value(
+                        QStringLiteral("name")).toString());
+                    idRow->setData(nameColumn, itemKindRole,
+                                   static_cast<int>(OutlinerRowKind::ObjectContent));
+                    idRow->setData(nameColumn, itemPathRole, idPath);
+                    QString description = QStringLiteral(
+                        "Read-only Blender library override for %1")
+                        .arg(sourceItem.value(QStringLiteral("reference_name"))
+                                 .toString(QStringLiteral("an unavailable reference")));
+                    const QString libraryPath = sourceItem.value(
+                        QStringLiteral("reference_library_path")).toString();
+                    if (!libraryPath.isEmpty()) {
+                        description += QStringLiteral(" from %1").arg(libraryPath);
+                    }
+                    idRow->setToolTip(nameColumn, description);
+                    idRow->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+
+                    QHash<QString, QTreeWidgetItem *> pathRows;
+                    for (qsizetype propertyIndex = 0;
+                         propertyIndex < visibleProperties.size(); ++propertyIndex) {
+                        const QJsonObject property = visibleProperties[propertyIndex];
+                        QJsonArray segments = property.value(
+                            QStringLiteral("segments")).toArray();
+                        if (segments.isEmpty()) {
+                            QJsonObject fallbackSegment;
+                            fallbackSegment.insert(QStringLiteral("key"),
+                                QStringLiteral("property:%1").arg(
+                                    property.value(QStringLiteral("path")).toString()));
+                            fallbackSegment.insert(QStringLiteral("name"),
+                                property.value(QStringLiteral("name")).toString());
+                            fallbackSegment.insert(QStringLiteral("kind"),
+                                                   QStringLiteral("PROPERTY"));
+                            segments.append(fallbackSegment);
+                        }
+                        QTreeWidgetItem *parent = idRow;
+                        QString relativePath;
+                        QTreeWidgetItem *propertyRow = nullptr;
+                        for (qsizetype segmentIndex = 0;
+                             segmentIndex < segments.size(); ++segmentIndex) {
+                            const QJsonObject segment = segments[segmentIndex].toObject();
+                            const QString key = segment.value(
+                                QStringLiteral("key")).toString();
+                            relativePath += QLatin1Char('/') + key;
+                            propertyRow = pathRows.value(relativePath, nullptr);
+                            if (propertyRow == nullptr) {
+                                propertyRow = new QTreeWidgetItem(parent);
+                                propertyRow->setText(nameColumn, segment.value(
+                                    QStringLiteral("name")).toString());
+                                propertyRow->setData(
+                                    nameColumn, itemKindRole,
+                                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                                propertyRow->setData(
+                                    nameColumn, itemPathRole,
+                                    idPath + relativePath);
+                                propertyRow->setFlags(Qt::ItemIsEnabled |
+                                                      Qt::ItemIsSelectable);
+                                pathRows.insert(relativePath, propertyRow);
+                            }
+                            parent = propertyRow;
+                        }
+                        if (propertyRow == nullptr) continue;
+                        const QString operationPath = property.value(
+                            QStringLiteral("path")).toString();
+                        const bool pathValid = property.value(
+                            QStringLiteral("valid")).toBool();
+                        propertyRow->setText(viewportColumn, property.value(
+                            QStringLiteral("value")).toString());
+                        QStringList operationLabels;
+                        for (const QJsonValue &operationValue : property.value(
+                                 QStringLiteral("operations")).toArray()) {
+                            const QJsonObject operation = operationValue.toObject();
+                            const QString label = operation.value(
+                                QStringLiteral("label")).toString();
+                            if (!label.isEmpty() && !operationLabels.contains(label)) {
+                                operationLabels.append(label);
+                            }
+                        }
+                        QString tooltip = QStringLiteral("Blender RNA path: %1")
+                                              .arg(operationPath);
+                        if (!pathValid) {
+                            tooltip += QStringLiteral("\nThis override path no longer resolves in the imported data.");
+                        }
+                        if (!operationLabels.isEmpty()) {
+                            tooltip += QStringLiteral("\n%1")
+                                           .arg(operationLabels.join(QStringLiteral("; ")));
+                            if (propertyRow->text(viewportColumn).isEmpty()) {
+                                propertyRow->setText(viewportColumn,
+                                    operationLabels.join(QStringLiteral("; ")));
+                            }
+                        }
+                        propertyRow->setToolTip(nameColumn, tooltip);
+                    }
+                }
+                if (!hasVisibleItems) {
+                    delete groupRow;
+                } else {
+                    sceneRoots.append(groupRow);
+                    groupRow->setExpanded(true);
+                }
+            }
+            if (properties.value(QStringLiteral("truncated")).toBool()) {
+                auto *truncatedRow = new QTreeWidgetItem(tree_);
+                truncatedRow->setText(nameColumn,
+                    QStringLiteral("Additional override data omitted"));
+                truncatedRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                truncatedRow->setData(nameColumn, itemPathRole,
+                    QStringLiteral("overrides/properties/truncated"));
+                truncatedRow->setToolTip(nameColumn,
+                    QStringLiteral("The bounded Blender override extraction limit was reached"));
+                truncatedRow->setFlags(Qt::ItemIsEnabled);
+            }
+        } else {
+            const QJsonArray hierarchies = libraryOverrides.value(
+                QStringLiteral("hierarchies")).toArray();
+            const auto appendHierarchyNode = [this](
+                const auto &self, const QJsonObject &source,
+                QTreeWidgetItem *parent, const QString &parentPath) -> void {
+                auto *row = new QTreeWidgetItem(parent);
+                row->setText(nameColumn, source.value(
+                    QStringLiteral("name")).toString());
+                row->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                const QString id = source.value(QStringLiteral("id")).toString();
+                const QString path = parentPath + QStringLiteral("/id-%1").arg(id);
+                row->setData(nameColumn, itemPathRole, path);
+                row->setToolTip(nameColumn,
+                    QStringLiteral("Blender %1 in this library override hierarchy")
+                        .arg(source.value(QStringLiteral("type")).toString()));
+                row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                for (const QJsonValue &childValue : source.value(
+                         QStringLiteral("children")).toArray()) {
+                    if (childValue.isObject()) {
+                        self(self, childValue.toObject(), row, path);
+                    }
+                }
+            };
+            for (qsizetype libraryIndex = 0;
+                 libraryIndex < hierarchies.size(); ++libraryIndex) {
+                const QJsonObject sourceLibrary = hierarchies[libraryIndex].toObject();
+                auto *libraryRow = new QTreeWidgetItem(tree_);
+                libraryRow->setText(nameColumn, sourceLibrary.value(
+                    QStringLiteral("name")).toString());
+                libraryRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::Library));
+                libraryRow->setData(nameColumn, itemLibraryCurrentFileRole,
+                    sourceLibrary.value(QStringLiteral("current_file")).toBool());
+                const QString libraryPath = QStringLiteral("overrides/hierarchies/%1")
+                    .arg(sourceLibrary.value(QStringLiteral("id")).toString());
+                libraryRow->setData(nameColumn, itemPathRole, libraryPath);
+                libraryRow->setToolTip(nameColumn,
+                    sourceLibrary.value(QStringLiteral("current_file")).toBool()
+                        ? QStringLiteral("Library override hierarchies in the current Blender file")
+                        : QStringLiteral("Library override hierarchies from this Blender library"));
+                libraryRow->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                sceneRoots.append(libraryRow);
+                const QJsonArray groups = sourceLibrary.value(
+                    QStringLiteral("groups")).toArray();
+                for (qsizetype groupIndex = 0; groupIndex < groups.size(); ++groupIndex) {
+                    const QJsonObject sourceGroup = groups[groupIndex].toObject();
+                    auto *groupRow = new QTreeWidgetItem(libraryRow);
+                    groupRow->setText(nameColumn, sourceGroup.value(
+                        QStringLiteral("name")).toString());
+                    groupRow->setData(nameColumn, itemKindRole,
+                        static_cast<int>(OutlinerRowKind::SceneGroup));
+                    const QString groupPath = libraryPath + QStringLiteral("/type-%1")
+                                                  .arg(groupIndex);
+                    groupRow->setData(nameColumn, itemPathRole, groupPath);
+                    groupRow->setToolTip(nameColumn,
+                        QStringLiteral("Root Blender IDs of this type"));
+                    groupRow->setFlags(Qt::ItemIsEnabled);
+                    const QJsonArray roots = sourceGroup.value(
+                        QStringLiteral("items")).toArray();
+                    for (const QJsonValue &rootValue : roots) {
+                        if (rootValue.isObject()) {
+                            appendHierarchyNode(appendHierarchyNode,
+                                rootValue.toObject(), groupRow, groupPath);
+                        }
+                    }
+                }
+                if (sourceLibrary.value(QStringLiteral("current_file")).toBool() &&
+                    groups.isEmpty()) {
+                    auto *emptyRow = new QTreeWidgetItem(libraryRow);
+                    emptyRow->setText(nameColumn,
+                        QStringLiteral("No Library Overrides"));
+                    emptyRow->setData(nameColumn, itemKindRole,
+                        static_cast<int>(OutlinerRowKind::ObjectContent));
+                    emptyRow->setData(nameColumn, itemPathRole,
+                        libraryPath + QStringLiteral("/empty"));
+                    emptyRow->setFlags(Qt::ItemIsEnabled);
+                }
+                if (sourceLibrary.value(QStringLiteral("truncated")).toBool()) {
+                    auto *truncatedRow = new QTreeWidgetItem(libraryRow);
+                    truncatedRow->setText(nameColumn,
+                        QStringLiteral("Additional hierarchy rows omitted"));
+                    truncatedRow->setData(nameColumn, itemKindRole,
+                        static_cast<int>(OutlinerRowKind::ObjectContent));
+                    truncatedRow->setData(nameColumn, itemPathRole,
+                        libraryPath + QStringLiteral("/truncated"));
+                    truncatedRow->setFlags(Qt::ItemIsEnabled);
+                }
+            }
+        }
+        if (libraryOverrides.value(QStringLiteral("truncated")).toBool()) {
+            auto *truncatedRow = new QTreeWidgetItem(tree_);
+            truncatedRow->setText(nameColumn,
+                QStringLiteral("Additional override rows omitted"));
+            truncatedRow->setData(nameColumn, itemKindRole,
+                static_cast<int>(OutlinerRowKind::ObjectContent));
+            truncatedRow->setData(nameColumn, itemPathRole,
+                QStringLiteral("overrides/truncated"));
+            truncatedRow->setToolTip(nameColumn,
+                QStringLiteral("The 20,000-row Blender override extraction limit was reached"));
             truncatedRow->setFlags(Qt::ItemIsEnabled);
         }
     } else if (librariesMode) {
@@ -3008,7 +3366,7 @@ void CollectionsPanel::refresh()
                           QStringLiteral("scene"));
     }
     if (showObjectChildren_ && !librariesMode && !orphanDataMode &&
-        !sequencerMode && !dataApiMode) {
+        !sequencerMode && !dataApiMode && !libraryOverridesMode) {
         buildObjectParentHierarchy(displayObjects);
     }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
@@ -3070,6 +3428,27 @@ void CollectionsPanel::refresh()
                     }
                 }
             }
+        } else if (libraryOverridesMode) {
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
+            }
+            while (!pending.isEmpty()) {
+                QTreeWidgetItem *item = pending.takeLast();
+                const int kind = item->data(nameColumn, itemKindRole).toInt();
+                if (kind == static_cast<int>(OutlinerRowKind::Library)) {
+                    item->setExpanded(
+                        overrideHierarchiesMode && item->data(
+                            nameColumn, itemLibraryCurrentFileRole).toBool());
+                } else if (kind == static_cast<int>(OutlinerRowKind::SceneGroup)) {
+                    item->setExpanded(overridePropertiesMode);
+                } else {
+                    item->setExpanded(false);
+                }
+                for (int index = 0; index < item->childCount(); ++index) {
+                    pending.append(item->child(index));
+                }
+            }
         }
         restoreTreeState();
         hasRefreshed_ = true;
@@ -3083,6 +3462,16 @@ void CollectionsPanel::refresh()
                 item->setExpanded(saved.value());
             } else if (dataApiMode) {
                 item->setExpanded(path == QStringLiteral("data-api/main"));
+            } else if (libraryOverridesMode) {
+                const int kind = item->data(nameColumn, itemKindRole).toInt();
+                if (kind == static_cast<int>(OutlinerRowKind::Library)) {
+                    item->setExpanded(overrideHierarchiesMode && item->data(
+                        nameColumn, itemLibraryCurrentFileRole).toBool());
+                } else if (kind == static_cast<int>(OutlinerRowKind::SceneGroup)) {
+                    item->setExpanded(overridePropertiesMode);
+                } else {
+                    item->setExpanded(false);
+                }
             } else if (sequencerMode &&
                        (item->data(nameColumn, itemKindRole).toInt() ==
                             static_cast<int>(OutlinerRowKind::SequencerStrip) ||

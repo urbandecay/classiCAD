@@ -46,6 +46,8 @@ struct DocumentSettings {
     QJsonObject importedBlenderSequencer;
     // Bounded read-only Blender RNA Data API Outliner tree.
     QJsonObject importedBlenderDataApi;
+    // Bounded Blender Library Overrides Properties and Hierarchies trees.
+    QJsonObject importedBlenderLibraryOverrides;
     // Blender objects with no classiCAD geometry representation still belong
     // in the Outliner. These source records preserve their tree rows only.
     QJsonArray importedBlenderOutlinerOnlyObjects;

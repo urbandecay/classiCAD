@@ -21,6 +21,7 @@ class QTreeWidgetItem;
 class QLineEdit;
 class QComboBox;
 class QToolButton;
+class QCheckBox;
 
 namespace classiCAD {
 
@@ -195,6 +196,7 @@ struct CollectionsPanelCallbacks {
     std::function<QVector<OutlinerOrphanGroup>()> orphanGroups;
     std::function<OutlinerSequenceTree()> sequencer;
     std::function<QJsonObject()> dataApi;
+    std::function<QJsonObject()> libraryOverrides;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
@@ -280,7 +282,9 @@ private:
     QLineEdit *filterEdit_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
+    QComboBox *libraryOverrideViewCombo_ = nullptr;
     QComboBox *idTypeCombo_ = nullptr;
+    QCheckBox *showSystemOverridesCheck_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
@@ -308,6 +312,9 @@ private:
     bool orphanDataDisplayMode_ = false;
     bool sequencerDisplayMode_ = false;
     bool dataApiDisplayMode_ = false;
+    bool libraryOverridesDisplayMode_ = false;
+    bool overrideHierarchiesView_ = false;
+    bool showSystemOverrides_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

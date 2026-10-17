@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -24,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 53
+BRIDGE_FORMAT_VERSION = 54
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -43,6 +44,10 @@ MAX_OUTLINER_SEQUENCE_DEPTH = 128
 MAX_OUTLINER_DATA_API_ITEMS = 20000
 MAX_OUTLINER_DATA_API_DEPTH = 32
 MAX_OUTLINER_DATA_API_COLLECTION_ITEMS = 128
+MAX_OUTLINER_OVERRIDE_ITEMS = 20000
+MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID = 512
+MAX_OUTLINER_OVERRIDE_DEPTH = 128
+MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID = 2048
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -864,6 +869,446 @@ def outliner_orphan_groups():
             row_count += 1
             group["names"].append(str(id_block.name_full))
     return groups
+
+
+def outliner_library_overrides_tree():
+    """Capture Blender's Library Overrides Properties and Hierarchies trees."""
+    def identity(value):
+        try:
+            return int(value.as_pointer())
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return id(value)
+
+    def display_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, (str, bool, int, float)):
+            return str(value)[:4096]
+        if isinstance(value, bpy.types.ID):
+            return str(value.name_full)[:4096]
+        try:
+            values = list(value)
+        except (ReferenceError, RuntimeError, TypeError):
+            values = None
+        if values is not None:
+            if len(values) > 16:
+                values = values[:16]
+                suffix = ", …"
+            else:
+                suffix = ""
+            if all(isinstance(item, (bool, int, float)) for item in values):
+                return (", ".join(str(item) for item in values) + suffix)[:4096]
+        try:
+            return str(value)[:4096]
+        except (ReferenceError, RuntimeError, TypeError):
+            return ""
+
+    def property_path_segments(id_block, path):
+        """Resolve Blender RNA names along a stored override property path."""
+        segments = []
+        current = id_block
+        last_property = None
+        token_pattern = re.compile(
+            r'(?P<property>[A-Za-z_][A-Za-z0-9_]*)|'
+            r'\[(?P<index>[0-9]+)\]|'
+            r'\[(?P<key>"(?:\\.|[^"\\])*")\]'
+        )
+        for token in token_pattern.finditer(str(path)):
+            property_name = token.group("property")
+            if property_name is not None:
+                try:
+                    rna = getattr(current, "bl_rna", None)
+                    last_property = (
+                        rna.properties.get(property_name)
+                        if rna is not None else None
+                    )
+                    label = (str(last_property.name) if last_property is not None
+                             else property_name.replace("_", " ").title())
+                    value = getattr(current, property_name)
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    label = property_name.replace("_", " ").title()
+                    value = None
+                    last_property = None
+                segments.append({
+                    "key": "property:" + property_name,
+                    "name": label[:4096],
+                    "kind": "PROPERTY",
+                })
+                current = value
+                continue
+
+            try:
+                if token.group("index") is not None:
+                    item_index = int(token.group("index"))
+                    item = current[item_index]
+                    item_key = str(item_index)
+                else:
+                    quoted_key = token.group("key")[1:-1]
+                    item_key = quoted_key.replace(r'\"', '"').replace(r"\\", "\\")
+                    getter = getattr(current, "get", None)
+                    item = getter(item_key) if getter is not None else current[item_key]
+                item_name = str(getattr(item, "name", "") or item_key)
+                item_rna = getattr(item, "bl_rna", None)
+                if not getattr(item, "name", "") and item_rna is not None:
+                    item_name = str(getattr(item_rna, "name", item_name))
+            except (AttributeError, IndexError, KeyError, ReferenceError,
+                    RuntimeError, TypeError, ValueError):
+                item = None
+                item_name = item_key
+            segments.append({
+                "key": "item:" + item_key,
+                "name": item_name[:4096],
+                "kind": "ITEM",
+            })
+            current = item
+            last_property = None
+        return segments, last_property
+
+    def is_path_animated(id_block, path):
+        animation_data = getattr(id_block, "animation_data", None)
+        if animation_data is None:
+            return False
+        curves = list(getattr(animation_data, "drivers", ()))
+        action = getattr(animation_data, "action", None)
+        if action is not None:
+            curves.extend(list(getattr(action, "fcurves", ())))
+        return any(str(getattr(curve, "data_path", "")) == path
+                   for curve in curves)
+
+    def is_system_override_property(id_block, path, override_property,
+                                    final_property, resolved_value):
+        if final_property is None:
+            return False
+        property_type = str(getattr(final_property, "type", ""))
+        if property_type not in {"POINTER", "COLLECTION"}:
+            return False
+        points_to_id = isinstance(resolved_value, bpy.types.ID)
+        if not points_to_id:
+            try:
+                fixed_type = final_property.fixed_type
+                points_to_id = (
+                    fixed_type == bpy.types.ID or
+                    (isinstance(fixed_type, type) and
+                     issubclass(fixed_type, bpy.types.ID))
+                )
+            except (AttributeError, TypeError):
+                points_to_id = False
+        if not points_to_id and property_type == "COLLECTION":
+            try:
+                points_to_id = any(
+                    isinstance(item, bpy.types.ID)
+                    for item in list(resolved_value)[:1]
+                )
+            except (ReferenceError, RuntimeError, TypeError):
+                points_to_id = False
+        if not points_to_id:
+            return False
+
+        operations = list(getattr(override_property, "operations", ()))
+        if not operations or not all(
+                "IDPOINTER_MATCH_REFERENCE" in
+                set(getattr(operation, "flag", ()))
+                for operation in operations):
+            return False
+        return not is_path_animated(id_block, path)
+
+    def override_properties(id_block, override_info):
+        rows = []
+        try:
+            source_properties = list(getattr(override_info, "properties", ()))
+        except (ReferenceError, RuntimeError, TypeError):
+            source_properties = []
+        for source_property in source_properties[:MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID]:
+            try:
+                path = str(source_property.rna_path)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                continue
+            segments, final_property = property_path_segments(id_block, path)
+            try:
+                value = id_block.path_resolve(path)
+                valid = True
+            except (AttributeError, ReferenceError, RuntimeError, TypeError, ValueError):
+                value = None
+                valid = False
+
+            operations = []
+            for operation in list(getattr(source_property, "operations", ()))[:64]:
+                try:
+                    operation_type = str(operation.operation)
+                    label = str(getattr(operation, "label", "") or "")
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    continue
+                labels = {
+                    "INSERT_AFTER": "Added through override",
+                    "INSERT_BEFORE": "Added through override",
+                    "NOOP": "Protected from override",
+                    "ADD": "Additive override",
+                    "SUBTRACT": "Subtractive override",
+                    "MULTIPLY": "Multiplicative override",
+                    "CUSTOM": "Custom override",
+                }
+                operations.append({
+                    "type": operation_type[:128],
+                    "label": (label or labels.get(operation_type, ""))[:512],
+                })
+            system_property = is_system_override_property(
+                id_block, path, source_property, final_property, value)
+            rows.append({
+                "path": path[:4096],
+                "name": (segments[-1]["name"] if segments
+                         else path.rsplit(".", 1)[-1])[:4096],
+                "valid": valid,
+                "system": system_property,
+                "value": display_value(value),
+                "segments": segments[:MAX_OUTLINER_OVERRIDE_DEPTH],
+                "operations": operations,
+            })
+        return rows
+
+    id_records = []
+    by_pointer = {}
+    seen_ids = set()
+    truncated = [False]
+    for collection_property in bpy.data.bl_rna.properties:
+        if getattr(collection_property, "type", "") != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, collection_property.identifier)
+        except (AttributeError, RuntimeError, TypeError):
+            continue
+        for id_block in collection:
+            if not isinstance(id_block, bpy.types.ID):
+                continue
+            pointer = identity(id_block)
+            if pointer in seen_ids:
+                continue
+            seen_ids.add(pointer)
+            override_info = getattr(id_block, "override_library", None)
+            if override_info is None or getattr(id_block, "library", None) is not None:
+                continue
+            reference = getattr(override_info, "reference", None)
+            if reference is None:
+                continue
+            if len(id_records) >= MAX_OUTLINER_OVERRIDE_ITEMS:
+                truncated[0] = True
+                continue
+            hierarchy_root = getattr(override_info, "hierarchy_root", None)
+            if hierarchy_root is None:
+                hierarchy_root = id_block
+            record = {
+                "id": stable_id(id_block),
+                "name": str(id_block.name_full)[:4096],
+                "type": str(collection_property.name)[:256],
+                "rna_type": str(id_block.bl_rna.identifier)[:256],
+                "library_path": source_library_path(id_block)[:4096],
+                "reference_name": (
+                    str(reference.name_full)[:4096] if reference is not None else ""
+                ),
+                "reference_library_path": (
+                    source_library_path(reference)[:4096]
+                    if reference is not None else ""
+                ),
+                "root_id": stable_id(hierarchy_root),
+                "root_pointer": identity(hierarchy_root),
+                "is_root": identity(hierarchy_root) == pointer,
+                "is_system_id": bool(getattr(override_info, "is_system_override", False)),
+                "properties": override_properties(id_block, override_info),
+                "references": [],
+            }
+            id_records.append(record)
+            by_pointer[pointer] = (id_block, record)
+
+    def referenced_ids(id_block):
+        """Read bounded ID pointers from Blender RNA to mirror Main relations."""
+        pending = [(id_block, 0)]
+        visited_structs = {identity(id_block)}
+        result = []
+        while pending and len(result) < MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID:
+            value, depth = pending.pop()
+            if (isinstance(value, bpy.types.ID) and
+                    identity(value) != identity(id_block)):
+                result.append(value)
+                continue
+            if depth >= 16:
+                continue
+            rna = getattr(value, "bl_rna", None)
+            if rna is None:
+                continue
+            try:
+                properties = list(rna.properties)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                continue
+            for prop in properties:
+                identifier = str(getattr(prop, "identifier", ""))
+                if identifier in {"rna_type", "library", "override_library"}:
+                    continue
+                if (value is id_block and identifier == "parent" and
+                        getattr(id_block, "bl_rna", None) is not None and
+                        id_block.bl_rna.identifier == "Object"):
+                    continue
+                prop_type = str(getattr(prop, "type", ""))
+                if prop_type not in {"POINTER", "COLLECTION"}:
+                    continue
+                try:
+                    child = getattr(value, identifier)
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    continue
+                if child is None:
+                    continue
+                if prop_type == "COLLECTION":
+                    try:
+                        values = list(child)
+                    except (ReferenceError, RuntimeError, TypeError):
+                        continue
+                    pending.extend((item, depth + 1)
+                                   for item in values[:256])
+                else:
+                    child_pointer = identity(child)
+                    if child_pointer not in visited_structs:
+                        visited_structs.add(child_pointer)
+                        pending.append((child, depth + 1))
+                if len(pending) + len(result) >= MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID:
+                    truncated[0] = True
+                    break
+        unique = []
+        pointers = set()
+        for value in result:
+            pointer = identity(value)
+            if pointer not in pointers:
+                pointers.add(pointer)
+                unique.append(value)
+        return unique
+
+    for id_block, record in by_pointer.values():
+        record["references"] = [identity(value) for value in referenced_ids(id_block)]
+
+    properties_groups = []
+    properties_groups_by_type = {}
+    for record in id_records:
+        group = properties_groups_by_type.get(record["type"])
+        if group is None:
+            group = {"name": record["type"], "items": []}
+            properties_groups_by_type[record["type"]] = group
+            properties_groups.append(group)
+        group["items"].append({
+            key: value for key, value in record.items()
+            if key not in {"references", "root_pointer"}
+        })
+
+    children_by_pointer = {pointer: [] for pointer in by_pointer}
+    for parent_pointer, (parent_id, parent_record) in by_pointer.items():
+        root_pointer = int(parent_record["root_pointer"])
+        sibling_seen = set()
+        for child_pointer in parent_record["references"]:
+            child_entry = by_pointer.get(int(child_pointer))
+            if child_entry is None:
+                continue
+            if int(child_entry[1]["root_pointer"]) != root_pointer:
+                continue
+            if child_pointer == parent_pointer or child_pointer in sibling_seen:
+                continue
+            sibling_seen.add(child_pointer)
+            children_by_pointer[parent_pointer].append(int(child_pointer))
+        if getattr(parent_id, "bl_rna", None) is not None and \
+                parent_id.bl_rna.identifier == "Object":
+            for child_pointer, (child_id, child_record) in by_pointer.items():
+                if (int(child_record["root_pointer"]) == root_pointer and
+                        getattr(child_id, "parent", None) is parent_id and
+                        child_pointer not in sibling_seen):
+                    sibling_seen.add(child_pointer)
+                    children_by_pointer[parent_pointer].append(child_pointer)
+
+    hierarchy_groups = []
+    hierarchy_groups_by_library = {}
+    hierarchy_rows_remaining = [MAX_OUTLINER_OVERRIDE_ITEMS]
+
+    def hierarchy_node(pointer, root_pointer, depth, ancestry):
+        if hierarchy_rows_remaining[0] <= 0 or depth >= MAX_OUTLINER_OVERRIDE_DEPTH:
+            truncated[0] = True
+            return None
+        entry = by_pointer.get(pointer)
+        if entry is None or pointer in ancestry:
+            return None
+        id_block, record = entry
+        hierarchy_rows_remaining[0] -= 1
+        node = {
+            "id": record["id"],
+            "name": record["name"],
+            "type": record["type"],
+            "root_id": record["root_id"],
+            "children": [],
+        }
+        next_ancestry = ancestry | {pointer}
+        sibling_seen = set()
+        for child_pointer in children_by_pointer.get(pointer, ()):
+            if child_pointer in sibling_seen:
+                continue
+            sibling_seen.add(child_pointer)
+            child_entry = by_pointer.get(child_pointer)
+            if child_entry is None or int(child_entry[1]["root_pointer"]) != root_pointer:
+                continue
+            child = hierarchy_node(child_pointer, root_pointer, depth + 1,
+                                   next_ancestry)
+            if child is not None:
+                node["children"].append(child)
+        return node
+
+    for pointer, (id_block, record) in by_pointer.items():
+        if not record["is_root"]:
+            continue
+        library_path = source_library_path(id_block)
+        library = getattr(id_block, "library", None)
+        if library is not None:
+            library_key = stable_id(library)
+            library_name = str(library.filepath or library.name_full)
+            current_file = False
+        else:
+            library_key = "CURRENT_FILE"
+            library_name = "Current File"
+            current_file = True
+        group_record = hierarchy_groups_by_library.get(library_key)
+        if group_record is None:
+            group_record = {
+                "id": library_key,
+                "name": library_name[:4096],
+                "current_file": current_file,
+                "groups": [],
+                "truncated": False,
+            }
+            hierarchy_groups_by_library[library_key] = group_record
+            hierarchy_groups.append(group_record)
+        type_group = next((group for group in group_record["groups"]
+                           if group["name"] == record["type"]), None)
+        if type_group is None:
+            type_group = {"name": record["type"], "items": []}
+            group_record["groups"].append(type_group)
+        root_node = hierarchy_node(pointer, pointer, 0, set())
+        if root_node is not None:
+            type_group["items"].append(root_node)
+        if hierarchy_rows_remaining[0] <= 0:
+            group_record["truncated"] = True
+
+    if not any(group["current_file"] for group in hierarchy_groups):
+        hierarchy_groups.insert(0, {
+            "id": "CURRENT_FILE",
+            "name": "Current File",
+            "current_file": True,
+            "groups": [],
+            "truncated": False,
+        })
+    hierarchy_groups = [
+        group for group in hierarchy_groups
+        if group["current_file"] or group["groups"]
+    ]
+    return {
+        "properties": {
+            "groups": properties_groups,
+            "truncated": truncated[0],
+        },
+        "hierarchies": hierarchy_groups,
+        "truncated": truncated[0] or hierarchy_rows_remaining[0] <= 0,
+        "has_libraries": bool(bpy.data.libraries),
+    }
 
 
 def outliner_sequencer_tree(active_window, fallback_scene):
@@ -3450,6 +3895,7 @@ def extract_scene(input_path, mode):
         "outliner_sequencer": outliner_sequencer_tree(
             active_window, active_scene),
         "outliner_data_api": outliner_data_api_tree(),
+        "outliner_library_overrides": outliner_library_overrides_tree(),
         "scenes": [],
         "collections": [],
         "items": [],

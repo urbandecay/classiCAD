@@ -222,6 +222,133 @@ bool isValidImportedBlenderDataApi(const QJsonValue &value)
     return validateNode(validateNode, root.toObject(), 0);
 }
 
+bool isValidImportedBlenderLibraryOverrides(const QJsonValue &value)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject record = value.toObject();
+    if (record.isEmpty()) return true;
+    const QJsonObject properties = record.value(
+        QStringLiteral("properties")).toObject();
+    const QJsonValue propertyGroups = properties.value(QStringLiteral("groups"));
+    const QJsonValue hierarchies = record.value(QStringLiteral("hierarchies"));
+    if (!record.value(QStringLiteral("truncated")).isBool() ||
+        !record.value(QStringLiteral("has_libraries")).isBool() ||
+        !properties.value(QStringLiteral("truncated")).isBool() ||
+        !propertyGroups.isArray() || !hierarchies.isArray() ||
+        propertyGroups.toArray().size() > 1024 || hierarchies.toArray().size() > 1024) {
+        return false;
+    }
+    int propertyItemCount = 0;
+    for (const QJsonValue &groupValue : propertyGroups.toArray()) {
+        if (!groupValue.isObject()) return false;
+        const QJsonObject group = groupValue.toObject();
+        const QJsonValue items = group.value(QStringLiteral("items"));
+        if (!group.value(QStringLiteral("name")).isString() ||
+            group.value(QStringLiteral("name")).toString().size() > 256 ||
+            !items.isArray()) return false;
+        for (const QJsonValue &itemValue : items.toArray()) {
+            if (!itemValue.isObject() || ++propertyItemCount > 20000) return false;
+            const QJsonObject item = itemValue.toObject();
+            const QStringList requiredStrings{
+                QStringLiteral("id"), QStringLiteral("name"),
+                QStringLiteral("type"), QStringLiteral("rna_type"),
+                QStringLiteral("library_path"), QStringLiteral("reference_name"),
+                QStringLiteral("reference_library_path"), QStringLiteral("root_id")};
+            for (const QString &field : requiredStrings) {
+                if (!item.value(field).isString() ||
+                    item.value(field).toString().size() > 4096) return false;
+            }
+            const QJsonValue itemProperties = item.value(QStringLiteral("properties"));
+            if (!item.value(QStringLiteral("is_root")).isBool() ||
+                !item.value(QStringLiteral("is_system_id")).isBool() ||
+                !itemProperties.isArray() || itemProperties.toArray().size() > 512) {
+                return false;
+            }
+            for (const QJsonValue &propertyValue : itemProperties.toArray()) {
+                if (!propertyValue.isObject()) return false;
+                const QJsonObject property = propertyValue.toObject();
+                for (const QString &field : {QStringLiteral("path"),
+                                             QStringLiteral("name"),
+                                             QStringLiteral("value")}) {
+                    if (!property.value(field).isString() ||
+                        property.value(field).toString().size() > 4096) return false;
+                }
+                const QJsonValue segments = property.value(QStringLiteral("segments"));
+                const QJsonValue operations = property.value(QStringLiteral("operations"));
+                if (!property.value(QStringLiteral("valid")).isBool() ||
+                    !property.value(QStringLiteral("system")).isBool() ||
+                    !segments.isArray() || segments.toArray().size() > 128 ||
+                    !operations.isArray() || operations.toArray().size() > 64) return false;
+                for (const QJsonValue &segmentValue : segments.toArray()) {
+                    if (!segmentValue.isObject()) return false;
+                    const QJsonObject segment = segmentValue.toObject();
+                    const QString kind = segment.value(QStringLiteral("kind")).toString();
+                    if (!segment.value(QStringLiteral("key")).isString() ||
+                        segment.value(QStringLiteral("key")).toString().size() > 512 ||
+                        !segment.value(QStringLiteral("name")).isString() ||
+                        segment.value(QStringLiteral("name")).toString().size() > 4096 ||
+                        (kind != QLatin1String("PROPERTY") &&
+                         kind != QLatin1String("ITEM"))) return false;
+                }
+                for (const QJsonValue &operationValue : operations.toArray()) {
+                    if (!operationValue.isObject()) return false;
+                    const QJsonObject operation = operationValue.toObject();
+                    if (!operation.value(QStringLiteral("type")).isString() ||
+                        operation.value(QStringLiteral("type")).toString().size() > 128 ||
+                        !operation.value(QStringLiteral("label")).isString() ||
+                        operation.value(QStringLiteral("label")).toString().size() > 512) return false;
+                }
+            }
+        }
+    }
+
+    int hierarchyNodeCount = 0;
+    const auto validateNode = [&](const auto &self,
+                                  const QJsonObject &node,
+                                  int depth) -> bool {
+        if (depth > 128 || ++hierarchyNodeCount > 20000) return false;
+        const QJsonValue children = node.value(QStringLiteral("children"));
+        for (const QString &field : {QStringLiteral("id"), QStringLiteral("name"),
+                                     QStringLiteral("root_id")}) {
+            if (!node.value(field).isString() ||
+                node.value(field).toString().size() > 4096) return false;
+        }
+        if (!node.value(QStringLiteral("type")).isString() ||
+            node.value(QStringLiteral("type")).toString().size() > 256 ||
+            !children.isArray()) return false;
+        for (const QJsonValue &child : children.toArray()) {
+            if (!child.isObject() || !self(self, child.toObject(), depth + 1)) return false;
+        }
+        return true;
+    };
+    int currentFileCount = 0;
+    for (const QJsonValue &hierarchyValue : hierarchies.toArray()) {
+        if (!hierarchyValue.isObject()) return false;
+        const QJsonObject hierarchy = hierarchyValue.toObject();
+        const QJsonValue groups = hierarchy.value(QStringLiteral("groups"));
+        const QJsonValue currentFile = hierarchy.value(QStringLiteral("current_file"));
+        if (!hierarchy.value(QStringLiteral("id")).isString() ||
+            hierarchy.value(QStringLiteral("id")).toString().size() > 4096 ||
+            !hierarchy.value(QStringLiteral("name")).isString() ||
+            hierarchy.value(QStringLiteral("name")).toString().size() > 4096 ||
+            !currentFile.isBool() || !hierarchy.value(QStringLiteral("truncated")).isBool() ||
+            !groups.isArray() || groups.toArray().size() > 1024) return false;
+        currentFileCount += currentFile.toBool() ? 1 : 0;
+        for (const QJsonValue &groupValue : groups.toArray()) {
+            if (!groupValue.isObject()) return false;
+            const QJsonObject group = groupValue.toObject();
+            const QJsonValue items = group.value(QStringLiteral("items"));
+            if (!group.value(QStringLiteral("name")).isString() ||
+                group.value(QStringLiteral("name")).toString().size() > 256 ||
+                !items.isArray()) return false;
+            for (const QJsonValue &item : items.toArray()) {
+                if (!item.isObject() || !validateNode(validateNode, item.toObject(), 0)) return false;
+            }
+        }
+    }
+    return currentFileCount == 1;
+}
+
 void setError(QString *errorMessage, const QString &message)
 {
     if (errorMessage != nullptr) {
@@ -440,7 +567,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 43);
+    serialized.insert(QStringLiteral("version"), 44);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -457,6 +584,8 @@ QJsonObject documentToJson(const Document &document)
                     document.settings().importedBlenderSequencer);
     settings.insert(QStringLiteral("importedBlenderDataApi"),
                     document.settings().importedBlenderDataApi);
+    settings.insert(QStringLiteral("importedBlenderLibraryOverrides"),
+                    document.settings().importedBlenderLibraryOverrides);
     settings.insert(QStringLiteral("importedBlenderOutlinerOnlyObjects"),
                     document.settings().importedBlenderOutlinerOnlyObjects);
     QJsonObject colorLuts;
@@ -894,7 +1023,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 43) {
+    if (version < 1 || version > 44) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1346,6 +1475,16 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.importedBlenderDataApi = importedDataApi.toObject();
+        }
+        if (version >= 44) {
+            const QJsonValue importedOverrides = settingsObject.value(
+                QStringLiteral("importedBlenderLibraryOverrides"));
+            if (!isValidImportedBlenderLibraryOverrides(importedOverrides)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid imported Blender Library Overrides metadata"));
+                return false;
+            }
+            settings.importedBlenderLibraryOverrides = importedOverrides.toObject();
         }
         if (version >= 37) {
             const QJsonValue outlinerOnlyValue = settingsObject.value(

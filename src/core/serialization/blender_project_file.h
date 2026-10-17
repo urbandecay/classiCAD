@@ -82,6 +82,7 @@ struct BlenderSceneImportReport {
     QJsonArray outlinerOrphans;
     QJsonObject outlinerSequencer;
     QJsonObject outlinerDataApi;
+    QJsonObject outlinerLibraryOverrides;
     QJsonArray outlinerOnlyObjects;
     // Indices refer to the imported-object array produced by
     // importBlenderScene(); ordinary .blend open also resolves these to the

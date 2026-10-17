@@ -2705,6 +2705,8 @@ bool loadVignolaDocument(const QString &path,
             importReport.outlinerSequencer;
         snapshot.settings.importedBlenderDataApi =
             importReport.outlinerDataApi;
+        snapshot.settings.importedBlenderLibraryOverrides =
+            importReport.outlinerLibraryOverrides;
         snapshot.settings.importedBlenderOutlinerOnlyObjects =
             importReport.outlinerOnlyObjects;
         snapshot.settings.importedBlenderColorLuts =
@@ -2835,7 +2837,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 46 && bridgeVersion != 47 &&
          bridgeVersion != 48 && bridgeVersion != 49 &&
          bridgeVersion != 50 && bridgeVersion != 51 &&
-         bridgeVersion != 52 && bridgeVersion != 53)) {
+         bridgeVersion != 52 && bridgeVersion != 53 &&
+         bridgeVersion != 54)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3350,6 +3353,232 @@ bool importBlenderScene(const QString &path,
             return false;
         }
         outlinerDataApi = dataApi;
+    }
+    QJsonObject outlinerLibraryOverrides;
+    if (bridgeVersion >= 54) {
+        const QJsonValue overridesValue = root.value(
+            QStringLiteral("outliner_library_overrides"));
+        if (!overridesValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Library Overrides tree is invalid"));
+            return false;
+        }
+        const QJsonObject overrides = overridesValue.toObject();
+        const QJsonValue propertiesValue = overrides.value(
+            QStringLiteral("properties"));
+        const QJsonValue hierarchiesValue = overrides.value(
+            QStringLiteral("hierarchies"));
+        if (!propertiesValue.isObject() || !hierarchiesValue.isArray() ||
+            !overrides.value(QStringLiteral("truncated")).isBool() ||
+            !overrides.value(QStringLiteral("has_libraries")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Library Overrides tree is incomplete"));
+            return false;
+        }
+        const QJsonObject properties = propertiesValue.toObject();
+        const QJsonValue propertyGroupsValue = properties.value(
+            QStringLiteral("groups"));
+        if (!propertyGroupsValue.isArray() ||
+            !properties.value(QStringLiteral("truncated")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Library Overrides Properties tree is invalid"));
+            return false;
+        }
+        int overrideItemCount = 0;
+        for (const QJsonValue &groupValue : propertyGroupsValue.toArray()) {
+            if (!groupValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender override type group is invalid"));
+                return false;
+            }
+            const QJsonObject group = groupValue.toObject();
+            const QJsonValue groupName = group.value(QStringLiteral("name"));
+            const QJsonValue itemsValue = group.value(QStringLiteral("items"));
+            if (!groupName.isString() || groupName.toString().size() > 256 ||
+                !itemsValue.isArray() || itemsValue.toArray().size() > 20000) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender override type group is invalid"));
+                return false;
+            }
+            for (const QJsonValue &itemValue : itemsValue.toArray()) {
+                if (!itemValue.isObject() || ++overrideItemCount > 20000) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender override data-block row is invalid"));
+                    return false;
+                }
+                const QJsonObject item = itemValue.toObject();
+                const QStringList stringFields{
+                    QStringLiteral("id"), QStringLiteral("name"),
+                    QStringLiteral("type"), QStringLiteral("rna_type"),
+                    QStringLiteral("library_path"),
+                    QStringLiteral("reference_name"),
+                    QStringLiteral("reference_library_path"),
+                    QStringLiteral("root_id")};
+                bool itemValid = true;
+                for (const QString &field : stringFields) {
+                    const QJsonValue fieldValue = item.value(field);
+                    itemValid &= fieldValue.isString() &&
+                        fieldValue.toString().size() <= 4096;
+                }
+                const QJsonValue isRoot = item.value(QStringLiteral("is_root"));
+                const QJsonValue isSystemId = item.value(
+                    QStringLiteral("is_system_id"));
+                const QJsonValue overrideProperties = item.value(
+                    QStringLiteral("properties"));
+                itemValid &= isRoot.isBool() && isSystemId.isBool() &&
+                             overrideProperties.isArray() &&
+                             overrideProperties.toArray().size() <= 512;
+                if (!itemValid) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender override data-block row is invalid"));
+                    return false;
+                }
+                for (const QJsonValue &propertyValue : overrideProperties.toArray()) {
+                    if (!propertyValue.isObject()) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender override property row is invalid"));
+                        return false;
+                    }
+                    const QJsonObject property = propertyValue.toObject();
+                    const QStringList propertyStringFields{
+                        QStringLiteral("path"), QStringLiteral("name"),
+                        QStringLiteral("value")};
+                    bool propertyValid = true;
+                    for (const QString &field : propertyStringFields) {
+                        const QJsonValue fieldValue = property.value(field);
+                        propertyValid &= fieldValue.isString() &&
+                            fieldValue.toString().size() <= 4096;
+                    }
+                    const QJsonValue validPath = property.value(
+                        QStringLiteral("valid"));
+                    const QJsonValue systemProperty = property.value(
+                        QStringLiteral("system"));
+                    const QJsonValue segmentsValue = property.value(
+                        QStringLiteral("segments"));
+                    const QJsonValue operationsValue = property.value(
+                        QStringLiteral("operations"));
+                    propertyValid &= validPath.isBool() && systemProperty.isBool() &&
+                        segmentsValue.isArray() &&
+                        segmentsValue.toArray().size() <= 128 &&
+                        operationsValue.isArray() &&
+                        operationsValue.toArray().size() <= 64;
+                    if (!propertyValid) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender override property row is invalid"));
+                        return false;
+                    }
+                    for (const QJsonValue &segmentValue : segmentsValue.toArray()) {
+                        if (!segmentValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender override path segment is invalid"));
+                            return false;
+                        }
+                        const QJsonObject segment = segmentValue.toObject();
+                        const QString kind = segment.value(
+                            QStringLiteral("kind")).toString();
+                        if (!segment.value(QStringLiteral("key")).isString() ||
+                            segment.value(QStringLiteral("key")).toString().size() > 512 ||
+                            !segment.value(QStringLiteral("name")).isString() ||
+                            segment.value(QStringLiteral("name")).toString().size() > 4096 ||
+                            (kind != QLatin1String("PROPERTY") &&
+                             kind != QLatin1String("ITEM"))) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender override path segment is invalid"));
+                            return false;
+                        }
+                    }
+                    for (const QJsonValue &operationValue : operationsValue.toArray()) {
+                        if (!operationValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender override operation is invalid"));
+                            return false;
+                        }
+                        const QJsonObject operation = operationValue.toObject();
+                        if (!operation.value(QStringLiteral("type")).isString() ||
+                            operation.value(QStringLiteral("type")).toString().size() > 128 ||
+                            !operation.value(QStringLiteral("label")).isString() ||
+                            operation.value(QStringLiteral("label")).toString().size() > 512) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender override operation is invalid"));
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        int hierarchyNodeCount = 0;
+        const auto validateHierarchyNode = [&](const auto &self,
+                                               const QJsonObject &node,
+                                               int depth) -> bool {
+            if (depth > 128 || ++hierarchyNodeCount > 20000) return false;
+            const QJsonValue children = node.value(QStringLiteral("children"));
+            if (!node.value(QStringLiteral("id")).isString() ||
+                node.value(QStringLiteral("id")).toString().size() > 4096 ||
+                !node.value(QStringLiteral("name")).isString() ||
+                node.value(QStringLiteral("name")).toString().size() > 4096 ||
+                !node.value(QStringLiteral("type")).isString() ||
+                node.value(QStringLiteral("type")).toString().size() > 256 ||
+                !node.value(QStringLiteral("root_id")).isString() ||
+                node.value(QStringLiteral("root_id")).toString().size() > 4096 ||
+                !children.isArray() || children.toArray().size() > 20000) {
+                return false;
+            }
+            for (const QJsonValue &childValue : children.toArray()) {
+                if (!childValue.isObject() ||
+                    !self(self, childValue.toObject(), depth + 1)) return false;
+            }
+            return true;
+        };
+        int currentFileCount = 0;
+        for (const QJsonValue &hierarchyValue : hierarchiesValue.toArray()) {
+            if (!hierarchyValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender override hierarchy root is invalid"));
+                return false;
+            }
+            const QJsonObject hierarchy = hierarchyValue.toObject();
+            const QJsonValue groupsValue = hierarchy.value(QStringLiteral("groups"));
+            const QJsonValue currentFile = hierarchy.value(
+                QStringLiteral("current_file"));
+            if (!hierarchy.value(QStringLiteral("id")).isString() ||
+                hierarchy.value(QStringLiteral("id")).toString().size() > 4096 ||
+                !hierarchy.value(QStringLiteral("name")).isString() ||
+                hierarchy.value(QStringLiteral("name")).toString().size() > 4096 ||
+                !currentFile.isBool() || !hierarchy.value(
+                    QStringLiteral("truncated")).isBool() || !groupsValue.isArray()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender override hierarchy root is invalid"));
+                return false;
+            }
+            currentFileCount += currentFile.toBool() ? 1 : 0;
+            if (groupsValue.toArray().size() > 1024) return false;
+            for (const QJsonValue &groupValue : groupsValue.toArray()) {
+                if (!groupValue.isObject()) return false;
+                const QJsonObject group = groupValue.toObject();
+                const QJsonValue itemsValue = group.value(QStringLiteral("items"));
+                if (!group.value(QStringLiteral("name")).isString() ||
+                    group.value(QStringLiteral("name")).toString().size() > 256 ||
+                    !itemsValue.isArray() || itemsValue.toArray().size() > 20000) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender override hierarchy type group is invalid"));
+                    return false;
+                }
+                for (const QJsonValue &itemValue : itemsValue.toArray()) {
+                    if (!itemValue.isObject() || !validateHierarchyNode(
+                            validateHierarchyNode, itemValue.toObject(), 0)) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender override hierarchy row is invalid"));
+                        return false;
+                    }
+                }
+            }
+        }
+        if (hierarchiesValue.toArray().size() > 1024 || currentFileCount != 1) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender override hierarchy roots are invalid"));
+            return false;
+        }
+        outlinerLibraryOverrides = overrides;
     }
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
@@ -4348,6 +4577,7 @@ bool importBlenderScene(const QString &path,
         report->outlinerOrphans = outlinerOrphans;
         report->outlinerSequencer = outlinerSequencer;
         report->outlinerDataApi = outlinerDataApi;
+        report->outlinerLibraryOverrides = outlinerLibraryOverrides;
         report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;

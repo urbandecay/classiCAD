@@ -978,7 +978,39 @@ bool Document::renameCollection(CollectionId id, const QString &name)
         return false;
     }
     if (candidate->name == trimmed) return true;
-    candidate->name = trimmed;
+
+    const auto splitNameNumber = [](const QString &value) {
+        const qsizetype separator = value.lastIndexOf(QLatin1Char('.'));
+        if (separator > 0) {
+            bool parsed = false;
+            const int number = value.mid(separator + 1).toInt(&parsed);
+            if (parsed && number >= 0) {
+                return qMakePair(value.left(separator), number);
+            }
+        }
+        return qMakePair(value, 0);
+    };
+    QSet<QString> localNames;
+    QHash<QString, QSet<int>> usedNumbersByBase;
+    for (const DocumentCollection &collection : collections_) {
+        if (collection.id == id || !collection.libraryPath.isEmpty()) continue;
+        localNames.insert(collection.name);
+        const auto nameParts = splitNameNumber(collection.name);
+        usedNumbersByBase[nameParts.first].insert(nameParts.second);
+    }
+
+    QString uniqueName = trimmed;
+    if (localNames.contains(uniqueName)) {
+        const auto requestedParts = splitNameNumber(trimmed);
+        const QString &baseName = requestedParts.first;
+        const QSet<int> usedNumbers = usedNumbersByBase.value(baseName);
+        int suffix = 1;
+        while (usedNumbers.contains(suffix)) ++suffix;
+        uniqueName = QStringLiteral("%1.%2")
+                         .arg(baseName)
+                         .arg(suffix, 3, 10, QLatin1Char('0'));
+    }
+    candidate->name = uniqueName;
     DocumentChangeSet changes;
     changes.addCollection(id);
     changes.collectionsChanged = true;

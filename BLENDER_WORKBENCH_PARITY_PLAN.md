@@ -11506,3 +11506,11 @@ scene depth.
   objects from the selected branches while preserving unrelated selection and
   the active object. `cmake --build build -j4` and `git diff --check` passed;
   no matched Blender Outliner interaction comparison was run.
+- The hundred-fourteenth tree update follows Blender 5.2.2's [Outliner rename
+  rules](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L326-L379)
+  and [ID name collision handling](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/main_namemap.cc#L530-L590).
+  Renaming a local collection now resolves an existing local collection-name
+  collision to the lowest available numbered suffix, such as `.001` or
+  `.002`. Linked collections and the Scene master collection remain
+  noneditable. `cmake --build build -j4` and `git diff --check` passed; no
+  matched Blender Outliner interaction comparison was run.

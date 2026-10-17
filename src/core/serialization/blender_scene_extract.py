@@ -3268,6 +3268,8 @@ def saved_viewport_shading_record(scene, unsupported_features):
                 overlay = space.overlay
                 record["show_overlays"] = bool(overlay.show_overlays)
                 record["show_extras"] = bool(overlay.show_extras)
+                record["show_cursor"] = bool(
+                    getattr(overlay, "show_cursor", True))
                 record["show_camera_passepartout"] = bool(
                     getattr(overlay, "show_camera_passepartout", True))
                 record["show_floor"] = bool(overlay.show_floor)
@@ -3290,8 +3292,6 @@ def saved_viewport_shading_record(scene, unsupported_features):
                          "Blender viewport text labels are not displayed by classiCAD"),
                         ("show_stats", "viewport_statistics",
                          "Blender viewport statistics are not displayed by classiCAD"),
-                        ("show_cursor", "viewport_3d_cursor",
-                         "Blender's 3D cursor overlay is not represented by classiCAD"),
                         ("show_camera_guides", "viewport_camera_guides",
                          "Blender camera guide overlays are not displayed by classiCAD"),
                         ("show_relationship_lines", "viewport_relationship_lines",

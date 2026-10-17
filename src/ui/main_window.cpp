@@ -5285,6 +5285,39 @@ private:
                                            sceneCursor[1].toDouble(),
                                            sceneCursor[2].toDouble()};
                 }
+                QString sceneCursorKey =
+                    QStringLiteral("classiCAD-default-scene");
+                if (!activeScene.isEmpty()) {
+                    const QString activeSceneId = activeScene.value(
+                        QStringLiteral("scene_id")).toString();
+                    const QString activeSceneName = activeScene.value(
+                        QStringLiteral("name")).toString();
+                    if (!activeSceneId.isEmpty()) {
+                        sceneCursorKey = activeSceneId;
+                    } else if (!activeSceneName.isEmpty()) {
+                        sceneCursorKey = QStringLiteral("blender-scene-name:%1")
+                                             .arg(activeSceneName);
+                    } else {
+                        const QJsonArray scenes =
+                            document.settings().importedBlenderScenes;
+                        for (qsizetype sceneIndex = 0;
+                             sceneIndex < scenes.size(); ++sceneIndex) {
+                            if (scenes[sceneIndex].toObject() == activeScene) {
+                                sceneCursorKey =
+                                    QStringLiteral("blender-scene-index:%1")
+                                        .arg(sceneIndex);
+                                break;
+                            }
+                        }
+                    }
+                }
+                const auto savedSceneCursor =
+                    document.sceneCursorLocationsByScene().constFind(
+                        sceneCursorKey);
+                if (savedSceneCursor !=
+                    document.sceneCursorLocationsByScene().cend()) {
+                    sceneCursorLocation = savedSceneCursor.value();
+                }
                 const QStringList activeCollectionPath =
                     document.activeCollectionSourcePath();
                 CollectionId destinationId = document.activeCollectionId();

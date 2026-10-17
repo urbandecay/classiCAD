@@ -223,6 +223,30 @@ bool Document::setOutlinerExpandedPathsByScene(
     return true;
 }
 
+const QHash<QString, Point3D> &Document::sceneCursorLocationsByScene() const
+{
+    return sceneCursorLocationsByScene_;
+}
+
+bool Document::setSceneCursorLocationsByScene(
+    const QHash<QString, Point3D> &locationsByScene)
+{
+    constexpr qsizetype maxSceneCount = 128;
+    constexpr qsizetype maxKeyLength = 256;
+    if (locationsByScene.size() > maxSceneCount) return false;
+    for (auto it = locationsByScene.cbegin();
+         it != locationsByScene.cend(); ++it) {
+        const Point3D &location = it.value();
+        if (it.key().isEmpty() || it.key().size() > maxKeyLength ||
+            !std::isfinite(location.x) || !std::isfinite(location.y) ||
+            !std::isfinite(location.z)) {
+            return false;
+        }
+    }
+    sceneCursorLocationsByScene_ = locationsByScene;
+    return true;
+}
+
 const SceneObject *Document::object(ObjectId id) const
 {
     const int index = indexOf(id);
@@ -313,6 +337,7 @@ void Document::replaceWith(const Document &document)
 {
     restoreSnapshot(document.snapshot());
     setOutlinerExpandedPathsByScene(document.outlinerExpandedPathsByScene());
+    setSceneCursorLocationsByScene(document.sceneCursorLocationsByScene());
 }
 
 const Shape &Document::operator[](int index) const

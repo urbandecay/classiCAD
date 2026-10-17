@@ -83,6 +83,15 @@ public:
                                const QVector<int> &excludedShapeIndices = {},
                                bool backfaceCulling = false) const;
 
+    // Ray-pick imported polygon meshes on explicit cursor placement. This is
+    // separate because the full mesh traversal is unnecessary for the
+    // surface-visibility queries made during pointer motion.
+    bool hitTestVisibleMesh(const Document &document,
+                            const QPointF &screenPosition,
+                            const ViewportTransform &transform,
+                            const QSize &viewportSize,
+                            Point3D *worldPoint) const;
+
     QVector<QPointF> controlPointsForShape(const Shape &shape) const;
 
     bool hitTestSelectedControlPoint(

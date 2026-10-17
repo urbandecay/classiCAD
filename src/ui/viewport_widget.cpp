@@ -17233,6 +17233,10 @@ protected:
         }
         drawImportedCameraPassepartout(
             document_, size(), viewportTransform_, painter);
+        if (viewportShadingSettings_.wireOverlaysVisible &&
+            sceneCursorVisible()) {
+            drawSceneCursor(painter, sceneCursorLocation());
+        }
         ViewportHudState hudState;
         hudState.perspectiveView = viewportTransform_.isPerspectiveEnabled();
         hudState.activeTool = activeTool_;
@@ -17301,6 +17305,16 @@ protected:
     {
         navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
+        const Qt::KeyboardModifiers modifiers = event->modifiers();
+        if (event->button() == Qt::RightButton &&
+            modifiers.testFlag(Qt::ShiftModifier) &&
+            !modifiers.testFlag(Qt::ControlModifier) &&
+            !modifiers.testFlag(Qt::AltModifier) &&
+            !modifiers.testFlag(Qt::MetaModifier) &&
+            placeSceneCursorAtScreenPosition(screenPosition)) {
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton &&
             activeTool_ == Tool::PointExtrude &&
             ViewportHudRenderer::pointExtrudeWeldToggleRect(size())
@@ -19668,6 +19682,201 @@ protected:
     }
 
 private:
+    int activeImportedBlenderSceneIndex() const
+    {
+        const DocumentSettings &settings = document_.settings();
+        if (!settings.activeViewLayerKey.isEmpty()) {
+            for (int sceneIndex = 0;
+                 sceneIndex < settings.importedBlenderScenes.size();
+                 ++sceneIndex) {
+                const QJsonObject scene = settings.importedBlenderScenes[
+                    sceneIndex].toObject();
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    if (layerValue.toObject().value(QStringLiteral("key"))
+                            .toString() == settings.activeViewLayerKey) {
+                        return sceneIndex;
+                    }
+                }
+            }
+        }
+        for (int sceneIndex = 0;
+             sceneIndex < settings.importedBlenderScenes.size();
+             ++sceneIndex) {
+            if (settings.importedBlenderScenes[sceneIndex].toObject().value(
+                    QStringLiteral("is_active_scene")).toBool()) {
+                return sceneIndex;
+            }
+        }
+        return settings.importedBlenderScenes.isEmpty() ? -1 : 0;
+    }
+
+    Point3D sceneCursorLocation() const
+    {
+        const int sceneIndex = activeImportedBlenderSceneIndex();
+        const QString cursorKey = sceneCursorKey(sceneIndex);
+        const auto savedLocation = document_.sceneCursorLocationsByScene()
+            .constFind(cursorKey);
+        if (savedLocation != document_.sceneCursorLocationsByScene().cend()) {
+            return savedLocation.value();
+        }
+        const QJsonArray location = sceneIndex >= 0 &&
+                sceneIndex < document_.settings().importedBlenderScenes.size()
+            ? document_.settings().importedBlenderScenes[
+                sceneIndex].toObject().value(
+                    QStringLiteral("cursor_location")).toArray()
+            : QJsonArray{};
+        if (location.size() == 3 && location[0].isDouble() &&
+            location[1].isDouble() && location[2].isDouble() &&
+            std::isfinite(location[0].toDouble()) &&
+            std::isfinite(location[1].toDouble()) &&
+            std::isfinite(location[2].toDouble())) {
+            return {location[0].toDouble(), location[1].toDouble(),
+                    location[2].toDouble()};
+        }
+        return {};
+    }
+
+    QString sceneCursorKey(int sceneIndex) const
+    {
+        if (sceneIndex < 0 ||
+            sceneIndex >= document_.settings().importedBlenderScenes.size()) {
+            return QStringLiteral("classiCAD-default-scene");
+        }
+        const QJsonObject scene = document_.settings().importedBlenderScenes[
+            sceneIndex].toObject();
+        const QString sceneId = scene.value(
+            QStringLiteral("scene_id")).toString();
+        if (!sceneId.isEmpty()) return sceneId;
+        const QString sceneName = scene.value(QStringLiteral("name")).toString();
+        if (!sceneName.isEmpty()) {
+            return QStringLiteral("blender-scene-name:%1").arg(sceneName);
+        }
+        return QStringLiteral("blender-scene-index:%1").arg(sceneIndex);
+    }
+
+    bool sceneCursorVisible() const
+    {
+        const DocumentSettings &settings = document_.settings();
+        const int sceneIndex = activeImportedBlenderSceneIndex();
+        if (sceneIndex < 0 || sceneIndex >= settings.importedBlenderScenes.size()) {
+            return true;
+        }
+        const QJsonObject scene = settings.importedBlenderScenes[
+            sceneIndex].toObject();
+        const QJsonObject shading = scene.value(
+            QStringLiteral("workbench_viewport_shading")).toObject();
+        const QJsonValue cursorVisible = shading.value(
+            QStringLiteral("show_cursor"));
+        return !cursorVisible.isBool() || cursorVisible.toBool();
+    }
+
+    bool setSceneCursorLocation(const Point3D &location)
+    {
+        if (!std::isfinite(location.x) || !std::isfinite(location.y) ||
+            !std::isfinite(location.z)) {
+            return false;
+        }
+        QHash<QString, Point3D> locations =
+            document_.sceneCursorLocationsByScene();
+        const QString cursorKey =
+            sceneCursorKey(activeImportedBlenderSceneIndex());
+        const auto current = locations.constFind(cursorKey);
+        if (current != locations.cend() &&
+            current->x == location.x && current->y == location.y &&
+            current->z == location.z) {
+            return true;
+        }
+        locations.insert(cursorKey, location);
+        if (!document_.setSceneCursorLocationsByScene(locations)) {
+            return false;
+        }
+        session_.notifyHistoryChanged();
+        update();
+        return true;
+    }
+
+    bool placeSceneCursorAtScreenPosition(const QPointF &screenPosition)
+    {
+        Point3D location;
+        Point3D surfaceNormal;
+        bool foundSurface = curveHitTester_.hitTestVisibleSurface(
+            document_, screenPosition, viewportTransform_, size(),
+            &location, &surfaceNormal, nullptr, nullptr, {},
+            viewportShadingSettings_.backfaceCulling);
+        Point3D meshLocation;
+        if (curveHitTester_.hitTestVisibleMesh(
+                document_, screenPosition, viewportTransform_, size(),
+                &meshLocation)) {
+            const qreal meshDepth = viewportTransform_
+                .worldDirectionToView(meshLocation).towardCamera;
+            const qreal surfaceDepth = foundSurface
+                ? viewportTransform_.worldDirectionToView(location).towardCamera
+                : -std::numeric_limits<qreal>::infinity();
+            if (!foundSurface || meshDepth > surfaceDepth) {
+                location = meshLocation;
+                foundSurface = true;
+            }
+        }
+        if (!foundSurface) {
+            const WorkPlaneFrame viewPlane = makeWorkPlaneFrameFromNormal(
+                viewportTransform_.viewTarget(),
+                viewportTransform_.viewDirection(),
+                viewportTransform_.viewUp());
+            QPointF localPoint;
+            if (!viewportTransform_.screenToWorkPlane(
+                    screenPosition, size(), viewPlane, &localPoint)) {
+                return false;
+            }
+            location = workPlaneFramePointToWorld(localPoint, viewPlane);
+        }
+        return setSceneCursorLocation(location);
+    }
+
+    void drawSceneCursor(QPainter &painter, const Point3D &location) const
+    {
+        QPointF center;
+        if (!viewportTransform_.worldPointToScreen(location, size(), &center)) {
+            return;
+        }
+        constexpr qreal radius = 7.0;
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF ring(center.x() - radius, center.y() - radius,
+                          radius * 2.0, radius * 2.0);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(QStringLiteral("#111111")), 3.2));
+        painter.drawEllipse(ring);
+        painter.setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1.2));
+        painter.drawEllipse(ring);
+        painter.setPen(QPen(QColor(QStringLiteral("#ed4b53")), 1.4));
+        painter.drawArc(ring.adjusted(0.8, 0.8, -0.8, -0.8), 35 * 16,
+                        180 * 16);
+
+        painter.setPen(QPen(QColor(QStringLiteral("#111111")), 3.2,
+                            Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(center + QPointF(-12.0, 0.0),
+                         center + QPointF(12.0, 0.0));
+        painter.drawLine(center + QPointF(0.0, -12.0),
+                         center + QPointF(0.0, 12.0));
+        painter.setPen(QPen(QColor(QStringLiteral("#ed4b53")), 1.4,
+                            Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(center + QPointF(-12.0, 0.0),
+                         center + QPointF(-3.0, 0.0));
+        painter.drawLine(center + QPointF(3.0, 0.0),
+                         center + QPointF(12.0, 0.0));
+        painter.setPen(QPen(QColor(QStringLiteral("#f0f0f0")), 1.4,
+                            Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(center + QPointF(0.0, -12.0),
+                         center + QPointF(0.0, -3.0));
+        painter.drawLine(center + QPointF(0.0, 3.0),
+                         center + QPointF(0.0, 12.0));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#f0f0f0")));
+        painter.drawEllipse(center, 1.4, 1.4);
+        painter.restore();
+    }
+
     void configureCommandRouter()
     {
         CommandRouter::Handlers handlers;

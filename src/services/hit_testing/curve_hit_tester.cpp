@@ -117,36 +117,16 @@ bool projectedNurbsSurfaceControlHullBounds(
     return initialized;
 }
 
-bool screenPointOnSurfaceTriangle(const QPointF &screenPosition,
-                                  const PreparedNurbsSurfaceTessellation &mesh,
-                                  const PreparedNurbsSurfaceTessellation::Triangle &triangle,
-                                  const Point3D &worldOffset,
-                                  const ViewportTransform &transform,
-                                  const QSize &viewportSize,
-                                  Point3D *worldPoint,
-                                  Point3D *worldNormal = nullptr)
+bool screenPointOnWorldTriangle(const QPointF &screenPosition,
+                                const Point3D &a,
+                                const Point3D &b,
+                                const Point3D &c,
+                                const ViewportTransform &transform,
+                                const QSize &viewportSize,
+                                Point3D *worldPoint,
+                                Point3D *worldNormal = nullptr)
 {
     if (worldPoint == nullptr) {
-        return false;
-    }
-
-    const auto placedVertex = [&](int vertexIndex, Point3D *point) {
-        if (point == nullptr || vertexIndex < 0 ||
-            vertexIndex >= mesh.vertices().size()) {
-            return false;
-        }
-        const Point3D &source = mesh.vertices()[vertexIndex];
-        *point = {source.x + worldOffset.x,
-                  source.y + worldOffset.y,
-                  source.z + worldOffset.z};
-        return true;
-    };
-
-    Point3D a;
-    Point3D b;
-    Point3D c;
-    if (!placedVertex(triangle[0], &a) || !placedVertex(triangle[1], &b) ||
-        !placedVertex(triangle[2], &c)) {
         return false;
     }
 
@@ -209,6 +189,32 @@ bool screenPointOnSurfaceTriangle(const QPointF &screenPosition,
 
     *worldPoint = workPlaneFramePointToWorld(cursorOnPlane, frame);
     return true;
+}
+
+bool screenPointOnSurfaceTriangle(const QPointF &screenPosition,
+                                  const PreparedNurbsSurfaceTessellation &mesh,
+                                  const PreparedNurbsSurfaceTessellation::Triangle &triangle,
+                                  const Point3D &worldOffset,
+                                  const ViewportTransform &transform,
+                                  const QSize &viewportSize,
+                                  Point3D *worldPoint,
+                                  Point3D *worldNormal = nullptr)
+{
+    if (triangle[0] < 0 || triangle[0] >= mesh.vertices().size() ||
+        triangle[1] < 0 || triangle[1] >= mesh.vertices().size() ||
+        triangle[2] < 0 || triangle[2] >= mesh.vertices().size()) {
+        return false;
+    }
+    const auto placedVertex = [&](int vertexIndex) {
+        const Point3D &source = mesh.vertices()[vertexIndex];
+        return Point3D{source.x + worldOffset.x,
+                       source.y + worldOffset.y,
+                       source.z + worldOffset.z};
+    };
+    return screenPointOnWorldTriangle(
+        screenPosition, placedVertex(triangle[0]), placedVertex(triangle[1]),
+        placedVertex(triangle[2]), transform, viewportSize, worldPoint,
+        worldNormal);
 }
 
 } // namespace
@@ -1544,6 +1550,102 @@ bool CurveHitTester::hitTestVisibleSurface(
                     if (hitShapeIndex != nullptr) {
                         *hitShapeIndex = objectIndex;
                     }
+                    nearestDepth = depth;
+                    found = true;
+                }
+            }
+        }
+    }
+    return found;
+}
+
+bool CurveHitTester::hitTestVisibleMesh(
+    const Document &document,
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    Point3D *worldPoint) const
+{
+    if (worldPoint == nullptr) {
+        return false;
+    }
+
+    qreal nearestDepth = -std::numeric_limits<qreal>::infinity();
+    bool found = false;
+    for (int objectIndex = 0; objectIndex < document.size(); ++objectIndex) {
+        const ObjectId objectId = document.objectIdAt(objectIndex);
+        if (!document.isObjectVisible(objectId)) {
+            continue;
+        }
+        const Shape &shape = document[objectIndex];
+        const SceneObject *sceneObject = document.object(objectId);
+        if (shape.geometryType != GeometryType::PolygonMesh ||
+            shape.polygonMesh.vertices.isEmpty() ||
+            (sceneObject != nullptr && sceneObject->hideSurfacePick)) {
+            continue;
+        }
+
+        const AffineTransform3D &meshTransform = sceneObject != nullptr
+            ? sceneObject->meshObjectTransform
+            : identityAffineTransform3D;
+        const Point3D placement = sceneObject != nullptr
+            ? sceneObject->placementTranslation
+            : Point3D{};
+        for (int faceIndex = 0;
+             faceIndex < shape.polygonMesh.faces.size(); ++faceIndex) {
+            const QVector<int> &face = shape.polygonMesh.faces[faceIndex];
+            if (face.size() < 3) {
+                continue;
+            }
+            QVector<Point3D> localLoop;
+            QVector<Point3D> worldLoop;
+            localLoop.reserve(face.size());
+            worldLoop.reserve(face.size());
+            bool validFace = true;
+            for (const int vertexIndex : face) {
+                if (vertexIndex < 0 ||
+                    vertexIndex >= shape.polygonMesh.vertices.size()) {
+                    validFace = false;
+                    break;
+                }
+                const Point3D &local =
+                    shape.polygonMesh.vertices[vertexIndex];
+                localLoop.append(local);
+                Point3D world = transformAffinePoint(meshTransform, local);
+                world.x += placement.x;
+                world.y += placement.y;
+                world.z += placement.z;
+                if (!std::isfinite(world.x) || !std::isfinite(world.y) ||
+                    !std::isfinite(world.z)) {
+                    validFace = false;
+                    break;
+                }
+                worldLoop.append(world);
+            }
+            if (!validFace) {
+                continue;
+            }
+
+            const QVector<std::array<int, 3>> triangles =
+                polygonMeshFaceTriangles(shape.polygonMesh, faceIndex,
+                                         localLoop);
+            for (const std::array<int, 3> &triangle : triangles) {
+                if (triangle[0] < 0 || triangle[0] >= worldLoop.size() ||
+                    triangle[1] < 0 || triangle[1] >= worldLoop.size() ||
+                    triangle[2] < 0 || triangle[2] >= worldLoop.size()) {
+                    continue;
+                }
+                Point3D candidate;
+                if (!screenPointOnWorldTriangle(
+                        screenPosition, worldLoop[triangle[0]],
+                        worldLoop[triangle[1]], worldLoop[triangle[2]],
+                        transform, viewportSize, &candidate)) {
+                    continue;
+                }
+                const qreal depth = transform.worldDirectionToView(candidate)
+                                        .towardCamera;
+                if (std::isfinite(depth) && (!found || depth > nearestDepth)) {
+                    *worldPoint = candidate;
                     nearestDepth = depth;
                     found = true;
                 }

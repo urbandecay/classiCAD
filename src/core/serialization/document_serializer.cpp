@@ -1185,7 +1185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 65);
+    serialized.insert(QStringLiteral("version"), 66);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1234,6 +1234,14 @@ QJsonObject documentToJson(const Document &document)
     }
     serialized.insert(QStringLiteral("outlinerExpandedPathsByScene"),
                       outlinerExpandedPathsByScene);
+    QJsonObject sceneCursorLocationsByScene;
+    for (auto it = document.sceneCursorLocationsByScene().cbegin();
+         it != document.sceneCursorLocationsByScene().cend(); ++it) {
+        sceneCursorLocationsByScene.insert(
+            it.key(), QJsonArray{it.value().x, it.value().y, it.value().z});
+    }
+    serialized.insert(QStringLiteral("sceneCursorLocationsByScene"),
+                      sceneCursorLocationsByScene);
     QJsonArray collections;
     for (const DocumentCollection &collection : document.collections()) {
         QJsonObject record;
@@ -1671,12 +1679,13 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 65) {
+    if (version < 1 || version > 66) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
 
     QHash<QString, QStringList> outlinerExpandedPathsByScene;
+    QHash<QString, Point3D> sceneCursorLocationsByScene;
     if (version >= 27) {
         const QJsonValue outlinerStateValue = serialized.value(
             QStringLiteral("outlinerExpandedPathsByScene"));
@@ -1704,11 +1713,42 @@ bool documentFromJson(const QJsonValue &value,
             outlinerExpandedPathsByScene.insert(it.key(), paths);
         }
     }
+    if (version >= 66) {
+        const QJsonValue cursorLocationsValue = serialized.value(
+            QStringLiteral("sceneCursorLocationsByScene"));
+        if (!cursorLocationsValue.isObject() ||
+            cursorLocationsValue.toObject().size() > 128) {
+            setError(errorMessage,
+                     QStringLiteral("invalid saved scene cursor locations"));
+            return false;
+        }
+        const QJsonObject cursorLocations = cursorLocationsValue.toObject();
+        for (auto it = cursorLocations.begin();
+             it != cursorLocations.end(); ++it) {
+            const QJsonArray location = it.value().toArray();
+            if (it.key().isEmpty() || it.key().size() > 256 ||
+                !it.value().isArray() || location.size() != 3 ||
+                !location[0].isDouble() || !location[1].isDouble() ||
+                !location[2].isDouble() ||
+                !std::isfinite(location[0].toDouble()) ||
+                !std::isfinite(location[1].toDouble()) ||
+                !std::isfinite(location[2].toDouble())) {
+                setError(errorMessage,
+                         QStringLiteral("invalid saved scene cursor location"));
+                return false;
+            }
+            sceneCursorLocationsByScene.insert(
+                it.key(), {location[0].toDouble(), location[1].toDouble(),
+                           location[2].toDouble()});
+        }
+    }
     Document validatedOutlinerState;
     if (!validatedOutlinerState.setOutlinerExpandedPathsByScene(
-            outlinerExpandedPathsByScene)) {
+            outlinerExpandedPathsByScene) ||
+        !validatedOutlinerState.setSceneCursorLocationsByScene(
+            sceneCursorLocationsByScene)) {
         setError(errorMessage,
-                 QStringLiteral("saved Outliner expansion state exceeds its limits"));
+                 QStringLiteral("saved document workspace state exceeds its limits"));
         return false;
     }
 
@@ -3423,6 +3463,12 @@ bool documentFromJson(const QJsonValue &value,
             outlinerExpandedPathsByScene)) {
         setError(errorMessage,
                  QStringLiteral("invalid saved Outliner expansion state"));
+        return false;
+    }
+    if (!document->setSceneCursorLocationsByScene(
+            sceneCursorLocationsByScene)) {
+        setError(errorMessage,
+                 QStringLiteral("invalid saved scene cursor locations"));
         return false;
     }
     return true;

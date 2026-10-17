@@ -10720,8 +10720,17 @@ scene depth.
   normal document refreshes continue to preserve the current tree state.
   Blender's data-block type/state filter matrix is not present. The full build
   passed; no GUI interaction comparison was run.
-- Remaining Outliner scope includes persistent row-state
-  storage across panel/app restarts, other Blender datablock rows and restriction
+- The sixth tree update persists collection/object row expansion state. Blender
+  stores open/closed state in its Outliner `TreeStoreElem` records during tree
+  rebuilds; classiCAD stores the corresponding expanded row paths in QSettings,
+  keyed by the current project path, and reloads them when the Outliner is
+  recreated or the open project changes. Search temporarily expands matching
+  paths without overwriting the saved user expansion state. Unlike Blender's
+  workspace data, this state is local to the classiCAD installation and is not
+  carried inside a copied project file. The full build passed; no GUI
+  interaction comparison was run.
+- Remaining Outliner scope includes carrying row state inside the project file,
+  other Blender datablock rows and restriction
   controls, multiple view-layer switching, and a matched Blender/classiCAD
   interaction comparison. Do not mark this port complete until the remaining
   items have been reviewed against pinned Blender source.

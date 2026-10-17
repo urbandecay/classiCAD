@@ -74,6 +74,7 @@ struct CollectionsPanelCallbacks {
                        const OutlinerRowReference &,
                        bool,
                        bool)> dropRows;
+    std::function<QString()> stateScopeKey;
 };
 
 // Displays linked collections and scene objects with Blender-style selection
@@ -88,6 +89,8 @@ public:
 private:
     void createLayout();
     void applyNameFilter(const QString &text);
+    void restoreTreeState();
+    void saveTreeState();
     void showContextMenu(const QPoint &position);
     bool activateObjectRow(QTreeWidgetItem *item,
                            Qt::KeyboardModifiers modifiers);
@@ -116,7 +119,9 @@ private:
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;
+    QString currentStateScopeKey_;
     bool refreshing_ = false;
+    bool restoringTreeState_ = false;
     bool hasRefreshed_ = false;
 };
 

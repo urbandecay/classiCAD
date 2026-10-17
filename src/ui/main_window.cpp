@@ -2800,6 +2800,9 @@ private:
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;
         };
+        collectionCallbacks.stateScopeKey = [this]() {
+            return currentProjectPath_;
+        };
         collectionCallbacks.selectedObjectIds = [this]() {
             return session_.selection().objectIds();
         };

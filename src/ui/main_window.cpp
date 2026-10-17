@@ -5087,6 +5087,38 @@ private:
                 session_.selection().setObjectIds(selectableIds, active);
                 session_.selection().setActiveObjectId(active);
             };
+        const auto linkedObjectDataUsers = [this](ObjectId sourceId) {
+            QVector<ObjectId> users;
+            const Document &document = session_.document();
+            const SceneObject *source = document.object(sourceId);
+            if (source == nullptr || source->blenderSourceDataName.isEmpty() ||
+                source->blenderSourceObjectType.isEmpty()) {
+                return users;
+            }
+            for (const SceneObject &candidate : document.objects()) {
+                if (candidate.blenderSourceDataName !=
+                        source->blenderSourceDataName ||
+                    candidate.blenderSourceObjectType !=
+                        source->blenderSourceObjectType ||
+                    !document.isObjectEditable(candidate.id)) {
+                    continue;
+                }
+                users.append(candidate.id);
+            }
+            return users;
+        };
+        collectionCallbacks.hasLinkedObjectData =
+            [linkedObjectDataUsers](ObjectId id) {
+                return !linkedObjectDataUsers(id).isEmpty();
+            };
+        collectionCallbacks.selectLinkedObjectData =
+            [this, linkedObjectDataUsers](ObjectId id) {
+                const QVector<ObjectId> users = linkedObjectDataUsers(id);
+                if (users.isEmpty()) return;
+                const ObjectId active = users.contains(id) ? id : users.back();
+                session_.selection().setObjectIds(users, active);
+                session_.selection().setActiveObjectId(active);
+            };
         collectionCallbacks.deselectSelectedObjects = [this]() {
             SelectionModel &selection = session_.selection();
             if (selection.objectIds().isEmpty()) return;

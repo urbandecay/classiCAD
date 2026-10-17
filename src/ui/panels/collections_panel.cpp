@@ -2977,6 +2977,17 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 createCollection(CollectionId::invalid());
             });
         }
+        if (objectId.isValid() && callbacks_.hasLinkedObjectData &&
+            callbacks_.hasLinkedObjectData(objectId) &&
+            callbacks_.selectLinkedObjectData) {
+            QMenu *idDataMenu = menu.addMenu(QStringLiteral("ID Data"));
+            QAction *selectLinked = idDataMenu->addAction(
+                QStringLiteral("Select Linked"));
+            connect(selectLinked, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.selectLinkedObjectData(objectId);
+            });
+        }
     }
 
     if (!menu.actions().isEmpty()) {

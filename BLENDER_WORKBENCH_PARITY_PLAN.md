@@ -11409,3 +11409,17 @@ scene depth.
   relink the original `.blend` or localize related linked IDs automatically.
   `cmake --build build -j4` and `git diff --check` passed; no matched Blender
   Outliner interaction comparison was run.
+- The hundred-sixth tree update follows Blender 5.2.2's Outliner ID Data
+  [`Select Linked`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L1668-L1678)
+  operation and its object-data selection path in
+  [`object_select.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/object/object_select.cc#L589-L602).
+  Object rows with imported Blender data identity now show ID Data > Select
+  Linked. It selects visible, selectable classiCAD objects whose retained
+  Blender object-data type and full data-block name match the clicked object.
+  The extractor supplies `data_name` from Blender's `ID.name_full`, which
+  distinguishes same-named IDs from linked libraries. This reproduces linked
+  selection from the imported identity snapshot; classiCAD still has per-object
+  geometry snapshots rather than Blender's shared datablock pointers. Objects
+  without source data identity do not show the action. `cmake --build build
+  -j4` and `git diff --check` passed; no matched Blender Outliner interaction
+  comparison was run.

@@ -2002,6 +2002,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             }
         }
         if (collectionTargets.isEmpty()) appendCollectionTarget(item);
+        QVector<CollectionId> selectedCollectionIds;
+        for (const OutlinerCollectionContext &target : collectionTargets) {
+            if (!target.collectionId.isValid() ||
+                selectedCollectionIds.contains(target.collectionId)) {
+                continue;
+            }
+            selectedCollectionIds.append(target.collectionId);
+        }
         if (callbacks_.createCollection) {
             QAction *create = menu.addAction(QStringLiteral("New Collection"));
             connect(create, &QAction::triggered, this,
@@ -2044,12 +2052,37 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                                                false);
             });
         }
-        if (callbacks_.instanceCollectionToScene) {
+        if (callbacks_.instanceCollectionsToScene) {
+            QVector<CollectionId> instanceCollectionIds;
+            for (const OutlinerCollectionContext &target : collectionTargets) {
+                const bool hasSelectedAncestor = std::any_of(
+                    collectionTargets.cbegin(), collectionTargets.cend(),
+                    [&target](const OutlinerCollectionContext &candidate) {
+                        if (candidate.viewLayerKey != target.viewLayerKey ||
+                            candidate.sourcePath.size() >=
+                                target.sourcePath.size()) {
+                            return false;
+                        }
+                        for (qsizetype index = 0;
+                             index < candidate.sourcePath.size(); ++index) {
+                            if (candidate.sourcePath[index] !=
+                                target.sourcePath[index]) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    });
+                if (!hasSelectedAncestor &&
+                    !instanceCollectionIds.contains(target.collectionId)) {
+                    instanceCollectionIds.append(target.collectionId);
+                }
+            }
             QAction *instance = menu.addAction(
                 QStringLiteral("Instance to Scene"));
+            instance->setEnabled(!instanceCollectionIds.isEmpty());
             connect(instance, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.instanceCollectionToScene(collectionId);
+                    [this, instanceCollectionIds]() {
+                callbacks_.instanceCollectionsToScene(instanceCollectionIds);
             });
         }
         if (scenesDisplayMode_ && callbacks_.linkCollectionToActiveScene) {
@@ -2224,13 +2257,6 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                     callbacks_.renameCollection(collectionId, name);
                 }
             });
-        }
-        QVector<CollectionId> selectedCollectionIds;
-        for (const OutlinerCollectionContext &target : collectionTargets) {
-            if (target.collectionId.isValid() &&
-                !selectedCollectionIds.contains(target.collectionId)) {
-                selectedCollectionIds.append(target.collectionId);
-            }
         }
         if (callbacks_.setCollectionsObjectSelection &&
             !selectedCollectionIds.isEmpty()) {

@@ -523,6 +523,8 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         QStringLiteral("armature_bone_tree"));
                     const QJsonValue boneCollectionTree = subtree.value(
                         QStringLiteral("bone_collection_tree"));
+                    const QJsonValue greasePencilLayerTree = subtree.value(
+                        QStringLiteral("grease_pencil_layer_tree"));
                     const QString dataBlockName = dataName.toString();
                     const QString shapeKeyName = shapeKeyDataName.toString();
                     if (!dataName.isString() || dataBlockName.size() > 4096 ||
@@ -536,7 +538,9 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                          boneCollectionTree.isUndefined()) ||
                         (!armatureBoneTree.isUndefined() &&
                          (!armatureBoneTree.isArray() ||
-                          !boneCollectionTree.isArray()))) {
+                          !boneCollectionTree.isArray())) ||
+                        (!greasePencilLayerTree.isUndefined() &&
+                         !greasePencilLayerTree.isArray())) {
                         return false;
                     }
                     subtreesByDataBlockName.insert(dataBlockName);
@@ -576,7 +580,36 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                                            &boneCollectionRows)) return false;
                         subtreeRows += boneRows + boneCollectionRows;
                     }
-                    if (subtreeRows > 2048 ||
+                    if (!greasePencilLayerTree.isUndefined()) {
+                        const auto countGreasePencilTree =
+                            [&](const auto &self, const QJsonArray &nodes,
+                                int depth, int *nodeCount) -> bool {
+                            if (depth > 128 || nodeCount == nullptr ||
+                                *nodeCount + nodes.size() > 1024) return false;
+                            for (const QJsonValue &nodeValue : nodes) {
+                                if (!nodeValue.isObject()) return false;
+                                const QJsonObject node = nodeValue.toObject();
+                                const QJsonValue name = node.value(
+                                    QStringLiteral("name"));
+                                const QJsonValue isGroup = node.value(
+                                    QStringLiteral("is_group"));
+                                const QJsonValue children = node.value(
+                                    QStringLiteral("children"));
+                                if (!name.isString() || name.toString().size() > 4096 ||
+                                    !isGroup.isBool() || !children.isArray()) return false;
+                                ++(*nodeCount);
+                                if (!self(self, children.toArray(), depth + 1,
+                                          nodeCount)) return false;
+                            }
+                            return true;
+                        };
+                        int greasePencilRows = 0;
+                        if (!countGreasePencilTree(countGreasePencilTree,
+                                                   greasePencilLayerTree.toArray(),
+                                                   0, &greasePencilRows)) return false;
+                        subtreeRows += greasePencilRows;
+                    }
+                    if (subtreeRows > 3072 ||
                         totalSpecializedRows + subtreeRows > 20000) return false;
                     totalSpecializedRows += subtreeRows;
                     for (const QJsonValue &name : shapeKeyNames.toArray()) {
@@ -814,7 +847,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 48);
+    serialized.insert(QStringLiteral("version"), 49);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1270,7 +1303,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 48) {
+    if (version < 1 || version > 49) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

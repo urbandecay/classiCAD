@@ -2840,7 +2840,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 52 && bridgeVersion != 53 &&
          bridgeVersion != 54 && bridgeVersion != 55 &&
          bridgeVersion != 56 && bridgeVersion != 57 &&
-         bridgeVersion != 58)) {
+         bridgeVersion != 58 && bridgeVersion != 59)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3324,6 +3324,8 @@ bool importBlenderScene(const QString &path,
                             QStringLiteral("armature_bone_tree"));
                         const QJsonValue boneCollectionTreeValue = subtree.value(
                             QStringLiteral("bone_collection_tree"));
+                        const QJsonValue greasePencilLayerTreeValue = subtree.value(
+                            QStringLiteral("grease_pencil_layer_tree"));
                         const QString dataName = dataNameValue.toString();
                         const QString shapeKeyDataName =
                             shapeKeyDataNameValue.toString();
@@ -3338,7 +3340,9 @@ bool importBlenderScene(const QString &path,
                             materialNamesValue.toArray().size() > 1024 ||
                             (bridgeVersion >= 58 &&
                              (!armatureBoneTreeValue.isArray() ||
-                              !boneCollectionTreeValue.isArray()))) {
+                              !boneCollectionTreeValue.isArray())) ||
+                            (bridgeVersion >= 59 &&
+                             !greasePencilLayerTreeValue.isArray())) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library data-block subtree is invalid"));
                             return false;
@@ -3386,9 +3390,45 @@ bool importBlenderScene(const QString &path,
                             }
                             subtreeRows += boneRows + boneCollectionRows;
                         }
+                        if (bridgeVersion >= 59) {
+                            const auto countGreasePencilTree =
+                                [&](const auto &self, const QJsonArray &nodes,
+                                    int depth, int *nodeCount) -> bool {
+                                if (depth > 128 || nodeCount == nullptr ||
+                                    *nodeCount + nodes.size() > 1024) return false;
+                                for (const QJsonValue &nodeValue : nodes) {
+                                    if (!nodeValue.isObject()) return false;
+                                    const QJsonObject node = nodeValue.toObject();
+                                    const QJsonValue name = node.value(
+                                        QStringLiteral("name"));
+                                    const QJsonValue isGroup = node.value(
+                                        QStringLiteral("is_group"));
+                                    const QJsonValue children = node.value(
+                                        QStringLiteral("children"));
+                                    if (!name.isString() || name.toString().size() > 4096 ||
+                                        !isGroup.isBool() || !children.isArray()) {
+                                        return false;
+                                    }
+                                    ++(*nodeCount);
+                                    if (!self(self, children.toArray(), depth + 1,
+                                              nodeCount)) return false;
+                                }
+                                return true;
+                            };
+                            int greasePencilRows = 0;
+                            if (!countGreasePencilTree(
+                                    countGreasePencilTree,
+                                    greasePencilLayerTreeValue.toArray(), 0,
+                                    &greasePencilRows)) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library Grease Pencil tree is invalid"));
+                                return false;
+                            }
+                            subtreeRows += greasePencilRows;
+                        }
                         if ((shapeKeyDataName.isEmpty() &&
                              !shapeKeyNamesValue.toArray().isEmpty()) ||
-                            subtreeRows > 2048 ||
+                            subtreeRows > 3072 ||
                             totalLibrarySpecializedRows + subtreeRows > 20000) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library specialized subtree exceeded its row limit"));

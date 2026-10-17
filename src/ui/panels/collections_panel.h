@@ -165,6 +165,7 @@ struct OutlinerLibraryDataGroup {
         QStringList materialNames;
         QJsonArray armatureBoneTree;
         QJsonArray boneCollectionTree;
+        QJsonArray greasePencilLayerTree;
     };
     QHash<QString, DataBlockTree> dataBlockTreesByName;
 };

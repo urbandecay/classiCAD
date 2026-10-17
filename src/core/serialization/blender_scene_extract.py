@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 58
+BRIDGE_FORMAT_VERSION = 59
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -786,64 +786,104 @@ def outliner_name_tree(items, include_constraints=False, remaining_rows=None,
     return rows
 
 
+def outliner_grease_pencil_data_layer_tree(data, legacy=False,
+                                           remaining_rows=None,
+                                           truncated_out=None):
+    """Capture bounded Blender Grease Pencil layer/group rows from an ID."""
+    local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    budgets = [local_remaining]
+    if remaining_rows is not None:
+        budgets.append(remaining_rows)
+    truncated = [False]
+
+    def reserve_row():
+        if any(budget[0] <= 0 for budget in budgets):
+            truncated[0] = True
+            return False
+        for budget in budgets:
+            budget[0] -= 1
+        return True
+
+    rows = []
+    try:
+        if legacy:
+            layers = getattr(data, "layers", None)
+            if layers is not None:
+                layer_count = len(layers)
+                first_index = max(
+                    0, layer_count - MAX_OUTLINER_HIERARCHY_ITEMS)
+                if layer_count > MAX_OUTLINER_HIERARCHY_ITEMS:
+                    truncated[0] = True
+                for index in range(layer_count - 1, first_index - 1, -1):
+                    if not reserve_row():
+                        break
+                    rows.append({
+                        "name": str(layers[index].name),
+                        "is_group": False,
+                        "children": [],
+                    })
+        else:
+            def convert(node, depth):
+                if depth >= 128:
+                    truncated[0] = True
+                    return None
+                if not reserve_row():
+                    return None
+                is_group = (
+                    getattr(getattr(node, "bl_rna", None), "identifier", "") ==
+                    "GreasePencilLayerGroup"
+                )
+                children = []
+                if is_group:
+                    source_children = getattr(node, "children", ())
+                    child_count = len(source_children)
+                    if child_count > MAX_OUTLINER_HIERARCHY_ITEMS:
+                        truncated[0] = True
+                    first_index = max(
+                        0, child_count - MAX_OUTLINER_HIERARCHY_ITEMS)
+                    for index in range(child_count - 1, first_index - 1, -1):
+                        child_row = convert(source_children[index], depth + 1)
+                        if child_row is not None:
+                            children.append(child_row)
+                        if any(budget[0] <= 0 for budget in budgets):
+                            truncated[0] = True
+                            break
+                return {
+                    "name": str(node.name),
+                    "is_group": is_group,
+                    "children": children,
+                }
+
+            root_nodes = getattr(data, "root_nodes", ())
+            root_count = len(root_nodes)
+            if root_count > MAX_OUTLINER_HIERARCHY_ITEMS:
+                truncated[0] = True
+            first_index = max(0, root_count - MAX_OUTLINER_HIERARCHY_ITEMS)
+            for index in range(root_count - 1, first_index - 1, -1):
+                row = convert(root_nodes[index], 0)
+                if row is not None:
+                    rows.append(row)
+                if any(budget[0] <= 0 for budget in budgets):
+                    truncated[0] = True
+                    break
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        truncated[0] = True
+
+    if truncated_out is not None:
+        truncated_out[:] = [truncated[0]]
+    return rows
+
+
 def outliner_grease_pencil_layer_tree(obj):
     """Capture the Blender 5.2 Grease Pencil data-block's layer tree."""
     data = getattr(obj, "data", None)
     if data is None:
         return []
-
-    # Blender 5.2 still loads legacy Grease Pencil data blocks alongside the
-    # new layer/group tree. Its Outliner element lists legacy layers flat.
     if obj.type == "GPENCIL":
-        layers = getattr(data, "layers", None)
-        if layers is None:
-            return []
-        layer_count = len(layers)
-        first_index = max(0, layer_count - MAX_OUTLINER_HIERARCHY_ITEMS)
-        return [
-            {
-                "name": str(layers[index].name),
-                "is_group": False,
-                "children": [],
-            }
-            for index in range(layer_count - 1, first_index - 1, -1)
-        ]
-
-    if obj.type != "GREASEPENCIL":
-        return []
-
-    remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
-
-    def convert(node, depth):
-        if remaining[0] <= 0 or depth >= 128:
-            return None
-        remaining[0] -= 1
-        is_group = (
-            getattr(getattr(node, "bl_rna", None), "identifier", "") ==
-            "GreasePencilLayerGroup"
-        )
-        children = []
-        if is_group:
-            for child in reversed(list(getattr(node, "children", ()))):
-                row = convert(child, depth + 1)
-                if row is not None:
-                    children.append(row)
-                if remaining[0] <= 0:
-                    break
-        return {
-            "name": str(node.name),
-            "is_group": is_group,
-            "children": children,
-        }
-
-    rows = []
-    for node in reversed(list(getattr(data, "root_nodes", ()))):
-        row = convert(node, 0)
-        if row is not None:
-            rows.append(row)
-        if remaining[0] <= 0:
-            break
-    return rows
+        return outliner_grease_pencil_data_layer_tree(data, legacy=True)
+    if obj.type == "GREASEPENCIL":
+        return outliner_grease_pencil_data_layer_tree(data)
+    return []
 
 
 def outliner_library_tree():
@@ -939,6 +979,7 @@ def outliner_library_tree():
                     "material_names": [],
                     "armature_bone_tree": [],
                     "bone_collection_tree": [],
+                    "grease_pencil_layer_tree": [],
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -1001,12 +1042,24 @@ def outliner_library_tree():
                             collection_tree_truncated == [True]):
                         subtree_truncated[0] = True
 
+                if "GreasePencil" in id_type:
+                    grease_pencil_tree_truncated = []
+                    subtree["grease_pencil_layer_tree"] = (
+                        outliner_grease_pencil_data_layer_tree(
+                            id_block,
+                            legacy=not hasattr(id_block, "root_nodes"),
+                            remaining_rows=library_specialized_rows_remaining,
+                            truncated_out=grease_pencil_tree_truncated))
+                    if grease_pencil_tree_truncated == [True]:
+                        subtree_truncated[0] = True
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
                         subtree["material_names"] or
                         subtree["armature_bone_tree"] or
-                        subtree["bone_collection_tree"]):
+                        subtree["bone_collection_tree"] or
+                        subtree["grease_pencil_layer_tree"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

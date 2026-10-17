@@ -3117,6 +3117,11 @@ void CollectionsPanel::refresh()
                                 dataBlockTree->armatureBoneTree,
                                 treePath + QStringLiteral("/bones"),
                                 QStringLiteral("Blender armature bone"));
+                            appendLibraryNameTree(
+                                appendLibraryNameTree, dataRow,
+                                dataBlockTree->greasePencilLayerTree,
+                                treePath + QStringLiteral("/grease-pencil"),
+                                QStringLiteral("Blender Grease Pencil layer or group"));
                             if (!dataBlockTree->boneCollectionTree.isEmpty()) {
                                 const QString boneCollectionPath = treePath +
                                     QStringLiteral("/bone-collections");

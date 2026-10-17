@@ -3404,6 +3404,8 @@ private:
                             QStringLiteral("armature_bone_tree")).toArray();
                         dataBlockTree.boneCollectionTree = subtree.value(
                             QStringLiteral("bone_collection_tree")).toArray();
+                        dataBlockTree.greasePencilLayerTree = subtree.value(
+                            QStringLiteral("grease_pencil_layer_tree")).toArray();
                         group.dataBlockTreesByName.insert(
                             dataBlockName, std::move(dataBlockTree));
                     }

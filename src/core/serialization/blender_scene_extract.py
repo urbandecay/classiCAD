@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 77
+BRIDGE_FORMAT_VERSION = 79
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -52,6 +52,7 @@ MAX_OUTLINER_OVERRIDE_ITEMS = 20000
 MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID = 512
 MAX_OUTLINER_OVERRIDE_DEPTH = 128
 MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID = 2048
+MAX_OUTLINER_OVERRIDE_VIEW_LAYER_STATES = 200000
 MAX_OUTLINER_ACTION_SLOTS = 20000
 MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS = 20000
 MAX_OUTLINER_LIBRARY_SPECIALIZED_ITEMS = 20000
@@ -1931,6 +1932,93 @@ def outliner_library_overrides_tree():
     hierarchy_groups_by_library = {}
     hierarchy_rows_remaining = [MAX_OUTLINER_OVERRIDE_ITEMS]
 
+    override_object_pointers = {
+        pointer for pointer, (id_block, _record) in by_pointer.items()
+        if isinstance(id_block, bpy.types.Object)
+    }
+    object_view_layer_states = {
+        pointer: {"states": {}, "complete": True}
+        for pointer in override_object_pointers
+    }
+    remaining_view_layer_states = [MAX_OUTLINER_OVERRIDE_VIEW_LAYER_STATES]
+
+    def selectable_objects_in_view_layer(scene, view_layer):
+        """Mirror the collection-derived part of Blender's BASE_SELECTABLE."""
+        selectable_by_pointer = {}
+
+        def visit(layer_collection, inherited_viewport_hidden,
+                  inherited_select_hidden):
+            if layer_collection.exclude:
+                return
+            collection = layer_collection.collection
+            is_master_collection = (
+                identity(collection) == identity(scene.collection)
+            )
+            viewport_hidden = inherited_viewport_hidden
+            select_hidden = inherited_select_hidden
+            if not is_master_collection:
+                viewport_hidden = viewport_hidden or bool(collection.hide_viewport)
+                select_hidden = select_hidden or bool(collection.hide_select)
+            path_selectable = not viewport_hidden and not select_hidden
+            for obj in collection.objects:
+                pointer = identity(obj)
+                if pointer in override_object_pointers:
+                    selectable_by_pointer[pointer] = (
+                        selectable_by_pointer.get(pointer, False) or
+                        path_selectable
+                    )
+            for child in layer_collection.children:
+                visit(child, viewport_hidden, select_hidden)
+
+        visit(view_layer.layer_collection, False, False)
+        return selectable_by_pointer
+
+    for scene in bpy.data.scenes:
+        for view_layer in scene.view_layers:
+            selectable_by_pointer = selectable_objects_in_view_layer(
+                scene, view_layer)
+            try:
+                layer_objects = list(view_layer.objects)
+                active_object = view_layer.objects.active
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                for pointer in override_object_pointers:
+                    object_view_layer_states[pointer]["complete"] = False
+                continue
+            layer_key = view_layer_key(scene, view_layer)
+            for id_block in layer_objects:
+                pointer = identity(id_block)
+                state_record = object_view_layer_states.get(pointer)
+                if state_record is None:
+                    continue
+                if remaining_view_layer_states[0] <= 0:
+                    state_record["complete"] = False
+                    continue
+                try:
+                    # The extractor runs Blender with --background, so this
+                    # resolves to BASE_ENABLED_AND_VISIBLE_IN_DEFAULT_VIEWPORT,
+                    # the exact visibility flag used by the Outliner filter.
+                    visible = bool(id_block.visible_get(view_layer=view_layer))
+                    selected = bool(id_block.select_get(view_layer=view_layer))
+                    hidden = bool(id_block.hide_get(view_layer=view_layer))
+                    selectable = (
+                        selectable_by_pointer.get(pointer, False) and
+                        not bool(id_block.hide_viewport) and
+                        not bool(id_block.hide_select) and not hidden
+                    )
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    state_record["complete"] = False
+                    continue
+                state_record["states"][layer_key] = {
+                    "visible": visible,
+                    "selected": selected,
+                    "active": (
+                        active_object is not None and
+                        identity(active_object) == pointer
+                    ),
+                    "selectable": selectable,
+                }
+                remaining_view_layer_states[0] -= 1
+
     def hierarchy_node(pointer, root_pointer, depth, ancestry):
         if hierarchy_rows_remaining[0] <= 0 or depth >= MAX_OUTLINER_OVERRIDE_DEPTH:
             truncated[0] = True
@@ -1944,9 +2032,20 @@ def outliner_library_overrides_tree():
             "id": record["id"],
             "name": record["name"],
             "type": record["type"],
+            "rna_type": record["rna_type"],
+            "object_type": (
+                str(id_block.type)
+                if isinstance(id_block, bpy.types.Object) else ""
+            ),
             "root_id": record["root_id"],
             "children": [],
         }
+        if isinstance(id_block, bpy.types.Object):
+            state_record = object_view_layer_states.get(pointer, {
+                "states": {}, "complete": False,
+            })
+            node["view_layer_states"] = state_record["states"]
+            node["view_layer_states_complete"] = state_record["complete"]
         next_ancestry = ancestry | {pointer}
         sibling_seen = set()
         for child_pointer in children_by_pointer.get(pointer, ()):

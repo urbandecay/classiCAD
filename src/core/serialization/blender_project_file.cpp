@@ -2851,7 +2851,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 71 && bridgeVersion != 72 &&
          bridgeVersion != 73 && bridgeVersion != 74 &&
          bridgeVersion != 75 && bridgeVersion != 76 &&
-         bridgeVersion != 77)) {
+         bridgeVersion != 77 && bridgeVersion != 78 && bridgeVersion != 79)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4362,11 +4362,22 @@ bool importBlenderScene(const QString &path,
             }
         }
         int hierarchyNodeCount = 0;
+        int hierarchyViewLayerStateCount = 0;
         const auto validateHierarchyNode = [&](const auto &self,
                                                const QJsonObject &node,
                                                int depth) -> bool {
             if (depth > 128 || ++hierarchyNodeCount > 20000) return false;
             const QJsonValue children = node.value(QStringLiteral("children"));
+            const QJsonValue rnaType = node.value(QStringLiteral("rna_type"));
+            const QJsonValue objectType = node.value(
+                QStringLiteral("object_type"));
+            const QJsonValue viewLayerStates = node.value(
+                QStringLiteral("view_layer_states"));
+            const QJsonValue viewLayerStatesComplete = node.value(
+                QStringLiteral("view_layer_states_complete"));
+            const bool hasViewLayerStateSnapshot =
+                !viewLayerStates.isUndefined() ||
+                !viewLayerStatesComplete.isUndefined();
             if (!node.value(QStringLiteral("id")).isString() ||
                 node.value(QStringLiteral("id")).toString().size() > 4096 ||
                 !node.value(QStringLiteral("name")).isString() ||
@@ -4375,8 +4386,42 @@ bool importBlenderScene(const QString &path,
                 node.value(QStringLiteral("type")).toString().size() > 256 ||
                 !node.value(QStringLiteral("root_id")).isString() ||
                 node.value(QStringLiteral("root_id")).toString().size() > 4096 ||
+                (!rnaType.isUndefined() &&
+                 (!rnaType.isString() || rnaType.toString().size() > 256)) ||
+                (!objectType.isUndefined() &&
+                 (!objectType.isString() || objectType.toString().size() > 256)) ||
+                (!rnaType.isUndefined() && rnaType.toString() ==
+                     QLatin1String("Object") &&
+                 (!objectType.isString() || objectType.toString().isEmpty())) ||
+                (bridgeVersion >= 79 && rnaType.toString() ==
+                     QLatin1String("Object") &&
+                 (!viewLayerStates.isObject() ||
+                  !viewLayerStatesComplete.isBool())) ||
+                (hasViewLayerStateSnapshot &&
+                 (!viewLayerStates.isObject() ||
+                  !viewLayerStatesComplete.isBool() ||
+                  viewLayerStates.toObject().size() > 20000 ||
+                  hierarchyViewLayerStateCount +
+                          viewLayerStates.toObject().size() > 200000)) ||
                 !children.isArray() || children.toArray().size() > 20000) {
                 return false;
+            }
+            if (hasViewLayerStateSnapshot) {
+                const QJsonObject states = viewLayerStates.toObject();
+                for (auto stateIt = states.constBegin();
+                     stateIt != states.constEnd(); ++stateIt) {
+                    if (stateIt.key().isEmpty() || stateIt.key().size() > 4096 ||
+                        !stateIt.value().isObject()) return false;
+                    const QJsonObject state = stateIt.value().toObject();
+                    for (const QString &field : {
+                             QStringLiteral("visible"),
+                             QStringLiteral("selected"),
+                             QStringLiteral("active"),
+                             QStringLiteral("selectable")}) {
+                        if (!state.value(field).isBool()) return false;
+                    }
+                }
+                hierarchyViewLayerStateCount += states.size();
             }
             for (const QJsonValue &childValue : children.toArray()) {
                 if (!childValue.isObject() ||

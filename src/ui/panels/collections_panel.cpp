@@ -116,6 +116,14 @@ constexpr int selectColumn = 6;
 constexpr int excludeColumn = 7;
 constexpr int modeColumn = 8;
 constexpr int itemModeValueRole = Qt::UserRole + 27;
+constexpr int itemOverrideObjectTypeRole = Qt::UserRole + 28;
+constexpr int itemOverrideObjectFilterRole = Qt::UserRole + 29;
+constexpr int itemOverrideObjectStateKnownRole = Qt::UserRole + 30;
+constexpr int itemOverrideObjectHasBaseRole = Qt::UserRole + 31;
+constexpr int itemOverrideObjectVisibleRole = Qt::UserRole + 32;
+constexpr int itemOverrideObjectSelectedRole = Qt::UserRole + 33;
+constexpr int itemOverrideObjectActiveRole = Qt::UserRole + 34;
+constexpr int itemOverrideObjectSelectableRole = Qt::UserRole + 35;
 
 QColor collectionColorTagColor(const QString &colorTag);
 
@@ -155,6 +163,14 @@ QString outlinerObjectTypeFilterKey(QString blenderType)
         return QStringLiteral("GREASE_PENCIL");
     }
     return QStringLiteral("OTHERS");
+}
+
+void migrateLegacyHiddenObjectStateFilter(
+    OutlinerObjectStateFilter &filter, bool &invert)
+{
+    if (filter != OutlinerObjectStateFilter::Hidden) return;
+    filter = OutlinerObjectStateFilter::Visible;
+    invert = !invert;
 }
 
 QIcon paintedIcon(const std::function<void(QPainter &)> &paint)
@@ -1037,6 +1053,8 @@ void CollectionsPanel::applyOutlinerWorkspaceState(const QJsonObject &state)
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, objectState,
                static_cast<int>(OutlinerObjectStateFilter::Selectable)));
+    migrateLegacyHiddenObjectStateFilter(objectStateFilter_,
+                                         invertObjectStateFilter_);
     const QString overrideView = state.value(
         QStringLiteral("libraryOverrideViewMode")).toString(
             QStringLiteral("PROPERTIES"));
@@ -1392,6 +1410,8 @@ void CollectionsPanel::createLayout()
                static_cast<int>(OutlinerObjectStateFilter::Selectable)));
     invertObjectStateFilter_ = outlinerSettings.value(
         QStringLiteral("outliner/filterInvertState"), false).toBool();
+    migrateLegacyHiddenObjectStateFilter(objectStateFilter_,
+                                         invertObjectStateFilter_);
     exactNameMatch_ = outlinerSettings.value(
         QStringLiteral("outliner/filterExactName"), false).toBool();
     caseSensitiveNameFilter_ = outlinerSettings.value(
@@ -1776,7 +1796,6 @@ void CollectionsPanel::createLayout()
     const QVector<QPair<OutlinerObjectStateFilter, QString>> states{
         {OutlinerObjectStateFilter::All, QStringLiteral("All")},
         {OutlinerObjectStateFilter::Visible, QStringLiteral("Visible")},
-        {OutlinerObjectStateFilter::Hidden, QStringLiteral("Hidden")},
         {OutlinerObjectStateFilter::Selected, QStringLiteral("Selected")},
         {OutlinerObjectStateFilter::Active, QStringLiteral("Active")},
         {OutlinerObjectStateFilter::Selectable, QStringLiteral("Selectable")}};
@@ -2145,6 +2164,8 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     const bool viewLayerMode = !scenesDisplayMode_ && !sequencerDisplayMode_ &&
         !dataApiDisplayMode_ && !librariesDisplayMode_ &&
         !orphanDataDisplayMode_ && !libraryOverridesDisplayMode_;
+    const bool overrideHierarchyFilterMode =
+        libraryOverridesDisplayMode_ && overrideHierarchiesView_;
     if (activeFilterText_.isEmpty() && !text.isEmpty()) {
         expandedBeforeFilter_.clear();
         QVector<QTreeWidgetItem *> pending;
@@ -2202,43 +2223,79 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
     const auto objectMatchesFilter = [this, &selectedValues, activeId,
-                                      activeViewLayerKey, viewLayerMode](
+                                      activeViewLayerKey, viewLayerMode,
+                                      overrideHierarchyFilterMode](
                                          const QTreeWidgetItem *item) {
         if (item == nullptr) return false;
         const quint64 objectValue = item->data(
             nameColumn, itemIdRole).toULongLong();
         const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
             item->data(nameColumn, itemKindRole).toInt());
-        const OutlinerObjectEntry entry = kind == OutlinerRowKind::SourceObject
-            ? sourceOnlyEntries_.value(item->data(
-                  nameColumn, itemSourceObjectIdRole).toString())
-            : objectEntries_.value(objectValue);
+        const bool overrideObject = item->data(
+            nameColumn, itemOverrideObjectFilterRole).toBool();
+        OutlinerObjectEntry entry;
+        if (kind == OutlinerRowKind::SourceObject) {
+            entry = sourceOnlyEntries_.value(item->data(
+                nameColumn, itemSourceObjectIdRole).toString());
+        } else if (overrideObject) {
+            const QString sourceId = item->data(
+                nameColumn, itemSourceObjectIdRole).toString();
+            entry = overrideHierarchyObjectEntries_.value(sourceId);
+            if (entry.blenderType.isEmpty()) {
+                entry.blenderType = item->data(
+                    nameColumn, itemOverrideObjectTypeRole).toString();
+            }
+        } else {
+            entry = objectEntries_.value(objectValue);
+        }
         if (kind == OutlinerRowKind::SourceObject) {
             if (!entry.outlinerOnly || entry.sourceObjectId.isEmpty()) {
                 return false;
             }
-        } else if (!entry.id.isValid()) {
+        } else if (!overrideObject && !entry.id.isValid()) {
             return false;
         }
-        if (!viewLayerMode) return true;
+        if (!viewLayerMode && !overrideHierarchyFilterMode) return true;
         const QString typeKey =
             outlinerObjectTypeFilterKey(entry.blenderType);
         if (!objectTypeFilters_.value(typeKey, true)) return false;
+        const bool hasOverrideStateSnapshot = overrideObject && item->data(
+            nameColumn, itemOverrideObjectStateKnownRole).toBool();
+        const bool hasOverrideBase = hasOverrideStateSnapshot
+            ? item->data(nameColumn, itemOverrideObjectHasBaseRole).toBool()
+            : (entry.id.isValid() || entry.outlinerOnly);
+        if (overrideObject && objectStateFilter_ !=
+                OutlinerObjectStateFilter::All && !hasOverrideBase) {
+            // Blender excludes an Object without a Base before applying the
+            // inverse state option.
+            return false;
+        }
 
         const QString rowViewLayerKey = item->data(
             nameColumn, itemViewLayerKeyRole).toString();
-        bool visible = entry.visible;
-        bool selectable = entry.selectable;
+        bool visible = hasOverrideStateSnapshot
+            ? item->data(nameColumn, itemOverrideObjectVisibleRole).toBool()
+            : entry.visible;
+        bool selectable = hasOverrideStateSnapshot
+            ? item->data(nameColumn, itemOverrideObjectSelectableRole).toBool()
+            : entry.selectable;
+        bool selected = hasOverrideStateSnapshot
+            ? item->data(nameColumn, itemOverrideObjectSelectedRole).toBool()
+            : (entry.id.isValid() && selectedValues.contains(objectValue));
+        bool active = hasOverrideStateSnapshot
+            ? item->data(nameColumn, itemOverrideObjectActiveRole).toBool()
+            : (entry.id.isValid() && activeId.isValid() &&
+               activeId.value() == objectValue);
         const bool hasLayerVisibilityCallback = entry.id.isValid() &&
             !rowViewLayerKey.isEmpty() &&
             static_cast<bool>(callbacks_.objectVisibleInViewLayer);
         const bool hasLayerSelectableCallback = entry.id.isValid() &&
             !rowViewLayerKey.isEmpty() &&
             static_cast<bool>(callbacks_.objectSelectableInViewLayer);
-        if (hasLayerVisibilityCallback) {
+        if (!hasOverrideStateSnapshot && hasLayerVisibilityCallback) {
             visible = callbacks_.objectVisibleInViewLayer(
                 entry.id, rowViewLayerKey);
-        } else if (!rowViewLayerKey.isEmpty() &&
+        } else if (!hasOverrideStateSnapshot && !rowViewLayerKey.isEmpty() &&
                    rowViewLayerKey != activeViewLayerKey) {
             const bool hiddenInLayer = entry.viewLayerHidden.contains(
                 rowViewLayerKey)
@@ -2247,14 +2304,14 @@ void CollectionsPanel::applyNameFilter(const QString &text)
             visible = !entry.hideViewport &&
                 !hiddenInLayer;
         }
-        if (hasLayerSelectableCallback) {
+        if (!hasOverrideStateSnapshot && hasLayerSelectableCallback) {
             selectable = callbacks_.objectSelectableInViewLayer(
                 entry.id, rowViewLayerKey);
-        } else if (!rowViewLayerKey.isEmpty() &&
+        } else if (!hasOverrideStateSnapshot && !rowViewLayerKey.isEmpty() &&
                    rowViewLayerKey != activeViewLayerKey) {
             selectable = visible && !entry.hideSelect;
         }
-        if (!rowViewLayerKey.isEmpty() &&
+        if (!hasOverrideStateSnapshot && !rowViewLayerKey.isEmpty() &&
             (!hasLayerVisibilityCallback || !hasLayerSelectableCallback)) {
             for (QTreeWidgetItem *ancestor = item->parent();
                  ancestor != nullptr; ancestor = ancestor->parent()) {
@@ -2286,12 +2343,10 @@ void CollectionsPanel::applyNameFilter(const QString &text)
             matchesState = !visible;
             break;
         case OutlinerObjectStateFilter::Selected:
-            matchesState = entry.id.isValid() &&
-                           selectedValues.contains(objectValue);
+            matchesState = selected;
             break;
         case OutlinerObjectStateFilter::Active:
-            matchesState = entry.id.isValid() && activeId.isValid() &&
-                           activeId.value() == objectValue;
+            matchesState = active;
             break;
         case OutlinerObjectStateFilter::Selectable:
             matchesState = selectable;
@@ -2327,6 +2382,9 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         } else if (viewLayerMode &&
                    (kind == OutlinerRowKind::Object ||
                     kind == OutlinerRowKind::SourceObject)) {
+            eligible = showObjects_ && objectMatchesFilter(item);
+        } else if (overrideHierarchyFilterMode && item->data(
+                       nameColumn, itemOverrideObjectFilterRole).toBool()) {
             eligible = showObjects_ && objectMatchesFilter(item);
         }
         const bool visible = (eligible && nameMatches) || childMatches;
@@ -4959,12 +5017,26 @@ void CollectionsPanel::refresh()
     rangeAnchorItem_ = nullptr;
     objectRows_.clear();
     objectEntries_.clear();
+    overrideHierarchyObjectEntries_.clear();
     hierarchyRows_.clear();
     hierarchyEntries_.clear();
     sourceOnlyEntries_.clear();
     const QVector<CollectionPanelEntry> allEntries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> allObjects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
+    for (const OutlinerObjectEntry &object : allObjects) {
+        if (object.id.isValid()) {
+            objectEntries_.insert(object.id.value(), object);
+        }
+        if (!object.hierarchyIdentity.isEmpty()) {
+            overrideHierarchyObjectEntries_.insert(
+                object.hierarchyIdentity, object);
+        }
+        if (!object.sourceObjectId.isEmpty()) {
+            overrideHierarchyObjectEntries_.insert(
+                object.sourceObjectId, object);
+        }
+    }
     const QVector<OutlinerSceneEntry> scenes = callbacks_.scenes
         ? callbacks_.scenes() : QVector<OutlinerSceneEntry>{};
     const QVector<OutlinerLibraryEntry> libraries = callbacks_.libraries
@@ -5540,10 +5612,80 @@ void CollectionsPanel::refresh()
                 row->setData(nameColumn, itemKindRole,
                     static_cast<int>(OutlinerRowKind::ObjectContent));
                 const QString id = source.value(QStringLiteral("id")).toString();
+                const QString rnaType = source.value(
+                    QStringLiteral("rna_type")).toString();
+                const bool isObjectRow = rnaType == QLatin1String("Object") ||
+                    (rnaType.isEmpty() && source.value(
+                        QStringLiteral("type")).toString().compare(
+                            QLatin1String("Objects"), Qt::CaseInsensitive) == 0);
+                OutlinerObjectEntry objectEntry =
+                    overrideHierarchyObjectEntries_.value(id);
+                QString objectType = source.value(
+                    QStringLiteral("object_type")).toString();
+                if (objectType.isEmpty()) objectType = objectEntry.blenderType;
+                if (isObjectRow) {
+                    row->setData(nameColumn, itemOverrideObjectFilterRole, true);
+                    row->setData(nameColumn, itemSourceObjectIdRole, id);
+                    row->setData(nameColumn, itemOverrideObjectTypeRole,
+                                 objectType);
+                    row->setData(nameColumn, itemViewLayerKeyRole,
+                        callbacks_.activeViewLayerKey
+                            ? callbacks_.activeViewLayerKey() : QString{});
+                    if (objectEntry.id.isValid()) {
+                        row->setData(nameColumn, itemIdRole,
+                            QVariant::fromValue<qulonglong>(
+                                objectEntry.id.value()));
+                    }
+                    const QJsonValue viewLayerStatesValue = source.value(
+                        QStringLiteral("view_layer_states"));
+                    const bool stateSnapshotKnown =
+                        source.value(QStringLiteral(
+                            "view_layer_states_complete")).toBool() &&
+                        viewLayerStatesValue.isObject();
+                    row->setData(nameColumn,
+                                 itemOverrideObjectStateKnownRole,
+                                 stateSnapshotKnown);
+                    if (stateSnapshotKnown) {
+                        const QString viewLayerKey =
+                            callbacks_.activeViewLayerKey
+                                ? callbacks_.activeViewLayerKey() : QString{};
+                        const QJsonObject viewLayerStates =
+                            viewLayerStatesValue.toObject();
+                        const bool hasBase = viewLayerStates.contains(
+                            viewLayerKey);
+                        const QJsonObject state = hasBase
+                            ? viewLayerStates.value(viewLayerKey).toObject()
+                            : QJsonObject{};
+                        row->setData(nameColumn,
+                                     itemOverrideObjectHasBaseRole, hasBase);
+                        row->setData(nameColumn,
+                                     itemOverrideObjectVisibleRole,
+                                     state.value(QStringLiteral("visible"))
+                                         .toBool());
+                        row->setData(nameColumn,
+                                     itemOverrideObjectSelectedRole,
+                                     state.value(QStringLiteral("selected"))
+                                         .toBool());
+                        row->setData(nameColumn,
+                                     itemOverrideObjectActiveRole,
+                                     state.value(QStringLiteral("active"))
+                                         .toBool());
+                        row->setData(nameColumn,
+                                     itemOverrideObjectSelectableRole,
+                                     state.value(QStringLiteral("selectable"))
+                                         .toBool());
+                    }
+                    if (!objectType.isEmpty()) {
+                        row->setIcon(nameColumn, objectTypeIcon(objectType));
+                    }
+                }
                 const QString path = parentPath + QStringLiteral("/id-%1").arg(id);
                 row->setData(nameColumn, itemPathRole, path);
-                row->setToolTip(nameColumn,
-                    QStringLiteral("Blender %1 in this library override hierarchy")
+                row->setToolTip(nameColumn, isObjectRow
+                    ? QStringLiteral("Blender %1 object in this library override hierarchy")
+                        .arg(objectType.isEmpty()
+                                 ? QStringLiteral("Object") : objectType)
+                    : QStringLiteral("Blender %1 in this library override hierarchy")
                         .arg(source.value(QStringLiteral("type")).toString()));
                 row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
                 for (const QJsonValue &childValue : source.value(

@@ -374,11 +374,21 @@ bool isValidImportedBlenderLibraryOverrides(const QJsonValue &value)
     }
 
     int hierarchyNodeCount = 0;
+    int hierarchyViewLayerStateCount = 0;
     const auto validateNode = [&](const auto &self,
                                   const QJsonObject &node,
                                   int depth) -> bool {
         if (depth > 128 || ++hierarchyNodeCount > 20000) return false;
         const QJsonValue children = node.value(QStringLiteral("children"));
+        const QJsonValue rnaType = node.value(QStringLiteral("rna_type"));
+        const QJsonValue objectType = node.value(QStringLiteral("object_type"));
+        const QJsonValue viewLayerStates = node.value(
+            QStringLiteral("view_layer_states"));
+        const QJsonValue viewLayerStatesComplete = node.value(
+            QStringLiteral("view_layer_states_complete"));
+        const bool hasViewLayerStateSnapshot =
+            !viewLayerStates.isUndefined() ||
+            !viewLayerStatesComplete.isUndefined();
         for (const QString &field : {QStringLiteral("id"), QStringLiteral("name"),
                                      QStringLiteral("root_id")}) {
             if (!node.value(field).isString() ||
@@ -386,7 +396,37 @@ bool isValidImportedBlenderLibraryOverrides(const QJsonValue &value)
         }
         if (!node.value(QStringLiteral("type")).isString() ||
             node.value(QStringLiteral("type")).toString().size() > 256 ||
+            (!rnaType.isUndefined() &&
+             (!rnaType.isString() || rnaType.toString().size() > 256)) ||
+            (!objectType.isUndefined() &&
+             (!objectType.isString() || objectType.toString().size() > 256)) ||
+            (!rnaType.isUndefined() && rnaType.toString() ==
+                 QLatin1String("Object") &&
+             (!objectType.isString() || objectType.toString().isEmpty())) ||
+            (hasViewLayerStateSnapshot &&
+             (!viewLayerStates.isObject() ||
+              !viewLayerStatesComplete.isBool() ||
+              viewLayerStates.toObject().size() > 20000 ||
+              hierarchyViewLayerStateCount +
+                      viewLayerStates.toObject().size() > 200000)) ||
             !children.isArray()) return false;
+        if (hasViewLayerStateSnapshot) {
+            const QJsonObject states = viewLayerStates.toObject();
+            for (auto stateIt = states.constBegin();
+                 stateIt != states.constEnd(); ++stateIt) {
+                if (stateIt.key().isEmpty() || stateIt.key().size() > 4096 ||
+                    !stateIt.value().isObject()) return false;
+                const QJsonObject state = stateIt.value().toObject();
+                for (const QString &field : {
+                         QStringLiteral("visible"),
+                         QStringLiteral("selected"),
+                         QStringLiteral("active"),
+                         QStringLiteral("selectable")}) {
+                    if (!state.value(field).isBool()) return false;
+                }
+            }
+            hierarchyViewLayerStateCount += states.size();
+        }
         for (const QJsonValue &child : children.toArray()) {
             if (!child.isObject() || !self(self, child.toObject(), depth + 1)) return false;
         }

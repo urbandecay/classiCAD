@@ -437,6 +437,7 @@ private:
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
+    QHash<QString, OutlinerObjectEntry> overrideHierarchyObjectEntries_;
     QHash<QString, QVector<QTreeWidgetItem *>> hierarchyRows_;
     QHash<QString, OutlinerObjectEntry> hierarchyEntries_;
     QHash<QString, OutlinerObjectEntry> sourceOnlyEntries_;

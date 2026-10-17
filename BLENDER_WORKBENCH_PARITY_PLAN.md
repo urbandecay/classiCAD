@@ -11649,7 +11649,22 @@ scene depth.
   migration fallbacks and are copied into the new document state on restore.
   Subsequent changes save to the document, so expansion state survives Save As
   and untitled projects. Native document version 70 carries this state outside
-  geometry undo. Library Override hierarchy filtering and flattened View Layer
-  membership checks remain open items. `cmake --build build -j4` and
+  geometry undo. The next entry addresses Library Override hierarchy filters;
+  flattened View Layer membership checks remain open. `cmake --build build -j4` and
   `git diff --check` passed; no GUI or matched Blender Outliner comparison was
   run.
+- The hundred-twenty-fourth Outliner filter update carries each override
+  hierarchy node's RNA ID type and, for actual Object IDs, Blender's object
+  type plus its per-View-Layer Base state. Visible, Selected, Active, and
+  Selectable filters now read that snapshot for both mapped and source-only
+  override objects. The background Blender extractor records actual Base
+  membership, `visible_get()` and `select_get()` states, the active object,
+  and collection/object restrictions needed to reproduce `BASE_SELECTABLE`.
+  Objects without a Base are omitted before state inversion, and the legacy
+  Hidden setting migrates to Visible with the inversion toggled. The bridge
+  and native snapshot validators bound and validate the state maps; bridge
+  format v79 emits them while older imports remain supported. State snapshots
+  fall back to classiCAD metadata if extraction encounters an API error or the
+  200,000-record cap. The extractor syntax check, `cmake --build build -j4`,
+  and `git diff --check` passed. No matched Blender Outliner comparison has
+  been run.

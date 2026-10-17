@@ -13,7 +13,7 @@
  * The Scenes tree mode is adapted from tree_display_scenes.cc and the
  * scene/object tree elements in tree_element_id_scene.cc and
  * tree_element_scene_objects.cc.
- * Generic object material rows follow tree_element_id_object.cc.
+ * Generic object contents follow tree_element_id_object.cc.
  */
 #include "collections_panel.h"
 
@@ -1604,11 +1604,12 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     objectEntries_.insert(entry.id.value(), entry);
     if (showObjectContents_) {
         const auto appendContentRow =
-            [item, &objectPath, &activeViewLayerKey](
+            [&objectPath, &activeViewLayerKey](
+                QTreeWidgetItem *contentParent,
                 const QString &name, const QString &suffix,
-                const QString &description) {
-            if (name.isEmpty()) return;
-            auto *content = new QTreeWidgetItem(item);
+                const QString &description) -> QTreeWidgetItem * {
+            if (contentParent == nullptr || name.isEmpty()) return nullptr;
+            auto *content = new QTreeWidgetItem(contentParent);
             content->setText(nameColumn, name);
             content->setData(nameColumn, itemKindRole,
                              static_cast<int>(OutlinerRowKind::ObjectContent));
@@ -1618,15 +1619,43 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                              objectPath.join(QLatin1Char('/')) + suffix);
             content->setToolTip(nameColumn, description);
             content->setFlags(Qt::ItemIsEnabled);
+            return content;
         };
-        appendContentRow(entry.dataBlockName, QStringLiteral("/data"),
+        appendContentRow(item, entry.dataBlockName, QStringLiteral("/data"),
                          QStringLiteral("Blender object data block"));
         for (qsizetype index = 0; index < entry.materialNames.size(); ++index) {
             appendContentRow(
+                item,
                 entry.materialNames[index],
                 QStringLiteral("/material-%1").arg(index),
                 QStringLiteral("Blender material data block"));
         }
+        const auto appendNameGroup = [&appendContentRow](
+            QTreeWidgetItem *objectItem, const QString &groupName,
+            const QString &groupPath, const QString &description,
+            const QStringList &names, const QString &itemPathPrefix) {
+            if (names.isEmpty()) return;
+            QTreeWidgetItem *group = appendContentRow(
+                objectItem, groupName, groupPath, description);
+            for (qsizetype index = 0; index < names.size(); ++index) {
+                appendContentRow(
+                    group, names[index],
+                    QStringLiteral("%1-%2").arg(itemPathPrefix).arg(index),
+                    description);
+            }
+        };
+        appendNameGroup(item, QStringLiteral("Constraints"),
+                        QStringLiteral("/constraints"),
+                        QStringLiteral("Blender object constraints"),
+                        entry.constraintNames, QStringLiteral("/constraint"));
+        appendNameGroup(item, QStringLiteral("Modifiers"),
+                        QStringLiteral("/modifiers"),
+                        QStringLiteral("Blender object modifiers"),
+                        entry.modifierNames, QStringLiteral("/modifier"));
+        appendNameGroup(item, QStringLiteral("Vertex Groups"),
+                        QStringLiteral("/vertex-groups"),
+                        QStringLiteral("Blender mesh vertex groups"),
+                        entry.vertexGroupNames, QStringLiteral("/vertex-group"));
     }
     return item;
 }

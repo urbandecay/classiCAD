@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 29);
+    serialized.insert(QStringLiteral("version"), 30);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -541,6 +541,18 @@ QJsonObject documentToJson(const Document &document)
         }
         serializedObject.insert(QStringLiteral("blenderSourceMaterialNames"),
                                 blenderSourceMaterialNames);
+        const auto insertBlenderNameList = [&serializedObject](
+            const QString &key, const QStringList &names) {
+            QJsonArray values;
+            for (const QString &name : names) values.append(name);
+            serializedObject.insert(key, values);
+        };
+        insertBlenderNameList(QStringLiteral("blenderSourceModifierNames"),
+                              sceneObject.blenderSourceModifierNames);
+        insertBlenderNameList(QStringLiteral("blenderSourceConstraintNames"),
+                              sceneObject.blenderSourceConstraintNames);
+        insertBlenderNameList(QStringLiteral("blenderSourceVertexGroupNames"),
+                              sceneObject.blenderSourceVertexGroupNames);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         if (!sceneObject.blenderSurfaceWireVerticesWorld.isEmpty()) {
             QJsonArray wireVertices;
@@ -647,7 +659,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 29) {
+    if (version < 1 || version > 30) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1525,6 +1537,43 @@ bool documentFromJson(const QJsonValue &value,
                 }
                 sceneObject.blenderSourceMaterialNames.append(
                     nameValue.toString());
+            }
+        }
+        if (version >= 30) {
+            const auto readBlenderNameList = [
+                &serializedObject, errorMessage](const QString &key,
+                                                  const QString &label,
+                                                  QStringList *names) {
+                const QJsonValue namesValue = serializedObject.value(key);
+                if (!namesValue.isArray() || namesValue.toArray().size() > 1024) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender %1 names").arg(label));
+                    return false;
+                }
+                for (const QJsonValue &nameValue : namesValue.toArray()) {
+                    if (!nameValue.isString() ||
+                        nameValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid Blender %1 name").arg(label));
+                        return false;
+                    }
+                    names->append(nameValue.toString());
+                }
+                return true;
+            };
+            if (!readBlenderNameList(
+                    QStringLiteral("blenderSourceModifierNames"),
+                    QStringLiteral("modifier"),
+                    &sceneObject.blenderSourceModifierNames) ||
+                !readBlenderNameList(
+                    QStringLiteral("blenderSourceConstraintNames"),
+                    QStringLiteral("constraint"),
+                    &sceneObject.blenderSourceConstraintNames) ||
+                !readBlenderNameList(
+                    QStringLiteral("blenderSourceVertexGroupNames"),
+                    QStringLiteral("vertex-group"),
+                    &sceneObject.blenderSourceVertexGroupNames)) {
+                return false;
             }
         }
         const QJsonValue surfaceWireValue = serializedObject.value(

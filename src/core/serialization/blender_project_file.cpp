@@ -2818,7 +2818,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 28 && bridgeVersion != 29 &&
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
-         bridgeVersion != 36)) {
+         bridgeVersion != 36 && bridgeVersion != 37)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3353,6 +3353,27 @@ bool importBlenderScene(const QString &path,
                 }
             }
         }
+        if (bridgeVersion >= 37) {
+            const auto validObjectNameList = [&item](const QString &key) {
+                const QJsonValue namesValue = item.value(key);
+                if (!namesValue.isArray() || namesValue.toArray().size() > 1024)
+                    return false;
+                for (const QJsonValue &nameValue : namesValue.toArray()) {
+                    if (!nameValue.isString() ||
+                        nameValue.toString().size() > 4096) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (!validObjectNameList(QStringLiteral("modifier_names")) ||
+                !validObjectNameList(QStringLiteral("constraint_names")) ||
+                !validObjectNameList(QStringLiteral("vertex_group_names"))) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender Outliner object-name list is invalid"));
+                return false;
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3449,6 +3470,20 @@ bool importBlenderScene(const QString &path,
                      QStringLiteral("material_slot_names")).toArray()) {
                 sceneObject.blenderSourceMaterialNames.append(
                     materialNameValue.toString());
+            }
+        }
+        if (bridgeVersion >= 37) {
+            for (const QJsonValue &nameValue : item.value(
+                     QStringLiteral("modifier_names")).toArray()) {
+                sceneObject.blenderSourceModifierNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &nameValue : item.value(
+                     QStringLiteral("constraint_names")).toArray()) {
+                sceneObject.blenderSourceConstraintNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &nameValue : item.value(
+                     QStringLiteral("vertex_group_names")).toArray()) {
+                sceneObject.blenderSourceVertexGroupNames.append(nameValue.toString());
             }
         }
         sceneObject.defaultViewLayerKey =

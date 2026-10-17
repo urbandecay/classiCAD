@@ -33,6 +33,9 @@ struct OutlinerObjectEntry {
     QString blenderType;
     QString dataBlockName;
     QStringList materialNames;
+    QStringList modifierNames;
+    QStringList constraintNames;
+    QStringList vertexGroupNames;
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
     bool hideRender = false;

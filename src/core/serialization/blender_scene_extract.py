@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 36
+BRIDGE_FORMAT_VERSION = 37
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -627,6 +627,11 @@ def object_metadata(obj, scene, depsgraph=None):
             slot.material.name_full for slot in obj.material_slots
             if slot.material is not None
         ],
+        "modifier_names": [modifier.name for modifier in obj.modifiers],
+        "constraint_names": [constraint.name for constraint in obj.constraints],
+        "vertex_group_names": [
+            group.name for group in getattr(obj, "vertex_groups", ())
+        ] if obj.type in ("MESH", "LATTICE", "GREASE_PENCIL") else [],
         "library_path": library_path,
         # Blender resolves a linked ID's relative filepath before Workbench
         # hashes it; preserve that render identity beside the source path.

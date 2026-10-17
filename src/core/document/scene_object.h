@@ -138,6 +138,10 @@ struct SceneObject {
     QString blenderSourceDataName;
     // Assigned Blender materials shown beneath any supported Outliner object.
     QStringList blenderSourceMaterialNames;
+    // Blender Outliner object subtrees retained from the source file.
+    QStringList blenderSourceModifierNames;
+    QStringList blenderSourceConstraintNames;
+    QStringList blenderSourceVertexGroupNames;
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;

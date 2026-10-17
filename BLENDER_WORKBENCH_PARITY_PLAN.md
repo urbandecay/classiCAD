@@ -10890,9 +10890,21 @@ scene depth.
   older bridge and document versions still load. Mesh geometry material names
   remain a fallback when the source slot list is absent. The full build passed;
   no matched Outliner UI comparison was run.
+- The twenty-first tree update follows Blender 5.2.2's object expansion in
+  [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L35-L43),
+  the group/row construction in
+  [`tree_element_modifier.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_modifier.cc#L22-L55),
+  [`tree_element_constraint.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_constraint.cc#L18-L31),
+  and [`tree_element_defgroup.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_defgroup.cc#L22-L49).
+  Blender modifier and constraint names now appear under their own expandable
+  object groups, and mesh vertex-group names appear under Vertex Groups. The
+  extraction bridge advances to version 37 and native documents to version
+  30; older formats still load. Modifier target links, animation and pose
+  subtrees, grease-pencil effects, and matched UI interaction remain
+  unported. Build passed; no matched Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
-  subtrees beyond the supported Object Contents rows, and a matched
-  Blender/classiCAD interaction comparison. Do not
+  subtrees beyond the currently supported rows, and a matched Blender/classiCAD
+  interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

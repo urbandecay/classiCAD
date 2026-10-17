@@ -2878,6 +2878,9 @@ private:
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
                 entry.dataBlockName = object.blenderSourceDataName;
+                entry.modifierNames = object.blenderSourceModifierNames;
+                entry.constraintNames = object.blenderSourceConstraintNames;
+                entry.vertexGroupNames = object.blenderSourceVertexGroupNames;
                 entry.sceneKeys = sceneKeysBySourceObjectId.value(
                     object.blenderSourceObjectId);
                 for (const CollectionId collectionId : object.collectionIds) {

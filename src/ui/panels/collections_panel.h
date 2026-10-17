@@ -175,6 +175,7 @@ private:
     bool showObjectContents_ = true;
     bool showObjectChildren_ = true;
     bool showAllViewLayers_ = false;
+    bool scrollToActive_ = true;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

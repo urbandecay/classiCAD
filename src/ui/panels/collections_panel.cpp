@@ -9,6 +9,7 @@
  * Shift-recursive restriction changes are adapted from outliner_draw.cc.
  * Name, type, and state filtering is adapted from outliner_tree.cc and
  * space_outliner.py.
+ * Active-row scrolling is adapted from outliner_draw.cc and outliner_edit.cc.
  */
 #include "collections_panel.h"
 
@@ -443,6 +444,8 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/filterObjectChildren"), true).toBool();
     showAllViewLayers_ = outlinerSettings.value(
         QStringLiteral("outliner/filterAllViewLayers"), false).toBool();
+    scrollToActive_ = outlinerSettings.value(
+        QStringLiteral("outliner/scrollToActive"), true).toBool();
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -526,6 +529,18 @@ void CollectionsPanel::createLayout()
         settings.setValue(QStringLiteral("outliner/filterObjectChildren"),
                           visible);
         refresh();
+    });
+    filterMenu->addSeparator();
+    QAction *scrollToActiveAction = filterMenu->addAction(
+        QStringLiteral("Scroll to Active"));
+    scrollToActiveAction->setCheckable(true);
+    scrollToActiveAction->setChecked(scrollToActive_);
+    connect(scrollToActiveAction, &QAction::toggled, this,
+            [this](bool enabled) {
+        scrollToActive_ = enabled;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/scrollToActive"), enabled);
+        syncSelection();
     });
     filterMenu->addSeparator();
     filterMenu->addSection(QStringLiteral("Object State"));
@@ -1856,10 +1871,15 @@ void CollectionsPanel::syncSelection()
     }
     const ObjectId activeId = callbacks_.activeObjectId
         ? callbacks_.activeObjectId() : ObjectId::invalid();
+    const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+        ? callbacks_.activeViewLayerKey() : QString{};
 
     refreshing_ = true;
     const QSignalBlocker blocker(tree_);
     QTreeWidgetItem *activeItem = nullptr;
+    QTreeWidgetItem *activeLayerItem = nullptr;
+    QTreeWidgetItem *currentActiveItem = nullptr;
+    QTreeWidgetItem *anyActiveItem = nullptr;
     QTreeWidgetItem *currentItem = tree_->currentItem();
     for (int topLevelIndex = 0;
          topLevelIndex < tree_->topLevelItemCount(); ++topLevelIndex) {
@@ -1875,12 +1895,18 @@ void CollectionsPanel::syncSelection()
                 QFont font = item->font(nameColumn);
                 font.setBold(activeId.isValid() && value == activeId.value());
                 item->setFont(nameColumn, font);
-                if (activeId.isValid() && value == activeId.value() &&
-                    currentItem == item) {
-                    activeItem = item;
-                } else if (activeItem == nullptr && activeId.isValid() &&
-                           value == activeId.value()) {
-                    activeItem = item;
+                if (activeId.isValid() && value == activeId.value()) {
+                    if (currentItem == item) {
+                        currentActiveItem = item;
+                    }
+                    if (anyActiveItem == nullptr) {
+                        anyActiveItem = item;
+                    }
+                    if (item->data(nameColumn, itemViewLayerKeyRole).toString() ==
+                            activeViewLayerKey &&
+                        activeLayerItem == nullptr) {
+                        activeLayerItem = item;
+                    }
                 }
             }
             for (int childIndex = 0; childIndex < item->childCount();
@@ -1889,12 +1915,25 @@ void CollectionsPanel::syncSelection()
             }
         }
     }
+    activeItem = activeLayerItem != nullptr ? activeLayerItem
+        : (currentActiveItem != nullptr ? currentActiveItem : anyActiveItem);
     if (activeItem != nullptr) {
         tree_->setCurrentItem(activeItem, nameColumn,
                               QItemSelectionModel::NoUpdate);
     }
     refreshing_ = false;
     applyNameFilter(activeFilterText_);
+    if (scrollToActive_ && activeItem != nullptr && !activeItem->isHidden()) {
+        const QRect activeRect = tree_->visualItemRect(activeItem);
+        if (!activeRect.isValid() ||
+            !tree_->viewport()->rect().intersects(activeRect)) {
+            for (QTreeWidgetItem *ancestor = activeItem->parent();
+                 ancestor != nullptr; ancestor = ancestor->parent()) {
+                if (!ancestor->isHidden()) ancestor->setExpanded(true);
+            }
+            tree_->scrollToItem(activeItem, QAbstractItemView::PositionAtCenter);
+        }
+    }
 }
 
 } // namespace classiCAD

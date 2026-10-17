@@ -10852,6 +10852,18 @@ scene depth.
   View-layer-specific columns are disabled when the active scene has no
   imported view layer. These preferences use QSettings; no matched Blender UI
   comparison was run. `cmake --build build -j4` passed.
+- The eighteenth tree update ports Blender 5.2.2's Scroll to Active option
+  from [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L416-L419),
+  its enabled-by-default flag in
+  [`space_outliner.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/space_outliner.cc#L372-L385),
+  and its selection/scroll behavior in
+  [`outliner_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L4066-L4074)
+  and [`outliner_edit.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1614-L1632).
+  The active object row is resolved in the current view layer first. When that
+  row is outside the visible tree area, classiCAD opens its collection path
+  and centers the row; the Filter menu toggle defaults on and persists in
+  QSettings. This behavior has not had a matched Blender UI comparison.
+  `cmake --build build -j4` passed.
 - Remaining Outliner scope includes Blender's additional display modes and
   data-block subtrees beyond the supported Object Contents rows, and a matched
   Blender/classiCAD interaction comparison. Do not

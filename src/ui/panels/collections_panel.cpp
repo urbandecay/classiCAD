@@ -1585,7 +1585,8 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     const OutlinerObjectEntry &entry,
     const QStringList &path,
     CollectionId linkedCollectionId,
-    const QString &activeViewLayerKey)
+    const QString &activeViewLayerKey,
+    bool includeContents)
 {
     if (parent == nullptr || (!entry.id.isValid() && !entry.outlinerOnly)) {
         return nullptr;
@@ -1642,7 +1643,11 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
         objectRows_[entry.id.value()].append(item);
         objectEntries_.insert(entry.id.value(), entry);
     }
-    if (showObjectContents_) {
+    if (!entry.hierarchyIdentity.isEmpty()) {
+        hierarchyEntries_.insert(entry.hierarchyIdentity, entry);
+        hierarchyRows_[entry.hierarchyIdentity].append(item);
+    }
+    if (showObjectContents_ && includeContents) {
         const auto appendContentRow =
             [&objectPath, &activeViewLayerKey](
                 QTreeWidgetItem *contentParent,
@@ -2011,52 +2016,54 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
 void CollectionsPanel::buildObjectParentHierarchy(
     const QVector<OutlinerObjectEntry> &objects)
 {
-    QSet<quint64> visited;
-    QSet<quint64> visiting;
-    QSet<quint64> cyclicParentLinks;
-    QVector<ObjectId> parentBeforeChild;
+    QSet<QString> visited;
+    QSet<QString> visiting;
+    QSet<QString> cyclicParentLinks;
+    QStringList parentBeforeChild;
     const auto appendWithParents = [&](const auto &self,
-                                       ObjectId objectId) -> void {
-        if (!objectId.isValid() || visited.contains(objectId.value())) return;
-        const OutlinerObjectEntry entry =
-            objectEntries_.value(objectId.value());
-        if (!entry.id.isValid()) return;
-        visiting.insert(objectId.value());
-        const ObjectId parentId = entry.parentObjectId;
-        if (parentId.isValid() && objectEntries_.contains(parentId.value())) {
-            if (visiting.contains(parentId.value())) {
-                cyclicParentLinks.insert(objectId.value());
+                                       const QString &identity) -> void {
+        if (identity.isEmpty() || visited.contains(identity)) return;
+        const OutlinerObjectEntry entry = hierarchyEntries_.value(identity);
+        if (entry.hierarchyIdentity.isEmpty()) return;
+        visiting.insert(identity);
+        const QString &parentIdentity = entry.parentHierarchyIdentity;
+        if (!parentIdentity.isEmpty() &&
+            hierarchyEntries_.contains(parentIdentity)) {
+            if (visiting.contains(parentIdentity)) {
+                cyclicParentLinks.insert(identity);
             } else {
-                self(self, parentId);
+                self(self, parentIdentity);
             }
         }
-        visiting.remove(objectId.value());
-        visited.insert(objectId.value());
-        parentBeforeChild.append(objectId);
+        visiting.remove(identity);
+        visited.insert(identity);
+        parentBeforeChild.append(identity);
     };
     for (const OutlinerObjectEntry &entry : objects) {
-        appendWithParents(appendWithParents, entry.id);
+        appendWithParents(appendWithParents, entry.hierarchyIdentity);
     }
 
-    for (const ObjectId childId : parentBeforeChild) {
+    for (const QString &childIdentity : parentBeforeChild) {
         const OutlinerObjectEntry childEntry =
-            objectEntries_.value(childId.value());
-        const ObjectId parentId = cyclicParentLinks.contains(childId.value())
-            ? ObjectId::invalid() : childEntry.parentObjectId;
-        if (!parentId.isValid()) continue;
+            hierarchyEntries_.value(childIdentity);
+        const QString parentIdentity = cyclicParentLinks.contains(childIdentity)
+            ? QString{} : childEntry.parentHierarchyIdentity;
+        if (parentIdentity.isEmpty()) continue;
 
         const QVector<QTreeWidgetItem *> parentRows =
-            objectRows_.value(parentId.value());
+            hierarchyRows_.value(parentIdentity);
         const QVector<QTreeWidgetItem *> childRows =
-            objectRows_.value(childId.value());
+            hierarchyRows_.value(childIdentity);
         for (QTreeWidgetItem *parentRow : parentRows) {
             if (parentRow == nullptr) continue;
             const QString viewLayerKey = parentRow->data(
                 nameColumn, itemViewLayerKeyRole).toString();
             QTreeWidgetItem *collectionRow = parentRow->parent();
-            while (collectionRow != nullptr &&
-                   collectionRow->data(nameColumn, itemKindRole).toInt() ==
-                       static_cast<int>(OutlinerRowKind::Object)) {
+            while (collectionRow != nullptr) {
+                const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
+                    collectionRow->data(nameColumn, itemKindRole).toInt());
+                if (kind != OutlinerRowKind::Object &&
+                    kind != OutlinerRowKind::SourceObject) break;
                 collectionRow = collectionRow->parent();
             }
             if (collectionRow == nullptr) continue;
@@ -2089,7 +2096,7 @@ void CollectionsPanel::buildObjectParentHierarchy(
                 .split(QLatin1Char('/'), Qt::SkipEmptyParts);
             QTreeWidgetItem *notInCollectionRow = appendObject(
                 parentRow, childEntry, parentPath,
-                CollectionId::invalid(), viewLayerKey);
+                CollectionId::invalid(), viewLayerKey, false);
             if (notInCollectionRow != nullptr) {
                 notInCollectionRow->setData(nameColumn,
                                             itemNotInCollectionRole, true);
@@ -2139,6 +2146,8 @@ void CollectionsPanel::refresh()
     rangeAnchorItem_ = nullptr;
     objectRows_.clear();
     objectEntries_.clear();
+    hierarchyRows_.clear();
+    hierarchyEntries_.clear();
     sourceOnlyEntries_.clear();
     const QVector<CollectionPanelEntry> allEntries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> allObjects = callbacks_.objects

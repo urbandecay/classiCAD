@@ -11015,9 +11015,17 @@ scene depth.
   version 38 preserves entries for supported objects; the existing raw record
   retains source-only entries. `cmake --build build -j4` passed; no matched
   Blender Outliner UI comparison was run.
+- The thirty-second tree update extends Blender's
+  [`ObjectsChildrenBuilder`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L208-L306)
+  parent hierarchy to source-only rows. Imported and unsupported objects now
+  nest under one another by Blender source ID, including children whose parent
+  is unsupported or whose collection membership differs. Blender's marked
+  child row for an object not in the parent's collection stays collapsed and
+  does not expand its contents. Cyclic parent links are safely broken. Build
+  passed; no matched Blender Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
-  subtrees beyond the currently supported rows, unsupported-object parenting,
-  and a matched Blender/classiCAD interaction comparison. Do not
+  subtrees beyond the currently supported rows and a matched Blender/classiCAD
+  interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

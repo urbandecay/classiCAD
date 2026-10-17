@@ -58,6 +58,8 @@ struct OutlinerObjectEntry {
     // Source-only Blender object rows have no editable CAD scene object.
     bool outlinerOnly = false;
     QString sourceObjectId;
+    QString hierarchyIdentity;
+    QString parentHierarchyIdentity;
     QString outlinerDescription;
     QString instancedCollectionName;
     bool hasPose = false;
@@ -98,7 +100,6 @@ struct OutlinerObjectEntry {
     bool visible = true;
     bool selectable = true;
     QJsonObject viewLayerHidden;
-    ObjectId parentObjectId = ObjectId::invalid();
     QStringList sceneKeys;
 };
 
@@ -219,7 +220,8 @@ private:
                                   const OutlinerObjectEntry &entry,
                                   const QStringList &path,
                                   CollectionId linkedCollectionId,
-                                  const QString &activeViewLayerKey);
+                                  const QString &activeViewLayerKey,
+                                  bool includeContents = true);
     void buildObjectParentHierarchy(
         const QVector<OutlinerObjectEntry> &objects);
 
@@ -233,6 +235,8 @@ private:
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
+    QHash<QString, QVector<QTreeWidgetItem *>> hierarchyRows_;
+    QHash<QString, OutlinerObjectEntry> hierarchyEntries_;
     QHash<QString, OutlinerObjectEntry> sourceOnlyEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;

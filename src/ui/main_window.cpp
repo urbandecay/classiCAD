@@ -2948,10 +2948,13 @@ private:
                 if (name.isEmpty()) {
                     name = QStringLiteral("Object %1").arg(object.id.value());
                 }
-                const ObjectId parentObjectId = objectIdsByIdentity.value(
-                    object.blenderParentObjectId, ObjectId::invalid());
                 OutlinerObjectEntry entry;
                 entry.id = object.id;
+                entry.hierarchyIdentity = object.blenderSourceObjectId.isEmpty()
+                    ? QStringLiteral("classiCAD-local-object:%1")
+                          .arg(object.id.value())
+                    : object.blenderSourceObjectId;
+                entry.parentHierarchyIdentity = object.blenderParentObjectId;
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
                 entry.dataBlockName = object.blenderSourceDataName;
@@ -3064,7 +3067,6 @@ private:
                 entry.visible = document.isObjectVisible(object.id);
                 entry.selectable = document.isObjectEditable(object.id);
                 entry.viewLayerHidden = object.viewLayerHidden;
-                entry.parentObjectId = parentObjectId;
                 objects.append(std::move(entry));
             }
             for (const QJsonValue &recordValue :
@@ -3081,6 +3083,9 @@ private:
                 OutlinerObjectEntry entry;
                 entry.outlinerOnly = true;
                 entry.sourceObjectId = sourceId;
+                entry.hierarchyIdentity = sourceId;
+                entry.parentHierarchyIdentity = record.value(
+                    QStringLiteral("parent_id")).toString();
                 entry.outlinerDescription = record.value(
                     QStringLiteral("reason")).toString();
                 entry.instancedCollectionName = record.value(

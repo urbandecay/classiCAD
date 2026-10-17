@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 47
+BRIDGE_FORMAT_VERSION = 48
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -697,7 +697,28 @@ def outliner_name_tree(items, include_constraints=False):
 
 def outliner_grease_pencil_layer_tree(obj):
     """Capture the Blender 5.2 Grease Pencil data-block's layer tree."""
-    if obj.type != "GREASEPENCIL" or getattr(obj, "data", None) is None:
+    data = getattr(obj, "data", None)
+    if data is None:
+        return []
+
+    # Blender 5.2 still loads legacy Grease Pencil data blocks alongside the
+    # new layer/group tree. Its Outliner element lists legacy layers flat.
+    if obj.type == "GPENCIL":
+        layers = getattr(data, "layers", None)
+        if layers is None:
+            return []
+        layer_count = len(layers)
+        first_index = max(0, layer_count - MAX_OUTLINER_HIERARCHY_ITEMS)
+        return [
+            {
+                "name": str(layers[index].name),
+                "is_group": False,
+                "children": [],
+            }
+            for index in range(layer_count - 1, first_index - 1, -1)
+        ]
+
+    if obj.type != "GREASEPENCIL":
         return []
 
     remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
@@ -725,7 +746,7 @@ def outliner_grease_pencil_layer_tree(obj):
         }
 
     rows = []
-    for node in reversed(list(getattr(obj.data, "root_nodes", ()))):
+    for node in reversed(list(getattr(data, "root_nodes", ()))):
         row = convert(node, 0)
         if row is not None:
             rows.append(row)

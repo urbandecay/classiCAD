@@ -11034,10 +11034,19 @@ scene depth.
   validation cap the tree at 1,024 nodes and 128 levels. Blender bridge version
   47 and native document version 39 preserve the tree. `cmake --build build
   -j4` passed; no matched Blender Outliner UI comparison was run.
-- Remaining Outliner scope includes unsupported display modes, specialized
-  data-block branches still under source review, and a matched Blender/classiCAD
-  interaction comparison. Do not mark this port complete until the remaining
-  items have been reviewed against pinned Blender source.
+- The thirty-fourth tree update follows Blender 5.2.2's legacy Grease Pencil
+  data-block expansion in
+  [`tree_element_id_gpencil_legacy.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_gpencil_legacy.cc#L23-L35).
+  The Blender bridge now also captures legacy Grease Pencil layers as a flat,
+  reversed list under their data block, capped at 1,024 entries. The same
+  bounded tree format and native document version 39 are reused; bridge version
+  48 advertises the extraction behavior. `cmake --build build -j4` passed; no
+  matched Blender Outliner UI comparison was run.
+- Remaining Outliner scope includes unsupported display modes, scene World and
+  scene-animation data-block rows, additional specialized ID branches still
+  under source review, and a matched Blender/classiCAD interaction comparison.
+  Do not mark this port complete until the remaining items have been reviewed
+  against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

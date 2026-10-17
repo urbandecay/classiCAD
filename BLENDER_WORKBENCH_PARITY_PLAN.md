@@ -10798,9 +10798,27 @@ scene depth.
   does not yet apply either flag to rendered pixels; Indirect Only is a
   Cycles-only behavior in Blender. Build passed; no GUI interaction comparison
   was run.
-- Remaining Outliner scope includes other Blender datablock rows and
-  restriction controls, and a matched
-  Blender/classiCAD interaction comparison. Do not
+- The fourteenth tree update ports Blender 5.2.2's View Layer filter options
+  from [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L380-L533)
+  and its object type/state filtering from
+  [`outliner_tree.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tree.cc#L797-L1089).
+  The Filter menu now controls collections, objects, parented object rows,
+  Blender object-type groups, and the All/Visible/Hidden/Selected/Active/
+  Selectable object-state filters with Blender's invert option. Name matching
+  now has Blender-style implicit wildcards plus Exact Name Match and Case
+  Sensitive options. Object state uses classiCAD's active-view visibility,
+  editability, and selection model. With Collections off, object rows move
+  directly under the scene root; with Object Children off, parented objects
+  remain at their collection memberships. These per-user filter choices use
+  QSettings because classiCAD does not yet have Blender's workspace editor
+  model. Blender's All View Layers and Object Contents options, other display
+  modes/data-block rows, and unsupported Blender object types remain
+  unimplemented. The full build passed; no GUI interaction comparison was
+  run.
+- Remaining Outliner scope includes Blender's additional display modes and
+  datablock rows, All View Layers/Object Contents controls, other unported
+  view-layer restriction toggles, and a matched Blender/classiCAD interaction
+  comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

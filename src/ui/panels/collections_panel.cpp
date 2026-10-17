@@ -7,12 +7,15 @@
  * Blender 5.2.2's tree_display_view_layer.cc and outliner_select.cc.
  * Collection and object drop outcomes are adapted from outliner_dragdrop.cc.
  * Shift-recursive restriction changes are adapted from outliner_draw.cc.
+ * Name, type, and state filtering is adapted from outliner_tree.cc and
+ * space_outliner.py.
  */
 #include "collections_panel.h"
 
 #include <QAbstractItemView>
 #include <QAbstractItemModel>
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
 #include <QCryptographicHash>
@@ -37,6 +40,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QToolButton>
 #include <QVariant>
 #include <QVBoxLayout>
 #include <QRegularExpression>
@@ -334,10 +338,16 @@ void CollectionsPanel::createLayout()
     filterEdit_->setClearButtonEnabled(true);
     filterEdit_->setPlaceholderText(QStringLiteral("Filter objects and collections"));
     filterEdit_->setToolTip(QStringLiteral(
-        "Case-insensitive name filter. Use * and ? as wildcards."));
+        "Filter Outliner names with * and ? wildcards. Exact and case-sensitive matching are in Filter."));
     auto *filterRow = new QHBoxLayout;
     filterRow->setContentsMargins(0, 0, 0, 0);
     filterRow->addWidget(filterEdit_, 1);
+    filterButton_ = new QToolButton(this);
+    filterButton_->setText(QStringLiteral("Filter"));
+    filterButton_->setToolTip(QStringLiteral(
+        "Filter collections and objects by name, type, and state."));
+    filterButton_->setPopupMode(QToolButton::InstantPopup);
+    filterRow->addWidget(filterButton_);
     sceneCombo_ = new QComboBox(this);
     sceneCombo_->setToolTip(QStringLiteral("Active Blender scene"));
     filterRow->addWidget(sceneCombo_);
@@ -407,6 +417,156 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/showHoldoutColumn"), false).toBool();
     showIndirectOnlyColumn_ = outlinerSettings.value(
         QStringLiteral("outliner/showIndirectOnlyColumn"), false).toBool();
+    showCollections_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterCollections"), true).toBool();
+    showObjects_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterObjects"), true).toBool();
+    showObjectChildren_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterObjectChildren"), true).toBool();
+    objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
+        qBound(0, outlinerSettings.value(
+                    QStringLiteral("outliner/filterObjectState"), 0).toInt(),
+               static_cast<int>(OutlinerObjectStateFilter::Selectable)));
+    invertObjectStateFilter_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterInvertState"), false).toBool();
+    exactNameMatch_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterExactName"), false).toBool();
+    caseSensitiveNameFilter_ = outlinerSettings.value(
+        QStringLiteral("outliner/filterCaseSensitive"), false).toBool();
+    const QVector<QPair<QString, QString>> objectTypes{
+        {QStringLiteral("MESH"), QStringLiteral("Meshes")},
+        {QStringLiteral("ARMATURE"), QStringLiteral("Armatures")},
+        {QStringLiteral("LIGHT"), QStringLiteral("Lights")},
+        {QStringLiteral("CAMERA"), QStringLiteral("Cameras")},
+        {QStringLiteral("GREASE_PENCIL"), QStringLiteral("Grease Pencil")},
+        {QStringLiteral("EMPTY"), QStringLiteral("Empties")},
+        {QStringLiteral("OTHER"), QStringLiteral("Others")}};
+    for (const auto &type : objectTypes) {
+        objectTypeFilters_.insert(
+            type.first,
+            outlinerSettings.value(
+                QStringLiteral("outliner/filterObjectType/%1").arg(type.first),
+                true).toBool());
+    }
+
+    auto *filterMenu = new QMenu(filterButton_);
+    filterButton_->setMenu(filterMenu);
+    QAction *collectionsAction = filterMenu->addAction(
+        QStringLiteral("Collections"));
+    collectionsAction->setCheckable(true);
+    collectionsAction->setChecked(showCollections_);
+    connect(collectionsAction, &QAction::toggled, this, [this](bool visible) {
+        showCollections_ = visible;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterCollections"), visible);
+        refresh();
+    });
+    QAction *objectsAction = filterMenu->addAction(QStringLiteral("Objects"));
+    objectsAction->setCheckable(true);
+    objectsAction->setChecked(showObjects_);
+    connect(objectsAction, &QAction::toggled, this, [this](bool visible) {
+        showObjects_ = visible;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterObjects"), visible);
+        refresh();
+    });
+    QAction *childrenAction = filterMenu->addAction(
+        QStringLiteral("Object Children"));
+    childrenAction->setCheckable(true);
+    childrenAction->setChecked(showObjectChildren_);
+    connect(childrenAction, &QAction::toggled, this, [this](bool visible) {
+        showObjectChildren_ = visible;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterObjectChildren"),
+                          visible);
+        refresh();
+    });
+    filterMenu->addSeparator();
+    filterMenu->addSection(QStringLiteral("Object State"));
+    auto *stateGroup = new QActionGroup(filterMenu);
+    stateGroup->setExclusive(true);
+    const QVector<QPair<OutlinerObjectStateFilter, QString>> states{
+        {OutlinerObjectStateFilter::All, QStringLiteral("All")},
+        {OutlinerObjectStateFilter::Visible, QStringLiteral("Visible")},
+        {OutlinerObjectStateFilter::Hidden, QStringLiteral("Hidden")},
+        {OutlinerObjectStateFilter::Selected, QStringLiteral("Selected")},
+        {OutlinerObjectStateFilter::Active, QStringLiteral("Active")},
+        {OutlinerObjectStateFilter::Selectable, QStringLiteral("Selectable")}};
+    for (const auto &state : states) {
+        QAction *action = filterMenu->addAction(state.second);
+        action->setCheckable(true);
+        action->setData(static_cast<int>(state.first));
+        action->setChecked(objectStateFilter_ == state.first);
+        stateGroup->addAction(action);
+    }
+    connect(stateGroup, &QActionGroup::triggered, this,
+            [this](QAction *action) {
+        objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
+            action->data().toInt());
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterObjectState"),
+                          static_cast<int>(objectStateFilter_));
+        applyNameFilter(filterEdit_->text());
+    });
+    QAction *invertStateAction = filterMenu->addAction(
+        QStringLiteral("Invert State Filter"));
+    invertStateAction->setCheckable(true);
+    invertStateAction->setChecked(invertObjectStateFilter_);
+    invertStateAction->setEnabled(
+        objectStateFilter_ != OutlinerObjectStateFilter::All);
+    connect(invertStateAction, &QAction::toggled, this, [this](bool invert) {
+        invertObjectStateFilter_ = invert;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterInvertState"),
+                          invert);
+        applyNameFilter(filterEdit_->text());
+    });
+    filterMenu->addSeparator();
+    filterMenu->addSection(QStringLiteral("Object Types"));
+    for (const auto &type : objectTypes) {
+        QAction *action = filterMenu->addAction(type.second);
+        action->setCheckable(true);
+        action->setChecked(objectTypeFilters_.value(type.first, true));
+        connect(action, &QAction::toggled, this,
+                [this, key = type.first](bool enabled) {
+            objectTypeFilters_.insert(key, enabled);
+            QSettings settings;
+            settings.setValue(
+                QStringLiteral("outliner/filterObjectType/%1").arg(key),
+                enabled);
+            applyNameFilter(filterEdit_->text());
+        });
+    }
+    filterMenu->addSeparator();
+    QAction *exactMatchAction = filterMenu->addAction(
+        QStringLiteral("Exact Name Match"));
+    exactMatchAction->setCheckable(true);
+    exactMatchAction->setChecked(exactNameMatch_);
+    connect(exactMatchAction, &QAction::toggled, this,
+            [this](bool enabled) {
+        exactNameMatch_ = enabled;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterExactName"), enabled);
+        applyNameFilter(filterEdit_->text());
+    });
+    QAction *caseSensitiveAction = filterMenu->addAction(
+        QStringLiteral("Case Sensitive"));
+    caseSensitiveAction->setCheckable(true);
+    caseSensitiveAction->setChecked(caseSensitiveNameFilter_);
+    connect(caseSensitiveAction, &QAction::toggled, this,
+            [this](bool enabled) {
+        caseSensitiveNameFilter_ = enabled;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/filterCaseSensitive"),
+                          enabled);
+        applyNameFilter(filterEdit_->text());
+    });
+    connect(stateGroup, &QActionGroup::triggered, this,
+            [invertStateAction](QAction *action) {
+        invertStateAction->setEnabled(
+            action->data().toInt() !=
+            static_cast<int>(OutlinerObjectStateFilter::All));
+    });
     tree_->header()->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(tree_->header(), &QHeaderView::customContextMenuRequested,
             this, [this](const QPoint &position) {
@@ -594,8 +754,12 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     QRegularExpression matcher;
     if (!text.isEmpty()) {
         QString glob = text;
-        if (!glob.startsWith(QLatin1Char('*'))) glob.prepend(QLatin1Char('*'));
-        if (!glob.endsWith(QLatin1Char('*'))) glob.append(QLatin1Char('*'));
+        if (!exactNameMatch_) {
+            if (!glob.startsWith(QLatin1Char('*')))
+                glob.prepend(QLatin1Char('*'));
+            if (!glob.endsWith(QLatin1Char('*')))
+                glob.append(QLatin1Char('*'));
+        }
         QString expression = QStringLiteral("^");
         for (const QChar character : glob) {
             if (character == QLatin1Char('*')) {
@@ -608,8 +772,69 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         }
         expression.append(QLatin1Char('$'));
         matcher = QRegularExpression(
-            expression, QRegularExpression::CaseInsensitiveOption);
+            expression,
+            caseSensitiveNameFilter_
+                ? QRegularExpression::NoPatternOption
+                : QRegularExpression::CaseInsensitiveOption);
     }
+
+    QSet<quint64> selectedValues;
+    if (callbacks_.selectedObjectIds) {
+        for (const ObjectId id : callbacks_.selectedObjectIds()) {
+            if (id.isValid()) selectedValues.insert(id.value());
+        }
+    }
+    const ObjectId activeId = callbacks_.activeObjectId
+        ? callbacks_.activeObjectId() : ObjectId::invalid();
+    const auto objectMatchesFilter = [this, &selectedValues, activeId](
+                                         quint64 objectValue) {
+        const OutlinerObjectEntry entry = objectEntries_.value(objectValue);
+        if (!entry.id.isValid()) return false;
+        const QString sourceType = entry.blenderType.toUpper();
+        QString typeKey = QStringLiteral("OTHER");
+        if (sourceType == QLatin1String("MESH")) {
+            typeKey = QStringLiteral("MESH");
+        } else if (sourceType == QLatin1String("ARMATURE")) {
+            typeKey = QStringLiteral("ARMATURE");
+        } else if (sourceType == QLatin1String("LIGHT")) {
+            typeKey = QStringLiteral("LIGHT");
+        } else if (sourceType == QLatin1String("CAMERA")) {
+            typeKey = QStringLiteral("CAMERA");
+        } else if (sourceType == QLatin1String("GREASE_PENCIL") ||
+                   sourceType == QLatin1String("GPENCIL")) {
+            typeKey = QStringLiteral("GREASE_PENCIL");
+        } else if (sourceType == QLatin1String("EMPTY")) {
+            typeKey = QStringLiteral("EMPTY");
+        }
+        if (!objectTypeFilters_.value(typeKey, true)) return false;
+
+        bool matchesState = true;
+        switch (objectStateFilter_) {
+        case OutlinerObjectStateFilter::Visible:
+            matchesState = entry.visible;
+            break;
+        case OutlinerObjectStateFilter::Hidden:
+            matchesState = !entry.visible;
+            break;
+        case OutlinerObjectStateFilter::Selected:
+            matchesState = selectedValues.contains(objectValue);
+            break;
+        case OutlinerObjectStateFilter::Active:
+            matchesState = activeId.isValid() &&
+                           activeId.value() == objectValue;
+            break;
+        case OutlinerObjectStateFilter::Selectable:
+            matchesState = entry.selectable;
+            break;
+        case OutlinerObjectStateFilter::All:
+            break;
+        }
+        if (invertObjectStateFilter_ &&
+            objectStateFilter_ != OutlinerObjectStateFilter::All) {
+            matchesState = !matchesState;
+        }
+        return matchesState;
+    };
 
     const auto filterSubtree = [&](const auto &self,
                                    QTreeWidgetItem *item) -> bool {
@@ -618,11 +843,24 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         for (int index = 0; index < item->childCount(); ++index) {
             childMatches = self(self, item->child(index)) || childMatches;
         }
-        const bool matches = text.isEmpty() ||
+        bool eligible = true;
+        const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
+            item->data(nameColumn, itemKindRole).toInt());
+        if (kind == OutlinerRowKind::Collection) {
+            eligible = showCollections_;
+        } else if (kind == OutlinerRowKind::Object) {
+            eligible = showObjects_ && objectMatchesFilter(
+                item->data(nameColumn, itemIdRole).toULongLong());
+        }
+        const bool nameMatches = text.isEmpty() ||
             matcher.match(item->text(nameColumn)).hasMatch();
-        const bool visible = matches || childMatches;
+        const bool visible = (eligible && nameMatches) || childMatches;
         item->setHidden(!visible);
-        if (!text.isEmpty() && childMatches) item->setExpanded(true);
+        if ((!text.isEmpty() || objectStateFilter_ !=
+                                    OutlinerObjectStateFilter::All) &&
+            childMatches) {
+            item->setExpanded(true);
+        }
         return visible;
     };
 
@@ -1216,6 +1454,8 @@ void CollectionsPanel::refresh()
     const QVector<CollectionPanelEntry> entries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> objects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
+    QVector<OutlinerObjectEntry> displayObjects;
+    if (showObjects_) displayObjects = objects;
     const QVector<OutlinerSceneEntry> scenes = callbacks_.scenes
         ? callbacks_.scenes() : QVector<OutlinerSceneEntry>{};
     const QVector<OutlinerViewLayerEntry> viewLayers = callbacks_.viewLayers
@@ -1266,29 +1506,41 @@ void CollectionsPanel::refresh()
     sceneRoot->setData(nameColumn, itemPathRole, QStringLiteral("scene"));
     sceneRoot->setFlags((sceneRoot->flags() & ~Qt::ItemIsSelectable) |
                         Qt::ItemIsDropEnabled);
-    for (const CollectionPanelEntry &entry : entries) {
-        bool hasKnownParent = false;
-        for (const CollectionId parentId : entry.collection.parentIds) {
-            const auto parent = std::find_if(
-                entries.cbegin(), entries.cend(), [parentId](const CollectionPanelEntry &candidate) {
-                    return candidate.collection.id == parentId;
-                });
-            hasKnownParent = hasKnownParent || parent != entries.cend();
+    if (showCollections_) {
+        for (const CollectionPanelEntry &entry : entries) {
+            bool hasKnownParent = false;
+            for (const CollectionId parentId : entry.collection.parentIds) {
+                const auto parent = std::find_if(
+                    entries.cbegin(), entries.cend(),
+                    [parentId](const CollectionPanelEntry &candidate) {
+                        return candidate.collection.id == parentId;
+                    });
+                hasKnownParent = hasKnownParent || parent != entries.cend();
+            }
+            if (!hasKnownParent) {
+                appendCollection(tree_, entry, entries, displayObjects,
+                                 sceneRoot, {}, {QStringLiteral("scene")}, {},
+                                 activeViewLayerKey);
+            }
         }
-        if (!hasKnownParent) {
-            appendCollection(tree_, entry, entries, objects, sceneRoot, {},
-                             {QStringLiteral("scene")}, {},
-                             activeViewLayerKey);
+        for (const OutlinerObjectEntry &object : displayObjects) {
+            if (object.collectionIds.isEmpty()) {
+                appendObject(sceneRoot, object,
+                             {QStringLiteral("scene"),
+                              QStringLiteral("root")},
+                             CollectionId::invalid(), activeViewLayerKey);
+            }
         }
-    }
-    for (const OutlinerObjectEntry &object : objects) {
-        if (object.collectionIds.isEmpty()) {
+    } else {
+        for (const OutlinerObjectEntry &object : displayObjects) {
             appendObject(sceneRoot, object,
                          {QStringLiteral("scene"), QStringLiteral("root")},
                          CollectionId::invalid(), activeViewLayerKey);
         }
     }
-    buildObjectParentHierarchy(objects);
+    if (showObjectChildren_) {
+        buildObjectParentHierarchy(displayObjects);
+    }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
         tree_->expandAll();
         for (const QVector<QTreeWidgetItem *> &rows : objectRows_) {
@@ -1321,9 +1573,6 @@ void CollectionsPanel::refresh()
     refreshing_ = false;
     tree_->verticalScrollBar()->setValue(scrollPosition);
     syncSelection();
-    if (filterEdit_ != nullptr && !filterEdit_->text().isEmpty()) {
-        applyNameFilter(filterEdit_->text());
-    }
 }
 
 void CollectionsPanel::syncSelection()
@@ -1375,6 +1624,7 @@ void CollectionsPanel::syncSelection()
                               QItemSelectionModel::NoUpdate);
     }
     refreshing_ = false;
+    applyNameFilter(activeFilterText_);
 }
 
 } // namespace classiCAD

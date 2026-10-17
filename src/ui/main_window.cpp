@@ -2890,10 +2890,19 @@ private:
                 }
                 const ObjectId parentObjectId = objectIdsByIdentity.value(
                     object.blenderParentObjectId, ObjectId::invalid());
-                objects.append({object.id, name, sceneMemberships,
-                                object.hideViewport, object.hideRender,
-                                object.hideSelect,
-                                object.viewLayerHidden, parentObjectId});
+                OutlinerObjectEntry entry;
+                entry.id = object.id;
+                entry.name = name;
+                entry.blenderType = object.blenderSourceObjectType;
+                entry.collectionIds = sceneMemberships;
+                entry.hideViewport = object.hideViewport;
+                entry.hideRender = object.hideRender;
+                entry.hideSelect = object.hideSelect;
+                entry.visible = document.isObjectVisible(object.id);
+                entry.selectable = document.isObjectEditable(object.id);
+                entry.viewLayerHidden = object.viewLayerHidden;
+                entry.parentObjectId = parentObjectId;
+                objects.append(std::move(entry));
             }
             return objects;
         };

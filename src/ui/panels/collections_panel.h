@@ -19,6 +19,7 @@ class QTreeWidget;
 class QTreeWidgetItem;
 class QLineEdit;
 class QComboBox;
+class QToolButton;
 
 namespace classiCAD {
 
@@ -29,15 +30,26 @@ struct CollectionPanelEntry {
 struct OutlinerObjectEntry {
     ObjectId id = ObjectId::invalid();
     QString name;
+    QString blenderType;
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
     bool hideRender = false;
     bool hideSelect = false;
+    bool visible = true;
+    bool selectable = true;
     QJsonObject viewLayerHidden;
     ObjectId parentObjectId = ObjectId::invalid();
 };
 
 enum class OutlinerRowKind { Collection, Object, SceneRoot };
+enum class OutlinerObjectStateFilter {
+    All,
+    Visible,
+    Hidden,
+    Selected,
+    Active,
+    Selectable,
+};
 
 struct OutlinerRowReference {
     OutlinerRowKind kind = OutlinerRowKind::SceneRoot;
@@ -141,6 +153,7 @@ private:
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
     QLineEdit *filterEdit_ = nullptr;
+    QToolButton *filterButton_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
@@ -148,8 +161,17 @@ private:
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;
+    QHash<QString, bool> objectTypeFilters_;
     QString currentStateScopeKey_;
     QString currentTreeStateContextKey_;
+    OutlinerObjectStateFilter objectStateFilter_ =
+        OutlinerObjectStateFilter::All;
+    bool showCollections_ = true;
+    bool showObjects_ = true;
+    bool showObjectChildren_ = true;
+    bool invertObjectStateFilter_ = false;
+    bool exactNameMatch_ = false;
+    bool caseSensitiveNameFilter_ = false;
     bool showHoldoutColumn_ = false;
     bool showIndirectOnlyColumn_ = false;
     bool refreshing_ = false;

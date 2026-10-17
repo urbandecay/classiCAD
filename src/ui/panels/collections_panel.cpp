@@ -85,6 +85,8 @@ constexpr int itemSourceObjectIdRole = Qt::UserRole + 11;
 constexpr int itemLibraryCurrentFileRole = Qt::UserRole + 12;
 constexpr int itemSequencerStripIdRole = Qt::UserRole + 13;
 constexpr int itemSequencerStripActiveRole = Qt::UserRole + 14;
+constexpr int itemDataApiKindRole = Qt::UserRole + 15;
+constexpr int itemDataApiTypeRole = Qt::UserRole + 16;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -2611,6 +2613,10 @@ void CollectionsPanel::refresh()
                       static_cast<int>(OutlinerRowKind::DataApi));
         root->setData(nameColumn, itemPathRole,
                       QStringLiteral("data-api/main"));
+        root->setData(nameColumn, itemDataApiKindRole,
+                      rootNode.value(QStringLiteral("kind")).toString());
+        root->setData(nameColumn, itemDataApiTypeRole,
+                      rootNode.value(QStringLiteral("type")).toString());
         root->setToolTip(
             nameColumn,
             QStringLiteral("Blender RNA Data API, captured read-only at import"));
@@ -2636,8 +2642,10 @@ void CollectionsPanel::refresh()
                 row->setData(nameColumn, itemKindRole,
                              static_cast<int>(OutlinerRowKind::DataApi));
                 row->setData(nameColumn, itemPathRole, path);
+                row->setData(nameColumn, itemDataApiKindRole, kind);
                 const QString type = child.value(
                     QStringLiteral("type")).toString();
+                row->setData(nameColumn, itemDataApiTypeRole, type);
                 row->setToolTip(
                     nameColumn,
                     type.isEmpty()
@@ -4199,7 +4207,15 @@ void CollectionsPanel::refresh()
                 }
                 while (!pending.isEmpty()) {
                     QTreeWidgetItem *item = pending.takeLast();
-                    item->setExpanded(false);
+                    const QTreeWidgetItem *parent = item->parent();
+                    const bool pointerStruct =
+                        item->data(nameColumn, itemDataApiKindRole).toString() ==
+                            QLatin1String("STRUCT") && parent != nullptr &&
+                        parent->data(nameColumn, itemDataApiKindRole).toString() ==
+                            QLatin1String("PROPERTY") &&
+                        parent->data(nameColumn, itemDataApiTypeRole).toString() ==
+                            QLatin1String("POINTER");
+                    item->setExpanded(pointerStruct);
                     for (int childIndex = 0; childIndex < item->childCount();
                          ++childIndex) {
                         pending.append(item->child(childIndex));

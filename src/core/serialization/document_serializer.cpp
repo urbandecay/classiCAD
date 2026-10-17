@@ -980,6 +980,19 @@ bool idFromJson(const QJsonValue &value, quint64 *id)
     return false;
 }
 
+bool nonnegativeIntFromJson(const QJsonValue &value, int *number)
+{
+    if (number == nullptr || !value.isDouble()) return false;
+    const double parsed = value.toDouble();
+    if (!std::isfinite(parsed) || std::floor(parsed) != parsed ||
+        parsed < 0.0 ||
+        parsed > static_cast<double>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    *number = static_cast<int>(parsed);
+    return true;
+}
+
 QJsonArray vector3ToJson(const QVector3D &value)
 {
     return {value.x(), value.y(), value.z()};
@@ -1159,7 +1172,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 58);
+    serialized.insert(QStringLiteral("version"), 59);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1226,6 +1239,13 @@ QJsonObject documentToJson(const Document &document)
             parentIds.append(idToJson(parentId.value()));
         }
         record.insert(QStringLiteral("parentIds"), parentIds);
+        QJsonArray parentOrders;
+        for (const CollectionParentOrder &parentOrder : collection.parentOrders) {
+            parentOrders.append(QJsonObject{
+                {QStringLiteral("parentId"), idToJson(parentOrder.parentId.value())},
+                {QStringLiteral("order"), parentOrder.order}});
+        }
+        record.insert(QStringLiteral("parentOrders"), parentOrders);
         record.insert(QStringLiteral("hideViewport"), collection.hideViewport);
         record.insert(QStringLiteral("hideRender"), collection.hideRender);
         record.insert(QStringLiteral("hideSelect"), collection.hideSelect);
@@ -1615,7 +1635,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 58) {
+    if (version < 1 || version > 59) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1684,6 +1704,8 @@ bool documentFromJson(const QJsonValue &value,
             const QJsonValue sourceSceneNamesValue =
                 record.value(QStringLiteral("sourceSceneNames"));
             const QJsonValue parentIdsValue = record.value(QStringLiteral("parentIds"));
+            const QJsonValue parentOrdersValue =
+                record.value(QStringLiteral("parentOrders"));
             const QJsonValue sourceSceneName = record.value(QStringLiteral("sourceSceneName"));
             const QJsonValue sourceSceneLibraryPath =
                 record.value(QStringLiteral("sourceSceneLibraryPath"));
@@ -1691,6 +1713,7 @@ bool documentFromJson(const QJsonValue &value,
             if (!idFromJson(record.value(QStringLiteral("id")), &collectionValueId) ||
                 collectionIds.contains(collectionValueId) || name.isEmpty() ||
                 !parentIdsValue.isArray() || !sourceId.isString() ||
+                (version >= 59 && !parentOrdersValue.isArray()) ||
                 !sourceSceneNamesValue.isArray() || !sourceSceneName.isString() ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
@@ -1734,6 +1757,39 @@ bool documentFromJson(const QJsonValue &value,
                 }
                 collection.parentIds.append(CollectionId::fromValue(parentId));
             }
+            if (version >= 59) {
+                const QJsonArray parentOrders = parentOrdersValue.toArray();
+                if (parentOrders.size() != collection.parentIds.size()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid collection parent order count"));
+                    return false;
+                }
+                QSet<quint64> orderedParents;
+                for (const QJsonValue &parentOrderValue : parentOrders) {
+                    if (!parentOrderValue.isObject()) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid collection parent order"));
+                        return false;
+                    }
+                    const QJsonObject parentOrder = parentOrderValue.toObject();
+                    quint64 parentId = 0;
+                    int order = -1;
+                    if (!idFromJson(parentOrder.value(QStringLiteral("parentId")),
+                                    &parentId) ||
+                        !nonnegativeIntFromJson(
+                            parentOrder.value(QStringLiteral("order")), &order) ||
+                        !collection.parentIds.contains(
+                            CollectionId::fromValue(parentId)) ||
+                        orderedParents.contains(parentId)) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid collection parent order"));
+                        return false;
+                    }
+                    orderedParents.insert(parentId);
+                    collection.parentOrders.append({
+                        CollectionId::fromValue(parentId), order});
+                }
+            }
             snapshot.collections.append(std::move(collection));
             collectionIds.insert(collectionValueId);
             if (collectionValueId < std::numeric_limits<quint64>::max()) {
@@ -1741,7 +1797,9 @@ bool documentFromJson(const QJsonValue &value,
             }
         }
         // Check references after loading all records so collection order is immaterial.
-        for (const DocumentCollection &collection : snapshot.collections) {
+        QHash<quint64, int> nextChildOrder;
+        QHash<quint64, QSet<int>> usedChildOrders;
+        for (DocumentCollection &collection : snapshot.collections) {
             QSet<quint64> parents;
             for (const CollectionId parentId : collection.parentIds) {
                 if (!collectionIds.contains(parentId.value()) ||
@@ -1750,6 +1808,46 @@ bool documentFromJson(const QJsonValue &value,
                     return false;
                 }
                 parents.insert(parentId.value());
+            }
+            if (version < 59) {
+                for (const CollectionId parentId : collection.parentIds) {
+                    collection.parentOrders.append(
+                        {parentId, nextChildOrder[parentId.value()]++});
+                }
+            } else {
+                QSet<quint64> orderedParents;
+                for (const CollectionParentOrder &parentOrder :
+                     collection.parentOrders) {
+                    const quint64 parentValue = parentOrder.parentId.value();
+                    if (!parents.contains(parentValue) ||
+                        parentOrder.order >= snapshot.collections.size() ||
+                        orderedParents.contains(parentValue) ||
+                        usedChildOrders[parentValue].contains(parentOrder.order)) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid or duplicate collection sibling order"));
+                        return false;
+                    }
+                    orderedParents.insert(parentValue);
+                    usedChildOrders[parentValue].insert(parentOrder.order);
+                }
+                if (orderedParents.size() != parents.size()) {
+                    setError(errorMessage,
+                             QStringLiteral("collection sibling order is incomplete"));
+                    return false;
+                }
+            }
+        }
+        if (version >= 59) {
+            for (auto orders = usedChildOrders.cbegin();
+                 orders != usedChildOrders.cend(); ++orders) {
+                for (int expected = 0; expected < orders.value().size();
+                     ++expected) {
+                    if (!orders.value().contains(expected)) {
+                        setError(errorMessage,
+                                 QStringLiteral("collection sibling order has a gap"));
+                        return false;
+                    }
+                }
             }
         }
         QSet<quint64> visiting;

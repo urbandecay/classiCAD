@@ -2845,7 +2845,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 62 && bridgeVersion != 63 &&
          bridgeVersion != 64 && bridgeVersion != 65 &&
          bridgeVersion != 66 && bridgeVersion != 67 &&
-         bridgeVersion != 68)) {
+         bridgeVersion != 68 && bridgeVersion != 69)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4594,13 +4594,95 @@ bool importBlenderScene(const QString &path,
         const QJsonObject record = sourceCollections[index].toObject();
         DocumentCollection &collection = importedCollections[index];
         const QJsonArray parentSourceIds = record.value(QStringLiteral("parent_ids")).toArray();
+        const QJsonValue parentOrdersValue = record.value(
+            QStringLiteral("parent_orders"));
+        if (bridgeVersion >= 69 &&
+            (!record.value(QStringLiteral("parent_ids")).isArray() ||
+             !parentOrdersValue.isArray() ||
+             parentOrdersValue.toArray().size() != parentSourceIds.size())) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender collection parent-order record is invalid"));
+            return false;
+        }
         for (const QJsonValue &parentValue : parentSourceIds) {
             const QString parentSourceId = parentValue.toString();
-            if (!collectionIdsBySource.contains(parentSourceId)) {
+            if (!parentValue.isString() || parentSourceId.isEmpty() ||
+                !collectionIdsBySource.contains(parentSourceId) ||
+                collection.parentIds.contains(
+                    collectionIdsBySource.value(parentSourceId))) {
                 setError(errorMessage, QStringLiteral("A Blender collection references an unknown parent"));
                 return false;
             }
             collection.parentIds.append(collectionIdsBySource.value(parentSourceId));
+        }
+        if (bridgeVersion >= 69) {
+            QSet<quint64> orderedParents;
+            for (const QJsonValue &orderValue : parentOrdersValue.toArray()) {
+                if (!orderValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender collection parent order is invalid"));
+                    return false;
+                }
+                const QJsonObject orderRecord = orderValue.toObject();
+                const QString parentSourceId = orderRecord.value(
+                    QStringLiteral("parent_id")).toString();
+                int order = -1;
+                if (parentSourceId.isEmpty() ||
+                    !collectionIdsBySource.contains(parentSourceId) ||
+                    !jsonInteger(orderRecord.value(QStringLiteral("order")),
+                                 &order) ||
+                    order < 0 || order >= sourceCollections.size()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender collection parent order is invalid"));
+                    return false;
+                }
+                const CollectionId parentId = collectionIdsBySource.value(
+                    parentSourceId);
+                if (!collection.parentIds.contains(parentId) ||
+                    orderedParents.contains(parentId.value())) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender collection parent order has a duplicate or unknown parent"));
+                    return false;
+                }
+                orderedParents.insert(parentId.value());
+                collection.parentOrders.append({parentId, order});
+            }
+        }
+    }
+    if (bridgeVersion < 69) {
+        QHash<quint64, int> nextSiblingOrder;
+        for (DocumentCollection &collection : importedCollections) {
+            for (const CollectionId parentId : collection.parentIds) {
+                collection.parentOrders.append(
+                    {parentId, nextSiblingOrder[parentId.value()]++});
+            }
+        }
+    }
+    QHash<quint64, QSet<int>> collectionOrdersByParent;
+    for (const DocumentCollection &collection : importedCollections) {
+        if (collection.parentOrders.size() != collection.parentIds.size()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender collection has incomplete parent ordering"));
+            return false;
+        }
+        for (const CollectionParentOrder &order : collection.parentOrders) {
+            if (collectionOrdersByParent[order.parentId.value()].contains(
+                    order.order)) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender collection sibling order is duplicated"));
+                return false;
+            }
+            collectionOrdersByParent[order.parentId.value()].insert(order.order);
+        }
+    }
+    for (auto orders = collectionOrdersByParent.cbegin();
+         orders != collectionOrdersByParent.cend(); ++orders) {
+        for (int expected = 0; expected < orders.value().size(); ++expected) {
+            if (!orders.value().contains(expected)) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender collection sibling order has a gap"));
+                return false;
+            }
         }
     }
     int skippedCount = unsupportedItems.size();

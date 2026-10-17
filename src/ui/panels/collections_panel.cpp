@@ -66,6 +66,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 
 namespace classiCAD {
 
@@ -1882,12 +1883,31 @@ void CollectionsPanel::appendCollection(
     }
 
     ancestors.insert(entry.collection.id.value());
-    for (const CollectionPanelEntry &candidate : entries) {
-        if (candidate.collection.parentIds.contains(entry.collection.id)) {
-            appendCollection(tree, candidate, entries, objects, item, ancestors,
-                             path, sourcePath, activeViewLayerKey,
-                             rowViewLayerKey);
+    QVector<int> childEntryIndices;
+    for (int index = 0; index < entries.size(); ++index) {
+        if (entries[index].collection.parentIds.contains(entry.collection.id)) {
+            childEntryIndices.append(index);
         }
+    }
+    const auto childOrder = [&entry, &entries](int index) {
+        const QVector<CollectionParentOrder> &orders =
+            entries[index].collection.parentOrders;
+        const auto found = std::find_if(
+            orders.cbegin(), orders.cend(), [&entry](
+                const CollectionParentOrder &order) {
+                return order.parentId == entry.collection.id;
+            });
+        return found == orders.cend()
+            ? std::numeric_limits<int>::max() : found->order;
+    };
+    std::stable_sort(childEntryIndices.begin(), childEntryIndices.end(),
+                     [&childOrder](int left, int right) {
+        return childOrder(left) < childOrder(right);
+    });
+    for (const int childIndex : childEntryIndices) {
+        appendCollection(tree, entries[childIndex], entries, objects, item,
+                         ancestors, path, sourcePath, activeViewLayerKey,
+                         rowViewLayerKey);
     }
     if (!excludedFromViewLayer) {
         for (const OutlinerObjectEntry &object : objects) {

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 
@@ -623,6 +624,43 @@ CollectionId Document::insertCollection(DocumentCollection value)
     for (CollectionId parent : value.parentIds) {
         if (parent.isValid() && parent == value.id) return CollectionId::invalid();
     }
+    QSet<quint64> orderedParentIds;
+    for (const CollectionParentOrder &parentOrder : value.parentOrders) {
+        if (!parentOrder.parentId.isValid() || parentOrder.order < 0 ||
+            !value.parentIds.contains(parentOrder.parentId) ||
+            orderedParentIds.contains(parentOrder.parentId.value())) {
+            return CollectionId::invalid();
+        }
+        for (const DocumentCollection &existing : collections_) {
+            if (!existing.parentIds.contains(parentOrder.parentId)) continue;
+            const auto existingOrder = std::find_if(
+                existing.parentOrders.cbegin(), existing.parentOrders.cend(),
+                [&parentOrder](const CollectionParentOrder &order) {
+                    return order.parentId == parentOrder.parentId;
+                });
+            if (existingOrder != existing.parentOrders.cend() &&
+                existingOrder->order == parentOrder.order) {
+                return CollectionId::invalid();
+            }
+        }
+        orderedParentIds.insert(parentOrder.parentId.value());
+    }
+    for (const CollectionId parentId : value.parentIds) {
+        if (orderedParentIds.contains(parentId.value())) continue;
+        int nextOrder = 0;
+        for (const DocumentCollection &existing : collections_) {
+            for (const CollectionParentOrder &order : existing.parentOrders) {
+                if (order.parentId == parentId) {
+                    if (order.order == std::numeric_limits<int>::max()) {
+                        return CollectionId::invalid();
+                    }
+                    nextOrder = qMax(nextOrder, order.order + 1);
+                }
+            }
+        }
+        value.parentOrders.append({parentId, nextOrder});
+        orderedParentIds.insert(parentId.value());
+    }
     value.name = value.name.trimmed();
     const bool localCollection = value.sourceId.isEmpty();
     if (localCollection) {
@@ -715,8 +753,30 @@ bool Document::removeCollection(CollectionId id)
         return -1;
     }();
     if (index < 0) return false;
+    const DocumentCollection removed = collections_[index];
     collections_.removeAt(index);
-    for (DocumentCollection &candidate : collections_) candidate.parentIds.removeAll(id);
+    for (DocumentCollection &candidate : collections_) {
+        for (const CollectionParentOrder &removedOrder : removed.parentOrders) {
+            if (!candidate.parentIds.contains(removedOrder.parentId)) continue;
+            auto siblingOrder = std::find_if(
+                candidate.parentOrders.begin(), candidate.parentOrders.end(),
+                [&removedOrder](const CollectionParentOrder &order) {
+                    return order.parentId == removedOrder.parentId;
+                });
+            if (siblingOrder != candidate.parentOrders.end() &&
+                siblingOrder->order > removedOrder.order) {
+                --siblingOrder->order;
+            }
+        }
+        candidate.parentIds.removeAll(id);
+        candidate.parentOrders.erase(
+            std::remove_if(candidate.parentOrders.begin(),
+                           candidate.parentOrders.end(),
+                           [id](const CollectionParentOrder &order) {
+                               return order.parentId == id;
+                           }),
+            candidate.parentOrders.end());
+    }
     for (SceneObject &object : objects_) object.collectionIds.removeAll(id);
     DocumentChangeSet changes;
     changes.addCollection(id);
@@ -766,7 +826,54 @@ bool Document::setCollectionParents(CollectionId id, const QVector<CollectionId>
         if (reachesId(reachesId, parent, visited)) return false;
     }
     if (candidate->parentIds == unique) return true;
+    QVector<CollectionParentOrder> removedParentOrders;
+    for (const CollectionParentOrder &existingOrder : candidate->parentOrders) {
+        if (!unique.contains(existingOrder.parentId)) {
+            removedParentOrders.append(existingOrder);
+        }
+    }
+    QVector<CollectionParentOrder> parentOrders;
+    for (const CollectionId parentId : unique) {
+        const auto existingOrder = std::find_if(
+            candidate->parentOrders.cbegin(), candidate->parentOrders.cend(),
+            [parentId](const CollectionParentOrder &order) {
+                return order.parentId == parentId;
+            });
+        if (existingOrder != candidate->parentOrders.cend()) {
+            parentOrders.append(*existingOrder);
+            continue;
+        }
+        int nextOrder = 0;
+        for (const DocumentCollection &sibling : collections_) {
+            if (sibling.id == id) continue;
+            for (const CollectionParentOrder &order : sibling.parentOrders) {
+                if (order.parentId == parentId) {
+                    if (order.order == std::numeric_limits<int>::max()) {
+                        return false;
+                    }
+                    nextOrder = qMax(nextOrder, order.order + 1);
+                }
+            }
+        }
+        parentOrders.append({parentId, nextOrder});
+    }
     candidate->parentIds = unique;
+    candidate->parentOrders = std::move(parentOrders);
+    for (DocumentCollection &sibling : collections_) {
+        if (sibling.id == id) continue;
+        for (const CollectionParentOrder &removedOrder : removedParentOrders) {
+            if (!sibling.parentIds.contains(removedOrder.parentId)) continue;
+            auto siblingOrder = std::find_if(
+                sibling.parentOrders.begin(), sibling.parentOrders.end(),
+                [&removedOrder](const CollectionParentOrder &order) {
+                    return order.parentId == removedOrder.parentId;
+                });
+            if (siblingOrder != sibling.parentOrders.end() &&
+                siblingOrder->order > removedOrder.order) {
+                --siblingOrder->order;
+            }
+        }
+    }
     DocumentChangeSet changes;
     changes.addCollection(id);
     changes.collectionsChanged = true;
@@ -1326,6 +1433,29 @@ Document::Snapshot Document::snapshot() const
 void Document::restoreSnapshot(const Snapshot &snapshot)
 {
     collections_ = snapshot.collections;
+    QHash<quint64, int> nextCollectionChildOrder;
+    for (const DocumentCollection &collection : collections_) {
+        for (const CollectionParentOrder &order : collection.parentOrders) {
+            if (collection.parentIds.contains(order.parentId) && order.order >= 0 &&
+                order.order < std::numeric_limits<int>::max()) {
+                nextCollectionChildOrder[order.parentId.value()] = qMax(
+                    nextCollectionChildOrder.value(order.parentId.value()),
+                    order.order + 1);
+            }
+        }
+    }
+    for (DocumentCollection &collection : collections_) {
+        for (const CollectionId parentId : collection.parentIds) {
+            const auto existingOrder = std::find_if(
+                collection.parentOrders.cbegin(), collection.parentOrders.cend(),
+                [parentId](const CollectionParentOrder &order) {
+                    return order.parentId == parentId;
+                });
+            if (existingOrder != collection.parentOrders.cend()) continue;
+            collection.parentOrders.append(
+                {parentId, nextCollectionChildOrder[parentId.value()]++});
+        }
+    }
     objects_ = snapshot.objects;
     materials_ = snapshot.materials;
     nextObjectValue_ = snapshot.nextObjectValue;

@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 68
+BRIDGE_FORMAT_VERSION = 69
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -4634,7 +4634,7 @@ def extract_scene(input_path, mode):
             visited.add(collection_id)
             collections_by_id[collection_id] = collection
             scene_names_by_collection.setdefault(collection_id, set()).add(scene.name_full)
-            pending.extend(collection.children)
+            pending.extend(reversed(list(collection.children)))
         for view_layer in scene.view_layers:
             key = view_layer_key(scene, view_layer)
             for state in layer_collection_records(scene, view_layer):
@@ -4648,12 +4648,18 @@ def extract_scene(input_path, mode):
                     "hide_render": state["hide_render"],
                 })
     parent_ids_by_collection = {}
+    parent_orders_by_collection = {}
     for parent in collections_by_id.values():
         parent_id = stable_id(parent)
-        for child in parent.children:
+        for child_order, child in enumerate(parent.children):
             parent_ids_by_collection.setdefault(stable_id(child), set()).add(
                 parent_id
             )
+            parent_orders_by_collection.setdefault(
+                stable_id(child), []).append({
+                    "parent_id": parent_id,
+                    "order": child_order,
+                })
     for collection in collections_by_id.values():
         collection_id = stable_id(collection)
         output["collections"].append({
@@ -4661,6 +4667,7 @@ def extract_scene(input_path, mode):
             "name": collection.name_full,
             "library_path": source_library_path(collection),
             "parent_ids": sorted(parent_ids_by_collection.get(collection_id, set())),
+            "parent_orders": parent_orders_by_collection.get(collection_id, []),
             "source_scene_names": sorted(scene_names_by_collection.get(collection_id, set())),
             "hide_viewport": bool(collection.hide_viewport),
             "hide_render": bool(collection.hide_render),

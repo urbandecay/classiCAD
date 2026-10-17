@@ -1917,6 +1917,22 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         if (tree_ == nullptr) return;
         QMenu menu(this);
         QMenu *viewMenu = menu.addMenu(QStringLiteral("View"));
+        const auto treeRows = [this]() {
+            QVector<QPair<QTreeWidgetItem *, int>> rows;
+            if (tree_ == nullptr) return rows;
+            std::function<void(QTreeWidgetItem *, int)> appendRows =
+                [&rows, &appendRows](QTreeWidgetItem *parent, int depth) {
+                    rows.append({parent, depth});
+                    for (int childIndex = 0;
+                         childIndex < parent->childCount(); ++childIndex) {
+                        appendRows(parent->child(childIndex), depth + 1);
+                    }
+                };
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                appendRows(tree_->topLevelItem(index), 1);
+            }
+            return rows;
+        };
         const ObjectId activeObjectId = callbacks_.activeObjectId
             ? callbacks_.activeObjectId() : ObjectId::invalid();
         QAction *showActive = viewMenu->addAction(
@@ -1957,27 +1973,22 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         QAction *expandedToggle = viewMenu->addAction(
             QStringLiteral("Expand/Collapse All"));
         expandedToggle->setEnabled(!dataApiDisplayMode_);
-        connect(expandedToggle, &QAction::triggered, this, [this]() {
+        connect(expandedToggle, &QAction::triggered, this,
+                [this, treeRows]() {
             if (tree_ == nullptr || dataApiDisplayMode_) return;
-            bool anyExpanded = false;
-            QVector<QTreeWidgetItem *> pending;
-            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-                pending.append(tree_->topLevelItem(index));
-            }
-            while (!pending.isEmpty()) {
-                QTreeWidgetItem *candidate = pending.takeLast();
-                anyExpanded = anyExpanded || candidate->isExpanded();
-                for (int childIndex = 0;
-                     childIndex < candidate->childCount(); ++childIndex) {
-                    pending.append(candidate->child(childIndex));
+            const QVector<QPair<QTreeWidgetItem *, int>> rows = treeRows();
+            const bool anyCollapsed = std::any_of(
+                rows.cbegin(), rows.cend(), [](const auto &row) {
+                    return row.first->childCount() > 0 &&
+                           !row.first->isExpanded();
+                });
+            {
+                const QSignalBlocker blocker(tree_);
+                if (anyCollapsed) {
+                    tree_->expandAll();
+                } else {
+                    tree_->collapseAll();
                 }
-            }
-            if (anyExpanded) {
-                const QSignalBlocker blocker(tree_);
-                tree_->collapseAll();
-            } else {
-                const QSignalBlocker blocker(tree_);
-                tree_->expandAll();
             }
             saveTreeState();
         });
@@ -1985,24 +1996,100 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         QAction *showHierarchy = viewMenu->addAction(
             QStringLiteral("Show Object Hierarchy"));
         showHierarchy->setEnabled(!dataApiDisplayMode_);
-        connect(showHierarchy, &QAction::triggered, this, [this]() {
+        connect(showHierarchy, &QAction::triggered, this,
+                [this, treeRows]() {
             if (tree_ == nullptr || dataApiDisplayMode_) return;
+            const QString activeSceneKey = callbacks_.activeSceneKey
+                ? callbacks_.activeSceneKey() : QString{};
+            const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+                ? callbacks_.activeViewLayerKey() : QString{};
+            const QVector<QPair<QTreeWidgetItem *, int>> rows = treeRows();
+            const auto containsObject = [](QTreeWidgetItem *root) {
+                QVector<QTreeWidgetItem *> pending;
+                for (int index = 0; index < root->childCount(); ++index) {
+                    pending.append(root->child(index));
+                }
+                while (!pending.isEmpty()) {
+                    QTreeWidgetItem *candidate = pending.takeLast();
+                    if (candidate->data(nameColumn, itemKindRole).toInt() ==
+                        static_cast<int>(OutlinerRowKind::Object)) {
+                        return true;
+                    }
+                    for (int index = 0; index < candidate->childCount(); ++index) {
+                        pending.append(candidate->child(index));
+                    }
+                }
+                return false;
+            };
             const QSignalBlocker blocker(tree_);
-            tree_->expandAll();
+            for (const auto &row : rows) {
+                QTreeWidgetItem *candidate = row.first;
+                const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
+                    candidate->data(nameColumn, itemKindRole).toInt());
+                const QString sceneKey = candidate->data(
+                    nameColumn, itemSceneKeyRole).toString();
+                const QString viewLayerKey = candidate->data(
+                    nameColumn, itemViewLayerKeyRole).toString();
+                if (kind == OutlinerRowKind::SceneRoot && !sceneKey.isEmpty()) {
+                    candidate->setExpanded(sceneKey == activeSceneKey);
+                } else if (kind == OutlinerRowKind::SceneRoot &&
+                           !viewLayerKey.isEmpty()) {
+                    candidate->setExpanded(
+                        viewLayerKey == activeViewLayerKey);
+                } else if (kind == OutlinerRowKind::SceneGroup &&
+                           candidate->text(nameColumn) ==
+                               QLatin1String("View Layers")) {
+                    candidate->setExpanded(!activeSceneKey.isEmpty() &&
+                        candidate->parent() != nullptr &&
+                        candidate->parent()->data(
+                            nameColumn, itemSceneKeyRole).toString() ==
+                            activeSceneKey);
+                } else if (kind == OutlinerRowKind::Collection ||
+                           kind == OutlinerRowKind::Object ||
+                           kind == OutlinerRowKind::SceneGroup ||
+                           kind == OutlinerRowKind::SceneRoot) {
+                    candidate->setExpanded(containsObject(candidate));
+                } else {
+                    candidate->setExpanded(false);
+                }
+            }
             saveTreeState();
         });
 
         const auto setOneLevel = [this](bool open) {
             if (tree_ == nullptr || dataApiDisplayMode_) return;
-            QVector<QTreeWidgetItem *> targets = tree_->selectedItems();
-            if (targets.isEmpty()) {
-                for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-                    targets.append(tree_->topLevelItem(index));
+            QVector<QPair<QTreeWidgetItem *, int>> rows;
+            std::function<void(QTreeWidgetItem *, int)> appendRows =
+                [&rows, &appendRows](QTreeWidgetItem *parent, int depth) {
+                    rows.append({parent, depth});
+                    for (int childIndex = 0;
+                         childIndex < parent->childCount(); ++childIndex) {
+                        appendRows(parent->child(childIndex), depth + 1);
+                    }
+                };
+            int maximumDepth = 0;
+            int firstCollapsedDepth = 0;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                appendRows(tree_->topLevelItem(index), 1);
+            }
+            for (const auto &row : rows) {
+                maximumDepth = qMax(maximumDepth, row.second);
+                if (firstCollapsedDepth == 0 &&
+                    row.first->childCount() > 0 &&
+                    !row.first->isExpanded()) {
+                    firstCollapsedDepth = row.second;
                 }
             }
+            int targetDepth = firstCollapsedDepth;
+            if (!open && targetDepth == 0) targetDepth = maximumDepth;
+            if (!open && targetDepth > 0) --targetDepth;
+            if (targetDepth == 0 && open) return;
             const QSignalBlocker blocker(tree_);
-            for (QTreeWidgetItem *target : targets) {
-                target->setExpanded(open);
+            for (const auto &row : rows) {
+                if ((open && row.second <= targetDepth) ||
+                    (!open && row.second >= targetDepth)) {
+                    row.first->setExpanded(open);
+                }
             }
             saveTreeState();
         };

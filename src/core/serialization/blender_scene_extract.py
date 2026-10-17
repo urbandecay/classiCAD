@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 40
+BRIDGE_FORMAT_VERSION = 41
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -613,6 +613,45 @@ def visibility_metadata(obj):
     }
 
 
+def data_block_animation_metadata(data_block):
+    animation_data = getattr(data_block, "animation_data", None)
+    action = getattr(animation_data, "action", None)
+    drivers = getattr(animation_data, "drivers", ())
+    nla_track_collection = getattr(animation_data, "nla_tracks", ())
+    driver_target_names = []
+    if animation_data is not None:
+        last_added_target = None
+        for fcurve in drivers:
+            driver = fcurve.driver
+            if driver is None or not driver.variables:
+                continue
+            for variable in driver.variables:
+                for target in variable.targets:
+                    target_id = target.id
+                    if target_id is not None and target_id != last_added_target:
+                        driver_target_names.append(target_id.name)
+                        last_added_target = target_id
+    nla_tracks = []
+    for track in list(nla_track_collection)[:1024]:
+        nla_tracks.append({
+            "name": track.name,
+            "action_names": [
+                strip.action.name for strip in track.strips
+                if strip.action is not None
+            ][:1024],
+        })
+    return {
+        "has_animation_data": bool(
+            animation_data is not None and
+            (action is not None or drivers or nla_track_collection)
+        ),
+        "action_name": action.name if action is not None else "",
+        "has_drivers": bool(drivers),
+        "driver_target_names": driver_target_names[:1024],
+        "nla_tracks": nla_tracks,
+    }
+
+
 def object_metadata(obj, scene, depsgraph=None):
     parent = obj.parent
     library_path = source_library_path(obj)
@@ -665,6 +704,8 @@ def object_metadata(obj, scene, depsgraph=None):
         # the Workbench color before the separate library path is mixed in.
         "name": obj.name,
         "data_name": getattr(getattr(obj, "data", None), "name_full", ""),
+        "data_animation": data_block_animation_metadata(
+            getattr(obj, "data", None)),
         "data_material_names": [
             material.name for material in
             getattr(getattr(obj, "data", None), "materials", ())

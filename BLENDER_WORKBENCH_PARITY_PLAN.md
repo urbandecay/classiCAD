@@ -10928,8 +10928,22 @@ scene depth.
   and [`tree_element_id_curve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_curve.cc#L21-L36).
   Expanding an object's data row now shows mesh shape-key data and its keys,
   plus the material slots owned by the data block. The Blender bridge advances
-  to version 40 and native documents to version 33. Data-block animation rows
-  remain unported. Build passed; no matched Outliner UI comparison was run.
+  to version 40 and native documents to version 33. The data-block animation
+  rows were added in the follow-up tree update below. Build passed; no matched
+  Outliner UI comparison was run.
+- The twenty-fifth tree update follows Blender 5.2.2's animation expansion for
+  data IDs in [`tree_element_id_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_mesh.cc#L21-L27)
+  and [`tree_element_id_curve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_curve.cc#L21-L25),
+  using the shared row construction in
+  [`tree_element_anim_data.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_anim_data.cc#L20-L63),
+  [`tree_element_driver.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_driver.cc#L23-L48),
+  and [`tree_element_nla.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_nla.cc#L20-L55).
+  Object data rows now show their Animation group, active action, driver target
+  IDs, NLA tracks, and strip actions. The Blender bridge advances to version
+  41 and native documents to version 34; earlier formats retain empty data
+  animation defaults. This keeps row names and hierarchy only: data-block row
+  selection/context operations and animation editing remain unimplemented.
+  No matched Blender UI comparison was run; `cmake --build build -j4` passed.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

@@ -2819,7 +2819,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
          bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38 &&
-         bridgeVersion != 39 && bridgeVersion != 40)) {
+         bridgeVersion != 39 && bridgeVersion != 40 && bridgeVersion != 41)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3488,6 +3488,67 @@ bool importBlenderScene(const QString &path,
                 return false;
             }
         }
+        if (bridgeVersion >= 41) {
+            const QJsonValue dataAnimationValue = item.value(
+                QStringLiteral("data_animation"));
+            if (!dataAnimationValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender data-block animation record is invalid"));
+                return false;
+            }
+            const QJsonObject dataAnimation = dataAnimationValue.toObject();
+            const QJsonValue hasAnimationValue = dataAnimation.value(
+                QStringLiteral("has_animation_data"));
+            const QJsonValue actionNameValue = dataAnimation.value(
+                QStringLiteral("action_name"));
+            const QJsonValue hasDriversValue = dataAnimation.value(
+                QStringLiteral("has_drivers"));
+            const QJsonValue driverNamesValue = dataAnimation.value(
+                QStringLiteral("driver_target_names"));
+            const QJsonValue nlaTracksValue = dataAnimation.value(
+                QStringLiteral("nla_tracks"));
+            if (!hasAnimationValue.isBool() || !actionNameValue.isString() ||
+                actionNameValue.toString().size() > 4096 ||
+                !hasDriversValue.isBool() || !driverNamesValue.isArray() ||
+                driverNamesValue.toArray().size() > 1024 ||
+                !nlaTracksValue.isArray() || nlaTracksValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender data-block animation record is invalid"));
+                return false;
+            }
+            for (const QJsonValue &nameValue : driverNamesValue.toArray()) {
+                if (!nameValue.isString() || nameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender data-block driver target is invalid"));
+                    return false;
+                }
+            }
+            for (const QJsonValue &trackValue : nlaTracksValue.toArray()) {
+                if (!trackValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender data-block NLA track is invalid"));
+                    return false;
+                }
+                const QJsonObject track = trackValue.toObject();
+                const QJsonValue trackName = track.value(QStringLiteral("name"));
+                const QJsonValue actionsValue = track.value(
+                    QStringLiteral("action_names"));
+                if (!trackName.isString() || trackName.toString().size() > 4096 ||
+                    !actionsValue.isArray() || actionsValue.toArray().size() > 1024) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender data-block NLA track is invalid"));
+                    return false;
+                }
+                for (const QJsonValue &actionValue : actionsValue.toArray()) {
+                    if (!actionValue.isString() ||
+                        actionValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender data-block NLA action is invalid"));
+                        return false;
+                    }
+                }
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3589,6 +3650,33 @@ bool importBlenderScene(const QString &path,
             for (const QJsonValue &nameValue : item.value(
                      QStringLiteral("data_material_names")).toArray()) {
                 sceneObject.blenderSourceDataMaterialNames.append(nameValue.toString());
+            }
+        }
+        if (bridgeVersion >= 41) {
+            const QJsonObject dataAnimation = item.value(
+                QStringLiteral("data_animation")).toObject();
+            BlenderSourceAnimationData &animation =
+                sceneObject.blenderSourceDataAnimation;
+            animation.hasAnimationData = dataAnimation.value(
+                QStringLiteral("has_animation_data")).toBool();
+            animation.actionName = dataAnimation.value(
+                QStringLiteral("action_name")).toString();
+            animation.hasDrivers = dataAnimation.value(
+                QStringLiteral("has_drivers")).toBool();
+            for (const QJsonValue &nameValue : dataAnimation.value(
+                     QStringLiteral("driver_target_names")).toArray()) {
+                animation.driverTargetNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &trackValue : dataAnimation.value(
+                     QStringLiteral("nla_tracks")).toArray()) {
+                const QJsonObject sourceTrack = trackValue.toObject();
+                BlenderSourceNlaTrack track;
+                track.name = sourceTrack.value(QStringLiteral("name")).toString();
+                for (const QJsonValue &actionValue : sourceTrack.value(
+                         QStringLiteral("action_names")).toArray()) {
+                    track.actionNames.append(actionValue.toString());
+                }
+                animation.nlaTracks.append(std::move(track));
             }
         }
         if (bridgeVersion >= 36) {

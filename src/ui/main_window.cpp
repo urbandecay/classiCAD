@@ -2883,6 +2883,18 @@ private:
                 entry.shapeKeyNames = object.blenderSourceShapeKeyNames;
                 entry.dataMaterialNames =
                     object.blenderSourceDataMaterialNames;
+                entry.dataHasAnimationData =
+                    object.blenderSourceDataAnimation.hasAnimationData;
+                entry.dataAnimationActionName =
+                    object.blenderSourceDataAnimation.actionName;
+                entry.dataHasDrivers =
+                    object.blenderSourceDataAnimation.hasDrivers;
+                entry.dataDriverTargetNames =
+                    object.blenderSourceDataAnimation.driverTargetNames;
+                for (const BlenderSourceNlaTrack &track :
+                     object.blenderSourceDataAnimation.nlaTracks) {
+                    entry.dataNlaTracks.append({track.name, track.actionNames});
+                }
                 entry.modifierNames = object.blenderSourceModifierNames;
                 for (const BlenderSourceModifier &modifier :
                      object.blenderSourceModifiers) {

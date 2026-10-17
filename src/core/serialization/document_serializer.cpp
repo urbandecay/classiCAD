@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 33);
+    serialized.insert(QStringLiteral("version"), 34);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -549,6 +549,32 @@ QJsonObject documentToJson(const Document &document)
         }
         serializedObject.insert(QStringLiteral("blenderSourceDataMaterialNames"),
                                 blenderSourceDataMaterialNames);
+        QJsonArray dataDriverTargetNames;
+        for (const QString &name :
+             sceneObject.blenderSourceDataAnimation.driverTargetNames) {
+            dataDriverTargetNames.append(name);
+        }
+        QJsonArray dataNlaTracks;
+        for (const BlenderSourceNlaTrack &track :
+             sceneObject.blenderSourceDataAnimation.nlaTracks) {
+            QJsonArray actionNames;
+            for (const QString &name : track.actionNames) {
+                actionNames.append(name);
+            }
+            dataNlaTracks.append(QJsonObject{
+                {QStringLiteral("name"), track.name},
+                {QStringLiteral("actionNames"), actionNames}});
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceDataAnimation"),
+            QJsonObject{
+                {QStringLiteral("hasAnimationData"),
+                 sceneObject.blenderSourceDataAnimation.hasAnimationData},
+                {QStringLiteral("actionName"),
+                 sceneObject.blenderSourceDataAnimation.actionName},
+                {QStringLiteral("hasDrivers"),
+                 sceneObject.blenderSourceDataAnimation.hasDrivers},
+                {QStringLiteral("driverTargetNames"), dataDriverTargetNames},
+                {QStringLiteral("nlaTracks"), dataNlaTracks}});
         QJsonArray blenderSourceMaterialNames;
         for (const QString &name : sceneObject.blenderSourceMaterialNames) {
             blenderSourceMaterialNames.append(name);
@@ -706,7 +732,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 33) {
+    if (version < 1 || version > 34) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1759,6 +1785,78 @@ bool documentFromJson(const QJsonValue &value,
             }
             sceneObject.blenderSourceShapeKeyDataName =
                 shapeKeyDataNameValue.toString();
+        }
+        if (version >= 34) {
+            const QJsonValue dataAnimationValue = serializedObject.value(
+                QStringLiteral("blenderSourceDataAnimation"));
+            if (!dataAnimationValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender data-block animation data"));
+                return false;
+            }
+            const QJsonObject dataAnimation = dataAnimationValue.toObject();
+            const QJsonValue hasAnimationValue = dataAnimation.value(
+                QStringLiteral("hasAnimationData"));
+            const QJsonValue actionNameValue = dataAnimation.value(
+                QStringLiteral("actionName"));
+            const QJsonValue hasDriversValue = dataAnimation.value(
+                QStringLiteral("hasDrivers"));
+            const QJsonValue driverNamesValue = dataAnimation.value(
+                QStringLiteral("driverTargetNames"));
+            const QJsonValue nlaTracksValue = dataAnimation.value(
+                QStringLiteral("nlaTracks"));
+            if (!hasAnimationValue.isBool() || !actionNameValue.isString() ||
+                actionNameValue.toString().size() > 4096 ||
+                !hasDriversValue.isBool() || !driverNamesValue.isArray() ||
+                driverNamesValue.toArray().size() > 1024 ||
+                !nlaTracksValue.isArray() || nlaTracksValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender data-block animation data"));
+                return false;
+            }
+            BlenderSourceAnimationData &animation =
+                sceneObject.blenderSourceDataAnimation;
+            animation.hasAnimationData = hasAnimationValue.toBool();
+            animation.actionName = actionNameValue.toString();
+            animation.hasDrivers = hasDriversValue.toBool();
+            for (const QJsonValue &nameValue : driverNamesValue.toArray()) {
+                if (!nameValue.isString() || nameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender data-block driver target name"));
+                    return false;
+                }
+                animation.driverTargetNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &trackValue : nlaTracksValue.toArray()) {
+                if (!trackValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender data-block NLA track"));
+                    return false;
+                }
+                const QJsonObject trackObject = trackValue.toObject();
+                const QJsonValue nameValue = trackObject.value(
+                    QStringLiteral("name"));
+                const QJsonValue actionsValue = trackObject.value(
+                    QStringLiteral("actionNames"));
+                if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !actionsValue.isArray() || actionsValue.toArray().size() > 1024) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender data-block NLA track contents"));
+                    return false;
+                }
+                BlenderSourceNlaTrack track;
+                track.name = nameValue.toString();
+                for (const QJsonValue &actionValue : actionsValue.toArray()) {
+                    if (!actionValue.isString() ||
+                        actionValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid Blender data-block NLA action name"));
+                        return false;
+                    }
+                    track.actionNames.append(actionValue.toString());
+                }
+                animation.nlaTracks.append(std::move(track));
+            }
         }
         const QJsonValue surfaceWireValue = serializedObject.value(
             QStringLiteral("blenderSurfaceWireVerticesWorld"));

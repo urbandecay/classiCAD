@@ -119,6 +119,14 @@ struct BlenderSourceModifier {
     QString linkedType;
 };
 
+struct BlenderSourceAnimationData {
+    bool hasAnimationData = false;
+    QString actionName;
+    bool hasDrivers = false;
+    QStringList driverTargetNames;
+    QVector<BlenderSourceNlaTrack> nlaTracks;
+};
+
 struct SceneObject {
     ObjectId id = ObjectId::invalid();
     QVector<CollectionId> collectionIds;
@@ -150,6 +158,7 @@ struct SceneObject {
     QString blenderSourceShapeKeyDataName;
     QStringList blenderSourceShapeKeyNames;
     QStringList blenderSourceDataMaterialNames;
+    BlenderSourceAnimationData blenderSourceDataAnimation;
     // Assigned Blender materials shown beneath any supported Outliner object.
     QStringList blenderSourceMaterialNames;
     // Blender Outliner object subtrees retained from the source file.

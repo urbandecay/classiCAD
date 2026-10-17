@@ -46,6 +46,11 @@ struct OutlinerObjectEntry {
     QString shapeKeyDataName;
     QStringList shapeKeyNames;
     QStringList dataMaterialNames;
+    bool dataHasAnimationData = false;
+    QString dataAnimationActionName;
+    bool dataHasDrivers = false;
+    QStringList dataDriverTargetNames;
+    QVector<OutlinerNlaTrackEntry> dataNlaTracks;
     QStringList materialNames;
     QStringList modifierNames;
     QVector<OutlinerModifierEntry> modifiers;

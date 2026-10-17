@@ -11042,11 +11042,21 @@ scene depth.
   bounded tree format and native document version 39 are reused; bridge version
   48 advertises the extraction behavior. `cmake --build build -j4` passed; no
   matched Blender Outliner UI comparison was run.
-- Remaining Outliner scope includes unsupported display modes, scene World and
-  scene-animation data-block rows, additional specialized ID branches still
-  under source review, and a matched Blender/classiCAD interaction comparison.
-  Do not mark this port complete until the remaining items have been reviewed
-  against pinned Blender source.
+- The thirty-fifth tree update follows Blender 5.2.2's scene expansion in
+  [`tree_element_id_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_scene.cc#L21-L28)
+  and generic ID animation expansion in
+  [`tree_element_id.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id.cc#L117-L130).
+  Scenes mode now shows each scene's World data block and its animation rows,
+  plus the scene's own Animation, Action/slot, Drivers, and NLA rows when
+  present. Blender bridge version 49 extracts these fields; the existing
+  `importedBlenderScenes` native document record preserves them without a new
+  document-version change. The tree order now follows Blender's View Layers,
+  World, Collections, Objects, and Animation sequence. `cmake --build build
+  -j4` passed; no matched Blender Outliner UI comparison was run.
+- Remaining Outliner scope includes unsupported display modes, additional
+  specialized ID branches still under source review, and a matched
+  Blender/classiCAD interaction comparison. Do not mark this port complete
+  until the remaining items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

@@ -138,6 +138,9 @@ struct OutlinerViewLayerEntry {
 struct OutlinerSceneEntry {
     QString key;
     QString displayName;
+    QString worldName;
+    OutlinerAnimationEntry worldAnimation;
+    OutlinerAnimationEntry animationData;
     QVector<OutlinerViewLayerEntry> viewLayers;
     QString activeViewLayerKey;
 };

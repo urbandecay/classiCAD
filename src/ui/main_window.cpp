@@ -3216,6 +3216,41 @@ private:
         };
         collectionCallbacks.scenes = [this]() {
             QVector<OutlinerSceneEntry> scenes;
+            const auto readAnimationData = [](
+                const QJsonObject &source) {
+                OutlinerAnimationEntry result;
+                result.hasAnimationData = source.value(
+                    QStringLiteral("has_animation_data")).toBool();
+                result.actionName = source.value(
+                    QStringLiteral("action_name")).toString();
+                result.actionSlotName = source.value(
+                    QStringLiteral("action_slot_name")).toString();
+                result.hasDrivers = source.value(
+                    QStringLiteral("has_drivers")).toBool();
+                for (const QJsonValue &targetValue : source.value(
+                         QStringLiteral("driver_target_names")).toArray()) {
+                    const QString targetName = targetValue.toString();
+                    if (!targetName.isEmpty()) {
+                        result.driverTargetNames.append(targetName);
+                    }
+                }
+                for (const QJsonValue &trackValue : source.value(
+                         QStringLiteral("nla_tracks")).toArray()) {
+                    const QJsonObject sourceTrack = trackValue.toObject();
+                    OutlinerNlaTrackEntry track;
+                    track.name = sourceTrack.value(
+                        QStringLiteral("name")).toString();
+                    for (const QJsonValue &actionValue : sourceTrack.value(
+                             QStringLiteral("action_names")).toArray()) {
+                        const QString actionName = actionValue.toString();
+                        if (!actionName.isEmpty()) {
+                            track.actionNames.append(actionName);
+                        }
+                    }
+                    result.nlaTracks.append(std::move(track));
+                }
+                return result;
+            };
             for (const QJsonValue &sceneValue :
                  session_.document().settings().importedBlenderScenes) {
                 const QJsonObject scene = sceneValue.toObject();
@@ -3227,6 +3262,12 @@ private:
                     OutlinerSceneEntry entry;
                     entry.key = key;
                     entry.displayName = name;
+                    entry.worldName = scene.value(
+                        QStringLiteral("world_name")).toString();
+                    entry.worldAnimation = readAnimationData(scene.value(
+                        QStringLiteral("world_animation_data")).toObject());
+                    entry.animationData = readAnimationData(scene.value(
+                        QStringLiteral("scene_animation_data")).toObject());
                     for (const QJsonValue &layerValue : scene.value(
                              QStringLiteral("view_layers")).toArray()) {
                         const QJsonObject layer = layerValue.toObject();

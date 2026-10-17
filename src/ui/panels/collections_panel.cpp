@@ -2297,6 +2297,77 @@ void CollectionsPanel::refresh()
         }
     };
     if (scenesMode) {
+        const auto appendSceneContentRow = [this](
+            QTreeWidgetItem *parent, const QString &name,
+            const QString &path, const QString &viewLayerKey,
+            const QString &description) -> QTreeWidgetItem * {
+            if (parent == nullptr || name.isEmpty()) return nullptr;
+            auto *row = new QTreeWidgetItem(parent);
+            row->setText(nameColumn, name);
+            row->setData(nameColumn, itemKindRole,
+                         static_cast<int>(OutlinerRowKind::ObjectContent));
+            row->setData(nameColumn, itemViewLayerKeyRole, viewLayerKey);
+            row->setData(nameColumn, itemPathRole, path);
+            row->setToolTip(nameColumn, description);
+            row->setFlags(Qt::ItemIsEnabled);
+            return row;
+        };
+        const auto appendAnimationData = [&appendSceneContentRow](
+            QTreeWidgetItem *parent, const OutlinerAnimationEntry &animation,
+            const QString &path, const QString &viewLayerKey,
+            const QString &description) {
+            if (!animation.hasAnimationData) return;
+            auto *animationRow = appendSceneContentRow(
+                parent, QStringLiteral("Animation"), path, viewLayerKey,
+                description);
+            auto *actionRow = appendSceneContentRow(
+                animationRow, animation.actionName,
+                path + QStringLiteral("/action"), viewLayerKey,
+                QStringLiteral("Blender active action data block"));
+            appendSceneContentRow(
+                actionRow, animation.actionSlotName,
+                path + QStringLiteral("/action/slot"), viewLayerKey,
+                QStringLiteral("Blender assigned action slot"));
+            if (animation.hasDrivers) {
+                auto *driversRow = appendSceneContentRow(
+                    animationRow, QStringLiteral("Drivers"),
+                    path + QStringLiteral("/drivers"), viewLayerKey,
+                    QStringLiteral("Blender animation drivers"));
+                for (qsizetype index = 0;
+                     index < animation.driverTargetNames.size(); ++index) {
+                    appendSceneContentRow(
+                        driversRow, animation.driverTargetNames[index],
+                        path + QStringLiteral("/driver-target-%1").arg(index),
+                        viewLayerKey,
+                        QStringLiteral("Blender driver target data block"));
+                }
+            }
+            if (!animation.nlaTracks.isEmpty()) {
+                auto *tracksRow = appendSceneContentRow(
+                    animationRow, QStringLiteral("NLA Tracks"),
+                    path + QStringLiteral("/nla-tracks"), viewLayerKey,
+                    QStringLiteral("Blender non-linear animation tracks"));
+                for (qsizetype trackIndex = 0;
+                     trackIndex < animation.nlaTracks.size(); ++trackIndex) {
+                    const OutlinerNlaTrackEntry &sourceTrack =
+                        animation.nlaTracks[trackIndex];
+                    auto *trackRow = appendSceneContentRow(
+                        tracksRow, sourceTrack.name,
+                        path + QStringLiteral("/nla-track-%1").arg(trackIndex),
+                        viewLayerKey, QStringLiteral("Blender NLA track"));
+                    for (qsizetype actionIndex = 0;
+                         actionIndex < sourceTrack.actionNames.size();
+                         ++actionIndex) {
+                        appendSceneContentRow(
+                            trackRow, sourceTrack.actionNames[actionIndex],
+                            path + QStringLiteral("/nla-track-%1/action-%2")
+                                .arg(trackIndex).arg(actionIndex),
+                            viewLayerKey,
+                            QStringLiteral("Blender NLA action data block"));
+                    }
+                }
+            }
+        };
         for (const OutlinerSceneEntry &scene : scenes) {
             const QVector<CollectionPanelEntry> sceneEntries =
                 entriesForScene(scene);
@@ -2350,6 +2421,19 @@ void CollectionsPanel::refresh()
                 }
             }
 
+            if (!scene.worldName.isEmpty()) {
+                QTreeWidgetItem *worldRow = appendSceneContentRow(
+                    sceneRoot, scene.worldName,
+                    rootPath + QStringLiteral("/world"),
+                    scene.activeViewLayerKey,
+                    QStringLiteral("Blender scene World data block"));
+                appendAnimationData(
+                    worldRow, scene.worldAnimation,
+                    rootPath + QStringLiteral("/world/animation"),
+                    scene.activeViewLayerKey,
+                    QStringLiteral("Blender World animation data"));
+            }
+
             if (showCollections_) {
                 auto *collectionsGroup = new QTreeWidgetItem(sceneRoot);
                 collectionsGroup->setText(nameColumn,
@@ -2396,6 +2480,11 @@ void CollectionsPanel::refresh()
                                  scene.activeViewLayerKey);
                 }
             }
+            appendAnimationData(
+                sceneRoot, scene.animationData,
+                rootPath + QStringLiteral("/animation"),
+                scene.activeViewLayerKey,
+                QStringLiteral("Blender scene animation data"));
         }
     } else if (showAllViewLayers_ && !viewLayers.isEmpty()) {
         for (const OutlinerViewLayerEntry &viewLayer : viewLayers) {

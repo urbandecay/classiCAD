@@ -2801,8 +2801,110 @@ private:
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;
         };
+        collectionCallbacks.viewLayers = [this]() {
+            QVector<OutlinerViewLayerEntry> viewLayers;
+            const DocumentSettings &settings = session_.document().settings();
+            QString activeSceneId;
+            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    if (layerValue.toObject().value(QStringLiteral("key"))
+                            .toString() == settings.activeViewLayerKey) {
+                        activeSceneId = scene.value(
+                            QStringLiteral("scene_id")).toString();
+                        break;
+                    }
+                }
+                if (!activeSceneId.isEmpty()) break;
+            }
+            if (activeSceneId.isEmpty()) return viewLayers;
+            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                if (scene.value(QStringLiteral("scene_id")).toString() !=
+                    activeSceneId) {
+                    continue;
+                }
+                const QString sceneName = scene.value(
+                    QStringLiteral("name")).toString();
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    const QJsonObject layer = layerValue.toObject();
+                    const QString key = layer.value(
+                        QStringLiteral("key")).toString();
+                    const QString name = layer.value(
+                        QStringLiteral("name")).toString();
+                    if (key.isEmpty() || name.isEmpty()) continue;
+                    viewLayers.append({key, QStringLiteral("%1 / %2")
+                                                .arg(sceneName, name)});
+                }
+                break;
+            }
+            return viewLayers;
+        };
         collectionCallbacks.stateScopeKey = [this]() {
             return currentProjectPath_;
+        };
+        collectionCallbacks.setActiveViewLayer = [this](const QString &key) {
+            if (key.isEmpty() || key ==
+                    session_.document().settings().activeViewLayerKey) {
+                return;
+            }
+            DocumentSettings settings = session_.document().settings();
+            settings.activeViewLayerKey = key;
+            DocumentTransaction transaction = session_.beginTransaction();
+            if (!transaction.setSettings(settings) ||
+                !session_.commitTransaction(transaction)) {
+                statusBar()->showMessage(
+                    QStringLiteral("Could not switch the active view layer"),
+                    4000);
+                return;
+            }
+
+            QHash<QString, ObjectId> objectIdsBySourceId;
+            for (const SceneObject &object : session_.document().objects()) {
+                if (!object.blenderLooseMeshEdgeCompanion &&
+                    !object.blenderSourceObjectId.isEmpty()) {
+                    objectIdsBySourceId.insert(object.blenderSourceObjectId,
+                                               object.id);
+                }
+            }
+            QVector<ObjectId> selectedIds;
+            ObjectId activeId = ObjectId::invalid();
+            for (const QJsonValue &sceneValue : settings.importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    const QJsonObject layer = layerValue.toObject();
+                    if (layer.value(QStringLiteral("key")).toString() != key) {
+                        continue;
+                    }
+                    for (const QJsonValue &sourceIdValue : layer.value(
+                             QStringLiteral("selected_object_ids")).toArray()) {
+                        const ObjectId id = objectIdsBySourceId.value(
+                            sourceIdValue.toString(), ObjectId::invalid());
+                        if (id.isValid() &&
+                            session_.document().isObjectEditable(id) &&
+                            !selectedIds.contains(id)) {
+                            selectedIds.append(id);
+                        }
+                    }
+                    const ObjectId requestedActiveId = objectIdsBySourceId.value(
+                        layer.value(QStringLiteral("active_object_id")).toString(),
+                        ObjectId::invalid());
+                    if (selectedIds.contains(requestedActiveId)) {
+                        activeId = requestedActiveId;
+                    }
+                    break;
+                }
+                if (activeId.isValid() || !selectedIds.isEmpty()) break;
+            }
+            if (!activeId.isValid() && !selectedIds.isEmpty()) {
+                activeId = selectedIds.back();
+            }
+            session_.selection().setObjectIds(selectedIds, activeId);
+            session_.selection().setActiveObjectId(activeId);
+            refreshCollections();
         };
         collectionCallbacks.selectedObjectIds = [this]() {
             return session_.selection().objectIds();

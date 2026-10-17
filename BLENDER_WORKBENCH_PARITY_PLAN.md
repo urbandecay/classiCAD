@@ -10738,9 +10738,17 @@ scene depth.
   restrictions. The remaining Blender hierarchy, recursive Shift behavior,
   and drag-toggle gestures are not implemented by this checkbox. The full
   `cmake --build build -j4` passed; no GUI comparison was run.
+- The eighth tree update adds a selector for the imported active scene's view
+  layers. It reads Blender's extracted `view_layers` records, changes the
+  document's active view-layer key through a transaction, and restores that
+  layer's imported selected and active objects. The restriction columns and
+  viewport visibility then read the newly active layer. It deliberately limits
+  the selector to the scene whose layer was active on import; changing scenes
+  and switching scene-specific geometry are still unsupported. The full build
+  passed; no GUI interaction comparison was run.
 - Remaining Outliner scope includes carrying row state inside the project file,
-  other Blender datablock rows and restriction controls, multiple view-layer
-  switching, and a matched Blender/classiCAD interaction comparison. Do not
+  other Blender datablock rows and restriction controls, scene switching, and a
+  matched Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

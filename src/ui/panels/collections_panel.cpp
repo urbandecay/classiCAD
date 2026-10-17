@@ -12,6 +12,7 @@
 #include <QAbstractItemView>
 #include <QAbstractItemModel>
 #include <QAction>
+#include <QComboBox>
 #include <QCryptographicHash>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
@@ -20,6 +21,7 @@
 #include <QInputDialog>
 #include <QFont>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -296,7 +298,13 @@ void CollectionsPanel::createLayout()
     filterEdit_->setPlaceholderText(QStringLiteral("Filter objects and collections"));
     filterEdit_->setToolTip(QStringLiteral(
         "Case-insensitive name filter. Use * and ? as wildcards."));
-    layout->addWidget(filterEdit_);
+    auto *filterRow = new QHBoxLayout;
+    filterRow->setContentsMargins(0, 0, 0, 0);
+    filterRow->addWidget(filterEdit_, 1);
+    viewLayerCombo_ = new QComboBox(this);
+    viewLayerCombo_->setToolTip(QStringLiteral("Active Blender view layer"));
+    filterRow->addWidget(viewLayerCombo_);
+    layout->addLayout(filterRow);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
     tree_->setColumnCount(6);
@@ -345,6 +353,11 @@ void CollectionsPanel::createLayout()
     layout->addWidget(tree_);
     connect(filterEdit_, &QLineEdit::textChanged, this,
             [this](const QString &text) { applyNameFilter(text); });
+    connect(viewLayerCombo_, &QComboBox::activated, this, [this](int index) {
+        if (index < 0 || !callbacks_.setActiveViewLayer) return;
+        const QString key = viewLayerCombo_->itemData(index).toString();
+        if (!key.isEmpty()) callbacks_.setActiveViewLayer(key);
+    });
     connect(tree_, &QTreeWidget::itemExpanded, this,
             [this](QTreeWidgetItem *) { saveTreeState(); });
     connect(tree_, &QTreeWidget::itemCollapsed, this,
@@ -1056,8 +1069,23 @@ void CollectionsPanel::refresh()
     const QVector<CollectionPanelEntry> entries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> objects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
+    const QVector<OutlinerViewLayerEntry> viewLayers = callbacks_.viewLayers
+        ? callbacks_.viewLayers() : QVector<OutlinerViewLayerEntry>{};
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
+    {
+        const QSignalBlocker blocker(viewLayerCombo_);
+        viewLayerCombo_->clear();
+        int activeIndex = -1;
+        for (const OutlinerViewLayerEntry &viewLayer : viewLayers) {
+            viewLayerCombo_->addItem(viewLayer.displayName, viewLayer.key);
+            if (viewLayer.key == activeViewLayerKey) {
+                activeIndex = viewLayerCombo_->count() - 1;
+            }
+        }
+        viewLayerCombo_->setCurrentIndex(activeIndex);
+        viewLayerCombo_->setVisible(viewLayers.size() > 1);
+    }
     tree_->setColumnHidden(viewLayerViewportColumn,
                            activeViewLayerKey.isEmpty());
     tree_->setColumnHidden(excludeColumn, activeViewLayerKey.isEmpty());

@@ -18,6 +18,7 @@
 class QTreeWidget;
 class QTreeWidgetItem;
 class QLineEdit;
+class QComboBox;
 
 namespace classiCAD {
 
@@ -47,10 +48,17 @@ struct OutlinerRowReference {
     bool syntheticParentRow = false;
 };
 
+struct OutlinerViewLayerEntry {
+    QString key;
+    QString displayName;
+};
+
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
+    std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
     std::function<QString()> activeViewLayerKey;
+    std::function<void(const QString &)> setActiveViewLayer;
     std::function<QVector<ObjectId>()> selectedObjectIds;
     std::function<ObjectId()> activeObjectId;
     std::function<bool(ObjectId)> canSelectObject;
@@ -117,6 +125,7 @@ private:
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
     QLineEdit *filterEdit_ = nullptr;
+    QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;

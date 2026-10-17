@@ -973,12 +973,29 @@ bool Document::renameCollection(CollectionId id, const QString &name)
 {
     DocumentCollection *candidate = mutableCollection(id);
     const QString trimmed = name.trimmed();
-    if (candidate == nullptr || trimmed.isEmpty()) return false;
+    if (candidate == nullptr || candidate->isSceneMaster ||
+        !candidate->libraryPath.isEmpty() || trimmed.isEmpty()) {
+        return false;
+    }
     if (candidate->name == trimmed) return true;
     candidate->name = trimmed;
     DocumentChangeSet changes;
     changes.addCollection(id);
     changes.collectionsChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::makeCollectionLocal(CollectionId id)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    if (candidate == nullptr || candidate->libraryPath.isEmpty()) return false;
+    candidate->libraryPath.clear();
+    candidate->assetMarked = false;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.structureChanged = true;
     applyChanges(changes);
     return true;
 }
@@ -1414,9 +1431,26 @@ bool Document::setObjectDisplayName(ObjectId objectId, const QString &name)
 {
     SceneObject *candidate = mutableObject(objectId);
     const QString trimmed = name.trimmed();
-    if (candidate == nullptr || trimmed.isEmpty()) return false;
+    if (candidate == nullptr || !candidate->libraryPath.isEmpty() ||
+        trimmed.isEmpty()) {
+        return false;
+    }
     if (candidate->displayName == trimmed) return true;
     candidate->displayName = trimmed;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::makeObjectLocal(ObjectId objectId)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr || candidate->libraryPath.isEmpty()) return false;
+    candidate->libraryPath.clear();
+    candidate->workbenchRandomLibraryPath.clear();
+    candidate->assetMarked = false;
     DocumentChangeSet changes;
     changes.addObject(objectId);
     changes.structureChanged = true;

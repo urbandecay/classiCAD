@@ -101,6 +101,7 @@ constexpr int itemDataStackKindRole = Qt::UserRole + 22;
 constexpr int itemDataStackIndexRole = Qt::UserRole + 23;
 constexpr int itemAssetMarkedRole = Qt::UserRole + 24;
 constexpr int itemLinkedLibraryRole = Qt::UserRole + 25;
+constexpr int itemSceneMasterRole = Qt::UserRole + 26;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -2783,6 +2784,9 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         }
         if (callbacks_.renameCollection) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
+            rename->setEnabled(
+                !item->data(nameColumn, itemLinkedLibraryRole).toBool() &&
+                !item->data(nameColumn, itemSceneMasterRole).toBool());
             connect(rename, &QAction::triggered, this, [this, item, collectionId]() {
                 bool accepted = false;
                 const QString name = QInputDialog::getText(
@@ -2792,6 +2796,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 if (accepted && !name.trimmed().isEmpty()) {
                     callbacks_.renameCollection(collectionId, name);
                 }
+            });
+        }
+        if (callbacks_.makeCollectionLocal &&
+            item->data(nameColumn, itemLinkedLibraryRole).toBool()) {
+            QAction *makeLocal = menu.addAction(QStringLiteral("Make Local"));
+            connect(makeLocal, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.makeCollectionLocal(collectionId);
             });
         }
         if (callbacks_.setCollectionsObjectSelection &&
@@ -2905,6 +2917,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         }
         if (callbacks_.renameObject) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
+            rename->setEnabled(
+                !item->data(nameColumn, itemLinkedLibraryRole).toBool());
             connect(rename, &QAction::triggered, this, [this, item, objectId]() {
                 bool accepted = false;
                 const QString name = QInputDialog::getText(
@@ -2914,6 +2928,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 if (accepted && !name.trimmed().isEmpty()) {
                     callbacks_.renameObject(objectId, name);
                 }
+            });
+        }
+        if (callbacks_.makeObjectLocal &&
+            item->data(nameColumn, itemLinkedLibraryRole).toBool()) {
+            QAction *makeLocal = menu.addAction(QStringLiteral("Make Local"));
+            connect(makeLocal, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.makeObjectLocal(objectId);
             });
         }
         if (callbacks_.setObjectAssetMarked && objectId.isValid()) {
@@ -3003,6 +3025,8 @@ void CollectionsPanel::appendCollection(
                   entry.collection.assetMarked);
     item->setData(nameColumn, itemLinkedLibraryRole,
                   !entry.collection.libraryPath.isEmpty());
+    item->setData(nameColumn, itemSceneMasterRole,
+                  entry.collection.isSceneMaster);
     item->setData(nameColumn, itemParentCollectionRole,
                   QVariant::fromValue<qulonglong>(
                       parent != nullptr &&

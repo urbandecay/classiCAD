@@ -714,6 +714,14 @@ bool DocumentTransaction::setObjectDisplayName(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::makeObjectLocal(ObjectId objectId)
+{
+    if (!document_.makeObjectLocal(objectId)) return false;
+    changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectAssetMarked(ObjectId objectId,
                                                bool assetMarked)
 {
@@ -727,6 +735,15 @@ bool DocumentTransaction::renameCollection(CollectionId collectionId,
                                             const QString &name)
 {
     if (!document_.renameCollection(collectionId, name)) return false;
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::makeCollectionLocal(CollectionId collectionId)
+{
+    if (!document_.makeCollectionLocal(collectionId)) return false;
     changes_.addCollection(collectionId);
     changes_.collectionsChanged = true;
     changes_.structureChanged = true;

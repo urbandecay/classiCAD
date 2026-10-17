@@ -6634,6 +6634,21 @@ private:
                         4000);
                 }
             };
+        collectionCallbacks.makeCollectionLocal =
+            [this](CollectionId id) {
+                const DocumentCollection *collection =
+                    session_.document().collection(id);
+                if (collection == nullptr || collection->libraryPath.isEmpty()) {
+                    return;
+                }
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.makeCollectionLocal(id) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not make collection local"),
+                        4000);
+                }
+            };
         collectionCallbacks.removeCollection =
             [this, updateAllSceneCollectionIds](
                 const QVector<CollectionId> &requestedIds) {
@@ -7116,6 +7131,17 @@ private:
                     statusBar()->showMessage(
                         QStringLiteral("Could not change object asset mark"),
                         4000);
+                }
+            };
+        collectionCallbacks.makeObjectLocal =
+            [this](ObjectId id) {
+                const SceneObject *object = session_.document().object(id);
+                if (object == nullptr || object->libraryPath.isEmpty()) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.makeObjectLocal(id) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not make object local"), 4000);
                 }
             };
         collectionCallbacks.unlinkObject =

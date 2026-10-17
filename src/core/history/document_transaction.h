@@ -72,8 +72,10 @@ public:
     bool removeCollectionViewLayerStates(
         CollectionId collectionId, const QStringList &viewLayerKeys);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
+    bool makeObjectLocal(ObjectId objectId);
     bool setObjectAssetMarked(ObjectId objectId, bool assetMarked);
     bool renameCollection(CollectionId collectionId, const QString &name);
+    bool makeCollectionLocal(CollectionId collectionId);
     bool setCollectionColorTag(CollectionId collectionId,
                                const QString &colorTag);
     bool setCollectionAssetMarked(CollectionId collectionId,

@@ -11397,3 +11397,15 @@ scene depth.
   counts or orphan retention. `cmake --build build -j4`, Python syntax
   parsing, and `git diff --check` passed; no matched Blender Outliner
   interaction comparison was run.
+- The hundred-fifth tree update follows Blender 5.2.2's [ID Data menu and
+  Make Local operation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L3042-L3215)
+  and [Outliner rename rules](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L326-L379).
+  Linked object and collection rows now offer Make Local. It clears the
+  imported library path and asset mark; objects also clear the absolute linked
+  path used by Workbench Random color. The conversion is an undoable native
+  document edit, and source hierarchy identity remains available. Rename is
+  disabled for linked IDs and master collections, and the document setters
+  enforce the same rule. This localizes the selected snapshot row; it does not
+  relink the original `.blend` or localize related linked IDs automatically.
+  `cmake --build build -j4` and `git diff --check` passed; no matched Blender
+  Outliner interaction comparison was run.

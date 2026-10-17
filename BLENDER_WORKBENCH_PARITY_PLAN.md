@@ -11002,6 +11002,19 @@ scene depth.
   preserved source-only records; native document version 37 remains unchanged.
   These rows remain display-only. Build passed; no matched Outliner UI
   comparison was run.
+- The thirty-first tree update follows Blender 5.2.2's object modifier and
+  Grease Pencil effect expansion in
+  [`tree_element_modifier.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_modifier.cc)
+  and
+  [`tree_element_gpencil_effect.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_gpencil_effect.cc).
+  The extracted Blender `object.modifiers` names remain in the existing
+  Modifiers group, including current Grease Pencil modifiers. The separate
+  Effects group now shows `object.shader_effects`; Swirl effects also retain
+  their linked object row. Blender bridge version 46 adds these entries to
+  source-only records and supported imported-object metadata. Native document
+  version 38 preserves entries for supported objects; the existing raw record
+  retains source-only entries. `cmake --build build -j4` passed; no matched
+  Blender Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, unsupported-object parenting,
   and a matched Blender/classiCAD interaction comparison. Do not

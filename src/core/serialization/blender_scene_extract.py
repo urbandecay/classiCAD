@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 45
+BRIDGE_FORMAT_VERSION = 46
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -741,6 +741,18 @@ def object_metadata(obj, scene, depsgraph=None):
             "linked_name": linked_id.name if linked_id is not None else "",
             "linked_type": linked_type if linked_id is not None else "",
         })
+    shader_effect_entries = []
+    for effect in list(getattr(obj, "shader_effects", ()))[:
+            MAX_OUTLINER_HIERARCHY_ITEMS]:
+        linked_id = (
+            getattr(effect, "object", None)
+            if getattr(effect, "type", "") == "FX_SWIRL" else None
+        )
+        shader_effect_entries.append({
+            "name": effect.name,
+            "linked_name": linked_id.name if linked_id is not None else "",
+            "linked_type": "object" if linked_id is not None else "",
+        })
     record = {
         "object_id": stable_id(obj),
         # Workbench Random hashes ID.name, which is obj.name in Blender's
@@ -779,6 +791,7 @@ def object_metadata(obj, scene, depsgraph=None):
         ][:1024],
         "modifier_names": [modifier.name for modifier in obj.modifiers][:1024],
         "modifier_entries": modifier_entries,
+        "shader_effect_entries": shader_effect_entries,
         "constraint_names": [
             constraint.name for constraint in obj.constraints
         ][:1024],

@@ -2823,7 +2823,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38 &&
          bridgeVersion != 39 && bridgeVersion != 40 && bridgeVersion != 41 &&
          bridgeVersion != 42 && bridgeVersion != 43 &&
-         bridgeVersion != 44 && bridgeVersion != 45)) {
+         bridgeVersion != 44 && bridgeVersion != 45 &&
+         bridgeVersion != 46)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3647,6 +3648,38 @@ bool importBlenderScene(const QString &path,
                 return false;
             }
         }
+        if (bridgeVersion >= 46) {
+            const QJsonValue effectsValue = item.value(
+                QStringLiteral("shader_effect_entries"));
+            if (!effectsValue.isArray() || effectsValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender shader-effect list is invalid"));
+                return false;
+            }
+            for (const QJsonValue &effectValue : effectsValue.toArray()) {
+                if (!effectValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender shader-effect entry is invalid"));
+                    return false;
+                }
+                const QJsonObject effect = effectValue.toObject();
+                const QJsonValue nameValue = effect.value(QStringLiteral("name"));
+                const QJsonValue linkedNameValue = effect.value(
+                    QStringLiteral("linked_name"));
+                const QJsonValue linkedTypeValue = effect.value(
+                    QStringLiteral("linked_type"));
+                const QString linkedType = linkedTypeValue.toString();
+                if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !linkedNameValue.isString() ||
+                    linkedNameValue.toString().size() > 4096 ||
+                    !linkedTypeValue.isString() || linkedType.size() > 32 ||
+                    (!linkedType.isEmpty() && linkedType != QLatin1String("object"))) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender shader-effect link is invalid"));
+                    return false;
+                }
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3878,6 +3911,16 @@ bool importBlenderScene(const QString &path,
                     sourceModifier.value(QStringLiteral("name")).toString(),
                     sourceModifier.value(QStringLiteral("linked_name")).toString(),
                     sourceModifier.value(QStringLiteral("linked_type")).toString()});
+            }
+        }
+        if (bridgeVersion >= 46) {
+            for (const QJsonValue &effectValue : item.value(
+                     QStringLiteral("shader_effect_entries")).toArray()) {
+                const QJsonObject sourceEffect = effectValue.toObject();
+                sceneObject.blenderSourceShaderEffects.append({
+                    sourceEffect.value(QStringLiteral("name")).toString(),
+                    sourceEffect.value(QStringLiteral("linked_name")).toString(),
+                    sourceEffect.value(QStringLiteral("linked_type")).toString()});
             }
         }
         sceneObject.defaultViewLayerKey =

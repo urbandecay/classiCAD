@@ -2990,6 +2990,11 @@ private:
                     entry.modifiers.append({modifier.name, modifier.linkedName,
                                             modifier.linkedType});
                 }
+                for (const BlenderSourceShaderEffect &effect :
+                     object.blenderSourceShaderEffects) {
+                    entry.shaderEffects.append({effect.name, effect.linkedName,
+                                                effect.linkedType});
+                }
                 entry.constraintNames = object.blenderSourceConstraintNames;
                 entry.vertexGroupNames = object.blenderSourceVertexGroupNames;
                 entry.hasAnimationData = object.blenderSourceHasAnimationData;
@@ -3149,6 +3154,14 @@ private:
                         modifier.value(QStringLiteral("name")).toString(),
                         modifier.value(QStringLiteral("linked_name")).toString(),
                         modifier.value(QStringLiteral("linked_type")).toString()});
+                }
+                for (const QJsonValue &effectValue : record.value(
+                         QStringLiteral("shader_effect_entries")).toArray()) {
+                    const QJsonObject effect = effectValue.toObject();
+                    entry.shaderEffects.append({
+                        effect.value(QStringLiteral("name")).toString(),
+                        effect.value(QStringLiteral("linked_name")).toString(),
+                        effect.value(QStringLiteral("linked_type")).toString()});
                 }
                 entry.constraintNames = jsonStringList(record.value(
                     QStringLiteral("constraint_names")));

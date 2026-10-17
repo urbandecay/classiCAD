@@ -82,6 +82,7 @@ struct OutlinerObjectEntry {
     QVector<OutlinerMaterialEntry> materialEntries;
     QStringList modifierNames;
     QVector<OutlinerModifierEntry> modifiers;
+    QVector<OutlinerModifierEntry> shaderEffects;
     QStringList constraintNames;
     QStringList vertexGroupNames;
     bool hasAnimationData = false;

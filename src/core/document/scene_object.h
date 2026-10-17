@@ -119,6 +119,12 @@ struct BlenderSourceModifier {
     QString linkedType;
 };
 
+struct BlenderSourceShaderEffect {
+    QString name;
+    QString linkedName;
+    QString linkedType;
+};
+
 struct BlenderSourceAnimationData {
     bool hasAnimationData = false;
     QString actionName;
@@ -167,6 +173,7 @@ struct SceneObject {
     // Blender Outliner object subtrees retained from the source file.
     QStringList blenderSourceModifierNames;
     QVector<BlenderSourceModifier> blenderSourceModifiers;
+    QVector<BlenderSourceShaderEffect> blenderSourceShaderEffects;
     QStringList blenderSourceConstraintNames;
     QStringList blenderSourceVertexGroupNames;
     bool blenderSourceHasAnimationData = false;

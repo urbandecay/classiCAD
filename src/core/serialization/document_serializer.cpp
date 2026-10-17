@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 37);
+    serialized.insert(QStringLiteral("version"), 38);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -641,6 +641,16 @@ QJsonObject documentToJson(const Document &document)
         }
         serializedObject.insert(QStringLiteral("blenderSourceModifiers"),
                                 blenderSourceModifiers);
+        QJsonArray blenderSourceShaderEffects;
+        for (const BlenderSourceShaderEffect &effect :
+             sceneObject.blenderSourceShaderEffects) {
+            blenderSourceShaderEffects.append(QJsonObject{
+                {QStringLiteral("name"), effect.name},
+                {QStringLiteral("linkedName"), effect.linkedName},
+                {QStringLiteral("linkedType"), effect.linkedType}});
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceShaderEffects"),
+                                blenderSourceShaderEffects);
         insertBlenderNameList(QStringLiteral("blenderSourceConstraintNames"),
                               sceneObject.blenderSourceConstraintNames);
         insertBlenderNameList(QStringLiteral("blenderSourceVertexGroupNames"),
@@ -777,7 +787,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 37) {
+    if (version < 1 || version > 38) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1828,6 +1838,41 @@ bool documentFromJson(const QJsonValue &value,
                     return false;
                 }
                 sceneObject.blenderSourceModifiers.append({
+                    nameValue.toString(), linkedNameValue.toString(), linkedType});
+            }
+        }
+        if (version >= 38) {
+            const QJsonValue effectsValue = serializedObject.value(
+                QStringLiteral("blenderSourceShaderEffects"));
+            if (!effectsValue.isArray() || effectsValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender shader effects"));
+                return false;
+            }
+            for (const QJsonValue &effectValue : effectsValue.toArray()) {
+                if (!effectValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender shader effect entry"));
+                    return false;
+                }
+                const QJsonObject effectObject = effectValue.toObject();
+                const QJsonValue nameValue = effectObject.value(
+                    QStringLiteral("name"));
+                const QJsonValue linkedNameValue = effectObject.value(
+                    QStringLiteral("linkedName"));
+                const QJsonValue linkedTypeValue = effectObject.value(
+                    QStringLiteral("linkedType"));
+                const QString linkedType = linkedTypeValue.toString();
+                if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !linkedNameValue.isString() ||
+                    linkedNameValue.toString().size() > 4096 ||
+                    !linkedTypeValue.isString() || linkedType.size() > 32 ||
+                    (!linkedType.isEmpty() && linkedType != QLatin1String("object"))) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender shader effect link"));
+                    return false;
+                }
+                sceneObject.blenderSourceShaderEffects.append({
                     nameValue.toString(), linkedNameValue.toString(), linkedType});
             }
         }

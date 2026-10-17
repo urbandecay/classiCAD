@@ -1976,6 +1976,24 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                                  linkedDescription);
             }
         }
+        if (!entry.shaderEffects.isEmpty()) {
+            QTreeWidgetItem *effects = appendContentRow(
+                item, QStringLiteral("Effects"), QStringLiteral("/effects"),
+                QStringLiteral("Blender Grease Pencil shader effects"));
+            for (qsizetype index = 0; index < entry.shaderEffects.size(); ++index) {
+                const OutlinerModifierEntry &sourceEffect = entry.shaderEffects[index];
+                QTreeWidgetItem *effect = appendContentRow(
+                    effects, sourceEffect.name,
+                    QStringLiteral("/effect-%1").arg(index),
+                    QStringLiteral("Blender Grease Pencil shader effect"));
+                if (!sourceEffect.linkedName.isEmpty()) {
+                    appendContentRow(
+                        effect, sourceEffect.linkedName,
+                        QStringLiteral("/effect-%1/linked").arg(index),
+                        QStringLiteral("Blender object linked to a Grease Pencil Swirl effect"));
+                }
+            }
+        }
         appendNameGroup(item, QStringLiteral("Vertex Groups"),
                         QStringLiteral("/vertex-groups"),
                         QStringLiteral("Blender mesh vertex groups"),

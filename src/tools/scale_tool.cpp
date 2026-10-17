@@ -247,6 +247,16 @@ bool ScaleTool::commitScale(qreal factor,
         const WorkPlaneFrame surfaceFrame = context.viewportTransform().workPlaneFrame();
         DocumentTransaction transaction = context.beginTransaction();
         const bool componentEdit = !state.controlPointIndices.isEmpty();
+        const auto pointMap = [base = state.basePoint, axisDirection, factor,
+                               oneDimensional = state.mode == ScaleMode::OneD,
+                               surfaceFrame](const Point3D &point) {
+            return scalePointInFrame(point, base, axisDirection, factor,
+                                     oneDimensional, surfaceFrame);
+        };
+        const AffineTransform3D instanceLinear =
+            affineLinearTransformFromPointMap(pointMap);
+        const bool instanceLinearValid =
+            isValidAffineTransform(instanceLinear, true);
         const bool edited = componentEdit
             ? TransformCommand::applyPerObject(
                   context.document(), transaction, state.sourceObjectIds,
@@ -268,15 +278,52 @@ bool ScaleTool::commitScale(qreal factor,
                                   oneDimensional, surfaceFrame);
                           });
                   })
-            : TransformCommand::apply(
+            : TransformCommand::applyPerObject(
                   context.document(), transaction, state.sourceObjectIds,
-                  [base = state.basePoint, axisDirection, factor,
+                  [&context, &pointMap, base = state.basePoint,
+                   axisDirection, factor,
                    oneDimensional = state.mode == ScaleMode::OneD,
-                   surfaceFrame](Shape &shape) {
-                      scaleShapeGeometry(&shape, base, axisDirection, factor,
-                                         oneDimensional, surfaceFrame);
+                   surfaceFrame](ObjectId objectId, Shape &shape) {
+                      const SceneObject *object =
+                          context.document().object(objectId);
+                      if (object != nullptr &&
+                          object->instanceCollectionId.isValid()) {
+                          transformShapeControlPoints(
+                              &shape, QSet<int>{0}, pointMap);
+                      } else {
+                          scaleShapeGeometry(&shape, base, axisDirection,
+                                             factor, oneDimensional,
+                                             surfaceFrame);
+                      }
                   });
-        if (edited) {
+        bool hasSelectedInstance = false;
+        for (const ObjectId objectId : state.sourceObjectIds) {
+            const SceneObject *object =
+                context.document().object(objectId);
+            hasSelectedInstance = hasSelectedInstance ||
+                (object != nullptr &&
+                 object->instanceCollectionId.isValid());
+        }
+        bool instanceTransformsUpdated =
+            !hasSelectedInstance || instanceLinearValid;
+        if (edited && instanceLinearValid) {
+            for (const ObjectId objectId : state.sourceObjectIds) {
+                const SceneObject *object =
+                    context.document().object(objectId);
+                if (object == nullptr ||
+                    !object->instanceCollectionId.isValid()) {
+                    continue;
+                }
+                if (!transaction.setObjectInstanceTransform(
+                        objectId,
+                        multiplyAffineTransforms(instanceLinear,
+                                                object->instanceTransform))) {
+                    instanceTransformsUpdated = false;
+                    break;
+                }
+            }
+        }
+        if (edited && instanceTransformsUpdated) {
             updateAssociativeDimensions(context.document(), context.curveSampler());
             context.commitTransaction(transaction);
             context.notifyCollectionsChanged();

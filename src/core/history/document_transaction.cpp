@@ -169,6 +169,17 @@ bool DocumentTransaction::setObjectPlacementTranslation(
     return true;
 }
 
+bool DocumentTransaction::setObjectInstanceTransform(
+    ObjectId objectId, const AffineTransform3D &transform)
+{
+    if (!document_.setObjectInstanceTransform(objectId, transform)) {
+        return false;
+    }
+    changes_.addObject(objectId);
+    changes_.placementChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectAppearance(
     ObjectId objectId,
     const QVector4D &displayColorSceneLinear,

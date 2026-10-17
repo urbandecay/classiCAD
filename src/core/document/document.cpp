@@ -337,6 +337,24 @@ bool Document::setObjectPlacementTranslation(ObjectId id,
     return setObjectPlacementTranslations({id}, {translation});
 }
 
+bool Document::setObjectInstanceTransform(
+    ObjectId id, const AffineTransform3D &transform)
+{
+    SceneObject *sceneObject = mutableObject(id);
+    if (sceneObject == nullptr || !isObjectEditable(id) ||
+        !sceneObject->instanceCollectionId.isValid() ||
+        !isValidLinearTransform(transform)) {
+        return false;
+    }
+    if (sceneObject->instanceTransform == transform) return true;
+    sceneObject->instanceTransform = transform;
+    DocumentChangeSet changes;
+    changes.addObject(id);
+    changes.placementChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::setObjectPlacementTranslations(
     const QVector<ObjectId> &ids, const QVector<Point3D> &translations)
 {
@@ -916,6 +934,7 @@ bool Document::removeCollection(CollectionId id)
     for (SceneObject &object : objects_) {
         if (object.instanceCollectionId != id) continue;
         object.instanceCollectionId = CollectionId::invalid();
+        object.instanceTransform = identityAffineTransform3D;
         changes.addObject(object.id);
     }
     changes.collectionsChanged = true;

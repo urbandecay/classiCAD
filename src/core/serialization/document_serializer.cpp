@@ -1185,7 +1185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 64);
+    serialized.insert(QStringLiteral("version"), 65);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1350,6 +1350,12 @@ QJsonObject documentToJson(const Document &document)
             sceneObject.instanceCollectionId.isValid()
                 ? idToJson(sceneObject.instanceCollectionId.value())
                 : QJsonValue(QString()));
+        QJsonArray instanceTransform;
+        for (const double value : sceneObject.instanceTransform) {
+            instanceTransform.append(value);
+        }
+        serializedObject.insert(QStringLiteral("instanceTransform"),
+                                instanceTransform);
         serializedObject.insert(QStringLiteral("hideViewport"), sceneObject.hideViewport);
         serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
@@ -1665,7 +1671,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 64) {
+    if (version < 1 || version > 65) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -2420,6 +2426,7 @@ bool documentFromJson(const QJsonValue &value,
 
         QVector<CollectionId> objectCollectionIds;
         CollectionId instanceCollectionId = CollectionId::invalid();
+        AffineTransform3D instanceTransform = identityAffineTransform3D;
         bool hideViewport = false;
         bool hideRender = false;
         bool hiddenInViewport = false;
@@ -2468,6 +2475,35 @@ bool documentFromJson(const QJsonValue &value,
                     return false;
                 }
                 instanceCollectionId = CollectionId::fromValue(collectionValueId);
+            }
+        }
+        if (version >= 65) {
+            const QJsonValue transformValue =
+                serializedObject.value(QStringLiteral("instanceTransform"));
+            if (!transformValue.isArray() ||
+                transformValue.toArray().size() != 16) {
+                setError(errorMessage,
+                         QStringLiteral("invalid collection instance transform"));
+                return false;
+            }
+            const QJsonArray transformArray = transformValue.toArray();
+            for (int index = 0; index < 16; ++index) {
+                const QJsonValue component = transformArray[index];
+                if (!component.isDouble() ||
+                    !std::isfinite(component.toDouble())) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid collection instance transform"));
+                    return false;
+                }
+                instanceTransform[static_cast<std::size_t>(index)] =
+                    component.toDouble();
+            }
+            if (!isValidLinearTransform(instanceTransform) ||
+                (!instanceCollectionId.isValid() &&
+                 instanceTransform != identityAffineTransform3D)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid collection instance transform"));
+                return false;
             }
         }
         if (version >= 11) {
@@ -2608,6 +2644,7 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.id = ObjectId::fromValue(objectValueId);
         sceneObject.collectionIds = std::move(objectCollectionIds);
         sceneObject.instanceCollectionId = instanceCollectionId;
+        sceneObject.instanceTransform = instanceTransform;
         sceneObject.hideViewport = hideViewport;
         sceneObject.hideRender = hideRender;
         sceneObject.hiddenInViewport = hiddenInViewport;

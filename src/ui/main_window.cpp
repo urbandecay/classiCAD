@@ -290,11 +290,13 @@ private:
                     }),
                     object.collectionIds.end());
                 object.instanceCollectionId = CollectionId::invalid();
+                object.instanceTransform = identityAffineTransform3D;
             }
         } else {
             for (SceneObject &object : snapshot.objects) {
                 object.collectionIds.clear();
                 object.instanceCollectionId = CollectionId::invalid();
+                object.instanceTransform = identityAffineTransform3D;
             }
         }
         for (const SceneObject &object : snapshot.objects) {
@@ -328,11 +330,16 @@ private:
             if (!object.id.isValid() || !object.instanceCollectionId.isValid()) {
                 continue;
             }
+            QJsonArray instanceTransform;
+            for (const double value : object.instanceTransform) {
+                instanceTransform.append(value);
+            }
             instanceReferences.append(QJsonObject{
                 {QStringLiteral("object_id"),
                  QString::number(object.id.value())},
                 {QStringLiteral("collection_id"),
-                 QString::number(object.instanceCollectionId.value())}});
+                 QString::number(object.instanceCollectionId.value())},
+                {QStringLiteral("instance_transform"), instanceTransform}});
         }
         const QHash<quint64, QString> &anchorIdentities = collectionClipboard
             ? outlinerCollectionClipboardAnchorIdentities_
@@ -462,7 +469,12 @@ private:
                 &collectionIdentities)) {
             return;
         }
-        QHash<quint64, quint64> instanceCollectionReferences;
+        struct ClipboardInstanceReference {
+            quint64 collectionId = 0;
+            AffineTransform3D transform = identityAffineTransform3D;
+        };
+        QHash<quint64, ClipboardInstanceReference>
+            instanceCollectionReferences;
         const QJsonValue instanceReferencesValue = payload.value(
             QStringLiteral("instance_collection_references"));
         if (!instanceReferencesValue.isArray() ||
@@ -482,6 +494,27 @@ private:
             const quint64 collectionId = reference.value(
                 QStringLiteral("collection_id")).toString()
                 .toULongLong(&collectionIdValid);
+            AffineTransform3D instanceTransform =
+                identityAffineTransform3D;
+            const QJsonValue transformValue = reference.value(
+                QStringLiteral("instance_transform"));
+            if (!transformValue.isUndefined()) {
+                if (!transformValue.isArray() ||
+                    transformValue.toArray().size() != 16) {
+                    return;
+                }
+                const QJsonArray transformArray = transformValue.toArray();
+                for (int index = 0; index < 16; ++index) {
+                    const QJsonValue component = transformArray[index];
+                    if (!component.isDouble() ||
+                        !std::isfinite(component.toDouble())) {
+                        return;
+                    }
+                    instanceTransform[static_cast<std::size_t>(index)] =
+                        component.toDouble();
+                }
+                if (!isValidLinearTransform(instanceTransform)) return;
+            }
             if (!objectIdValid || objectId == 0 || !collectionIdValid ||
                 collectionId == 0 ||
                 instanceCollectionReferences.contains(objectId) ||
@@ -492,7 +525,8 @@ private:
                 })) {
                 return;
             }
-            instanceCollectionReferences.insert(objectId, collectionId);
+            instanceCollectionReferences.insert(
+                objectId, {collectionId, instanceTransform});
         }
         QVector<SceneObject> restoredObjects = clipboardDocument.objects();
         for (SceneObject &object : restoredObjects) {
@@ -500,7 +534,8 @@ private:
                 object.id.value());
             if (reference != instanceCollectionReferences.cend()) {
                 object.instanceCollectionId =
-                    CollectionId::fromValue(reference.value());
+                    CollectionId::fromValue(reference->collectionId);
+                object.instanceTransform = reference->transform;
             }
         }
 
@@ -4451,6 +4486,9 @@ private:
                             }
                         }
                         copy.instanceCollectionId = currentCollectionId;
+                        if (!currentCollectionId.isValid()) {
+                            copy.instanceTransform = identityAffineTransform3D;
+                        }
                     }
                 }
                 for (int index = 0; index < copies.size(); ++index) {
@@ -5958,6 +5996,9 @@ private:
                                        clone.instanceCollectionId) == nullptr) {
                             clone.instanceCollectionId =
                                 CollectionId::invalid();
+                        }
+                        if (!clone.instanceCollectionId.isValid()) {
+                            clone.instanceTransform = identityAffineTransform3D;
                         }
                     }
                     if (fromClipboard) {

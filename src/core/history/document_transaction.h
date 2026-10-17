@@ -26,6 +26,8 @@ public:
     bool replaceGeometry(ObjectId objectId, const Shape &shape);
     bool setObjectPlacementTranslation(ObjectId objectId,
                                        const Point3D &translation);
+    bool setObjectInstanceTransform(ObjectId objectId,
+                                    const AffineTransform3D &transform);
     bool setObjectAppearance(ObjectId objectId,
                              const QVector4D &displayColorSceneLinear,
                              const WorkbenchMaterialData &workbenchMaterial);

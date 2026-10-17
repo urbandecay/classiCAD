@@ -1,11 +1,18 @@
 #pragma once
 
+#include "affine_transform.h"
 #include "core/document/shape.h"
 
 #include <QSet>
 #include <functional>
 
 namespace classiCAD {
+
+// Applies an affine world-space transform to exact stored geometry. Meshes
+// keep their data-local vertices and compose this transform into their object
+// matrix at the scene-object layer.
+bool transformShapeGeometryAffine(Shape *shape,
+                                  const AffineTransform3D &transform);
 
 // Bake a scene object's world-space translation into its geometry. Used when
 // a non-translation edit needs geometry in the same world-space frame.

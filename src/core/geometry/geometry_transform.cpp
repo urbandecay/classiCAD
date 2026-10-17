@@ -9,6 +9,88 @@
 namespace classiCAD {
 namespace {
 
+Point3D cross(const Point3D &left, const Point3D &right)
+{
+    return {left.y * right.z - left.z * right.y,
+            left.z * right.x - left.x * right.z,
+            left.x * right.y - left.y * right.x};
+}
+
+qreal length(const Point3D &vector)
+{
+    return std::hypot(std::hypot(vector.x, vector.y), vector.z);
+}
+
+bool transformedWorkPlaneFrame(const WorkPlaneFrame &source,
+                               const AffineTransform3D &transform,
+                               WorkPlaneFrame *result)
+{
+    if (result == nullptr || !isValidWorkPlaneFrame(source)) return false;
+    const Point3D transformedX = transformAffineVector(transform, source.xAxis);
+    const Point3D transformedY = transformAffineVector(transform, source.yAxis);
+    const qreal xLength = length(transformedX);
+    Point3D transformedNormal = cross(transformedX, transformedY);
+    const qreal normalLength = length(transformedNormal);
+    if (!std::isfinite(xLength) || !std::isfinite(normalLength) ||
+        xLength <= 1.0e-12 || normalLength <= 1.0e-12) {
+        return false;
+    }
+    WorkPlaneFrame frame;
+    frame.origin = transformAffinePoint(transform, source.origin);
+    frame.xAxis = {transformedX.x / xLength,
+                   transformedX.y / xLength,
+                   transformedX.z / xLength};
+    transformedNormal = {transformedNormal.x / normalLength,
+                         transformedNormal.y / normalLength,
+                         transformedNormal.z / normalLength};
+    frame.normal = transformedNormal;
+    frame.yAxis = cross(frame.normal, frame.xAxis);
+    frame.valid = isValidWorkPlaneFrame(frame);
+    if (!frame.valid) return false;
+    *result = frame;
+    return true;
+}
+
+bool transformCurveAffine(NurbsCurve3D *curve,
+                          const WorkPlaneFrame &sourceFrame,
+                          const AffineTransform3D &transform,
+                          const WorkPlaneFrame &targetFrame)
+{
+    if (curve == nullptr || !validateNurbsCurve(*curve)) return false;
+    bool requiresDimension3 = curve->dimension == 3;
+    QVector<double> normalCoordinates;
+    normalCoordinates.reserve(curve->controlPoints.size());
+    for (int index = 0; index < curve->controlPoints.size(); ++index) {
+        const qreal normal = curve->dimension == 3
+            ? curve->normalCoordinates[index] : 0.0;
+        const Point3D sourceWorld = workPlaneFramePointToWorld(
+            curve->controlPoints[index], normal, sourceFrame);
+        const Point3D targetWorld = transformAffinePoint(transform, sourceWorld);
+        qreal targetNormal = 0.0;
+        const QPointF targetLocal = worldPointToWorkPlaneFrame(
+            targetWorld, targetFrame, &targetNormal);
+        if (!std::isfinite(targetLocal.x()) ||
+            !std::isfinite(targetLocal.y()) ||
+            !std::isfinite(targetNormal)) {
+            return false;
+        }
+        const qreal scale = std::max<qreal>(
+            1.0, length(targetWorld));
+        requiresDimension3 = requiresDimension3 ||
+                             std::abs(targetNormal) > scale * 1.0e-10;
+        curve->controlPoints[index] = targetLocal;
+        normalCoordinates.append(targetNormal);
+    }
+    if (requiresDimension3) {
+        curve->dimension = 3;
+        curve->normalCoordinates = std::move(normalCoordinates);
+    } else {
+        curve->dimension = 2;
+        curve->normalCoordinates.clear();
+    }
+    return validateNurbsCurve(*curve);
+}
+
 template <typename Map>
 bool transformSpatialGeometry(Shape *shape, const Map &map)
 {
@@ -192,6 +274,140 @@ WorkPlaneFrame rotateFrame(const WorkPlaneFrame &frame,
 }
 
 } // namespace
+
+bool transformShapeGeometryAffine(Shape *shape,
+                                  const AffineTransform3D &transform)
+{
+    if (shape == nullptr || !isValidAffineTransform(transform, true)) {
+        return false;
+    }
+    Shape result = *shape;
+    const auto transformPointCloud = [&transform](PointCloud3D *cloud) {
+        if (cloud == nullptr || !validatePointCloud(*cloud)) return false;
+        const double determinant =
+            transform[0] * (transform[5] * transform[10] -
+                            transform[6] * transform[9]) -
+            transform[1] * (transform[4] * transform[10] -
+                            transform[6] * transform[8]) +
+            transform[2] * (transform[4] * transform[9] -
+                            transform[5] * transform[8]);
+        const qreal radiusScale = std::cbrt(std::abs(determinant));
+        for (Point3D &point : cloud->positions) {
+            point = transformAffinePoint(transform, point);
+        }
+        for (qreal &radius : cloud->radii) radius *= radiusScale;
+        return validatePointCloud(*cloud);
+    };
+
+    if (result.geometryType == GeometryType::PolygonMesh) {
+        return false;
+    }
+    if (result.geometryType == GeometryType::PointCloud) {
+        if (!transformPointCloud(&result.pointCloud)) return false;
+        *shape = std::move(result);
+        return true;
+    }
+    if (result.geometryType == GeometryType::ScalarVolume) {
+        ScalarVolume3D &volume = result.scalarVolume;
+        if (!validateScalarVolume(volume)) return false;
+        volume.objectToWorld = multiplyAffineTransforms(
+            transform, volume.objectToWorld);
+        if (!isValidAffineTransform(volume.objectToWorld, true) ||
+            !scalarVolumeDensityScale(volume.renderSpace,
+                                      volume.objectToWorld,
+                                      volume.displayDensity,
+                                      &volume.densityScale) ||
+            !validateScalarVolume(volume)) {
+            return false;
+        }
+        *shape = std::move(result);
+        return true;
+    }
+
+    const auto determinant = [&transform]() {
+        return transform[0] * (transform[5] * transform[10] -
+                                transform[6] * transform[9]) -
+               transform[1] * (transform[4] * transform[10] -
+                                transform[6] * transform[8]) +
+               transform[2] * (transform[4] * transform[9] -
+                                transform[5] * transform[8]);
+    };
+    if (result.geometryType == GeometryType::NurbsSurface ||
+        result.geometryType == GeometryType::NurbsSolid) {
+        NurbsSurface3D &baseSurface = shapeBaseSurface(result);
+        if (!validateNurbsSurface(baseSurface)) return false;
+        for (Point3D &point : baseSurface.controlPoints) {
+            point = transformAffinePoint(transform, point);
+        }
+        if (result.geometryType == GeometryType::NurbsSolid) {
+            NurbsExtrusionSolid3D &solid = result.nurbsSolid;
+            solid.displacement = transformAffineVector(
+                transform, solid.displacement);
+            for (NurbsSurface3D &face : solid.boundaryFaces) {
+                if (!validateNurbsSurface(face)) return false;
+                for (Point3D &point : face.controlPoints) {
+                    point = transformAffinePoint(transform, point);
+                }
+            }
+            if (determinant() < 0.0) {
+                for (int index = 0;
+                     index < solid.boundaryFaceReversed.size(); ++index) {
+                    solid.boundaryFaceReversed[index] =
+                        !solid.boundaryFaceReversed[index];
+                }
+            }
+        }
+        if (!validateNurbsSurface(baseSurface)) return false;
+        *shape = std::move(result);
+        return true;
+    }
+
+    const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(result);
+    WorkPlaneFrame targetFrame;
+    if (!transformedWorkPlaneFrame(sourceFrame, transform, &targetFrame)) {
+        return false;
+    }
+    for (QPointF &point : result.points) {
+        const Point3D sourceWorld = workPlaneFramePointToWorld(point,
+                                                               sourceFrame);
+        qreal depth = 0.0;
+        point = worldPointToWorkPlaneFrame(
+            transformAffinePoint(transform, sourceWorld), targetFrame, &depth);
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+            std::abs(depth) > std::max<qreal>(1.0, length(sourceWorld)) *
+                                  1.0e-9) {
+            return false;
+        }
+    }
+    if (result.geometryType == GeometryType::PolyCurve &&
+        !result.components.isEmpty()) {
+        QVector<WorkPlaneFrame> targetComponentFrames;
+        targetComponentFrames.reserve(result.components.size());
+        for (int index = 0; index < result.components.size(); ++index) {
+            const WorkPlaneFrame sourceComponentFrame =
+                shapeComponentWorkPlaneFrame(*shape, index);
+            WorkPlaneFrame targetComponentFrame;
+            if (!transformedWorkPlaneFrame(sourceComponentFrame, transform,
+                                           &targetComponentFrame) ||
+                !transformCurveAffine(&result.components[index],
+                                      sourceComponentFrame, transform,
+                                      targetComponentFrame)) {
+                return false;
+            }
+            targetComponentFrames.append(targetComponentFrame);
+        }
+        result.componentWorkPlaneFrames = std::move(targetComponentFrames);
+    } else if (validateNurbsCurve(result.nurbs)) {
+        if (!transformCurveAffine(&result.nurbs, sourceFrame, transform,
+                                  targetFrame)) {
+            return false;
+        }
+        result.points = result.nurbs.controlPoints;
+    }
+    result.workPlaneFrame = targetFrame;
+    *shape = std::move(result);
+    return true;
+}
 
 bool bakeShapePlacementTranslation(Shape *shape,
                                    const Point3D &translation)

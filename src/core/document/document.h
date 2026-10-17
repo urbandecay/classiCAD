@@ -69,6 +69,8 @@ public:
                         const std::function<bool(Shape &)> &edit);
     bool setObjectPlacementTranslation(ObjectId id,
                                        const Point3D &translation);
+    bool setObjectInstanceTransform(ObjectId id,
+                                    const AffineTransform3D &transform);
     bool setObjectPlacementTranslations(const QVector<ObjectId> &ids,
                                        const QVector<Point3D> &translations);
     bool translateObjects(const QVector<ObjectId> &ids,

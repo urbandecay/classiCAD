@@ -3,6 +3,7 @@
 #include "collection_id.h"
 #include "object_id.h"
 #include "shape.h"
+#include "core/geometry/affine_transform.h"
 
 #include <QVector3D>
 #include <QJsonArray>
@@ -17,12 +18,9 @@ namespace classiCAD {
 
 // Row-major local-to-world affine matrix used by imported polygon meshes.
 // Other geometry types continue to use their existing placement/frame data.
-using MeshObjectTransform = std::array<double, 16>;
-inline constexpr MeshObjectTransform identityMeshObjectTransform{
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    0.0, 0.0, 0.0, 1.0};
+using MeshObjectTransform = AffineTransform3D;
+inline constexpr MeshObjectTransform identityMeshObjectTransform =
+    identityAffineTransform3D;
 
 // One Blender tiled-image entry. Tile numbers follow Blender's UDIM numbering
 // (1001 is UV tile (0, 0)); renderers prefer packed bytes and fall back to path.
@@ -147,6 +145,9 @@ struct SceneObject {
     // Blender Object.instance_collection. The viewport resolves the linked
     // collection dynamically so edits to its members remain visible here.
     CollectionId instanceCollectionId = CollectionId::invalid();
+    // Rotation and scale applied to a Blender-style collection instance.
+    // Its translation remains the world-space point stored in geometry.
+    AffineTransform3D instanceTransform = identityAffineTransform3D;
     bool hideViewport = false;
     bool hideRender = false;
     bool hiddenInViewport = false;

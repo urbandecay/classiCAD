@@ -277,6 +277,15 @@ bool RotateTool::commitAngle(qreal angle,
         DocumentTransaction transaction = context.beginTransaction();
         const InteractionState &state = interactionState_;
         const bool componentEdit = !state.controlPointIndices.isEmpty();
+        const auto pointMap = [pivot = state.baseWorldPoint,
+                               axis = state.frame.normal,
+                               angle](const Point3D &point) {
+            return rotatePointAboutAxis(point, pivot, axis, angle);
+        };
+        const AffineTransform3D instanceLinear =
+            affineLinearTransformFromPointMap(pointMap);
+        const bool instanceLinearValid =
+            isValidAffineTransform(instanceLinear, true);
         const bool edited = componentEdit
             ? TransformCommand::applyPerObject(
                   context.document(), transaction, state.sourceObjectIds,
@@ -296,14 +305,49 @@ bool RotateTool::commitAngle(qreal angle,
                                                           angle);
                           });
                   })
-            : TransformCommand::apply(
+            : TransformCommand::applyPerObject(
                   context.document(), transaction, state.sourceObjectIds,
-                  [pivot = state.baseWorldPoint,
+                  [&context, &pointMap, pivot = state.baseWorldPoint,
                    axis = state.frame.normal,
-                   angle](Shape &shape) {
-                      rotateShapeGeometry(&shape, pivot, axis, angle);
+                   angle](ObjectId objectId, Shape &shape) {
+                      const SceneObject *object =
+                          context.document().object(objectId);
+                      if (object != nullptr &&
+                          object->instanceCollectionId.isValid()) {
+                          transformShapeControlPoints(
+                              &shape, QSet<int>{0}, pointMap);
+                      } else {
+                          rotateShapeGeometry(&shape, pivot, axis, angle);
+                      }
                   });
-        if (edited) {
+        bool hasSelectedInstance = false;
+        for (const ObjectId objectId : state.sourceObjectIds) {
+            const SceneObject *object =
+                context.document().object(objectId);
+            hasSelectedInstance = hasSelectedInstance ||
+                (object != nullptr &&
+                 object->instanceCollectionId.isValid());
+        }
+        bool instanceTransformsUpdated =
+            !hasSelectedInstance || instanceLinearValid;
+        if (edited && instanceLinearValid) {
+            for (const ObjectId objectId : state.sourceObjectIds) {
+                const SceneObject *object =
+                    context.document().object(objectId);
+                if (object == nullptr ||
+                    !object->instanceCollectionId.isValid()) {
+                    continue;
+                }
+                if (!transaction.setObjectInstanceTransform(
+                        objectId,
+                        multiplyAffineTransforms(instanceLinear,
+                                                object->instanceTransform))) {
+                    instanceTransformsUpdated = false;
+                    break;
+                }
+            }
+        }
+        if (edited && instanceTransformsUpdated) {
             updateAssociativeDimensions(context.document(), context.curveSampler());
             context.commitTransaction(transaction);
             context.notifyCollectionsChanged();

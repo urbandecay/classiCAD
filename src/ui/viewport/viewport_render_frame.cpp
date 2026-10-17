@@ -113,6 +113,74 @@ bool remapCameraBackgroundPicture(Shape *shape,
     return true;
 }
 
+AffineTransform3D transformPreviewLinear(
+    const ViewportRenderTransform &preview)
+{
+    if (preview.kind == ViewportRenderTransformKind::Scale) {
+        return affineLinearTransformFromPointMap(
+            [&preview](const Point3D &point) {
+                return scalePointInFrame(
+                    point, preview.scaleBasePoint, preview.scaleAxis,
+                    preview.scaleFactor,
+                    preview.scaleMode == ScaleMode::OneD,
+                    preview.scaleSurfaceFrame);
+            });
+    }
+    if (preview.kind == ViewportRenderTransformKind::Rotate) {
+        return affineLinearTransformFromPointMap(
+            [&preview](const Point3D &point) {
+                return rotatePointAboutAxis(
+                    point, preview.rotatePivot, preview.rotateAxis,
+                    preview.rotateAngle);
+            });
+    }
+    return identityAffineTransform3D;
+}
+
+bool applyCollectionInstanceTransform(ViewportRenderObject *proxy,
+                                      const AffineTransform3D &transform)
+{
+    if (proxy == nullptr || !isValidAffineTransform(transform, true)) {
+        return false;
+    }
+    if (proxy->hasDisplayBoundsData) {
+        proxy->displayBoundsTransformWorld = multiplyAffineTransforms(
+            transform, proxy->displayBoundsTransformWorld);
+    }
+    if (proxy->shape.geometryType == GeometryType::PolygonMesh) {
+        proxy->meshObjectTransform = multiplyAffineTransforms(
+            transform, proxy->meshObjectTransform);
+        return isValidAffineTransform(proxy->meshObjectTransform);
+    }
+    if (proxy->placementTranslation.x != 0.0 ||
+        proxy->placementTranslation.y != 0.0 ||
+        proxy->placementTranslation.z != 0.0) {
+        if (!bakeShapePlacementTranslation(&proxy->shape,
+                                           proxy->placementTranslation)) {
+            return false;
+        }
+        proxy->placementTranslation = {};
+    }
+    if (!transformShapeGeometryAffine(&proxy->shape, transform)) {
+        return false;
+    }
+    if (!proxy->blenderSurfaceWireVerticesWorld.isEmpty()) {
+        for (Point3D &point : proxy->blenderSurfaceWireVerticesWorld) {
+            point = transformAffinePoint(transform, point);
+        }
+    }
+    const double determinant =
+        transform[0] * (transform[5] * transform[10] -
+                        transform[6] * transform[9]) -
+        transform[1] * (transform[4] * transform[10] -
+                        transform[6] * transform[8]) +
+        transform[2] * (transform[4] * transform[9] -
+                        transform[5] * transform[8]);
+    if (determinant < 0.0) proxy->reverseSurfaceOrientation =
+        !proxy->reverseSurfaceOrientation;
+    return true;
+}
+
 } // namespace
 
 const ViewportRenderObject *ViewportRenderFrame::find(
@@ -396,6 +464,16 @@ ViewportRenderFrame buildViewportRenderFrame(
                             preview.scaleMode == ScaleMode::OneD,
                             preview.scaleSurfaceFrame);
                     });
+            } else if (sceneObject.instanceCollectionId.isValid()) {
+                transformShapeControlPoints(
+                    &entry.shape, QSet<int>{0},
+                    [&preview](const Point3D &point) {
+                        return scalePointInFrame(
+                            point, preview.scaleBasePoint,
+                            preview.scaleAxis, preview.scaleFactor,
+                            preview.scaleMode == ScaleMode::OneD,
+                            preview.scaleSurfaceFrame);
+                    });
             } else {
                 scaleShapeGeometry(&entry.shape,
                                    preview.scaleBasePoint,
@@ -418,6 +496,14 @@ ViewportRenderFrame buildViewportRenderFrame(
             if (componentTargets != preview.controlPointIndices.cend()) {
                 transformShapeControlPoints(
                     &entry.shape, componentTargets.value(),
+                    [&preview](const Point3D &point) {
+                        return rotatePointAboutAxis(
+                            point, preview.rotatePivot,
+                            preview.rotateAxis, preview.rotateAngle);
+                    });
+            } else if (sceneObject.instanceCollectionId.isValid()) {
+                transformShapeControlPoints(
+                    &entry.shape, QSet<int>{0},
                     [&preview](const Point3D &point) {
                         return rotatePointAboutAxis(
                             point, preview.rotatePivot,
@@ -460,14 +546,29 @@ ViewportRenderFrame buildViewportRenderFrame(
         origin.z += entry.placementTranslation.z;
         return origin;
     };
-    const auto subtractPoint = [](const Point3D &left, const Point3D &right) {
-        return Point3D{left.x - right.x, left.y - right.y,
-                       left.z - right.z};
-    };
-    const auto addPoint = [](const Point3D &left, const Point3D &right) {
-        return Point3D{left.x + right.x, left.y + right.y,
-                       left.z + right.z};
-    };
+        const auto collectionInstanceTransform =
+            [&input, &transformedIds](const SceneObject &object) {
+                AffineTransform3D linear = object.instanceTransform;
+                if (transformedIds.contains(object.id.value()) &&
+                    (input.transformPreview.kind ==
+                         ViewportRenderTransformKind::Rotate ||
+                     input.transformPreview.kind ==
+                         ViewportRenderTransformKind::Scale)) {
+                    linear = multiplyAffineTransforms(
+                        transformPreviewLinear(input.transformPreview), linear);
+                }
+                return linear;
+            };
+        const auto makeInstanceTransform = [](
+            const Point3D &origin, const Point3D &collectionOffset,
+            const AffineTransform3D &linear) {
+            const Point3D negativeOffset{-collectionOffset.x,
+                                         -collectionOffset.y,
+                                         -collectionOffset.z};
+            return multiplyAffineTransforms(
+                multiplyAffineTransforms(affineTranslation(origin), linear),
+                affineTranslation(negativeOffset));
+        };
 
     for (const SceneObject &instanceObject : document.objects()) {
         if (!instanceObject.instanceCollectionId.isValid()) continue;
@@ -487,7 +588,7 @@ ViewportRenderFrame buildViewportRenderFrame(
         int emittedCount = 0;
         const auto appendCollectionInstance =
             [&](const auto &self, CollectionId collectionId,
-                const Point3D &translation) -> void {
+                const AffineTransform3D &collectionTransform) -> void {
                 if (emittedCount >= 20000 || collectionPath.size() >= 64 ||
                     collectionPath.contains(collectionId.value())) {
                     return;
@@ -535,19 +636,24 @@ ViewportRenderFrame buildViewportRenderFrame(
                         const auto nestedTarget = collectionsById.constFind(
                             sourceObject.instanceCollectionId.value());
                         if (nestedTarget == collectionsById.cend()) continue;
-                        Point3D nestedTranslation = addPoint(
-                            instanceObjectOrigin(sourceEntry), translation);
-                        nestedTranslation = subtractPoint(
-                            nestedTranslation, nestedTarget->instanceOffset);
+                        const Point3D nestedOrigin =
+                            instanceObjectOrigin(sourceEntry);
+                        const AffineTransform3D nestedTransform =
+                            makeInstanceTransform(
+                                nestedOrigin, nestedTarget->instanceOffset,
+                                collectionInstanceTransform(sourceObject));
                         self(self, sourceObject.instanceCollectionId,
-                             nestedTranslation);
+                             multiplyAffineTransforms(collectionTransform,
+                                                      nestedTransform));
                         continue;
                     }
                     ViewportRenderObject proxy = sourceEntry;
                     proxy.objectId = instanceObject.id;
                     proxy.objectIndex = objectIndex++;
-                    proxy.placementTranslation = addPoint(
-                        proxy.placementTranslation, translation);
+                    if (!applyCollectionInstanceTransform(
+                            &proxy, collectionTransform)) {
+                        continue;
+                    }
                     proxy.cacheable = false;
                     proxy.preparedDepthGeometry.reset();
                     proxy.preparedGeometryRevision = 0;
@@ -565,11 +671,12 @@ ViewportRenderFrame buildViewportRenderFrame(
                 collectionPath.remove(collectionId.value());
             };
 
-        const Point3D initialTranslation = subtractPoint(
-            instanceOrigin, target->instanceOffset);
+        const AffineTransform3D initialTransform = makeInstanceTransform(
+            instanceOrigin, target->instanceOffset,
+            collectionInstanceTransform(instanceObject));
         appendCollectionInstance(appendCollectionInstance,
                                  instanceObject.instanceCollectionId,
-                                 initialTranslation);
+                                 initialTransform);
     }
     return frame;
 }

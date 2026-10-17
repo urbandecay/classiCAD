@@ -1835,33 +1835,38 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         kind == OutlinerRowKind::SequencerStrip ||
         kind == OutlinerRowKind::DataApi) return;
     QMenu menu(this);
+    const auto createCollection = [this](CollectionId parentId) {
+        if (!callbacks_.createCollection) return;
+        QSet<QString> existingNames;
+        if (callbacks_.entries) {
+            for (const CollectionPanelEntry &entry : callbacks_.entries()) {
+                existingNames.insert(entry.collection.name);
+            }
+        }
+        QString name = QStringLiteral("Collection");
+        for (int suffix = 1; existingNames.contains(name); ++suffix) {
+            name = QStringLiteral("Collection.%1")
+                       .arg(suffix, 3, 10, QLatin1Char('0'));
+        }
+        callbacks_.createCollection(name, parentId);
+    };
 
     if (kind == OutlinerRowKind::SceneRoot &&
         item->data(nameColumn, itemViewLayerKeyRole).toString().isEmpty() &&
         callbacks_.createCollection) {
         QAction *create = menu.addAction(QStringLiteral("New Collection"));
-        connect(create, &QAction::triggered, this, [this]() {
-            bool accepted = false;
-            const QString name = QInputDialog::getText(
-                this, QStringLiteral("New Collection"),
-                QStringLiteral("Name"), QLineEdit::Normal, {}, &accepted);
-            if (accepted && !name.trimmed().isEmpty()) {
-                callbacks_.createCollection(name, CollectionId::invalid());
-            }
+        connect(create, &QAction::triggered, this,
+                [createCollection]() {
+            createCollection(CollectionId::invalid());
         });
     } else if (kind == OutlinerRowKind::Collection) {
         const CollectionId collectionId = CollectionId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
         if (callbacks_.createCollection) {
             QAction *create = menu.addAction(QStringLiteral("New Collection"));
-            connect(create, &QAction::triggered, this, [this, collectionId]() {
-                bool accepted = false;
-                const QString name = QInputDialog::getText(
-                    this, QStringLiteral("New Collection"),
-                    QStringLiteral("Name"), QLineEdit::Normal, {}, &accepted);
-                if (accepted && !name.trimmed().isEmpty()) {
-                    callbacks_.createCollection(name, collectionId);
-                }
+            connect(create, &QAction::triggered, this,
+                    [createCollection, collectionId]() {
+                createCollection(collectionId);
             });
         }
         if (callbacks_.renameCollection) {
@@ -1963,6 +1968,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             connect(unlink, &QAction::triggered, this,
                     [this, objectId, linkedCollectionId]() {
                 callbacks_.unlinkObject(objectId, linkedCollectionId);
+            });
+        }
+        if (callbacks_.createCollection) {
+            QAction *createCollectionAction = menu.addAction(
+                QStringLiteral("New Collection"));
+            connect(createCollectionAction, &QAction::triggered, this,
+                    [createCollection]() {
+                createCollection(CollectionId::invalid());
             });
         }
     }

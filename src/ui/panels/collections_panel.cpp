@@ -2983,6 +2983,22 @@ void CollectionsPanel::refresh()
                 }
             }
         };
+        const auto appendLibraryNameTree = [&appendLibraryContentRow](
+            const auto &self, QTreeWidgetItem *parent,
+            const QJsonArray &nodes, const QString &path,
+            const QString &description) -> void {
+            for (qsizetype index = 0; index < nodes.size(); ++index) {
+                const QJsonObject node = nodes[index].toObject();
+                const QString nodePath = path + QStringLiteral("/item-%1")
+                    .arg(index);
+                QTreeWidgetItem *row = appendLibraryContentRow(
+                    parent, node.value(QStringLiteral("name")).toString(),
+                    nodePath, description);
+                self(self, row, node.value(
+                    QStringLiteral("children")).toArray(), nodePath,
+                    description);
+            }
+        };
         QHash<QString, QTreeWidgetItem *> libraryRows;
         for (const OutlinerLibraryEntry &library : libraries) {
             auto *row = new QTreeWidgetItem;
@@ -3096,6 +3112,27 @@ void CollectionsPanel::refresh()
                             sourceGroup.dataBlockTreesByName.cend()) {
                             const QString treePath = dataPath +
                                 QStringLiteral("/item-%1").arg(dataIndex);
+                            appendLibraryNameTree(
+                                appendLibraryNameTree, dataRow,
+                                dataBlockTree->armatureBoneTree,
+                                treePath + QStringLiteral("/bones"),
+                                QStringLiteral("Blender armature bone"));
+                            if (!dataBlockTree->boneCollectionTree.isEmpty()) {
+                                const QString boneCollectionPath = treePath +
+                                    QStringLiteral("/bone-collections");
+                                QTreeWidgetItem *boneCollectionsRow =
+                                    appendLibraryContentRow(
+                                        dataRow,
+                                        QStringLiteral("Bone Collections"),
+                                        boneCollectionPath,
+                                        QStringLiteral("Blender armature bone collections"));
+                                appendLibraryNameTree(
+                                    appendLibraryNameTree,
+                                    boneCollectionsRow,
+                                    dataBlockTree->boneCollectionTree,
+                                    boneCollectionPath + QStringLiteral("/items"),
+                                    QStringLiteral("Blender bone collection"));
+                            }
                             if (!dataBlockTree->shapeKeyDataName.isEmpty()) {
                                 const QString shapeKeyPath = treePath +
                                     QStringLiteral("/shape-keys");

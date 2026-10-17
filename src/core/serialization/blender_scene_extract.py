@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 56
+BRIDGE_FORMAT_VERSION = 58
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -728,28 +728,46 @@ def data_block_animation_metadata(data_block, remaining_rows=None):
     return result
 
 
-def outliner_name_tree(items, include_constraints=False):
+def outliner_name_tree(items, include_constraints=False, remaining_rows=None,
+                       truncated_out=None):
     """Bounded Blender name/parent tree used by display-only Outliner rows."""
-    remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    budgets = [local_remaining]
+    if remaining_rows is not None:
+        budgets.append(remaining_rows)
+    truncated = [False]
+
+    def reserve_rows(count=1):
+        if any(budget[0] < count for budget in budgets):
+            truncated[0] = True
+            return False
+        for budget in budgets:
+            budget[0] -= count
+        return True
 
     def convert(item, depth):
-        if remaining[0] <= 0 or depth >= 128:
+        if depth >= 128:
+            truncated[0] = True
             return None
-        remaining[0] -= 1
+        if not reserve_rows():
+            return None
         result = {"name": str(item.name), "children": []}
         if include_constraints:
             constraints = []
-            for constraint in list(getattr(item, "constraints", ())):
-                if remaining[0] <= 0:
+            for index, constraint in enumerate(getattr(item, "constraints", ())):
+                if index >= MAX_OUTLINER_HIERARCHY_ITEMS:
+                    truncated[0] = True
+                    break
+                if not reserve_rows(2 if index == 0 else 1):
                     break
                 constraints.append(str(constraint.name))
-                remaining[0] -= 1
             result["constraints"] = constraints
         for child in getattr(item, "children", ()):
             row = convert(child, depth + 1)
             if row is not None:
                 result["children"].append(row)
-            if remaining[0] <= 0:
+            if any(budget[0] <= 0 for budget in budgets):
+                truncated[0] = True
                 break
         return result
 
@@ -760,8 +778,11 @@ def outliner_name_tree(items, include_constraints=False):
         row = convert(item, 0)
         if row is not None:
             rows.append(row)
-        if remaining[0] <= 0:
+        if any(budget[0] <= 0 for budget in budgets):
+            truncated[0] = True
             break
+    if truncated_out is not None:
+        truncated_out[:] = [truncated[0]]
     return rows
 
 
@@ -916,6 +937,8 @@ def outliner_library_tree():
                     "shape_key_data_name": "",
                     "shape_key_names": [],
                     "material_names": [],
+                    "armature_bone_tree": [],
+                    "bone_collection_tree": [],
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -960,10 +983,30 @@ def outliner_library_tree():
                 except (AttributeError, ReferenceError, RuntimeError, TypeError):
                     subtree_truncated[0] = True
 
+                if id_type == "Armature":
+                    bone_tree_truncated = []
+                    collection_tree_truncated = []
+                    try:
+                        subtree["armature_bone_tree"] = outliner_name_tree(
+                            getattr(id_block, "bones", ()),
+                            remaining_rows=library_specialized_rows_remaining,
+                            truncated_out=bone_tree_truncated)
+                        subtree["bone_collection_tree"] = outliner_name_tree(
+                            getattr(id_block, "collections", ()),
+                            remaining_rows=library_specialized_rows_remaining,
+                            truncated_out=collection_tree_truncated)
+                    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                        subtree_truncated[0] = True
+                    if (bone_tree_truncated == [True] or
+                            collection_tree_truncated == [True]):
+                        subtree_truncated[0] = True
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
-                        subtree["material_names"]):
+                        subtree["material_names"] or
+                        subtree["armature_bone_tree"] or
+                        subtree["bone_collection_tree"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

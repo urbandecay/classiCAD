@@ -2839,7 +2839,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 50 && bridgeVersion != 51 &&
          bridgeVersion != 52 && bridgeVersion != 53 &&
          bridgeVersion != 54 && bridgeVersion != 55 &&
-         bridgeVersion != 56 && bridgeVersion != 57)) {
+         bridgeVersion != 56 && bridgeVersion != 57 &&
+         bridgeVersion != 58)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3319,6 +3320,10 @@ bool importBlenderScene(const QString &path,
                             QStringLiteral("shape_key_names"));
                         const QJsonValue materialNamesValue = subtree.value(
                             QStringLiteral("material_names"));
+                        const QJsonValue armatureBoneTreeValue = subtree.value(
+                            QStringLiteral("armature_bone_tree"));
+                        const QJsonValue boneCollectionTreeValue = subtree.value(
+                            QStringLiteral("bone_collection_tree"));
                         const QString dataName = dataNameValue.toString();
                         const QString shapeKeyDataName =
                             shapeKeyDataNameValue.toString();
@@ -3330,19 +3335,60 @@ bool importBlenderScene(const QString &path,
                             !shapeKeyNamesValue.isArray() ||
                             shapeKeyNamesValue.toArray().size() > 1024 ||
                             !materialNamesValue.isArray() ||
-                            materialNamesValue.toArray().size() > 1024) {
+                            materialNamesValue.toArray().size() > 1024 ||
+                            (bridgeVersion >= 58 &&
+                             (!armatureBoneTreeValue.isArray() ||
+                              !boneCollectionTreeValue.isArray()))) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library data-block subtree is invalid"));
                             return false;
                         }
                         dataBlockSubtrees.insert(dataName);
-                        const int subtreeRows =
+                        int subtreeRows =
                             (shapeKeyDataName.isEmpty() ? 0 :
                                 1 + shapeKeyNamesValue.toArray().size()) +
                             materialNamesValue.toArray().size();
+                        if (bridgeVersion >= 58) {
+                            const auto countNameTree = [&](const auto &self,
+                                                           const QJsonArray &nodes,
+                                                           int depth,
+                                                           int *nodeCount) -> bool {
+                                if (depth > 128 || nodeCount == nullptr ||
+                                    *nodeCount + nodes.size() > 1024) {
+                                    return false;
+                                }
+                                for (const QJsonValue &nodeValue : nodes) {
+                                    if (!nodeValue.isObject()) return false;
+                                    const QJsonObject node = nodeValue.toObject();
+                                    const QJsonValue name = node.value(
+                                        QStringLiteral("name"));
+                                    const QJsonValue children = node.value(
+                                        QStringLiteral("children"));
+                                    if (!name.isString() || name.toString().size() > 4096 ||
+                                        !children.isArray()) return false;
+                                    ++(*nodeCount);
+                                    if (!self(self, children.toArray(), depth + 1,
+                                              nodeCount)) return false;
+                                }
+                                return true;
+                            };
+                            int boneRows = 0;
+                            int boneCollectionRows = 0;
+                            if (!countNameTree(countNameTree,
+                                               armatureBoneTreeValue.toArray(),
+                                               0, &boneRows) ||
+                                !countNameTree(countNameTree,
+                                               boneCollectionTreeValue.toArray(),
+                                               0, &boneCollectionRows)) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library armature tree is invalid"));
+                                return false;
+                            }
+                            subtreeRows += boneRows + boneCollectionRows;
+                        }
                         if ((shapeKeyDataName.isEmpty() &&
                              !shapeKeyNamesValue.toArray().isEmpty()) ||
-                            subtreeRows > 1024 ||
+                            subtreeRows > 2048 ||
                             totalLibrarySpecializedRows + subtreeRows > 20000) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library specialized subtree exceeded its row limit"));

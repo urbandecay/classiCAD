@@ -519,6 +519,10 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         QStringLiteral("shape_key_names"));
                     const QJsonValue materialNames = subtree.value(
                         QStringLiteral("material_names"));
+                    const QJsonValue armatureBoneTree = subtree.value(
+                        QStringLiteral("armature_bone_tree"));
+                    const QJsonValue boneCollectionTree = subtree.value(
+                        QStringLiteral("bone_collection_tree"));
                     const QString dataBlockName = dataName.toString();
                     const QString shapeKeyName = shapeKeyDataName.toString();
                     if (!dataName.isString() || dataBlockName.size() > 4096 ||
@@ -527,15 +531,52 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         !shapeKeyDataName.isString() || shapeKeyName.size() > 4096 ||
                         !shapeKeyNames.isArray() || shapeKeyNames.toArray().size() > 1024 ||
                         !materialNames.isArray() || materialNames.toArray().size() > 1024 ||
-                        (shapeKeyName.isEmpty() && !shapeKeyNames.toArray().isEmpty())) {
+                        (shapeKeyName.isEmpty() && !shapeKeyNames.toArray().isEmpty()) ||
+                        (armatureBoneTree.isUndefined() !=
+                         boneCollectionTree.isUndefined()) ||
+                        (!armatureBoneTree.isUndefined() &&
+                         (!armatureBoneTree.isArray() ||
+                          !boneCollectionTree.isArray()))) {
                         return false;
                     }
                     subtreesByDataBlockName.insert(dataBlockName);
-                    const int subtreeRows =
+                    int subtreeRows =
                         (shapeKeyName.isEmpty() ? 0 :
                             1 + shapeKeyNames.toArray().size()) +
                         materialNames.toArray().size();
-                    if (subtreeRows > 1024 ||
+                    if (!armatureBoneTree.isUndefined()) {
+                        const auto countNameTree = [&](const auto &self,
+                                                       const QJsonArray &nodes,
+                                                       int depth,
+                                                       int *nodeCount) -> bool {
+                            if (depth > 128 || nodeCount == nullptr ||
+                                *nodeCount + nodes.size() > 1024) return false;
+                            for (const QJsonValue &nodeValue : nodes) {
+                                if (!nodeValue.isObject()) return false;
+                                const QJsonObject node = nodeValue.toObject();
+                                const QJsonValue name = node.value(
+                                    QStringLiteral("name"));
+                                const QJsonValue children = node.value(
+                                    QStringLiteral("children"));
+                                if (!name.isString() || name.toString().size() > 4096 ||
+                                    !children.isArray()) return false;
+                                ++(*nodeCount);
+                                if (!self(self, children.toArray(), depth + 1,
+                                          nodeCount)) return false;
+                            }
+                            return true;
+                        };
+                        int boneRows = 0;
+                        int boneCollectionRows = 0;
+                        if (!countNameTree(countNameTree,
+                                           armatureBoneTree.toArray(), 0,
+                                           &boneRows) ||
+                            !countNameTree(countNameTree,
+                                           boneCollectionTree.toArray(), 0,
+                                           &boneCollectionRows)) return false;
+                        subtreeRows += boneRows + boneCollectionRows;
+                    }
+                    if (subtreeRows > 2048 ||
                         totalSpecializedRows + subtreeRows > 20000) return false;
                     totalSpecializedRows += subtreeRows;
                     for (const QJsonValue &name : shapeKeyNames.toArray()) {
@@ -773,7 +814,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 47);
+    serialized.insert(QStringLiteral("version"), 48);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1229,7 +1270,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 47) {
+    if (version < 1 || version > 48) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

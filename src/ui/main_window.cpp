@@ -3400,6 +3400,10 @@ private:
                                 dataBlockTree.materialNames.append(name);
                             }
                         }
+                        dataBlockTree.armatureBoneTree = subtree.value(
+                            QStringLiteral("armature_bone_tree")).toArray();
+                        dataBlockTree.boneCollectionTree = subtree.value(
+                            QStringLiteral("bone_collection_tree")).toArray();
                         group.dataBlockTreesByName.insert(
                             dataBlockName, std::move(dataBlockTree));
                     }

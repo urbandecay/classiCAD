@@ -11621,3 +11621,12 @@ scene depth.
   hierarchy rows lack Blender object identity/state metadata for carried object
   filters. `cmake --build build -j4` and `git diff --check` passed; no matched
   Blender Outliner comparison was run.
+- The hundred-twenty-first Outliner data update preserves Blender's per-path
+  View Layer restriction state when extracting collections. `holdout` and
+  `indirect_only` were already captured in each Blender LayerCollection
+  instance, but the collection state consumed by classiCAD's Outliner dropped
+  them. The extractor now carries both values through with the exact
+  view-layer key and collection path, so flattened All View Layers rows can
+  show the imported restriction values. Collection ID alone is not a safe
+  match because the same Blender collection can occur at multiple paths.
+  Build and Blender comparison are pending.

@@ -4872,6 +4872,8 @@ def extract_scene(input_path, mode):
                     "exclude": state["exclude"],
                     "hide_viewport": state["hide_viewport"],
                     "hide_render": state["hide_render"],
+                    "holdout": state["holdout"],
+                    "indirect_only": state["indirect_only"],
                 })
     parent_ids_by_collection = {}
     parent_orders_by_collection = {}

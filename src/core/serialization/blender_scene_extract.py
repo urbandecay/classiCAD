@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 73
+BRIDGE_FORMAT_VERSION = 74
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -43,6 +43,8 @@ MAX_OUTLINER_SEQUENCE_ITEMS = 10000
 MAX_OUTLINER_SEQUENCE_DEPTH = 128
 MAX_OUTLINER_DATA_API_ITEMS = 20000
 MAX_OUTLINER_DATA_API_DEPTH = 32
+MAX_OUTLINER_KEYING_SETS = 1024
+MAX_OUTLINER_KEYING_SET_PATHS = 20000
 # Blender's RNA Outliner stores collection indices in a signed short.
 MAX_OUTLINER_DATA_API_COLLECTION_ITEMS = 32767
 MAX_OUTLINER_OVERRIDE_ITEMS = 20000
@@ -2180,7 +2182,7 @@ def outliner_sequencer_tree(active_window, fallback_scene):
 
 
 def outliner_data_api_tree():
-    """Capture Blender's read-only RNA Data API tree with bounded recursion."""
+    """Capture Blender's RNA Data API tree with bounded recursion."""
     remaining = [MAX_OUTLINER_DATA_API_ITEMS - 1]
     truncated = [False]
     pending_structs = []
@@ -2246,6 +2248,36 @@ def outliner_data_api_tree():
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             return []
 
+    def animation_path_metadata(owner, prop, identifier, is_array,
+                                array_index=0):
+        try:
+            if not bool(getattr(prop, "is_animatable", False)) or bool(
+                    getattr(prop, "is_readonly", False)):
+                return None
+            id_block = owner if isinstance(owner, bpy.types.ID) else getattr(
+                owner, "id_data", None)
+            if not isinstance(id_block, bpy.types.ID):
+                return None
+            if (getattr(id_block, "library", None) is not None and
+                    getattr(id_block, "override_library", None) is None and
+                    not bool(getattr(prop, "is_library_editable", False))):
+                return None
+            owner_path = "" if owner is id_block else str(
+                owner.path_from_id())
+            data_path = ((owner_path + ".") if owner_path else "") + identifier
+            if not data_path or len(data_path) > 4096:
+                return None
+            return {
+                "id_type": str(id_block.id_type)[:256],
+                "id_name": str(id_block.name_full)[:4096],
+                "data_path": data_path,
+                "array_index": int(array_index),
+                "use_entire_array": bool(is_array),
+            }
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError):
+            return None
+
     def add_struct(value, key, depth, ancestry):
         rna = getattr(value, "bl_rna", None)
         type_name = str(getattr(rna, "identifier", ""))
@@ -2283,6 +2315,11 @@ def outliner_data_api_tree():
                 "PROPERTY", identifier, prop_name, prop_type)
             if property_node is None:
                 break
+            is_array = bool(getattr(prop, "is_array", False))
+            property_animation_path = animation_path_metadata(
+                value, prop, identifier, is_array)
+            if property_animation_path is not None:
+                property_node["animation_path"] = property_animation_path
             try:
                 property_value = getattr(value, identifier)
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
@@ -2325,6 +2362,11 @@ def outliner_data_api_tree():
                         "ARRAY_ELEM", array_key, array_name, prop_type)
                     if array_node is None:
                         break
+                    if property_animation_path is not None:
+                        element_path = dict(property_animation_path)
+                        element_path["array_index"] = index
+                        element_path["use_entire_array"] = False
+                        array_node["animation_path"] = element_path
                     property_node["children"].append(array_node)
             node["children"].append(property_node)
 
@@ -2346,6 +2388,11 @@ def outliner_data_api_tree():
                                      prop_type)
         if property_node is None:
             break
+        is_array = bool(getattr(prop, "is_array", False))
+        property_animation_path = animation_path_metadata(
+            bpy.data, prop, identifier, is_array)
+        if property_animation_path is not None:
+            property_node["animation_path"] = property_animation_path
         try:
             property_value = getattr(bpy.data, identifier)
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
@@ -2385,6 +2432,11 @@ def outliner_data_api_tree():
                     "ARRAY_ELEM", str(index), array_name, prop_type)
                 if array_node is None:
                     break
+                if property_animation_path is not None:
+                    element_path = dict(property_animation_path)
+                    element_path["array_index"] = index
+                    element_path["use_entire_array"] = False
+                    array_node["animation_path"] = element_path
                 property_node["children"].append(array_node)
         root["children"].append(property_node)
 
@@ -2398,6 +2450,65 @@ def outliner_data_api_tree():
         populate_struct(node, value, depth, ancestry)
 
     return {"root": root, "truncated": truncated[0]}
+
+
+def outliner_scene_keying_sets(scene):
+    """Capture scene keying-set paths used by the Data API Outliner."""
+    records = []
+    active_key = ""
+    truncated = False
+    try:
+        collection = scene.keying_sets
+        active = collection.active
+        keying_set_count = len(collection)
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        return records, active_key, truncated
+
+    remaining_paths = MAX_OUTLINER_KEYING_SET_PATHS
+    for index, keying_set in enumerate(collection):
+        if index >= MAX_OUTLINER_KEYING_SETS:
+            truncated = True
+            break
+        try:
+            name = str(keying_set.name)[:4096]
+            key = "keying-set:%d:%s" % (index, name)
+            is_absolute = bool(keying_set.is_path_absolute)
+            source_paths = keying_set.paths
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            continue
+        paths = []
+        for source_path in source_paths:
+            if remaining_paths <= 0:
+                truncated = True
+                break
+            try:
+                id_block = source_path.id
+                paths.append({
+                    "id_type": str(source_path.id_type)[:256],
+                    "id_name": (str(id_block.name_full)[:4096]
+                                if isinstance(id_block, bpy.types.ID) else ""),
+                    "data_path": str(source_path.data_path)[:4096],
+                    "array_index": int(source_path.array_index),
+                    "use_entire_array": bool(
+                        source_path.use_entire_array),
+                    "group": str(source_path.group)[:4096],
+                    "group_method": str(source_path.group_method)[:128],
+                })
+                remaining_paths -= 1
+            except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                    ValueError):
+                continue
+        records.append({
+            "key": key,
+            "name": name,
+            "is_absolute": is_absolute,
+            "paths": paths,
+        })
+        if keying_set == active:
+            active_key = key
+    if keying_set_count > MAX_OUTLINER_KEYING_SETS:
+        truncated = True
+    return records, active_key, truncated
 
 
 def object_metadata(obj, scene, depsgraph=None):
@@ -4716,11 +4827,16 @@ def extract_scene(input_path, mode):
         depsgraph = depsgraph_for_scene(scene)
         camera_depsgraph = depsgraph
         render = scene.render
+        (keying_sets, active_keying_set_key,
+         keying_sets_truncated) = outliner_scene_keying_sets(scene)
         scene_record = {
             "scene_id": stable_id(scene),
             "is_active_scene": scene == active_scene,
             "name": scene.name_full,
             "cursor_location": vector_values(scene.cursor.location),
+            "keying_sets": keying_sets,
+            "active_keying_set_key": active_keying_set_key,
+            "keying_sets_truncated": keying_sets_truncated,
             "library_path": source_library_path(scene),
             "world_name": scene.world.name_full if scene.world else "",
             "world_animation_data": data_block_animation_metadata(scene.world),

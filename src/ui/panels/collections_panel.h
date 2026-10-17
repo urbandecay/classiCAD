@@ -244,6 +244,10 @@ struct CollectionsPanelCallbacks {
     std::function<OutlinerSequenceTree()> sequencer;
     std::function<void(const QStringList &, const QString &)> setSequencerSelection;
     std::function<QJsonObject()> dataApi;
+    std::function<QJsonObject()> activeSceneRecord;
+    std::function<void(const QString &)> setActiveKeyingSet;
+    std::function<QString(const QString &, const QJsonArray &, bool)>
+        editKeyingSetPaths;
     std::function<QJsonObject()> libraryOverrides;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
@@ -342,6 +346,8 @@ private:
     void restoreTreeState();
     void saveTreeState();
     void populateDataApiChildren(QTreeWidgetItem *item);
+    void editSelectedDataApiKeyingSetPaths(bool add);
+    void updateDataApiKeyingSetControls();
     void showContextMenu(const QPoint &position);
     bool activateObjectRow(QTreeWidgetItem *item,
                            Qt::KeyboardModifiers modifiers);
@@ -369,6 +375,9 @@ private:
     QLineEdit *filterEdit_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
+    QComboBox *dataApiKeyingSetCombo_ = nullptr;
+    QToolButton *addKeyingSetPathsButton_ = nullptr;
+    QToolButton *removeKeyingSetPathsButton_ = nullptr;
     QComboBox *libraryOverrideViewCombo_ = nullptr;
     QComboBox *idTypeCombo_ = nullptr;
     QCheckBox *showSystemOverridesCheck_ = nullptr;

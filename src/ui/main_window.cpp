@@ -4086,10 +4086,192 @@ private:
         collectionCallbacks.libraryOverrides = [this]() {
             return session_.document().settings().importedBlenderLibraryOverrides;
         };
+        collectionCallbacks.activeSceneRecord = activeSceneRecord;
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();
         };
+        collectionCallbacks.setActiveKeyingSet =
+            [this, activeSceneRecord](const QString &key) {
+                DocumentSettings settings = session_.document().settings();
+                QJsonArray scenes = settings.importedBlenderScenes;
+                const QString sceneId = activeSceneRecord().value(
+                    QStringLiteral("scene_id")).toString();
+                if (sceneId.isEmpty()) return;
+                bool changed = false;
+                for (qsizetype index = 0; index < scenes.size(); ++index) {
+                    QJsonObject scene = scenes[index].toObject();
+                    if (scene.value(QStringLiteral("scene_id")).toString() !=
+                        sceneId) {
+                        continue;
+                    }
+                    bool keyExists = key.isEmpty();
+                    for (const QJsonValue &keyingSetValue : scene.value(
+                             QStringLiteral("keying_sets")).toArray()) {
+                        if (keyingSetValue.toObject().value(
+                                QStringLiteral("key")).toString() == key) {
+                            keyExists = true;
+                            break;
+                        }
+                    }
+                    if (!keyExists || scene.value(
+                            QStringLiteral("active_keying_set_key")).toString() ==
+                            key) {
+                        return;
+                    }
+                    scene.insert(QStringLiteral("active_keying_set_key"), key);
+                    scenes[index] = scene;
+                    changed = true;
+                    break;
+                }
+                if (!changed) return;
+                settings.importedBlenderScenes = scenes;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setSettings(settings) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not change the active Keying Set"),
+                        4000);
+                }
+            };
+        collectionCallbacks.editKeyingSetPaths =
+            [this, activeSceneRecord](const QString &requestedKey,
+                                      const QJsonArray &paths,
+                                      bool add) -> QString {
+                DocumentSettings settings = session_.document().settings();
+                QJsonArray scenes = settings.importedBlenderScenes;
+                const QString sceneId = activeSceneRecord().value(
+                    QStringLiteral("scene_id")).toString();
+                if (sceneId.isEmpty() || paths.isEmpty()) return requestedKey;
+                QString activeKey = requestedKey;
+                bool changed = false;
+                for (qsizetype sceneIndex = 0; sceneIndex < scenes.size();
+                     ++sceneIndex) {
+                    QJsonObject scene = scenes[sceneIndex].toObject();
+                    if (scene.value(QStringLiteral("scene_id")).toString() !=
+                        sceneId) {
+                        continue;
+                    }
+                    QJsonArray keyingSets = scene.value(
+                        QStringLiteral("keying_sets")).toArray();
+                    int keyingSetIndex = -1;
+                    for (qsizetype index = 0; index < keyingSets.size(); ++index) {
+                        if (keyingSets[index].toObject().value(
+                                QStringLiteral("key")).toString() == activeKey) {
+                            keyingSetIndex = static_cast<int>(index);
+                            break;
+                        }
+                    }
+                    if (keyingSetIndex < 0 && !add) return activeKey;
+                    if (keyingSetIndex < 0) {
+                        if (keyingSets.size() >= 1024) return activeKey;
+                        QSet<QString> existingNames;
+                        QSet<QString> existingKeys;
+                        for (const QJsonValue &value : keyingSets) {
+                            const QJsonObject keyingSet = value.toObject();
+                            existingNames.insert(keyingSet.value(
+                                QStringLiteral("name")).toString());
+                            existingKeys.insert(keyingSet.value(
+                                QStringLiteral("key")).toString());
+                        }
+                        QString name = QStringLiteral("KeyingSet");
+                        for (int suffix = 1; existingNames.contains(name); ++suffix) {
+                            name = QStringLiteral("KeyingSet.%1")
+                                       .arg(suffix, 3, 10, QLatin1Char('0'));
+                        }
+                        int suffix = 1;
+                        do {
+                            activeKey = QStringLiteral("classiCAD-keying-set:%1")
+                                            .arg(suffix++);
+                        } while (existingKeys.contains(activeKey));
+                        QJsonObject keyingSet;
+                        keyingSet.insert(QStringLiteral("key"), activeKey);
+                        keyingSet.insert(QStringLiteral("name"), name);
+                        keyingSet.insert(QStringLiteral("is_absolute"), true);
+                        keyingSet.insert(QStringLiteral("paths"), QJsonArray{});
+                        keyingSets.append(keyingSet);
+                        keyingSetIndex = keyingSets.size() - 1;
+                        changed = true;
+                    }
+
+                    QJsonObject keyingSet = keyingSets[keyingSetIndex].toObject();
+                    const QJsonArray previousPaths = keyingSet.value(
+                        QStringLiteral("paths")).toArray();
+                    QJsonArray updatedPaths;
+                    const auto samePath = [](const QJsonObject &left,
+                                             const QJsonObject &right) {
+                        static const QStringList keys{
+                            QStringLiteral("id_type"),
+                            QStringLiteral("id_name"),
+                            QStringLiteral("data_path"),
+                            QStringLiteral("array_index"),
+                            QStringLiteral("use_entire_array"),
+                            QStringLiteral("group"),
+                            QStringLiteral("group_method")};
+                        for (const QString &key : keys) {
+                            if (left.value(key) != right.value(key)) return false;
+                        }
+                        return true;
+                    };
+                    if (add) {
+                        updatedPaths = previousPaths;
+                        for (const QJsonValue &candidateValue : paths) {
+                            if (!candidateValue.isObject() ||
+                                updatedPaths.size() >= 20000) {
+                                continue;
+                            }
+                            const QJsonObject candidate = candidateValue.toObject();
+                            const bool exists = std::any_of(
+                                updatedPaths.cbegin(), updatedPaths.cend(),
+                                [&candidate, &samePath](const QJsonValue &value) {
+                                    return value.isObject() &&
+                                           samePath(value.toObject(), candidate);
+                                });
+                            if (!exists) updatedPaths.append(candidate);
+                        }
+                    } else {
+                        for (const QJsonValue &existingValue : previousPaths) {
+                            bool remove = false;
+                            if (existingValue.isObject()) {
+                                for (const QJsonValue &candidateValue : paths) {
+                                    if (candidateValue.isObject() && samePath(
+                                            existingValue.toObject(),
+                                            candidateValue.toObject())) {
+                                        remove = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!remove) updatedPaths.append(existingValue);
+                        }
+                    }
+                    if (updatedPaths != previousPaths) {
+                        keyingSet.insert(QStringLiteral("paths"), updatedPaths);
+                        keyingSets[keyingSetIndex] = keyingSet;
+                        changed = true;
+                    }
+                    if (scene.value(QStringLiteral("active_keying_set_key"))
+                            .toString() != activeKey) {
+                        scene.insert(QStringLiteral("active_keying_set_key"),
+                                     activeKey);
+                        changed = true;
+                    }
+                    scene.insert(QStringLiteral("keying_sets"), keyingSets);
+                    scenes[sceneIndex] = scene;
+                    break;
+                }
+                if (!changed) return activeKey;
+                settings.importedBlenderScenes = scenes;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setSettings(settings) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not edit the active Keying Set"),
+                        4000);
+                    return requestedKey;
+                }
+                return activeKey;
+            };
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;
         };

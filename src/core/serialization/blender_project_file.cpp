@@ -2849,7 +2849,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 66 && bridgeVersion != 67 &&
          bridgeVersion != 68 && bridgeVersion != 69 && bridgeVersion != 70 &&
          bridgeVersion != 71 && bridgeVersion != 72 &&
-         bridgeVersion != 73)) {
+         bridgeVersion != 73 && bridgeVersion != 74)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4129,6 +4129,30 @@ bool importBlenderScene(const QString &path,
                 !childrenValue.isArray() || childrenValue.toArray().size() > 20000) {
                 return false;
             }
+            if (bridgeVersion >= 74) {
+                const QJsonValue animationPathValue = node.value(
+                    QStringLiteral("animation_path"));
+                if (!animationPathValue.isUndefined()) {
+                    const QJsonObject animationPath =
+                        animationPathValue.toObject();
+                    int arrayIndex = -1;
+                    if (!animationPathValue.isObject() ||
+                        !animationPath.value(QStringLiteral("id_type")).isString() ||
+                        animationPath.value(QStringLiteral("id_type")).toString().isEmpty() ||
+                        animationPath.value(QStringLiteral("id_type")).toString().size() > 256 ||
+                        !animationPath.value(QStringLiteral("id_name")).isString() ||
+                        animationPath.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+                        !animationPath.value(QStringLiteral("data_path")).isString() ||
+                        animationPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
+                        animationPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+                        !jsonInteger(animationPath.value(QStringLiteral("array_index")),
+                                     &arrayIndex) ||
+                        arrayIndex < 0 || arrayIndex > 32766 ||
+                        !animationPath.value(QStringLiteral("use_entire_array")).isBool()) {
+                        return false;
+                    }
+                }
+            }
             for (const QJsonValue &childValue : childrenValue.toArray()) {
                 if (!childValue.isObject() ||
                     !self(self, childValue.toObject(), depth + 1)) {
@@ -4398,6 +4422,86 @@ bool importBlenderScene(const QString &path,
             setError(errorMessage,
                      QStringLiteral("A Blender scene record is incomplete"));
             return false;
+        }
+        if (bridgeVersion >= 74) {
+            const QJsonValue keyingSetsValue = scene.value(
+                QStringLiteral("keying_sets"));
+            const QJsonValue activeKeyValue = scene.value(
+                QStringLiteral("active_keying_set_key"));
+            const QJsonValue keyingSetsTruncatedValue = scene.value(
+                QStringLiteral("keying_sets_truncated"));
+            if (!keyingSetsValue.isArray() ||
+                keyingSetsValue.toArray().size() > 1024 ||
+                !activeKeyValue.isString() ||
+                activeKeyValue.toString().size() > 512 ||
+                !keyingSetsTruncatedValue.isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender scene keying-set record is invalid"));
+                return false;
+            }
+            QSet<QString> keyingSetKeys;
+            int keyingSetPathCount = 0;
+            bool activeKeyFound = activeKeyValue.toString().isEmpty();
+            for (const QJsonValue &keyingSetValue : keyingSetsValue.toArray()) {
+                if (!keyingSetValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender scene keying-set record is invalid"));
+                    return false;
+                }
+                const QJsonObject keyingSet = keyingSetValue.toObject();
+                const QJsonValue keyValue = keyingSet.value(QStringLiteral("key"));
+                const QJsonValue nameValue = keyingSet.value(QStringLiteral("name"));
+                const QJsonValue absoluteValue = keyingSet.value(
+                    QStringLiteral("is_absolute"));
+                const QJsonValue pathsValue = keyingSet.value(QStringLiteral("paths"));
+                if (!keyValue.isString() || keyValue.toString().isEmpty() ||
+                    keyValue.toString().size() > 512 ||
+                    keyingSetKeys.contains(keyValue.toString()) ||
+                    !nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !absoluteValue.isBool() || !pathsValue.isArray() ||
+                    pathsValue.toArray().size() > 20000 ||
+                    keyingSetPathCount + pathsValue.toArray().size() > 20000) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender scene keying-set record is invalid"));
+                    return false;
+                }
+                const QString key = keyValue.toString();
+                keyingSetKeys.insert(key);
+                if (key == activeKeyValue.toString()) activeKeyFound = true;
+                keyingSetPathCount += pathsValue.toArray().size();
+                for (const QJsonValue &pathValue : pathsValue.toArray()) {
+                    if (!pathValue.isObject()) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender keying-set path is invalid"));
+                        return false;
+                    }
+                    const QJsonObject path = pathValue.toObject();
+                    int arrayIndex = -1;
+                    if (!path.value(QStringLiteral("id_type")).isString() ||
+                        path.value(QStringLiteral("id_type")).toString().size() > 256 ||
+                        !path.value(QStringLiteral("id_name")).isString() ||
+                        path.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+                        !path.value(QStringLiteral("data_path")).isString() ||
+                        path.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+                        !jsonInteger(path.value(QStringLiteral("array_index")),
+                                     &arrayIndex) ||
+                        arrayIndex < -1 || arrayIndex > 32766 ||
+                        !path.value(QStringLiteral("use_entire_array")).isBool() ||
+                        !path.value(QStringLiteral("group")).isString() ||
+                        path.value(QStringLiteral("group")).toString().size() > 4096 ||
+                        !path.value(QStringLiteral("group_method")).isString() ||
+                        path.value(QStringLiteral("group_method")).toString().size() > 128) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender keying-set path is invalid"));
+                        return false;
+                    }
+                }
+            }
+            if (!activeKeyFound) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender scene references an unknown active keying set"));
+                return false;
+            }
         }
         const QJsonObject colorManagement =
             scene.value(QStringLiteral("color_management")).toObject();

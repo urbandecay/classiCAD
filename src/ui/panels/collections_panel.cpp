@@ -703,6 +703,23 @@ void CollectionsPanel::createLayout()
     viewLayerCombo_->setToolTip(QStringLiteral("Active Blender view layer"));
     filterRow->addWidget(viewLayerCombo_);
     layout->addLayout(filterRow);
+    auto *keyingSetRow = new QHBoxLayout;
+    keyingSetRow->setContentsMargins(0, 0, 0, 0);
+    dataApiKeyingSetCombo_ = new QComboBox(this);
+    dataApiKeyingSetCombo_->setToolTip(QStringLiteral(
+        "Active Blender Keying Set for RNA properties"));
+    keyingSetRow->addWidget(dataApiKeyingSetCombo_, 1);
+    addKeyingSetPathsButton_ = new QToolButton(this);
+    addKeyingSetPathsButton_->setText(QStringLiteral("+"));
+    addKeyingSetPathsButton_->setToolTip(QStringLiteral(
+        "Add selected animatable properties to the active Keying Set"));
+    keyingSetRow->addWidget(addKeyingSetPathsButton_);
+    removeKeyingSetPathsButton_ = new QToolButton(this);
+    removeKeyingSetPathsButton_->setText(QStringLiteral("−"));
+    removeKeyingSetPathsButton_->setToolTip(QStringLiteral(
+        "Remove selected animatable properties from the active Keying Set"));
+    keyingSetRow->addWidget(removeKeyingSetPathsButton_);
+    layout->addLayout(keyingSetRow);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
     tree_->setColumnCount(8);
@@ -1145,6 +1162,17 @@ void CollectionsPanel::createLayout()
         const QString key = viewLayerCombo_->itemData(index).toString();
         if (!key.isEmpty()) callbacks_.setActiveViewLayer(key);
     });
+    connect(dataApiKeyingSetCombo_, &QComboBox::activated, this,
+            [this](int index) {
+        if (index < 0 || !callbacks_.setActiveKeyingSet) return;
+        callbacks_.setActiveKeyingSet(
+            dataApiKeyingSetCombo_->itemData(index).toString());
+        refresh();
+    });
+    connect(addKeyingSetPathsButton_, &QToolButton::clicked, this,
+            [this]() { editSelectedDataApiKeyingSetPaths(true); });
+    connect(removeKeyingSetPathsButton_, &QToolButton::clicked, this,
+            [this]() { editSelectedDataApiKeyingSetPaths(false); });
     connect(sceneCombo_, &QComboBox::activated, this, [this](int index) {
         if (index < 0 || !callbacks_.setActiveScene) return;
         const QString key = sceneCombo_->itemData(index).toString();
@@ -1670,6 +1698,105 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
             QStringLiteral("The 20,000-row or 32-level capture limit was reached"));
         truncatedRow->setFlags(Qt::ItemIsEnabled);
     }
+}
+
+void CollectionsPanel::updateDataApiKeyingSetControls()
+{
+    const bool visible = dataApiDisplayMode_;
+    dataApiKeyingSetCombo_->setVisible(visible);
+    addKeyingSetPathsButton_->setVisible(visible);
+    removeKeyingSetPathsButton_->setVisible(visible);
+    addKeyingSetPathsButton_->setEnabled(
+        visible && static_cast<bool>(callbacks_.editKeyingSetPaths));
+
+    const QJsonObject scene = callbacks_.activeSceneRecord
+        ? callbacks_.activeSceneRecord() : QJsonObject{};
+    const QString activeKey = scene.value(
+        QStringLiteral("active_keying_set_key")).toString();
+    const QSignalBlocker blocker(dataApiKeyingSetCombo_);
+    dataApiKeyingSetCombo_->clear();
+    for (const QJsonValue &keyingSetValue : scene.value(
+             QStringLiteral("keying_sets")).toArray()) {
+        if (!keyingSetValue.isObject()) continue;
+        const QJsonObject keyingSet = keyingSetValue.toObject();
+        const QString key = keyingSet.value(QStringLiteral("key")).toString();
+        if (key.isEmpty()) continue;
+        QString name = keyingSet.value(QStringLiteral("name")).toString();
+        if (name.isEmpty()) name = QStringLiteral("Keying Set");
+        dataApiKeyingSetCombo_->addItem(name, key);
+    }
+    if (activeKey.isEmpty()) {
+        dataApiKeyingSetCombo_->insertItem(
+            0, QStringLiteral("No Keying Set Active"), QString{});
+    } else if (dataApiKeyingSetCombo_->count() == 0) {
+        dataApiKeyingSetCombo_->addItem(
+            QStringLiteral("No Keying Set Active"), QString{});
+    }
+    int activeIndex = dataApiKeyingSetCombo_->findData(activeKey);
+    if (activeIndex < 0) activeIndex = 0;
+    dataApiKeyingSetCombo_->setCurrentIndex(activeIndex);
+    dataApiKeyingSetCombo_->setEnabled(
+        visible && dataApiKeyingSetCombo_->count() > 1 &&
+        static_cast<bool>(callbacks_.setActiveKeyingSet));
+    removeKeyingSetPathsButton_->setEnabled(
+        visible && !dataApiKeyingSetCombo_->currentData().toString().isEmpty() &&
+        static_cast<bool>(callbacks_.editKeyingSetPaths));
+}
+
+void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
+{
+    if (!dataApiDisplayMode_ || tree_ == nullptr ||
+        !callbacks_.editKeyingSetPaths) {
+        return;
+    }
+    QJsonArray paths;
+    QSet<QString> uniquePaths;
+    for (QTreeWidgetItem *item : tree_->selectedItems()) {
+        if (item == nullptr || item->data(nameColumn, itemKindRole).toInt() !=
+                static_cast<int>(OutlinerRowKind::DataApi)) {
+            continue;
+        }
+        const QJsonObject node = item->data(
+            nameColumn, itemDataApiNodeRole).toJsonObject();
+        const QJsonValue animationPathValue = node.value(
+            QStringLiteral("animation_path"));
+        if (!animationPathValue.isObject()) continue;
+        QJsonObject path = animationPathValue.toObject();
+        const QJsonValue idType = path.value(QStringLiteral("id_type"));
+        const QJsonValue idName = path.value(QStringLiteral("id_name"));
+        const QJsonValue dataPath = path.value(QStringLiteral("data_path"));
+        const QJsonValue arrayIndex = path.value(
+            QStringLiteral("array_index"));
+        const QJsonValue entireArray = path.value(
+            QStringLiteral("use_entire_array"));
+        if (!idType.isString() || idType.toString().isEmpty() ||
+            !idName.isString() || !dataPath.isString() ||
+            dataPath.toString().isEmpty() || !arrayIndex.isDouble() ||
+            arrayIndex.toInt(-1) < 0 || arrayIndex.toInt(-1) > 32766 ||
+            !entireArray.isBool()) {
+            continue;
+        }
+        path.insert(QStringLiteral("group"), QString{});
+        path.insert(QStringLiteral("group_method"),
+                    QStringLiteral("KEYINGSET"));
+        const QString identity = path.value(QStringLiteral("id_type")).toString() +
+            QLatin1Char('\x1f') +
+            path.value(QStringLiteral("id_name")).toString() +
+            QLatin1Char('\x1f') +
+            path.value(QStringLiteral("data_path")).toString() +
+            QLatin1Char('\x1f') +
+            QString::number(path.value(QStringLiteral("array_index")).toInt()) +
+            QLatin1Char('\x1f') +
+            (path.value(QStringLiteral("use_entire_array")).toBool()
+                 ? QStringLiteral("1") : QStringLiteral("0"));
+        if (uniquePaths.contains(identity)) continue;
+        uniquePaths.insert(identity);
+        paths.append(path);
+    }
+    if (paths.isEmpty()) return;
+    const QString currentKey = dataApiKeyingSetCombo_->currentData().toString();
+    callbacks_.editKeyingSetPaths(currentKey, paths, add);
+    refresh();
 }
 
 void CollectionsPanel::saveTreeState()
@@ -3545,6 +3672,7 @@ void CollectionsPanel::refresh()
                                           overrideHierarchiesView_;
     const bool overridePropertiesMode = libraryOverridesMode &&
                                          !overrideHierarchiesView_;
+    updateDataApiKeyingSetControls();
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
     static_cast<OutlinerTreeWidget *>(tree_)->setAllowParentingWithoutModifier(
         scenesMode || !showCollections_);
@@ -3836,7 +3964,7 @@ void CollectionsPanel::refresh()
                       dataApi.value(QStringLiteral("truncated")).toBool());
         root->setToolTip(
             nameColumn,
-            QStringLiteral("Blender RNA Data API, captured read-only at import"));
+            QStringLiteral("Blender RNA Data API captured at import; selected property paths can be added to the active Keying Set"));
         root->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         auto *placeholder = new QTreeWidgetItem(root);
         placeholder->setData(nameColumn, itemDataApiPlaceholderRole, true);

@@ -11310,3 +11310,17 @@ scene depth.
   only to QPainter would reduce parity. Existing texture-alpha cutouts still
   apply to visible raster/effect coverage. These audits found no source change
   to make; large-target and fallback image comparisons remain open.
+- The ninety-ninth tree update follows Blender 5.2.2's Data API animation-path
+  and Keying Set operators in
+  [`outliner_edit.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1780-L2246).
+  Animatable RNA property and array-element rows now retain the owning ID type
+  and name, RNA data path, array index, and whole-array flag. In Data API mode,
+  the Outliner can select a scene Keying Set and add or remove paths for the
+  selected property rows. Adding with no active set creates an absolute
+  `KeyingSet`, matching Blender's active-set fallback; path edits and active
+  set changes are undoable document transactions. Extracted keying paths and
+  animatability use Blender's RNA fields, including `ID.id_type` and
+  `KeyingSet.is_path_absolute`. This preserves path metadata but does not
+  evaluate animation, insert keyframes, or create/remove drivers. A matched
+  live UI comparison was not run. `cmake --build build -j4`, Python syntax
+  parsing, and `git diff --check` passed.

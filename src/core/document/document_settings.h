@@ -47,7 +47,7 @@ struct DocumentSettings {
     QJsonArray importedBlenderOrphans;
     // Current Blender workspace's Sequencer Outliner tree.
     QJsonObject importedBlenderSequencer;
-    // Bounded read-only Blender RNA Data API Outliner tree.
+    // Bounded Blender RNA Data API Outliner tree and animation-path metadata.
     QJsonObject importedBlenderDataApi;
     // Bounded Blender Library Overrides Properties and Hierarchies trees.
     QJsonObject importedBlenderLibraryOverrides;

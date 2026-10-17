@@ -7558,20 +7558,180 @@ private:
             return result;
         };
         const auto setCollectionsObjectSelection =
-            [this, collectionHierarchyIds](
-                const QVector<CollectionId> &roots, bool select) {
+            [this, collectionBelongsToActiveScene](
+                const QVector<OutlinerCollectionContext> &targets,
+                bool select) {
+                const Document &document = session_.document();
+                const QVector<DocumentCollection> collections =
+                    document.collections();
+                QHash<quint64, qsizetype> collectionIndexById;
+                QHash<QString, qsizetype> collectionIndexBySourceId;
+                QHash<quint64, QVector<CollectionId>> childIdsByParent;
+                for (qsizetype index = 0; index < collections.size(); ++index) {
+                    const DocumentCollection &collection = collections[index];
+                    collectionIndexById.insert(collection.id.value(), index);
+                    if (!collection.sourceId.isEmpty() &&
+                        !collectionIndexBySourceId.contains(
+                            collection.sourceId)) {
+                        collectionIndexBySourceId.insert(
+                            collection.sourceId, index);
+                    }
+                    for (const CollectionId parentId : collection.parentIds) {
+                        childIdsByParent[parentId.value()].append(
+                            collection.id);
+                    }
+                }
+                QString viewLayerKey =
+                    document.settings().activeViewLayerKey;
+                for (const OutlinerCollectionContext &target : targets) {
+                    if (target.viewLayerKey.isEmpty()) continue;
+                    viewLayerKey = target.viewLayerKey;
+                    break;
+                }
+
                 QSet<quint64> collectionIds;
-                for (const CollectionId root : roots) {
-                    for (const CollectionId id :
-                         collectionHierarchyIds(root)) {
-                        collectionIds.insert(id.value());
+                const auto appendHierarchy =
+                    [&collections, &collectionIds, &collectionIndexById,
+                     &childIdsByParent,
+                     &collectionBelongsToActiveScene](CollectionId root) {
+                        const auto rootIndex = collectionIndexById.constFind(
+                            root.value());
+                        if (rootIndex == collectionIndexById.cend()) {
+                            return;
+                        }
+                        const DocumentCollection &rootCollection =
+                            collections[rootIndex.value()];
+                        if (!collectionBelongsToActiveScene(rootCollection)) {
+                            return;
+                        }
+                        QVector<CollectionId> pending{root};
+                        QSet<quint64> visited;
+                        while (!pending.isEmpty()) {
+                            const CollectionId parentId = pending.takeLast();
+                            if (visited.contains(parentId.value())) continue;
+                            visited.insert(parentId.value());
+                            const auto parentIndex =
+                                collectionIndexById.constFind(
+                                    parentId.value());
+                            if (parentIndex == collectionIndexById.cend()) {
+                                continue;
+                            }
+                            const DocumentCollection &parent =
+                                collections[parentIndex.value()];
+                            if (parent.hideSelect ||
+                                !collectionBelongsToActiveScene(parent)) {
+                                continue;
+                            }
+                            collectionIds.insert(parentId.value());
+                            for (const CollectionId childId :
+                                 childIdsByParent.value(parentId.value())) {
+                                if (!visited.contains(childId.value())) {
+                                    pending.append(childId);
+                                }
+                            }
+                        }
+                    };
+
+                const auto pathHasPrefix = [](
+                    const QStringList &path, const QStringList &prefix) {
+                    if (path.size() < prefix.size()) return false;
+                    for (qsizetype index = 0; index < prefix.size(); ++index) {
+                        if (path[index] != prefix[index]) return false;
+                    }
+                    return true;
+                };
+                for (const OutlinerCollectionContext &target : targets) {
+                    if (!target.collectionId.isValid() ||
+                        (!target.viewLayerKey.isEmpty() &&
+                         target.viewLayerKey != viewLayerKey)) {
+                        continue;
+                    }
+                    if (target.viewLayerKey.isEmpty() ||
+                        target.sourcePath.isEmpty()) {
+                        appendHierarchy(target.collectionId);
+                        continue;
+                    }
+
+                    const qsizetype rootPathIndex =
+                        target.sourcePath.size() - 1;
+                    for (const DocumentCollection &candidate : collections) {
+                        for (const QJsonValue &stateValue :
+                             candidate.viewLayerStates) {
+                            const QJsonObject state = stateValue.toObject();
+                            if (state.value(QStringLiteral("view_layer_key"))
+                                    .toString() != target.viewLayerKey) {
+                                continue;
+                            }
+                            const QJsonArray storedPath = state.value(
+                                QStringLiteral("path")).toArray();
+                            if (storedPath.size() <
+                                    target.sourcePath.size() ||
+                                storedPath.isEmpty()) {
+                                continue;
+                            }
+                            QStringList sourcePath;
+                            bool validPath = true;
+                            for (const QJsonValue &part : storedPath) {
+                                if (!part.isString()) {
+                                    validPath = false;
+                                    break;
+                                }
+                                sourcePath.append(part.toString());
+                            }
+                            if (!validPath ||
+                                !pathHasPrefix(sourcePath,
+                                               target.sourcePath) ||
+                                sourcePath.last() != candidate.sourceId) {
+                                continue;
+                            }
+
+                            QVector<const DocumentCollection *> pathNodes;
+                            CollectionId previousId = CollectionId::invalid();
+                            bool validHierarchy = true;
+                            bool blockedByHideSelect = false;
+                            for (qsizetype pathIndex = 0;
+                                 pathIndex < sourcePath.size(); ++pathIndex) {
+                                const QString &sourceId = sourcePath[pathIndex];
+                                const auto nodeIndex =
+                                    collectionIndexBySourceId.constFind(
+                                        sourceId);
+                                if (nodeIndex ==
+                                        collectionIndexBySourceId.cend() ||
+                                    nodeIndex.value() < 0 ||
+                                    nodeIndex.value() >= collections.size()) {
+                                    validHierarchy = false;
+                                    break;
+                                }
+                                const DocumentCollection &node =
+                                    collections[nodeIndex.value()];
+                                if (previousId.isValid() &&
+                                    !node.parentIds.contains(previousId)) {
+                                    validHierarchy = false;
+                                    break;
+                                }
+                                pathNodes.append(&node);
+                                if (pathIndex >= rootPathIndex &&
+                                    node.hideSelect) {
+                                    blockedByHideSelect = true;
+                                }
+                                previousId = node.id;
+                            }
+                            if (!validHierarchy || pathNodes.isEmpty() ||
+                                pathNodes[rootPathIndex]->id !=
+                                    target.collectionId ||
+                                blockedByHideSelect ||
+                                state.value(QStringLiteral("exclude"))
+                                    .toBool()) {
+                                continue;
+                            }
+                            collectionIds.insert(candidate.id.value());
+                        }
                     }
                 }
                 if (collectionIds.isEmpty()) return;
 
                 QVector<ObjectId> collectionObjectIds;
-                for (const SceneObject &object :
-                     session_.document().objects()) {
+                for (const SceneObject &object : document.objects()) {
                     if (object.blenderLooseMeshEdgeCompanion) continue;
                     const bool belongsToCollection = std::any_of(
                         object.collectionIds.cbegin(),
@@ -7579,11 +7739,12 @@ private:
                         [&collectionIds](CollectionId id) {
                             return collectionIds.contains(id.value());
                         });
-                    if (belongsToCollection &&
-                        (!select || session_.document().isObjectEditable(
-                                        object.id))) {
-                        collectionObjectIds.append(object.id);
+                    if (!belongsToCollection ||
+                        (select && !document.isObjectEditable(
+                                       object.id, viewLayerKey))) {
+                        continue;
                     }
+                    collectionObjectIds.append(object.id);
                 }
                 if (collectionObjectIds.isEmpty()) return;
 

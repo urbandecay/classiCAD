@@ -2573,6 +2573,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             }
             selectedCollectionIds.append(target.collectionId);
         }
+        QVector<OutlinerCollectionContext> objectSelectionTargets;
+        for (const OutlinerCollectionContext &target : collectionTargets) {
+            if (!viewLayerKey.isEmpty() &&
+                target.viewLayerKey != viewLayerKey) {
+                continue;
+            }
+            objectSelectionTargets.append(target);
+        }
         QVector<CollectionId> linkedCollectionIds;
         bool canMarkCollectionAsset = false;
         bool canClearCollectionAsset = false;
@@ -2915,20 +2923,20 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             });
         }
         if (callbacks_.setCollectionsObjectSelection &&
-            !selectedCollectionIds.isEmpty()) {
+            !objectSelectionTargets.isEmpty()) {
             QAction *selectObjects = menu.addAction(
                 QStringLiteral("Select Objects"));
             connect(selectObjects, &QAction::triggered, this,
-                    [this, selectedCollectionIds]() {
+                    [this, objectSelectionTargets]() {
                 callbacks_.setCollectionsObjectSelection(
-                    selectedCollectionIds, true);
+                    objectSelectionTargets, true);
             });
             QAction *deselectObjects = menu.addAction(
                 QStringLiteral("Deselect Objects"));
             connect(deselectObjects, &QAction::triggered, this,
-                    [this, selectedCollectionIds]() {
+                    [this, objectSelectionTargets]() {
                 callbacks_.setCollectionsObjectSelection(
-                    selectedCollectionIds, false);
+                    objectSelectionTargets, false);
             });
         }
         const QVector<ObjectId> selectedIds = callbacks_.selectedObjectIds

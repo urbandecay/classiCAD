@@ -11495,3 +11495,14 @@ scene depth.
   with an explanatory tooltip; Blender cancels the operator and reports that
   condition. `cmake --build build -j4` and `git diff --check` passed; no
   matched Blender Outliner interaction comparison was run.
+- The hundred-thirteenth tree update follows Blender 5.2.2's [selected
+  collection object actions](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_collections.cc#L525-L589)
+  and [LayerCollection selection walk](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/layer.cc#L1568-L1606).
+  Select Objects and Deselect Objects now receive the selected collection row
+  paths and View Layer. They traverse only those collection branches, skip
+  direct objects in excluded LayerCollections, and stop below collections
+  marked hide-select. Select Objects adds only objects classiCAD considers
+  visible and selectable in that View Layer. Deselect Objects removes matching
+  objects from the selected branches while preserving unrelated selection and
+  the active object. `cmake --build build -j4` and `git diff --check` passed;
+  no matched Blender Outliner interaction comparison was run.

@@ -290,7 +290,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<CollectionId> &, bool)>
         setCollectionsAssetMarked;
     std::function<void(const QVector<CollectionId> &)> makeCollectionsLocal;
-    std::function<void(const QVector<CollectionId> &, bool)>
+    std::function<void(const QVector<OutlinerCollectionContext> &, bool)>
         setCollectionsObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
     std::function<void(const QVector<CollectionId> &, CollectionId,

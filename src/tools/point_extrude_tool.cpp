@@ -92,6 +92,11 @@ void PointExtrudeTool::setSolidCapSources(
     stagedSolidCapSources_ = sources;
 }
 
+void PointExtrudeTool::setEditMode(bool editMode)
+{
+    editMode_ = editMode;
+}
+
 void PointExtrudeTool::begin(ToolContext &context)
 {
     const QVector<ControlPointSource> stagedSources =
@@ -109,6 +114,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     sourcePoints_.clear();
     completedExtrusionObjectIds_.clear();
     completedFaceExtrusions_.clear();
+    completedCurveAppends_.clear();
     inputFrame_ = {};
     cursorPoint_ = {};
     lastInput_ = {};
@@ -391,6 +397,7 @@ void PointExtrudeTool::cancel(ToolContext &context)
     sourcePoints_.clear();
     completedExtrusionObjectIds_.clear();
     completedFaceExtrusions_.clear();
+    completedCurveAppends_.clear();
     constraintAxisKey_ = 0;
     normalConstraint_ = false;
     hasLastInput_ = false;
@@ -404,6 +411,7 @@ void PointExtrudeTool::cancel(ToolContext &context)
 
 void PointExtrudeTool::commit(ToolContext &context)
 {
+    completedCurveAppends_.clear();
     if (sourcePoints_.isEmpty() || !hasCursorPoint_ || !status_.canCommit) {
         return;
     }
@@ -417,7 +425,7 @@ void PointExtrudeTool::commit(ToolContext &context)
     }
 
     DocumentTransaction transaction = context.beginTransaction();
-    if (weldEnabled_) {
+    if (weldEnabled_ && !editMode_) {
         quint64 nextWeldGroup = 1;
         for (int objectIndex = 0;
              objectIndex < context.document().size(); ++objectIndex) {
@@ -621,6 +629,65 @@ void PointExtrudeTool::commit(ToolContext &context)
                 publish(context);
                 return;
             }
+        } else if (editMode_) {
+            const SceneObject *sceneObject =
+                context.document().object(source.objectId);
+            Shape *editedShape = transaction.editGeometry(source.objectId);
+            if (sceneObject == nullptr || editedShape == nullptr) {
+                transaction.rollback();
+                status_.text = QStringLiteral(
+                    "Edit Mode Extrude could not update the active object");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+            const Point3D placement = sceneObject->placementTranslation;
+            ShapeCurveAppendRange appendedRange;
+            Shape appendGeometry = lines[index];
+            const bool curveObjectTarget =
+                editedShape->geometryType == GeometryType::Point ||
+                !nurbsCurveComponentsForShape(*editedShape).isEmpty();
+            if (curveObjectTarget &&
+                appendGeometry.geometryType == GeometryType::NurbsSurface &&
+                !source.curve.controlPoints.isEmpty()) {
+                const QVector<NurbsSurfaceBoundaryCurve> boundaries =
+                    nurbsSurfaceBoundaryCurves(appendGeometry.nurbsSurface);
+                if (boundaries.size() != 4) {
+                    transaction.rollback();
+                    status_.text = QStringLiteral(
+                        "Edit Mode Extrude could not read the ruled curve boundary");
+                    status_.canCommit = false;
+                    publish(context);
+                    return;
+                }
+                appendGeometry = Shape{};
+                appendGeometry.geometryType = GeometryType::PolyCurve;
+                const WorkPlaneFrame worldFrame =
+                    makeWorkPlaneFrame(WorkPlane::XY);
+                for (int boundaryIndex = 1;
+                     boundaryIndex < boundaries.size(); ++boundaryIndex) {
+                    appendGeometry.components.append(
+                        boundaries[boundaryIndex].curve);
+                    appendGeometry.componentWorkPlaneFrames.append(worldFrame);
+                }
+            }
+            if (!appendShapeCurveComponents(
+                    editedShape, appendGeometry,
+                    {-placement.x, -placement.y, -placement.z},
+                    &appendedRange)) {
+                transaction.rollback();
+                status_.text = QStringLiteral(
+                    "This Edit Mode extrusion cannot be added to the active object");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+            completedCurveAppends_.append(
+                {source.objectId,
+                 appendedRange.firstComponentIndex,
+                 appendedRange.componentCount,
+                 appendedRange.firstControlPointIndex,
+                 appendedRange.controlPointCount});
         } else {
             SceneObject derivedObject;
             if (const SceneObject *sourceObject =
@@ -665,9 +732,11 @@ void PointExtrudeTool::commit(ToolContext &context)
     }
     status_.state = ToolLifecycleState::Completed;
     status_.canCommit = false;
-    status_.text = QStringLiteral("Extrude created %1 object%2")
-                       .arg(lines.size())
-                       .arg(lines.size() == 1 ? QString() : QStringLiteral("s"));
+    status_.text = editMode_
+                       ? QStringLiteral("Extrude added geometry to the active object")
+                       : QStringLiteral("Extrude created %1 object%2")
+                             .arg(lines.size())
+                             .arg(lines.size() == 1 ? QString() : QStringLiteral("s"));
     publish(context);
     context.finishTool(ToolId::Select);
 }
@@ -706,6 +775,7 @@ ToolPreview PointExtrudeTool::preview() const
     if (status_.state == ToolLifecycleState::Completed) {
         result.completedExtrusionObjectIds = completedExtrusionObjectIds_;
         result.completedFaceExtrusions = completedFaceExtrusions_;
+        result.completedCurveAppends = completedCurveAppends_;
     }
     return result;
 }

@@ -38,6 +38,7 @@ public:
     void setCurveSources(const QVector<CurveSource> &sources);
     void setSurfaceFaceSources(const QVector<SurfaceFaceSource> &sources);
     void setSolidCapSources(const QVector<SolidCapSource> &sources);
+    void setEditMode(bool editMode);
     void begin(ToolContext &context) override;
     bool handleMousePress(const ToolInput &input, ToolContext &context) override;
     bool handleMouseMove(const ToolInput &input, ToolContext &context) override;
@@ -77,7 +78,9 @@ private:
     QVector<SolidCapSource> stagedSolidCapSources_;
     QVector<ObjectId> completedExtrusionObjectIds_;
     QVector<CompletedFaceExtrusion> completedFaceExtrusions_;
+    QVector<CompletedCurveAppend> completedCurveAppends_;
     bool stagedControlPointSourcesRequested_ = false;
+    bool editMode_ = false;
     WorkPlaneFrame inputFrame_;
     Point3D cursorPoint_;
     ToolInput lastInput_;

@@ -54,6 +54,14 @@ struct CompletedFaceExtrusion {
     int capIndex = 1;
 };
 
+struct CompletedCurveAppend {
+    ObjectId objectId = ObjectId::invalid();
+    int firstComponentIndex = -1;
+    int componentCount = 0;
+    int firstControlPointIndex = -1;
+    int controlPointCount = 0;
+};
+
 struct ToolPreview {
     QVector<QPointF> points;
     QVector<ToolPreviewGuide> guides;
@@ -66,6 +74,7 @@ struct ToolPreview {
     QVector<ObjectId> hiddenObjectIds;
     QVector<ObjectId> completedExtrusionObjectIds;
     QVector<CompletedFaceExtrusion> completedFaceExtrusions;
+    QVector<CompletedCurveAppend> completedCurveAppends;
     bool planeLocked = false;
     SnapResult snap;
     bool overridesSnap = false;

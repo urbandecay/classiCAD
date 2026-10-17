@@ -4092,8 +4092,29 @@ model, without importing Blender's architecture:
   geometry family; operations must never connect or merge geometry across
   object boundaries implicitly.
 - Existing CAD creation tools remain usable and do not silently change modes.
+  In Curve Edit Mode, new curve geometry and component duplicates are appended
+  to the active source object's `PolyCurve` spline list. Point extrusion adds
+  its connecting curve to that same object. Multi-object component duplicates
+  stay with their respective source objects, and the new components become
+  selected without leaving Edit Mode. Surface and solid face extrusion keeps
+  the source object ID while replacing its geometry. A curve-to-surface
+  extrusion currently keeps only the generated surface's three new boundary
+  splines because one `Shape` cannot yet store both curve splines and multiple
+  exact surface patches; this is an acknowledged geometry limitation. New
+  surface/solid primitives and surface-component duplicates are rejected in
+  Edit Mode rather than being stored as an unrelated new scene object.
 
 Blender references: [Object Modes](https://docs.blender.org/manual/en/5.2/editors/3dview/modes.html), [mesh selection modes](https://docs.blender.org/manual/en/5.2/modeling/meshes/selecting/introduction.html), and [curve editing](https://docs.blender.org/manual/en/5.2/modeling/curves/editing/curve.html).
+
+Blender 5.2.2's `curvesurf_prim_add()` reuses the active compatible curve or
+surface object and appends the new `Nurb` to its edit data. `CURVE_OT_duplicate`
+likewise appends duplicated `Nurb` components to the edited curve data.
+`CURVE_OT_extrude` mutates selected curve control-point data in place. classiCAD
+now follows the same scene-object ownership for its supported curve tools while
+using its own `PolyCurve` NURBS component collection. The source behavior is in
+[`editcurve_add.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/curve/editcurve_add.cc#L2677-L2779)
+and
+[`editcurve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/curve/editcurve.cc#L5267-L5400).
 
 ### Final display dither (2026-10-12)
 
@@ -11546,3 +11567,18 @@ scene depth.
   geometry snapshots rather than shared Blender data pointers. `cmake --build
   build -j4` passed; no matched Blender Outliner interaction comparison was
   run.
+- The hundred-eighteenth Edit Mode update follows Blender 5.2.2's compatible
+  curve/surface primitive insertion, curve component duplication, and curve
+  extrusion paths. New curve tools and component duplicates now append NURBS
+  components to their source object's curve data, and point extrusion stores
+  its connecting curve in that same object. The active scene-object identity is
+  retained, added components are selected, and Edit Mode stays active. Surface
+  and solid face extrusion continues to replace geometry on the same object.
+  The generic append path rejects raw surface and solid additions. The current
+  curve-to-surface extrusion path has a specific wire-only conversion: a
+  curve object's curve-only `PolyCurve` representation cannot store an exact
+  surface patch alongside its splines, so it retains only the three new
+  boundary splines. Adding or duplicating surface patches inside an existing
+  surface object needs a multi-patch geometry representation. `cmake --build
+  build -j4` and `git diff --check` passed; no GUI interaction or matched
+  Blender comparison was run.

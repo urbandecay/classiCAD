@@ -2186,21 +2186,25 @@ public:
             if (tool == Tool::Line) {
                 return commitLineWithAutomaticWeld(committedShape);
             }
-            DocumentTransaction transaction = session_.beginTransaction();
-            if (!transaction.addShape(committedShape).isValid() ||
-                !session_.commitTransaction(transaction)) {
-                return false;
+            const bool committed = commitShape(committedShape);
+            if (committed) {
+                DebugLog::instance().write(
+                    QStringLiteral("tool commit tool=%1 shapes=%2")
+                        .arg(toolName(tool))
+                        .arg(shapes_.size()));
             }
-            DebugLog::instance().write(QStringLiteral("tool commit tool=%1 shapes=%2")
-                                           .arg(toolName(tool))
-                                           .arg(shapes_.size()));
-            return true;
+            return committed;
         });
         toolContext_.setToolFinisher([this](ToolId tool) {
             if (activeTool_ == Tool::PointExtrude && tool == Tool::Select) {
-                selectExtrudedResultComponents(
-                    toolPreview_.completedExtrusionObjectIds,
-                    toolPreview_.completedFaceExtrusions);
+                if (!toolPreview_.completedCurveAppends.isEmpty()) {
+                    selectAppendedCurveComponents(
+                        toolPreview_.completedCurveAppends);
+                } else {
+                    selectExtrudedResultComponents(
+                        toolPreview_.completedExtrusionObjectIds,
+                        toolPreview_.completedFaceExtrusions);
+                }
             }
             setTool(tool);
             if (commandFinished_) {
@@ -2231,6 +2235,27 @@ public:
                 } else if (!validateNurbsCurve(shape.nurbs)) {
                     return false;
                 }
+            }
+            if (interactionMode_ == ViewportInteractionMode::Edit) {
+                ObjectId target = componentSelectionObject_;
+                if (!isEditObject(target)) {
+                    target = selection_.activeObjectId().isValid()
+                                 ? selection_.activeObjectId()
+                                 : selection_.primaryObjectId();
+                }
+                QVector<QPair<ObjectId, Shape>> additions;
+                additions.reserve(shapes.size());
+                for (const Shape &shape : shapes) {
+                    additions.append({target, shape});
+                }
+                if (!appendCurvesToEditObjects(additions, true)) {
+                    if (toolStatusUpdate_) {
+                        toolStatusUpdate_(QStringLiteral(
+                            "This tool cannot add its geometry to the active object in Edit Mode"));
+                    }
+                    return false;
+                }
+                return true;
             }
             DocumentTransaction transaction = session_.beginTransaction();
             for (const Shape &shape : shapes) {
@@ -4079,6 +4104,159 @@ public:
         emitCoordinateUpdate();
     }
 
+    void selectAppendedCurveComponents(
+        const QVector<CompletedCurveAppend> &appended)
+    {
+        if (appended.isEmpty()) {
+            return;
+        }
+        const int vertexModeBit =
+            1 << static_cast<int>(ComponentSelectionMode::Vertex);
+        const int edgeModeBit =
+            1 << static_cast<int>(ComponentSelectionMode::Edge);
+        bool selectVertices = (componentSelectionModesMask_ & vertexModeBit) != 0;
+        bool selectEdges = (componentSelectionModesMask_ & edgeModeBit) != 0;
+        if (!selectVertices && !selectEdges) {
+            setComponentSelectionMode(ComponentSelectionMode::Vertex);
+            selectVertices = true;
+        }
+
+        ObjectId lastObject = ObjectId::invalid();
+        int lastVertex = -1;
+        int lastEdge = -1;
+        QSet<quint64> resetObjects;
+        for (const CompletedCurveAppend &range : appended) {
+            if (!range.objectId.isValid() ||
+                document_.shape(range.objectId) == nullptr ||
+                range.componentCount <= 0 || range.controlPointCount <= 0) {
+                continue;
+            }
+            editObjectIds_.insert(range.objectId.value());
+            componentSelectionObject_ = range.objectId;
+            if (!resetObjects.contains(range.objectId.value())) {
+                for (auto &selections : componentSelections_) {
+                    selections.remove(range.objectId.value());
+                }
+                resetObjects.insert(range.objectId.value());
+            }
+            if (selectVertices && range.firstControlPointIndex >= 0) {
+                QSet<int> &vertices = componentSelections_[
+                    static_cast<int>(ComponentSelectionMode::Vertex)]
+                    [range.objectId.value()];
+                for (int index = range.firstControlPointIndex;
+                     index < range.firstControlPointIndex +
+                                 range.controlPointCount;
+                     ++index) {
+                    vertices.insert(index);
+                }
+                lastVertex = range.firstControlPointIndex +
+                             range.controlPointCount - 1;
+            }
+            if (selectEdges && range.firstComponentIndex >= 0) {
+                QSet<int> &edges = componentSelections_[
+                    static_cast<int>(ComponentSelectionMode::Edge)]
+                    [range.objectId.value()];
+                for (int index = range.firstComponentIndex;
+                     index < range.firstComponentIndex + range.componentCount;
+                     ++index) {
+                    edges.insert(index);
+                }
+                lastEdge = range.firstComponentIndex + range.componentCount - 1;
+            }
+            lastObject = range.objectId;
+        }
+        if (!lastObject.isValid()) {
+            return;
+        }
+        if (selectVertices) {
+            activeComponentIndices_[static_cast<int>(
+                ComponentSelectionMode::Vertex)] = lastVertex;
+        }
+        if (selectEdges) {
+            activeComponentIndices_[static_cast<int>(
+                ComponentSelectionMode::Edge)] = lastEdge;
+        }
+        componentSelectionObject_ = lastObject;
+        selection_.add(lastObject);
+        selection_.setPrimaryObjectId(lastObject);
+        selection_.setActiveObjectId(lastObject);
+        selection_.clearActiveControlPoint();
+        clearSelectionDragState();
+        session_.notifySelectionChanged();
+        notifyViewportControlsChanged();
+        update();
+        emitCoordinateUpdate();
+    }
+
+    bool appendCurvesToEditObjects(
+        const QVector<QPair<ObjectId, Shape>> &additions,
+        bool incomingFramesAreWorldSpace)
+    {
+        if (interactionMode_ != ViewportInteractionMode::Edit ||
+            additions.isEmpty()) {
+            return false;
+        }
+        struct EditObjectAppendState {
+            ObjectId objectId = ObjectId::invalid();
+            Shape geometry;
+            QVector<CompletedCurveAppend> appended;
+        };
+        QVector<EditObjectAppendState> states;
+        QHash<quint64, int> stateIndices;
+        for (const auto &addition : additions) {
+            const ObjectId objectId = addition.first;
+            const SceneObject *sceneObject = document_.object(objectId);
+            if (!isEditObject(objectId) || sceneObject == nullptr ||
+                !document_.isObjectEditable(objectId)) {
+                return false;
+            }
+            int stateIndex = stateIndices.value(objectId.value(), -1);
+            if (stateIndex < 0) {
+                stateIndex = states.size();
+                stateIndices.insert(objectId.value(), stateIndex);
+                states.append({objectId, sceneObject->geometry, {}});
+            }
+            EditObjectAppendState &state = states[stateIndex];
+            Point3D frameTranslation{};
+            if (incomingFramesAreWorldSpace) {
+                frameTranslation = {-sceneObject->placementTranslation.x,
+                                    -sceneObject->placementTranslation.y,
+                                    -sceneObject->placementTranslation.z};
+            }
+            ShapeCurveAppendRange range;
+            if (!appendShapeCurveComponents(&state.geometry, addition.second,
+                                            frameTranslation, &range)) {
+                return false;
+            }
+            state.appended.append({objectId,
+                                  range.firstComponentIndex,
+                                  range.componentCount,
+                                  range.firstControlPointIndex,
+                                  range.controlPointCount});
+        }
+
+        DocumentTransaction transaction = session_.beginTransaction();
+        QVector<CompletedCurveAppend> completed;
+        for (const EditObjectAppendState &state : states) {
+            Shape *editedGeometry = transaction.editGeometry(state.objectId);
+            if (editedGeometry == nullptr) {
+                transaction.rollback();
+                return false;
+            }
+            *editedGeometry = state.geometry;
+            completed += state.appended;
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return false;
+        }
+        selectAppendedCurveComponents(completed);
+        DebugLog::instance().write(
+            QStringLiteral("edit-mode curve append objects=%1 components=%2")
+                .arg(states.size())
+                .arg(completed.size()));
+        return true;
+    }
+
     int beginPointExtrude()
     {
         const int vertexModeBit =
@@ -4295,6 +4473,8 @@ public:
                 extrudeTool->setCurveSources(curveSources);
                 extrudeTool->setSurfaceFaceSources(surfaceFaceSources);
                 extrudeTool->setSolidCapSources(solidCapSources);
+                extrudeTool->setEditMode(
+                    interactionMode_ == ViewportInteractionMode::Edit);
                 setTool(Tool::PointExtrude);
                 setFocus(Qt::OtherFocusReason);
                 setCursor(Qt::CrossCursor);
@@ -5559,6 +5739,8 @@ public:
         if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
                 toolRegistry_.find(Tool::PointExtrude))) {
             extrudeTool->setSolidCapSources(solidCapSources);
+            extrudeTool->setEditMode(
+                interactionMode_ == ViewportInteractionMode::Edit);
         }
 
         setTool(Tool::PointExtrude);
@@ -8313,6 +8495,46 @@ public:
                                       duplicateTool_.previewShapes(),
                                       &plan,
                                       duplicateTool_.previewPlacementTranslations())) {
+            return;
+        }
+
+        if (interactionMode_ == ViewportInteractionMode::Edit &&
+            duplicateHasOriginalComponentSelection_) {
+            QVector<QPair<ObjectId, Shape>> additions;
+            additions.reserve(plan.duplicateObjects.size());
+            for (int index = 0; index < plan.duplicateObjects.size(); ++index) {
+                additions.append({plan.sourceObjectIds[index],
+                                  plan.duplicateObjects[index].geometry});
+            }
+            if (!appendCurvesToEditObjects(additions, false)) {
+                cancelDuplicate();
+                if (toolStatusUpdate_) {
+                    toolStatusUpdate_(QStringLiteral(
+                        "These components cannot be duplicated inside their active object"));
+                }
+                return;
+            }
+
+            const int duplicateCount = additions.size();
+            const Point3D committedDelta = duplicateTool_.worldDelta();
+            const bool duplicateAnchorValid = grabViewPlaneAnchorValid_;
+            const QString duplicateSnapType = snapTypeName(currentSnap_.type);
+            resetDuplicateInteraction();
+            currentSnap_ = SnapResult{};
+            setCursor(Qt::ArrowCursor);
+            update();
+            emitCoordinateUpdate();
+            if (commandFinished_) {
+                commandFinished_(Tool::Select);
+            }
+            DebugLog::instance().write(
+                QStringLiteral("edit-mode duplicate appended=%1 delta=(%2,%3,%4) anchorValid=%5 snap=%6")
+                    .arg(duplicateCount)
+                    .arg(committedDelta.x, 0, 'g', 12)
+                    .arg(committedDelta.y, 0, 'g', 12)
+                    .arg(committedDelta.z, 0, 'g', 12)
+                    .arg(duplicateAnchorValid)
+                    .arg(duplicateSnapType));
             return;
         }
 
@@ -22977,8 +23199,32 @@ private:
         recordGeometrySnapshot(document_.snapshot());
     }
 
+    ObjectId activeEditObjectForCurveAppend() const
+    {
+        if (isEditObject(componentSelectionObject_)) {
+            return componentSelectionObject_;
+        }
+        const ObjectId active = selection_.activeObjectId();
+        if (isEditObject(active)) {
+            return active;
+        }
+        const ObjectId primary = selection_.primaryObjectId();
+        return isEditObject(primary) ? primary : ObjectId::invalid();
+    }
+
     bool commitShape(const Shape &shape)
     {
+        if (interactionMode_ == ViewportInteractionMode::Edit) {
+            const ObjectId target = activeEditObjectForCurveAppend();
+            if (!appendCurvesToEditObjects({{target, shape}}, true)) {
+                if (toolStatusUpdate_) {
+                    toolStatusUpdate_(QStringLiteral(
+                        "This geometry cannot be added to the active object in Edit Mode"));
+                }
+                return false;
+            }
+            return true;
+        }
         DocumentTransaction transaction = session_.beginTransaction();
         if (!transaction.addShape(shape).isValid()) {
             return false;
@@ -22988,6 +23234,9 @@ private:
 
     bool commitLineWithAutomaticWeld(const Shape &line)
     {
+        if (interactionMode_ == ViewportInteractionMode::Edit) {
+            return commitShape(line);
+        }
         if (!lineAutoWeldEnabled_) {
             return commitShape(line);
         }

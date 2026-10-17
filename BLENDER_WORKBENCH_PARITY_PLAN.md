@@ -4050,7 +4050,10 @@ the component-mode toolbar now toggle
 simultaneous control-point/vertex and spline/edge selection for curve-family
 Edit Mode. Click and marquee picking, both selection overlays, A/Alt+A/Ctrl+I,
 transforms, deletion, duplication, and extrusion read the enabled domains
-together. This adapts Blender's multi-select behavior to classiCAD's curve
+together. Switching back to one mode transfers the other mode's selected
+components using the existing vertex-to-spline or spline-to-control-point
+conversion, while retaining selections already made in the destination mode.
+This adapts Blender's multi-select behavior to classiCAD's curve
 mapping; it does not reproduce Blender's native NURBS keymap. Shift+3
 combinations and combined vertex/edge/face selection on NURBS surfaces or
 solids remain open. Matched GPU/QPainter captures remain unverified. Ctrl+1/2/3 now

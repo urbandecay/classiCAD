@@ -10806,19 +10806,35 @@ protected:
                                    bool useExpand = false)
     {
         const int requestedModeMask = 1 << static_cast<int>(mode);
-        if (componentSelectionMode_ == mode) {
-            if (componentSelectionModesMask_ == requestedModeMask) return;
-            componentSelectionModesMask_ = requestedModeMask;
-            update();
-            notifyViewportControlsChanged();
-            return;
-        }
+        const int additiveCurveModeMask =
+            (1 << static_cast<int>(ComponentSelectionMode::Vertex)) |
+            (1 << static_cast<int>(ComponentSelectionMode::Edge));
+        const bool collapsingAdditiveCurveModes =
+            componentSelectionModesMask_ == additiveCurveModeMask &&
+            (mode == ComponentSelectionMode::Vertex ||
+             mode == ComponentSelectionMode::Edge);
         if (interactionMode_ == ViewportInteractionMode::Edit &&
             !supportsComponentSelectionShortcut(
                 static_cast<int>(mode) + Qt::Key_1)) {
             return;
         }
+        if (componentSelectionMode_ == mode) {
+            if (componentSelectionModesMask_ == requestedModeMask) return;
+            if (collapsingAdditiveCurveModes) {
+                componentSelectionMode_ =
+                    mode == ComponentSelectionMode::Vertex
+                        ? ComponentSelectionMode::Edge
+                        : ComponentSelectionMode::Vertex;
+            } else {
+                componentSelectionModesMask_ = requestedModeMask;
+                update();
+                notifyViewportControlsChanged();
+                return;
+            }
+        }
         const ComponentSelectionMode previousMode = componentSelectionMode_;
+        const int previousTargetActiveIndex =
+            activeComponentIndices_[static_cast<int>(mode)];
         const bool expandingSelection = useExpand && mode > previousMode;
         const bool contractingSelection = useExpand && mode < previousMode;
 
@@ -10832,8 +10848,10 @@ protected:
                 componentSelections_[static_cast<int>(ComponentSelectionMode::Edge)];
             auto &selectedVertices =
                 componentSelections_[static_cast<int>(ComponentSelectionMode::Vertex)];
-            for (quint64 objectValue : editObjectIds_) {
-                selectedVertices.remove(objectValue);
+            if (!collapsingAdditiveCurveModes) {
+                for (quint64 objectValue : editObjectIds_) {
+                    selectedVertices.remove(objectValue);
+                }
             }
             int activeVertex = -1;
 
@@ -10970,8 +10988,15 @@ protected:
                     selectedVertices.remove(objectIt.key());
                 }
             }
+            int resultingActiveVertex = activeVertex;
+            if (collapsingAdditiveCurveModes &&
+                previousTargetActiveIndex >= 0 &&
+                selectedVertices[componentSelectionObject_.value()].contains(
+                    previousTargetActiveIndex)) {
+                resultingActiveVertex = previousTargetActiveIndex;
+            }
             activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Vertex)] =
-                activeVertex;
+                resultingActiveVertex;
         }
 
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
@@ -10980,8 +11005,10 @@ protected:
                 componentSelections_[static_cast<int>(ComponentSelectionMode::Vertex)];
             auto &selectedEdges =
                 componentSelections_[static_cast<int>(ComponentSelectionMode::Edge)];
-            for (quint64 objectValue : editObjectIds_) {
-                selectedEdges.remove(objectValue);
+            if (!collapsingAdditiveCurveModes) {
+                for (quint64 objectValue : editObjectIds_) {
+                    selectedEdges.remove(objectValue);
+                }
             }
 
             for (auto objectIt = selectedVertices.cbegin();
@@ -11044,19 +11071,26 @@ protected:
                     selectedEdges.remove(objectIt.key());
                 }
             }
-            activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Edge)] =
-                -1;
+            int resultingActiveEdge = -1;
+            if (collapsingAdditiveCurveModes &&
+                previousTargetActiveIndex >= 0 &&
+                selectedEdges[componentSelectionObject_.value()].contains(
+                    previousTargetActiveIndex)) {
+                resultingActiveEdge = previousTargetActiveIndex;
+            }
             if (useExpand) {
                 const auto activeSelection = selectedEdges.constFind(
                     componentSelectionObject_.value());
-                if (activeSelection != selectedEdges.cend() &&
+                if (resultingActiveEdge < 0 &&
+                    activeSelection != selectedEdges.cend() &&
                     !activeSelection.value().isEmpty()) {
-                    activeComponentIndices_[static_cast<int>(
-                        ComponentSelectionMode::Edge)] =
+                    resultingActiveEdge =
                         *std::min_element(activeSelection.value().cbegin(),
                                           activeSelection.value().cend());
                 }
             }
+            activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Edge)] =
+                resultingActiveEdge;
         }
 
         if ((componentSelectionMode_ == ComponentSelectionMode::Face &&

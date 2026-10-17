@@ -10881,6 +10881,15 @@ scene depth.
   and the Blender data-browser/sequence/override display modes, remain outside
   the currently imported tree data. No matched Blender UI comparison was run;
   `cmake --build build -j4` passed.
+- The twentieth tree update ports Blender 5.2.2's object material expansion
+  from [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L32-L72).
+  Material-slot names now come from Blender's `Object.material_slots` for every
+  supported object type, so curve, surface, point, volume, and image objects
+  can show their assigned materials as well as meshes. The Blender extraction
+  bridge advances to version 36 and native classiCAD documents to version 29;
+  older bridge and document versions still load. Mesh geometry material names
+  remain a fallback when the source slot list is absent. The full build passed;
+  no matched Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the supported Object Contents rows, and a matched
   Blender/classiCAD interaction comparison. Do not

@@ -2817,7 +2817,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 25 && bridgeVersion != 26 && bridgeVersion != 27 &&
          bridgeVersion != 28 && bridgeVersion != 29 &&
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
-         bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35)) {
+         bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
+         bridgeVersion != 36)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3333,6 +3334,25 @@ bool importBlenderScene(const QString &path,
             warnings.append(QStringLiteral("A Blender scene record has missing identity or an unexpected object type and was skipped"));
             continue;
         }
+        if (bridgeVersion >= 36) {
+            const QJsonValue materialNamesValue = item.value(
+                QStringLiteral("material_slot_names"));
+            if (!materialNamesValue.isArray() ||
+                materialNamesValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender object material-name list is invalid"));
+                return false;
+            }
+            for (const QJsonValue &materialNameValue :
+                 materialNamesValue.toArray()) {
+                if (!materialNameValue.isString() ||
+                    materialNameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender object material name is invalid"));
+                    return false;
+                }
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3423,6 +3443,13 @@ bool importBlenderScene(const QString &path,
         if (sceneObject.blenderSourceDataName.isEmpty()) {
             sceneObject.blenderSourceDataName = item.value(
                 QStringLiteral("mesh_name")).toString();
+        }
+        if (bridgeVersion >= 36) {
+            for (const QJsonValue &materialNameValue : item.value(
+                     QStringLiteral("material_slot_names")).toArray()) {
+                sceneObject.blenderSourceMaterialNames.append(
+                    materialNameValue.toString());
+            }
         }
         sceneObject.defaultViewLayerKey =
             item.value(QStringLiteral("default_view_layer_key")).toString();

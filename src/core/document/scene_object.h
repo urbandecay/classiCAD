@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QVector4D>
 #include <QString>
+#include <QStringList>
 #include <QHash>
 #include <array>
 
@@ -135,6 +136,8 @@ struct SceneObject {
     QString blenderParentObjectId;
     // Name of the Blender ID stored in Object.data, used by the Outliner.
     QString blenderSourceDataName;
+    // Assigned Blender materials shown beneath any supported Outliner object.
+    QStringList blenderSourceMaterialNames;
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;

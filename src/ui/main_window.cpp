@@ -2895,7 +2895,9 @@ private:
                     !entry.sceneKeys.contains(defaultSceneKey)) {
                     entry.sceneKeys.append(defaultSceneKey);
                 }
-                if (object.geometry.geometryType == GeometryType::PolygonMesh) {
+                entry.materialNames = object.blenderSourceMaterialNames;
+                if (entry.materialNames.isEmpty() &&
+                    object.geometry.geometryType == GeometryType::PolygonMesh) {
                     const PolygonMesh3D &mesh = object.geometry.polygonMesh;
                     if (!mesh.materialSlotIds.isEmpty()) {
                         for (const QString &materialId : mesh.materialSlotIds) {

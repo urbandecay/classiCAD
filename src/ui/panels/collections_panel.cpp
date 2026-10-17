@@ -13,6 +13,7 @@
  * The Scenes tree mode is adapted from tree_display_scenes.cc and the
  * scene/object tree elements in tree_element_id_scene.cc and
  * tree_element_scene_objects.cc.
+ * Generic object material rows follow tree_element_id_object.cc.
  */
 #include "collections_panel.h"
 

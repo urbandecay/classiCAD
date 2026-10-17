@@ -2971,9 +2971,10 @@ void CollectionsPanel::refresh()
                 }
                 for (qsizetype dataIndex = 0;
                      dataIndex < sourceGroup.dataBlockNames.size(); ++dataIndex) {
+                    const QString &dataBlockName =
+                        sourceGroup.dataBlockNames[dataIndex];
                     auto *dataRow = new QTreeWidgetItem(dataParent);
-                    dataRow->setText(nameColumn,
-                                     sourceGroup.dataBlockNames[dataIndex]);
+                    dataRow->setText(nameColumn, dataBlockName);
                     dataRow->setData(nameColumn, itemKindRole,
                         static_cast<int>(OutlinerRowKind::ObjectContent));
                     dataRow->setData(
@@ -2984,13 +2985,33 @@ void CollectionsPanel::refresh()
                         QStringLiteral("Blender data block"));
                     dataRow->setFlags(Qt::ItemIsEnabled |
                                       Qt::ItemIsSelectable);
+                    const QVector<OutlinerActionSlotEntry> actionSlots =
+                        sourceGroup.actionSlotsByDataBlockName.value(dataBlockName);
+                    for (qsizetype slotIndex = 0;
+                         slotIndex < actionSlots.size(); ++slotIndex) {
+                        const OutlinerActionSlotEntry &slot = actionSlots[slotIndex];
+                        auto *slotRow = new QTreeWidgetItem(dataRow);
+                        slotRow->setText(nameColumn, slot.displayName);
+                        slotRow->setData(nameColumn, itemKindRole,
+                            static_cast<int>(OutlinerRowKind::ObjectContent));
+                        slotRow->setData(
+                            nameColumn, itemPathRole,
+                            dataPath + QStringLiteral("/item-%1/slot-%2")
+                                           .arg(dataIndex).arg(slotIndex));
+                        slotRow->setToolTip(
+                            nameColumn,
+                            QStringLiteral("Blender Action slot: %1")
+                                .arg(slot.identifier));
+                        slotRow->setFlags(Qt::ItemIsEnabled |
+                                          Qt::ItemIsSelectable);
+                    }
                 }
             }
             if (library.truncated) {
                 auto *truncatedRow = new QTreeWidgetItem(row);
                 truncatedRow->setText(
                     nameColumn,
-                    QStringLiteral("Additional data blocks omitted"));
+                    QStringLiteral("Additional Blender rows omitted"));
                 truncatedRow->setData(nameColumn, itemKindRole,
                     static_cast<int>(OutlinerRowKind::ObjectContent));
                 truncatedRow->setData(
@@ -2998,7 +3019,7 @@ void CollectionsPanel::refresh()
                     libraryPath + QStringLiteral("/truncated"));
                 truncatedRow->setToolTip(
                     nameColumn,
-                    QStringLiteral("The 20,000-row extraction limit was reached"));
+                    QStringLiteral("The 20,000 data-block or Action-slot extraction limit was reached"));
                 truncatedRow->setFlags(Qt::ItemIsEnabled);
             }
         }

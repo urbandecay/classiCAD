@@ -349,6 +349,82 @@ bool isValidImportedBlenderLibraryOverrides(const QJsonValue &value)
     return currentFileCount == 1;
 }
 
+bool isValidImportedBlenderActionSlots(const QJsonValue &value)
+{
+    if (!value.isArray() || value.toArray().size() > 1024) return false;
+    int totalSlots = 0;
+    int totalActionGroups = 0;
+    int totalDataBlockGroups = 0;
+    int totalDataBlocks = 0;
+    for (const QJsonValue &libraryValue : value.toArray()) {
+        if (!libraryValue.isObject()) return false;
+        const QJsonValue groupsValue = libraryValue.toObject().value(
+            QStringLiteral("data_blocks"));
+        if (!groupsValue.isArray() || groupsValue.toArray().size() > 1024) {
+            return false;
+        }
+        for (const QJsonValue &groupValue : groupsValue.toArray()) {
+            if (!groupValue.isObject() || ++totalDataBlockGroups > 20000) {
+                return false;
+            }
+            const QJsonObject group = groupValue.toObject();
+            const QJsonValue namesValue = group.value(QStringLiteral("names"));
+            const QJsonValue actionSlotsValue = group.value(
+                QStringLiteral("action_slots"));
+            if (!namesValue.isArray() || namesValue.toArray().size() > 20000) {
+                return false;
+            }
+            totalDataBlocks += namesValue.toArray().size();
+            if (totalDataBlocks > 20000) return false;
+            if (actionSlotsValue.isUndefined()) continue;
+            if (!actionSlotsValue.isArray() ||
+                actionSlotsValue.toArray().size() > 20000 ||
+                totalActionGroups + actionSlotsValue.toArray().size() > 20000) {
+                return false;
+            }
+            QSet<QString> dataBlockNames;
+            for (const QJsonValue &nameValue : namesValue.toArray()) {
+                if (!nameValue.isString() || nameValue.toString().size() > 4096) {
+                    return false;
+                }
+                dataBlockNames.insert(nameValue.toString());
+            }
+            QSet<QString> actionNames;
+            for (const QJsonValue &actionValue : actionSlotsValue.toArray()) {
+                if (!actionValue.isObject() || ++totalActionGroups > 20000) {
+                    return false;
+                }
+                const QJsonObject action = actionValue.toObject();
+                const QJsonValue actionNameValue = action.value(
+                    QStringLiteral("action_name"));
+                const QJsonValue slotsValue = action.value(QStringLiteral("slots"));
+                const QString actionName = actionNameValue.toString();
+                if (!actionNameValue.isString() || actionName.size() > 4096 ||
+                    !dataBlockNames.contains(actionName) ||
+                    actionNames.contains(actionName) || !slotsValue.isArray() ||
+                    slotsValue.toArray().size() > 20000 ||
+                    totalSlots + slotsValue.toArray().size() > 20000) {
+                    return false;
+                }
+                actionNames.insert(actionName);
+                totalSlots += slotsValue.toArray().size();
+                for (const QJsonValue &slotValue : slotsValue.toArray()) {
+                    if (!slotValue.isObject()) return false;
+                    const QJsonObject slot = slotValue.toObject();
+                    const QJsonValue name = slot.value(QStringLiteral("name"));
+                    const QJsonValue identifier = slot.value(
+                        QStringLiteral("identifier"));
+                    if (!name.isString() || name.toString().isEmpty() ||
+                        name.toString().size() > 4096 || !identifier.isString() ||
+                        identifier.toString().size() < 3 ||
+                        identifier.toString().size() > 256) return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 void setError(QString *errorMessage, const QString &message)
 {
     if (errorMessage != nullptr) {
@@ -567,7 +643,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 44);
+    serialized.insert(QStringLiteral("version"), 45);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1023,7 +1099,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 44) {
+    if (version < 1 || version > 45) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1438,7 +1514,9 @@ bool documentFromJson(const QJsonValue &value,
             const QJsonValue importedLibraries = settingsObject.value(
                 QStringLiteral("importedBlenderLibraries"));
             if (!importedLibraries.isArray() ||
-                importedLibraries.toArray().size() > 1024) {
+                importedLibraries.toArray().size() > 1024 ||
+                (version >= 45 &&
+                 !isValidImportedBlenderActionSlots(importedLibraries))) {
                 setError(errorMessage,
                          QStringLiteral("invalid imported Blender library metadata"));
                 return false;

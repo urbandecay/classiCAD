@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 54
+BRIDGE_FORMAT_VERSION = 55
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -48,6 +48,7 @@ MAX_OUTLINER_OVERRIDE_ITEMS = 20000
 MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID = 512
 MAX_OUTLINER_OVERRIDE_DEPTH = 128
 MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID = 2048
+MAX_OUTLINER_ACTION_SLOTS = 20000
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -798,6 +799,7 @@ def outliner_library_tree():
     groups_by_library = {}
     seen_ids = set()
     row_count = 0
+    action_slot_count = 0
     for property_rna in bpy.data.bl_rna.properties:
         if getattr(property_rna, "type", "") != "COLLECTION":
             continue
@@ -825,10 +827,37 @@ def outliner_library_tree():
             group_name = str(property_rna.name)
             group = groups.get(group_name)
             if group is None:
-                group = {"name": group_name, "names": []}
+                group = {"name": group_name, "names": [], "action_slots": []}
                 groups[group_name] = group
                 record["data_blocks"].append(group)
-            group["names"].append(str(id_block.name_full))
+            data_block_name = str(id_block.name_full)
+            group["names"].append(data_block_name)
+            if id_block.bl_rna.identifier == "Action":
+                slots = []
+                try:
+                    for slot in getattr(id_block, "slots", ()):
+                        if action_slot_count >= MAX_OUTLINER_ACTION_SLOTS:
+                            record["truncated"] = True
+                            break
+                        try:
+                            identifier = str(getattr(slot, "identifier", ""))[:256]
+                            display_name = str(
+                                getattr(slot, "name_display", "") or
+                                (identifier[2:] if len(identifier) > 2 else identifier))
+                        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                            record["truncated"] = True
+                            continue
+                        slots.append({
+                            "name": display_name[:4096],
+                            "identifier": identifier,
+                        })
+                        action_slot_count += 1
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    record["truncated"] = True
+                group["action_slots"].append({
+                    "action_name": data_block_name,
+                    "slots": slots,
+                })
 
     return libraries
 

@@ -2838,7 +2838,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 48 && bridgeVersion != 49 &&
          bridgeVersion != 50 && bridgeVersion != 51 &&
          bridgeVersion != 52 && bridgeVersion != 53 &&
-         bridgeVersion != 54)) {
+         bridgeVersion != 54 && bridgeVersion != 55)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3095,6 +3095,7 @@ bool importBlenderScene(const QString &path,
         }
         int currentFileCount = 0;
         int totalDataBlockRows = 0;
+        int totalActionSlotRows = 0;
         QSet<QString> libraryIds;
         const QJsonArray libraryRecords = librariesValue.toArray();
         for (qsizetype libraryIndex = 0;
@@ -3150,21 +3151,80 @@ bool importBlenderScene(const QString &path,
                     QStringLiteral("name"));
                 const QJsonValue namesValue = group.value(
                     QStringLiteral("names"));
+                const QJsonValue actionSlotsValue = group.value(
+                    QStringLiteral("action_slots"));
                 if (!groupNameValue.isString() ||
                     groupNameValue.toString().size() > 256 ||
                     !namesValue.isArray() || namesValue.toArray().size() > 20000 ||
-                    totalDataBlockRows + namesValue.toArray().size() > 20000) {
+                    totalDataBlockRows + namesValue.toArray().size() > 20000 ||
+                    (bridgeVersion >= 55 &&
+                     (!actionSlotsValue.isArray() ||
+                      actionSlotsValue.toArray().size() > 20000))) {
                     setError(errorMessage,
                              QStringLiteral("A Blender Outliner ID group is invalid"));
                     return false;
                 }
                 totalDataBlockRows += namesValue.toArray().size();
+                QSet<QString> dataBlockNames;
                 for (const QJsonValue &dataNameValue : namesValue.toArray()) {
                     if (!dataNameValue.isString() ||
                         dataNameValue.toString().size() > 4096) {
                         setError(errorMessage,
                                  QStringLiteral("A Blender Outliner data-block name is invalid"));
                         return false;
+                    }
+                    dataBlockNames.insert(dataNameValue.toString());
+                }
+                if (bridgeVersion >= 55) {
+                    QSet<QString> actionNames;
+                    for (const QJsonValue &actionValue :
+                         actionSlotsValue.toArray()) {
+                        if (!actionValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender Action slot group is invalid"));
+                            return false;
+                        }
+                        const QJsonObject action = actionValue.toObject();
+                        const QJsonValue actionNameValue = action.value(
+                            QStringLiteral("action_name"));
+                        const QJsonValue slotsValue = action.value(
+                            QStringLiteral("slots"));
+                        const QString actionName = actionNameValue.toString();
+                        if (!actionNameValue.isString() ||
+                            actionName.size() > 4096 ||
+                            !dataBlockNames.contains(actionName) ||
+                            actionNames.contains(actionName) ||
+                            !slotsValue.isArray() ||
+                            slotsValue.toArray().size() > 20000 ||
+                            totalActionSlotRows + slotsValue.toArray().size() > 20000) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender Action slot group is invalid"));
+                            return false;
+                        }
+                        actionNames.insert(actionName);
+                        totalActionSlotRows += slotsValue.toArray().size();
+                        for (const QJsonValue &slotValue : slotsValue.toArray()) {
+                            if (!slotValue.isObject()) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender Action slot is invalid"));
+                                return false;
+                            }
+                            const QJsonObject slot = slotValue.toObject();
+                            const QJsonValue slotName = slot.value(
+                                QStringLiteral("name"));
+                            const QJsonValue slotIdentifier = slot.value(
+                                QStringLiteral("identifier"));
+                            if (!slotName.isString() ||
+                                slotName.toString().isEmpty() ||
+                                slotName.toString().size() > 4096 ||
+                                !slotIdentifier.isString() ||
+                                slotIdentifier.toString().size() < 3 ||
+                                slotIdentifier.toString().size() > 256) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender Action slot is invalid"));
+                                return false;
+                            }
+                        }
                     }
                 }
             }

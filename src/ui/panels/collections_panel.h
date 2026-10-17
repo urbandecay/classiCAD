@@ -149,9 +149,15 @@ struct OutlinerSceneEntry {
     QString activeViewLayerKey;
 };
 
+struct OutlinerActionSlotEntry {
+    QString displayName;
+    QString identifier;
+};
+
 struct OutlinerLibraryDataGroup {
     QString displayName;
     QStringList dataBlockNames;
+    QHash<QString, QVector<OutlinerActionSlotEntry>> actionSlotsByDataBlockName;
 };
 
 struct OutlinerLibraryEntry {

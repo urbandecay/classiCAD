@@ -11127,11 +11127,23 @@ scene depth.
   property widgets or override create/reset/clear actions. `cmake --build
   build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
   Blender Outliner UI comparison was run.
-- Remaining Outliner scope includes further specialized ID branches, Data API
-  edit/keying-set interactions, Sequencer selection synchronization, and a
-  matched Blender/classiCAD interaction comparison. Do not mark this port
-  complete until the remaining items have been reviewed against pinned
-  Blender source.
+- The forty-first tree update follows Blender 5.2.2's [Action expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_action.cc)
+  and [Action-slot row](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_action_slot.cc)
+  implementations. In Libraries mode, classiCAD now captures and displays
+  every Action slot beneath its Action, using Blender's slot display name and
+  retaining the full identifier in the row tooltip. Existing scene/object
+  animation rows continue to show only their assigned slot. Blender bridge
+  version 55 and native document version 45 add bounded slot metadata, capped
+  at 20,000 slots and validated on import and document load; saved projects
+  without the added field remain supported. This is a read-only snapshot, so
+  Blender's slot editing and live expansion behavior are not ported. `cmake --build build -j4`
+  passed, as did Python syntax parsing and `git diff --check`; no matched
+  Blender Outliner UI comparison was run.
+- Remaining Outliner scope still includes further specialized ID branches,
+  Data API edit/keying-set interactions, Sequencer selection synchronization,
+  and a matched Blender/classiCAD interaction comparison. Do not mark this
+  port complete until those items have been reviewed against pinned Blender
+  source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

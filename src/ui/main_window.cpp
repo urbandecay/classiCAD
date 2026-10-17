@@ -3327,6 +3327,29 @@ private:
                         const QString name = nameValue.toString();
                         if (!name.isEmpty()) group.dataBlockNames.append(name);
                     }
+                    for (const QJsonValue &actionValue : groupRecord.value(
+                             QStringLiteral("action_slots")).toArray()) {
+                        const QJsonObject actionRecord = actionValue.toObject();
+                        const QString actionName = actionRecord.value(
+                            QStringLiteral("action_name")).toString();
+                        if (actionName.isEmpty()) continue;
+                        QVector<OutlinerActionSlotEntry> slotEntries;
+                        for (const QJsonValue &slotValue : actionRecord.value(
+                                 QStringLiteral("slots")).toArray()) {
+                            const QJsonObject slotRecord = slotValue.toObject();
+                            OutlinerActionSlotEntry slot;
+                            slot.displayName = slotRecord.value(
+                                QStringLiteral("name")).toString();
+                            slot.identifier = slotRecord.value(
+                                QStringLiteral("identifier")).toString();
+                            if (!slot.displayName.isEmpty() &&
+                                !slot.identifier.isEmpty()) {
+                                slotEntries.append(std::move(slot));
+                            }
+                        }
+                        group.actionSlotsByDataBlockName.insert(
+                            actionName, std::move(slotEntries));
+                    }
                     entry.dataGroups.append(std::move(group));
                 }
                 if (!entry.id.isEmpty() && !entry.displayName.isEmpty()) {

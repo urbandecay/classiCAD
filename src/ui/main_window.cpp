@@ -6141,73 +6141,116 @@ private:
                 }
             };
         collectionCallbacks.removeCollection =
-            [this, updateAllSceneCollectionIds](CollectionId id) {
-            const DocumentCollection *collection =
-                session_.document().collection(id);
-            if (collection == nullptr || !collection->libraryPath.isEmpty()) {
-                statusBar()->showMessage(
-                    QStringLiteral("Cannot delete a linked collection"),
-                    4000);
-                return;
-            }
-            const QVector<CollectionId> parentIds = collection->parentIds;
-            QVector<CollectionId> childCollectionIds;
-            for (const DocumentCollection &candidate :
-                 session_.document().collections()) {
-                if (candidate.parentIds.contains(id)) {
-                    childCollectionIds.append(candidate.id);
+            [this, updateAllSceneCollectionIds](
+                const QVector<CollectionId> &requestedIds) {
+                QVector<CollectionId> collectionIds;
+                QSet<quint64> seenIds;
+                int skippedLinked = 0;
+                for (const CollectionId id : requestedIds) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection == nullptr || seenIds.contains(id.value())) {
+                        continue;
+                    }
+                    seenIds.insert(id.value());
+                    if (!collection->libraryPath.isEmpty()) {
+                        ++skippedLinked;
+                        continue;
+                    }
+                    collectionIds.append(id);
                 }
-            }
-            QVector<ObjectId> linkedObjectIds;
-            for (const SceneObject &object : session_.document().objects()) {
-                if (object.collectionIds.contains(id)) {
-                    linkedObjectIds.append(object.id);
-                }
-            }
-            DocumentTransaction transaction = session_.beginTransaction();
-            for (const CollectionId childId : childCollectionIds) {
-                const DocumentCollection *child =
-                    session_.document().collection(childId);
-                if (child == nullptr) continue;
-                QVector<CollectionId> parents = child->parentIds;
-                parents.removeAll(id);
-                for (const CollectionId parentId : parentIds) {
-                    if (!parents.contains(parentId)) parents.append(parentId);
-                }
-                if (!transaction.setCollectionParents(childId, parents)) {
+                if (collectionIds.isEmpty()) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not preserve child collections"),
+                        skippedLinked > 0
+                            ? QStringLiteral("Cannot delete linked collections")
+                            : QStringLiteral("No collections to delete"),
                         4000);
                     return;
                 }
-            }
-            for (const ObjectId objectId : linkedObjectIds) {
-                const SceneObject *object =
-                    session_.document().object(objectId);
-                if (object == nullptr) continue;
-                QVector<CollectionId> memberships = object->collectionIds;
-                memberships.removeAll(id);
-                for (const CollectionId parentId : parentIds) {
-                    if (!memberships.contains(parentId)) {
-                        memberships.append(parentId);
+
+                DocumentTransaction transaction = session_.beginTransaction();
+                for (const CollectionId id : collectionIds) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection == nullptr) continue;
+                    const QVector<CollectionId> parentIds =
+                        collection->parentIds;
+                    QVector<CollectionId> childCollectionIds;
+                    for (const DocumentCollection &candidate :
+                         session_.document().collections()) {
+                        if (candidate.parentIds.contains(id)) {
+                            childCollectionIds.append(candidate.id);
+                        }
+                    }
+                    QVector<ObjectId> linkedObjectIds;
+                    for (const SceneObject &object :
+                         session_.document().objects()) {
+                        if (object.collectionIds.contains(id)) {
+                            linkedObjectIds.append(object.id);
+                        }
+                    }
+                    for (const CollectionId childId : childCollectionIds) {
+                        const DocumentCollection *child =
+                            session_.document().collection(childId);
+                        if (child == nullptr) continue;
+                        QVector<CollectionId> parents = child->parentIds;
+                        parents.removeAll(id);
+                        for (const CollectionId parentId : parentIds) {
+                            if (!parents.contains(parentId)) {
+                                parents.append(parentId);
+                            }
+                        }
+                        if (!transaction.setCollectionParents(childId,
+                                                              parents)) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not preserve child collections"),
+                                4000);
+                            return;
+                        }
+                    }
+                    for (const ObjectId objectId : linkedObjectIds) {
+                        const SceneObject *object =
+                            session_.document().object(objectId);
+                        if (object == nullptr) continue;
+                        QVector<CollectionId> memberships =
+                            object->collectionIds;
+                        memberships.removeAll(id);
+                        for (const CollectionId parentId : parentIds) {
+                            if (!memberships.contains(parentId)) {
+                                memberships.append(parentId);
+                            }
+                        }
+                        if (!transaction.setObjectCollections(objectId,
+                                                              memberships)) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not preserve collection objects"),
+                                4000);
+                            return;
+                        }
+                    }
+                    if (!transaction.removeCollection(id)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not remove collection"),
+                            4000);
+                        return;
                     }
                 }
-                if (!transaction.setObjectCollections(objectId, memberships)) {
+                if (!updateAllSceneCollectionIds(transaction) ||
+                    !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not preserve collection objects"),
+                        QStringLiteral("Could not remove collections"),
                         4000);
                     return;
                 }
-            }
-            if (!transaction.removeCollection(id) ||
-                !updateAllSceneCollectionIds(transaction) ||
-                !session_.commitTransaction(transaction)) {
-                statusBar()->showMessage(
-                    QStringLiteral("Could not remove collection"), 4000);
-                return;
-            }
-            pruneOutlinerSelection();
-        };
+                pruneOutlinerSelection();
+                if (skippedLinked > 0) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Deleted %1 collection(s); skipped %2 linked collection(s)")
+                            .arg(collectionIds.size())
+                            .arg(skippedLinked),
+                        5000);
+                }
+            };
         collectionCallbacks.linkObjects =
             [this](const QVector<ObjectId> &objectIds, CollectionId collectionId) {
                 DocumentTransaction transaction = session_.beginTransaction();
@@ -6832,21 +6875,38 @@ private:
         collectionCallbacks.setCollectionsObjectSelection =
             setCollectionsObjectSelection;
         collectionCallbacks.removeCollectionHierarchy =
-            [this, collectionHierarchyIds,
-             updateAllSceneCollectionIds](CollectionId root) {
-                const DocumentCollection *rootCollection =
-                    session_.document().collection(root);
-                if (rootCollection == nullptr ||
-                    !rootCollection->libraryPath.isEmpty()) {
+            [this, updateAllSceneCollectionIds](
+                const QVector<CollectionId> &requestedRoots) {
+                const QVector<DocumentCollection> allCollections =
+                    session_.document().collections();
+                QVector<CollectionId> hierarchy;
+                QSet<quint64> collectionIds;
+                int skippedLinkedRoots = 0;
+                int selectedLocalRoots = 0;
+                for (const CollectionId root : requestedRoots) {
+                    const DocumentCollection *rootCollection =
+                        session_.document().collection(root);
+                    if (rootCollection == nullptr ||
+                        collectionIds.contains(root.value())) {
+                        continue;
+                    }
+                    collectionIds.insert(root.value());
+                    if (!rootCollection->libraryPath.isEmpty()) {
+                        ++skippedLinkedRoots;
+                        collectionIds.remove(root.value());
+                        continue;
+                    }
+                    hierarchy.append(root);
+                    ++selectedLocalRoots;
+                }
+                if (hierarchy.isEmpty()) {
                     statusBar()->showMessage(
-                        QStringLiteral("Cannot delete a linked collection"),
+                        skippedLinkedRoots > 0
+                            ? QStringLiteral("Cannot delete linked collections")
+                            : QStringLiteral("No collection hierarchies to delete"),
                         4000);
                     return;
                 }
-                QVector<CollectionId> hierarchy{root};
-                QSet<quint64> collectionIds{root.value()};
-                const QVector<DocumentCollection> allCollections =
-                    session_.document().collections();
                 for (qsizetype index = 0; index < hierarchy.size(); ++index) {
                     const CollectionId parentId = hierarchy[index];
                     for (const DocumentCollection &candidate : allCollections) {
@@ -6972,6 +7032,13 @@ private:
                     return;
                 }
                 pruneOutlinerSelection();
+                if (skippedLinkedRoots > 0) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Deleted %1 collection hierarchy root(s); skipped %2 linked root(s)")
+                            .arg(selectedLocalRoots)
+                            .arg(skippedLinkedRoots),
+                        5000);
+                }
             };
         const auto collectionRelationIds =
             [this, collectionHierarchyIds,

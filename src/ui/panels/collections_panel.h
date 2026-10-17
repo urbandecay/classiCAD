@@ -277,11 +277,12 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<OutlinerCollectionContext> &)>
         unlinkCollections;
     std::function<void(CollectionId, const QString &)> renameCollection;
-    std::function<void(CollectionId)> removeCollection;
+    std::function<void(const QVector<CollectionId> &)> removeCollection;
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;
     std::function<void(ObjectId, const QString &)> renameObject;
     std::function<void(ObjectId, CollectionId)> unlinkObject;
-    std::function<void(CollectionId)> removeCollectionHierarchy;
+    std::function<void(const QVector<CollectionId> &)>
+        removeCollectionHierarchy;
     std::function<void(CollectionId, bool, bool, bool)> setViewportVisibility;
     std::function<void(const QVector<OutlinerCollectionContext> &, bool)>
         setCollectionsViewportEnabled;

@@ -2294,16 +2294,17 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             if (callbacks_.removeCollection) {
                 QAction *remove = menu.addAction(QStringLiteral("Delete"));
                 connect(remove, &QAction::triggered, this,
-                        [this, collectionId]() {
-                    callbacks_.removeCollection(collectionId);
+                        [this, selectedCollectionIds]() {
+                    callbacks_.removeCollection(selectedCollectionIds);
                 });
             }
             if (callbacks_.removeCollectionHierarchy) {
                 QAction *removeHierarchy = menu.addAction(
                     QStringLiteral("Delete Hierarchy"));
                 connect(removeHierarchy, &QAction::triggered, this,
-                        [this, collectionId]() {
-                    callbacks_.removeCollectionHierarchy(collectionId);
+                        [this, topLevelCollectionIds]() {
+                    callbacks_.removeCollectionHierarchy(
+                        topLevelCollectionIds);
                 });
             }
         }

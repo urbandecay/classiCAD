@@ -1887,6 +1887,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.duplicateCollection(collectionId, parentId, true);
             });
         }
+        if (callbacks_.instanceCollectionToScene) {
+            QAction *instance = menu.addAction(
+                QStringLiteral("Instance to Scene"));
+            connect(instance, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.instanceCollectionToScene(collectionId);
+            });
+        }
         if (scenesDisplayMode_ && callbacks_.linkCollectionToActiveScene) {
             QAction *linkToScene = menu.addAction(
                 QStringLiteral("Link to Scene"));

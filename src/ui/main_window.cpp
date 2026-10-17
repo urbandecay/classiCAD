@@ -3044,6 +3044,14 @@ private:
                 entry.parentHierarchyIdentity = object.blenderParentObjectId;
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
+                if (object.instanceCollectionId.isValid()) {
+                    const DocumentCollection *instanceCollection =
+                        document.collection(object.instanceCollectionId);
+                    if (instanceCollection != nullptr) {
+                        entry.instancedCollectionName =
+                            instanceCollection->name;
+                    }
+                }
                 entry.dataBlockName = object.blenderSourceDataName;
                 entry.greasePencilLayerTree =
                     object.blenderSourceGreasePencilLayerTree;
@@ -4006,6 +4014,10 @@ private:
                     copy.defaultViewLayerKey =
                         document.settings().activeViewLayerKey;
                     copy.collectionIds.clear();
+                    if (copy.instanceCollectionId.isValid() &&
+                        document.collection(copy.instanceCollectionId) == nullptr) {
+                        copy.instanceCollectionId = CollectionId::invalid();
+                    }
                 }
                 for (int index = 0; index < copies.size(); ++index) {
                     SceneObject &copy = copies[index];
@@ -4669,6 +4681,194 @@ private:
                     return;
                 }
                 pruneOutlinerSelection();
+            };
+        collectionCallbacks.instanceCollectionToScene =
+            [this, activeSceneRecord, collectionBelongsToActiveScene](
+                CollectionId targetId) {
+                const Document &document = session_.document();
+                const DocumentCollection *target = document.collection(targetId);
+                if (target == nullptr) return;
+                const DocumentCollection targetCollection = *target;
+
+                QSet<quint64> targetHierarchy{targetId.value()};
+                for (qsizetype index = 0;
+                     index < document.collections().size(); ++index) {
+                    bool added = false;
+                    for (const DocumentCollection &candidate :
+                         document.collections()) {
+                        if (targetHierarchy.contains(candidate.id.value())) {
+                            continue;
+                        }
+                        for (const CollectionId parentId : candidate.parentIds) {
+                            if (!targetHierarchy.contains(parentId.value())) {
+                                continue;
+                            }
+                            targetHierarchy.insert(candidate.id.value());
+                            added = true;
+                            break;
+                        }
+                    }
+                    if (!added) break;
+                }
+
+                const QJsonObject activeScene = activeSceneRecord();
+                const QString sceneId = activeScene.value(
+                    QStringLiteral("scene_id")).toString();
+                const QString sceneName = activeScene.value(
+                    QStringLiteral("name")).toString();
+                CollectionId destinationId = CollectionId::invalid();
+                int destinationOrder = std::numeric_limits<int>::max();
+                for (const DocumentCollection &candidate : document.collections()) {
+                    if (!candidate.parentIds.isEmpty() ||
+                        !candidate.libraryPath.isEmpty() ||
+                        targetHierarchy.contains(candidate.id.value())) {
+                        continue;
+                    }
+                    const bool belongsToScene = sceneName.isEmpty()
+                        ? candidate.sourceSceneNames.isEmpty()
+                        : collectionBelongsToActiveScene(candidate);
+                    const int order = candidate.rootOrder < 0
+                        ? std::numeric_limits<int>::max() - 1
+                        : candidate.rootOrder;
+                    if (belongsToScene && order < destinationOrder) {
+                        destinationId = candidate.id;
+                        destinationOrder = order;
+                    }
+                }
+
+                DocumentTransaction transaction = session_.beginTransaction();
+                QString createdRootSourceId;
+                if (!destinationId.isValid()) {
+                    QSet<QString> names;
+                    for (const DocumentCollection &candidate :
+                         document.collections()) {
+                        names.insert(candidate.name);
+                    }
+                    QString rootName = QStringLiteral("Collection Instances");
+                    for (int suffix = 1; names.contains(rootName); ++suffix) {
+                        rootName = QStringLiteral("Collection Instances.%1")
+                            .arg(suffix, 3, 10, QLatin1Char('0'));
+                    }
+                    DocumentCollection root;
+                    root.name = rootName;
+                    createdRootSourceId = QStringLiteral(
+                        "classiCAD-local-collection:%1").arg(
+                            QUuid::createUuid().toString(QUuid::WithoutBraces));
+                    root.sourceId = createdRootSourceId;
+                    root.sceneMembershipExplicit = true;
+                    if (!sceneName.isEmpty()) {
+                        root.sourceSceneName = sceneName;
+                        root.sourceSceneNames.append(sceneName);
+                    }
+                    const QString viewLayerKey =
+                        document.settings().activeViewLayerKey;
+                    if (!viewLayerKey.isEmpty()) {
+                        root.viewLayerStates.append(QJsonObject{
+                            {QStringLiteral("view_layer_key"), viewLayerKey},
+                            {QStringLiteral("path"), QJsonArray{root.sourceId}},
+                            {QStringLiteral("exclude"), false},
+                            {QStringLiteral("hide_viewport"), false},
+                            {QStringLiteral("hide_render"), false},
+                            {QStringLiteral("holdout"), false},
+                            {QStringLiteral("indirect_only"), false}});
+                    }
+                    destinationId = transaction.insertCollection(root);
+                    if (!destinationId.isValid()) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not create a collection for the instance"),
+                            4000);
+                        return;
+                    }
+                }
+
+                SceneObject instance;
+                instance.instanceCollectionId = targetId;
+                instance.collectionIds = {destinationId};
+                instance.displayName = targetCollection.name +
+                    QStringLiteral(" Instance");
+                QSet<QString> usedObjectNames;
+                for (const SceneObject &object : document.objects()) {
+                    usedObjectNames.insert(object.displayName);
+                }
+                const QString baseName = instance.displayName;
+                for (int suffix = 1;
+                     usedObjectNames.contains(instance.displayName); ++suffix) {
+                    instance.displayName = QStringLiteral("%1.%2")
+                        .arg(baseName)
+                        .arg(suffix, 3, 10, QLatin1Char('0'));
+                }
+                instance.blenderSourceObjectType = QStringLiteral("EMPTY");
+                instance.blenderSourceObjectId = QStringLiteral(
+                    "classiCAD-instance-object:%1").arg(
+                        QUuid::createUuid().toString(QUuid::WithoutBraces));
+                instance.geometry.geometryType = GeometryType::Point;
+                instance.geometry.points.append(QPointF(0.0, 0.0));
+                instance.geometry.workPlaneFrame =
+                    makeWorkPlaneFrame(WorkPlane::XY);
+                const ObjectId instanceId = transaction.insertObject(
+                    document.size(), instance);
+                if (!instanceId.isValid()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not create the collection instance"),
+                        4000);
+                    return;
+                }
+
+                if (!sceneId.isEmpty()) {
+                    DocumentSettings settings = document.settings();
+                    QJsonArray scenes = settings.importedBlenderScenes;
+                    bool sceneFound = false;
+                    for (qsizetype index = 0; index < scenes.size(); ++index) {
+                        QJsonObject scene = scenes[index].toObject();
+                        if (scene.value(QStringLiteral("scene_id")).toString() !=
+                            sceneId) {
+                            continue;
+                        }
+                        QJsonArray objectIds = scene.value(
+                            QStringLiteral("object_ids")).toArray();
+                        if (!objectIds.contains(instance.blenderSourceObjectId)) {
+                            objectIds.append(instance.blenderSourceObjectId);
+                        }
+                        scene.insert(QStringLiteral("object_ids"), objectIds);
+                        QJsonArray collectionIds = scene.value(
+                            QStringLiteral("collection_ids")).toArray();
+                        if (!createdRootSourceId.isEmpty() &&
+                            !collectionIds.contains(createdRootSourceId)) {
+                            collectionIds.append(createdRootSourceId);
+                        }
+                        scene.insert(QStringLiteral("collection_ids"),
+                                     collectionIds);
+                        scenes[index] = scene;
+                        sceneFound = true;
+                        break;
+                    }
+                    if (!sceneFound) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not register the instance in the active scene"),
+                            4000);
+                        return;
+                    }
+                    settings.importedBlenderScenes = scenes;
+                    if (!transaction.setSettings(settings)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not save the active scene instance"),
+                            4000);
+                        return;
+                    }
+                }
+
+                if (!session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not create the collection instance"),
+                        4000);
+                    return;
+                }
+                session_.selection().setObjectIds({instanceId}, instanceId);
+                session_.selection().setActiveObjectId(instanceId);
+                statusBar()->showMessage(
+                    QStringLiteral("Created instance of %1")
+                        .arg(targetCollection.name),
+                    4000);
             };
         collectionCallbacks.duplicateCollection =
             [this, activeSceneRecord, collectionBelongsToScene,

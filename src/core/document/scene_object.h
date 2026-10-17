@@ -144,6 +144,9 @@ struct BlenderSourceAnimationData {
 struct SceneObject {
     ObjectId id = ObjectId::invalid();
     QVector<CollectionId> collectionIds;
+    // Blender Object.instance_collection. The viewport resolves the linked
+    // collection dynamically so edits to its members remain visible here.
+    CollectionId instanceCollectionId = CollectionId::invalid();
     bool hideViewport = false;
     bool hideRender = false;
     bool hiddenInViewport = false;

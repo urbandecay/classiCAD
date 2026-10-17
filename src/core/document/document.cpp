@@ -812,9 +812,16 @@ bool Document::removeCollection(CollectionId id)
             candidate.rootOrder = nextRootOrder++;
         }
     }
-    for (SceneObject &object : objects_) object.collectionIds.removeAll(id);
+    for (SceneObject &object : objects_) {
+        object.collectionIds.removeAll(id);
+    }
     DocumentChangeSet changes;
     changes.addCollection(id);
+    for (SceneObject &object : objects_) {
+        if (object.instanceCollectionId != id) continue;
+        object.instanceCollectionId = CollectionId::invalid();
+        changes.addObject(object.id);
+    }
     changes.collectionsChanged = true;
     changes.visibilityChanged = true;
     changes.structureChanged = true;

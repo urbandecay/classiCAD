@@ -1185,7 +1185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 61);
+    serialized.insert(QStringLiteral("version"), 62);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1249,6 +1249,10 @@ QJsonObject documentToJson(const Document &document)
         record.insert(QStringLiteral("sourceSceneLibraryPath"),
                       collection.sourceSceneLibraryPath);
         record.insert(QStringLiteral("libraryPath"), collection.libraryPath);
+        record.insert(QStringLiteral("instanceOffset"),
+                      QJsonArray{collection.instanceOffset.x,
+                                 collection.instanceOffset.y,
+                                 collection.instanceOffset.z});
         QJsonArray parentIds;
         for (const CollectionId parentId : collection.parentIds) {
             parentIds.append(idToJson(parentId.value()));
@@ -1336,6 +1340,11 @@ QJsonObject documentToJson(const Document &document)
             collectionIds.append(idToJson(collectionId.value()));
         }
         serializedObject.insert(QStringLiteral("collectionIds"), collectionIds);
+        serializedObject.insert(
+            QStringLiteral("instanceCollectionId"),
+            sceneObject.instanceCollectionId.isValid()
+                ? idToJson(sceneObject.instanceCollectionId.value())
+                : QJsonValue(QString()));
         serializedObject.insert(QStringLiteral("hideViewport"), sceneObject.hideViewport);
         serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
@@ -1651,7 +1660,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 61) {
+    if (version < 1 || version > 62) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1736,6 +1745,8 @@ bool documentFromJson(const QJsonValue &value,
                 !sourceSceneNamesValue.isArray() || !sourceSceneName.isString() ||
                 (version >= 61 &&
                  !record.value(QStringLiteral("sceneMembershipExplicit")).isBool()) ||
+                (version >= 62 &&
+                 !record.value(QStringLiteral("instanceOffset")).isArray()) ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
                 !record.value(QStringLiteral("hideRender")).isBool() ||
@@ -1761,6 +1772,17 @@ bool documentFromJson(const QJsonValue &value,
             }
             collection.sourceSceneLibraryPath = sourceSceneLibraryPath.toString();
             collection.libraryPath = libraryPath.toString();
+            if (version >= 62) {
+                Point3D instanceOffset;
+                if (!readDisplayBoundsPoint(
+                        record.value(QStringLiteral("instanceOffset")),
+                        &instanceOffset)) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid collection instance offset"));
+                    return false;
+                }
+                collection.instanceOffset = instanceOffset;
+            }
             collection.hideViewport = record.value(QStringLiteral("hideViewport")).toBool();
             collection.hideRender = record.value(QStringLiteral("hideRender")).toBool();
             collection.hideSelect = version >= 24 &&
@@ -2370,6 +2392,7 @@ bool documentFromJson(const QJsonValue &value,
         }
 
         QVector<CollectionId> objectCollectionIds;
+        CollectionId instanceCollectionId = CollectionId::invalid();
         bool hideViewport = false;
         bool hideRender = false;
         bool hiddenInViewport = false;
@@ -2402,6 +2425,23 @@ bool documentFromJson(const QJsonValue &value,
             hideViewport = serializedObject.value(QStringLiteral("hideViewport")).toBool();
             hideRender = serializedObject.value(QStringLiteral("hideRender")).toBool();
             hiddenInViewport = serializedObject.value(QStringLiteral("hiddenInViewport")).toBool();
+        }
+        if (version >= 62) {
+            const QJsonValue instanceCollectionValue =
+                serializedObject.value(QStringLiteral("instanceCollectionId"));
+            if (instanceCollectionValue.isString() &&
+                instanceCollectionValue.toString().isEmpty()) {
+                instanceCollectionId = CollectionId::invalid();
+            } else {
+                quint64 collectionValueId = 0;
+                if (!idFromJson(instanceCollectionValue, &collectionValueId) ||
+                    !collectionIds.contains(collectionValueId)) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid object collection instance reference"));
+                    return false;
+                }
+                instanceCollectionId = CollectionId::fromValue(collectionValueId);
+            }
         }
         if (version >= 11) {
             if (!serializedObject.value(QStringLiteral("hideSelect")).isBool()) {
@@ -2540,6 +2580,7 @@ bool documentFromJson(const QJsonValue &value,
         SceneObject sceneObject;
         sceneObject.id = ObjectId::fromValue(objectValueId);
         sceneObject.collectionIds = std::move(objectCollectionIds);
+        sceneObject.instanceCollectionId = instanceCollectionId;
         sceneObject.hideViewport = hideViewport;
         sceneObject.hideRender = hideRender;
         sceneObject.hiddenInViewport = hiddenInViewport;

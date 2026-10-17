@@ -2845,7 +2845,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 62 && bridgeVersion != 63 &&
          bridgeVersion != 64 && bridgeVersion != 65 &&
          bridgeVersion != 66 && bridgeVersion != 67 &&
-         bridgeVersion != 68 && bridgeVersion != 69)) {
+         bridgeVersion != 68 && bridgeVersion != 69 && bridgeVersion != 70)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4578,6 +4578,19 @@ bool importBlenderScene(const QString &path,
             return false;
         }
         collection.hideSelect = record.value(QStringLiteral("hide_select")).toBool();
+        if (bridgeVersion >= 70) {
+            QVector<double> instanceOffset;
+            if (!jsonNumberArray(
+                    record.value(QStringLiteral("instance_offset")), 3,
+                    &instanceOffset)) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender collection instance offset is invalid"));
+                return false;
+            }
+            collection.instanceOffset = {instanceOffset[0],
+                                         instanceOffset[1],
+                                         instanceOffset[2]};
+        }
         collection.viewLayerStates = record.value(QStringLiteral("view_layer_states")).toArray();
         const QJsonArray sourceSceneNames = record.value(QStringLiteral("source_scene_names")).toArray();
         collection.sceneMembershipExplicit =

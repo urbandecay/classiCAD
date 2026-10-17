@@ -434,6 +434,143 @@ ViewportRenderFrame buildViewportRenderFrame(
         frame.objectIndices.insert(entry.objectId.value(), frame.objects.size());
         frame.objects.append(std::move(entry));
     }
+    // Blender collection instances draw the linked collection at the Empty's
+    // transform. Keep ordinary source entries for their own scene membership,
+    // then append uncached draw proxies that pick as the owning Empty.
+    QHash<quint64, int> sourceEntryByObjectId;
+    sourceEntryByObjectId.reserve(frame.objects.size());
+    for (int index = 0; index < frame.objects.size(); ++index) {
+        const ViewportRenderObject &entry = frame.objects[index];
+        sourceEntryByObjectId.insert(entry.objectId.value(), index);
+    }
+
+    QHash<quint64, DocumentCollection> collectionsById;
+    collectionsById.reserve(document.collections().size());
+    for (const DocumentCollection &collection : document.collections()) {
+        collectionsById.insert(collection.id.value(), collection);
+    }
+
+    const auto instanceObjectOrigin = [](const ViewportRenderObject &entry) {
+        Point3D origin;
+        if (!entry.shape.points.isEmpty()) {
+            origin = shapePointToWorld(entry.shape, entry.shape.points.first());
+        }
+        origin.x += entry.placementTranslation.x;
+        origin.y += entry.placementTranslation.y;
+        origin.z += entry.placementTranslation.z;
+        return origin;
+    };
+    const auto subtractPoint = [](const Point3D &left, const Point3D &right) {
+        return Point3D{left.x - right.x, left.y - right.y,
+                       left.z - right.z};
+    };
+    const auto addPoint = [](const Point3D &left, const Point3D &right) {
+        return Point3D{left.x + right.x, left.y + right.y,
+                       left.z + right.z};
+    };
+
+    for (const SceneObject &instanceObject : document.objects()) {
+        if (!instanceObject.instanceCollectionId.isValid()) continue;
+        const auto instanceEntryIndex = sourceEntryByObjectId.constFind(
+            instanceObject.id.value());
+        if (instanceEntryIndex == sourceEntryByObjectId.cend()) continue;
+        const auto target = collectionsById.constFind(
+            instanceObject.instanceCollectionId.value());
+        if (target == collectionsById.cend()) continue;
+        const ViewportRenderObject &instanceEntry =
+            frame.objects[instanceEntryIndex.value()];
+        const Point3D instanceOrigin = instanceObjectOrigin(instanceEntry);
+        const bool instanceSelected = instanceEntry.selected;
+        const bool instanceActive = instanceEntry.active;
+        QSet<quint64> collectionPath;
+        QSet<quint64> emittedObjectIds;
+        int emittedCount = 0;
+        const auto appendCollectionInstance =
+            [&](const auto &self, CollectionId collectionId,
+                const Point3D &translation) -> void {
+                if (emittedCount >= 20000 || collectionPath.size() >= 64 ||
+                    collectionPath.contains(collectionId.value())) {
+                    return;
+                }
+                collectionPath.insert(collectionId.value());
+                QSet<quint64> hierarchy{collectionId.value()};
+                for (qsizetype collectionIndex = 0;
+                     collectionIndex < document.collections().size();
+                     ++collectionIndex) {
+                    bool added = false;
+                    for (const DocumentCollection &candidate :
+                         document.collections()) {
+                        if (hierarchy.contains(candidate.id.value())) continue;
+                        for (const CollectionId parentId : candidate.parentIds) {
+                            if (!hierarchy.contains(parentId.value())) continue;
+                            hierarchy.insert(candidate.id.value());
+                            added = true;
+                            break;
+                        }
+                    }
+                    if (!added) break;
+                }
+
+                for (const SceneObject &sourceObject : document.objects()) {
+                    if (emittedCount >= 20000 ||
+                        emittedObjectIds.contains(sourceObject.id.value())) {
+                        continue;
+                    }
+                    bool belongs = false;
+                    for (const CollectionId membership :
+                         sourceObject.collectionIds) {
+                        if (hierarchy.contains(membership.value())) {
+                            belongs = true;
+                            break;
+                        }
+                    }
+                    if (!belongs) continue;
+                    const auto sourceIndex = sourceEntryByObjectId.constFind(
+                        sourceObject.id.value());
+                    if (sourceIndex == sourceEntryByObjectId.cend()) continue;
+                    emittedObjectIds.insert(sourceObject.id.value());
+                    const ViewportRenderObject sourceEntry =
+                        frame.objects[sourceIndex.value()];
+                    if (sourceObject.instanceCollectionId.isValid()) {
+                        const auto nestedTarget = collectionsById.constFind(
+                            sourceObject.instanceCollectionId.value());
+                        if (nestedTarget == collectionsById.cend()) continue;
+                        Point3D nestedTranslation = addPoint(
+                            instanceObjectOrigin(sourceEntry), translation);
+                        nestedTranslation = subtractPoint(
+                            nestedTranslation, nestedTarget->instanceOffset);
+                        self(self, sourceObject.instanceCollectionId,
+                             nestedTranslation);
+                        continue;
+                    }
+                    ViewportRenderObject proxy = sourceEntry;
+                    proxy.objectId = instanceObject.id;
+                    proxy.objectIndex = objectIndex++;
+                    proxy.placementTranslation = addPoint(
+                        proxy.placementTranslation, translation);
+                    proxy.cacheable = false;
+                    proxy.preparedDepthGeometry.reset();
+                    proxy.preparedGeometryRevision = 0;
+                    proxy.preparedGeometryOffset = {};
+                    proxy.selected = instanceSelected;
+                    proxy.active = instanceActive;
+                    proxy.scalePreview = false;
+                    proxy.rotatePreview = false;
+                    proxy.blenderLooseMeshEdgeSourceSelected = false;
+                    proxy.blenderLooseMeshEdgeSourceActive = false;
+                    proxy.blenderLooseMeshEdgeSourceTransforming = false;
+                    frame.objects.append(std::move(proxy));
+                    ++emittedCount;
+                }
+                collectionPath.remove(collectionId.value());
+            };
+
+        const Point3D initialTranslation = subtractPoint(
+            instanceOrigin, target->instanceOffset);
+        appendCollectionInstance(appendCollectionInstance,
+                                 instanceObject.instanceCollectionId,
+                                 initialTranslation);
+    }
     return frame;
 }
 

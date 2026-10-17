@@ -258,6 +258,7 @@ struct CollectionsPanelCallbacks {
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
     std::function<void(CollectionId, CollectionId, bool)> duplicateCollection;
     std::function<void(CollectionId)> linkCollectionToActiveScene;
+    std::function<void(CollectionId)> instanceCollectionToScene;
     std::function<void(CollectionId, CollectionId)> unlinkCollection;
     std::function<void(CollectionId, const QString &)> renameCollection;
     std::function<void(CollectionId)> removeCollection;

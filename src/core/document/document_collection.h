@@ -1,6 +1,7 @@
 #pragma once
 
 #include "collection_id.h"
+#include "core/geometry/work_plane.h"
 #include <QString>
 #include <QJsonArray>
 #include <QStringList>
@@ -24,6 +25,9 @@ struct DocumentCollection {
     bool sceneMembershipExplicit = false;
     QString sourceSceneLibraryPath;
     QString libraryPath;
+    // Blender Collection.instance_offset is subtracted from linked contents
+    // when this collection is instanced by an object.
+    Point3D instanceOffset;
     QVector<CollectionId> parentIds;
     QVector<CollectionParentOrder> parentOrders;
     int rootOrder = -1;

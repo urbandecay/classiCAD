@@ -555,7 +555,8 @@ bool DocumentTransaction::removeCollection(CollectionId collectionId)
     }
     QVector<ObjectId> linkedObjects;
     for (const SceneObject &object : document_.objects()) {
-        if (object.collectionIds.contains(collectionId)) {
+        if (object.collectionIds.contains(collectionId) ||
+            object.instanceCollectionId == collectionId) {
             linkedObjects.append(object.id);
         }
     }

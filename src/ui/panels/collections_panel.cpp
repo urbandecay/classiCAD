@@ -1973,17 +1973,23 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             }
             if (anyExpanded) {
+                const QSignalBlocker blocker(tree_);
                 tree_->collapseAll();
             } else {
+                const QSignalBlocker blocker(tree_);
                 tree_->expandAll();
             }
+            saveTreeState();
         });
 
         QAction *showHierarchy = viewMenu->addAction(
             QStringLiteral("Show Object Hierarchy"));
         showHierarchy->setEnabled(!dataApiDisplayMode_);
         connect(showHierarchy, &QAction::triggered, this, [this]() {
-            if (tree_ != nullptr && !dataApiDisplayMode_) tree_->expandAll();
+            if (tree_ == nullptr || dataApiDisplayMode_) return;
+            const QSignalBlocker blocker(tree_);
+            tree_->expandAll();
+            saveTreeState();
         });
 
         const auto setOneLevel = [this](bool open) {
@@ -1994,9 +2000,11 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                     targets.append(tree_->topLevelItem(index));
                 }
             }
+            const QSignalBlocker blocker(tree_);
             for (QTreeWidgetItem *target : targets) {
                 target->setExpanded(open);
             }
+            saveTreeState();
         };
         QAction *showOneLevel = viewMenu->addAction(
             QStringLiteral("Show One Level"));

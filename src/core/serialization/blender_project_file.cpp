@@ -4685,6 +4685,11 @@ bool importBlenderScene(const QString &path,
             }
         }
     }
+    int nextRootCollectionOrder = 0;
+    for (DocumentCollection &collection : importedCollections) {
+        collection.rootOrder = collection.parentIds.isEmpty()
+            ? nextRootCollectionOrder++ : -1;
+    }
     int skippedCount = unsupportedItems.size();
     QJsonArray outlinerOnlyObjects;
     QSet<QString> outlinerOnlyObjectIds;

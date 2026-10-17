@@ -661,6 +661,22 @@ CollectionId Document::insertCollection(DocumentCollection value)
         value.parentOrders.append({parentId, nextOrder});
         orderedParentIds.insert(parentId.value());
     }
+    if (value.parentIds.isEmpty()) {
+        int nextRootOrder = 0;
+        for (const DocumentCollection &existing : collections_) {
+            if (!existing.parentIds.isEmpty()) continue;
+            if (existing.rootOrder == std::numeric_limits<int>::max()) {
+                return CollectionId::invalid();
+            }
+            nextRootOrder = qMax(nextRootOrder, existing.rootOrder + 1);
+            if (value.rootOrder >= 0 && existing.rootOrder == value.rootOrder) {
+                return CollectionId::invalid();
+            }
+        }
+        if (value.rootOrder < 0) value.rootOrder = nextRootOrder;
+    } else {
+        value.rootOrder = -1;
+    }
     value.name = value.name.trimmed();
     const bool localCollection = value.sourceId.isEmpty();
     if (localCollection) {
@@ -756,6 +772,10 @@ bool Document::removeCollection(CollectionId id)
     const DocumentCollection removed = collections_[index];
     collections_.removeAt(index);
     for (DocumentCollection &candidate : collections_) {
+        if (removed.parentIds.isEmpty() && candidate.parentIds.isEmpty() &&
+            candidate.rootOrder > removed.rootOrder) {
+            --candidate.rootOrder;
+        }
         for (const CollectionParentOrder &removedOrder : removed.parentOrders) {
             if (!candidate.parentIds.contains(removedOrder.parentId)) continue;
             auto siblingOrder = std::find_if(
@@ -776,6 +796,17 @@ bool Document::removeCollection(CollectionId id)
                                return order.parentId == id;
                            }),
             candidate.parentOrders.end());
+    }
+    int nextRootOrder = 0;
+    for (const DocumentCollection &candidate : collections_) {
+        if (candidate.parentIds.isEmpty() && candidate.rootOrder >= 0) {
+            nextRootOrder = qMax(nextRootOrder, candidate.rootOrder + 1);
+        }
+    }
+    for (DocumentCollection &candidate : collections_) {
+        if (candidate.parentIds.isEmpty() && candidate.rootOrder < 0) {
+            candidate.rootOrder = nextRootOrder++;
+        }
     }
     for (SceneObject &object : objects_) object.collectionIds.removeAll(id);
     DocumentChangeSet changes;
@@ -826,6 +857,8 @@ bool Document::setCollectionParents(CollectionId id, const QVector<CollectionId>
         if (reachesId(reachesId, parent, visited)) return false;
     }
     if (candidate->parentIds == unique) return true;
+    const bool wasRoot = candidate->parentIds.isEmpty();
+    const int oldRootOrder = candidate->rootOrder;
     QVector<CollectionParentOrder> removedParentOrders;
     for (const CollectionParentOrder &existingOrder : candidate->parentOrders) {
         if (!unique.contains(existingOrder.parentId)) {
@@ -857,10 +890,24 @@ bool Document::setCollectionParents(CollectionId id, const QVector<CollectionId>
         }
         parentOrders.append({parentId, nextOrder});
     }
+    int rootOrder = -1;
+    if (unique.isEmpty()) {
+        for (const DocumentCollection &sibling : collections_) {
+            if (sibling.id == id || !sibling.parentIds.isEmpty()) continue;
+            if (sibling.rootOrder == std::numeric_limits<int>::max()) return false;
+            rootOrder = qMax(rootOrder, sibling.rootOrder);
+        }
+        ++rootOrder;
+    }
     candidate->parentIds = unique;
     candidate->parentOrders = std::move(parentOrders);
+    candidate->rootOrder = rootOrder;
     for (DocumentCollection &sibling : collections_) {
         if (sibling.id == id) continue;
+        if (wasRoot && !unique.isEmpty() && sibling.parentIds.isEmpty() &&
+            sibling.rootOrder > oldRootOrder) {
+            --sibling.rootOrder;
+        }
         for (const CollectionParentOrder &removedOrder : removedParentOrders) {
             if (!sibling.parentIds.contains(removedOrder.parentId)) continue;
             auto siblingOrder = std::find_if(
@@ -876,6 +923,92 @@ bool Document::setCollectionParents(CollectionId id, const QVector<CollectionId>
     }
     DocumentChangeSet changes;
     changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::moveCollectionRelative(CollectionId id,
+                                      CollectionId targetId,
+                                      CollectionId parentId,
+                                      bool after)
+{
+    if (!id.isValid() || !targetId.isValid() || id == targetId) return false;
+    const DocumentCollection *source = collection(id);
+    const DocumentCollection *target = collection(targetId);
+    if (source == nullptr || target == nullptr) return false;
+    const auto isSiblingOf = [parentId](const DocumentCollection &candidate) {
+        return parentId.isValid()
+            ? candidate.parentIds.contains(parentId)
+            : candidate.parentIds.isEmpty();
+    };
+    if (!isSiblingOf(*source) || !isSiblingOf(*target)) return false;
+
+    struct OrderedSibling {
+        CollectionId id;
+        int order = 0;
+    };
+    QVector<OrderedSibling> siblings;
+    for (int index = 0; index < collections_.size(); ++index) {
+        const DocumentCollection &candidate = collections_[index];
+        if (!isSiblingOf(candidate)) continue;
+        int order = candidate.rootOrder >= 0 ? candidate.rootOrder : index;
+        if (parentId.isValid()) {
+            const auto edgeOrder = std::find_if(
+                candidate.parentOrders.cbegin(), candidate.parentOrders.cend(),
+                [parentId](const CollectionParentOrder &entry) {
+                    return entry.parentId == parentId;
+                });
+            if (edgeOrder != candidate.parentOrders.cend()) {
+                order = edgeOrder->order;
+            }
+        }
+        siblings.append({candidate.id, order});
+    }
+    std::stable_sort(siblings.begin(), siblings.end(),
+                     [](const OrderedSibling &left,
+                        const OrderedSibling &right) {
+        return left.order < right.order;
+    });
+    QVector<CollectionId> originalOrder;
+    QVector<CollectionId> reordered;
+    originalOrder.reserve(siblings.size());
+    reordered.reserve(siblings.size());
+    for (const OrderedSibling &sibling : siblings) {
+        originalOrder.append(sibling.id);
+        reordered.append(sibling.id);
+    }
+    const int sourceIndex = reordered.indexOf(id);
+    if (sourceIndex < 0) return false;
+    reordered.removeAt(sourceIndex);
+    const int targetIndex = reordered.indexOf(targetId);
+    if (targetIndex < 0) return false;
+    reordered.insert(targetIndex + (after ? 1 : 0), id);
+    if (reordered == originalOrder) return false;
+
+    for (int index = 0; index < reordered.size(); ++index) {
+        DocumentCollection *candidate = mutableCollection(reordered[index]);
+        if (candidate == nullptr) return false;
+        if (!parentId.isValid()) {
+            candidate->rootOrder = index;
+            continue;
+        }
+        auto edgeOrder = std::find_if(
+            candidate->parentOrders.begin(), candidate->parentOrders.end(),
+            [parentId](const CollectionParentOrder &entry) {
+                return entry.parentId == parentId;
+            });
+        if (edgeOrder == candidate->parentOrders.end()) {
+            candidate->parentOrders.append({parentId, index});
+        } else {
+            edgeOrder->order = index;
+        }
+    }
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.addCollection(targetId);
+    if (parentId.isValid()) changes.addCollection(parentId);
     changes.collectionsChanged = true;
     changes.structureChanged = true;
     applyChanges(changes);
@@ -1433,6 +1566,20 @@ Document::Snapshot Document::snapshot() const
 void Document::restoreSnapshot(const Snapshot &snapshot)
 {
     collections_ = snapshot.collections;
+    int nextRootOrder = 0;
+    for (const DocumentCollection &collection : collections_) {
+        if (collection.parentIds.isEmpty() && collection.rootOrder >= 0 &&
+            collection.rootOrder < std::numeric_limits<int>::max()) {
+            nextRootOrder = qMax(nextRootOrder, collection.rootOrder + 1);
+        }
+    }
+    for (DocumentCollection &collection : collections_) {
+        if (!collection.parentIds.isEmpty()) {
+            collection.rootOrder = -1;
+        } else if (collection.rootOrder < 0) {
+            collection.rootOrder = nextRootOrder++;
+        }
+    }
     QHash<quint64, int> nextCollectionChildOrder;
     for (const DocumentCollection &collection : collections_) {
         for (const CollectionParentOrder &order : collection.parentOrders) {

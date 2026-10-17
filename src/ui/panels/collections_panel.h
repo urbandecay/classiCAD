@@ -116,6 +116,11 @@ enum class OutlinerRowKind {
     ObjectContent,
     SourceObject
 };
+enum class OutlinerDropPosition {
+    Into,
+    Before,
+    After,
+};
 enum class OutlinerObjectStateFilter {
     All,
     Visible,
@@ -258,7 +263,8 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<OutlinerRowReference> &,
                        const OutlinerRowReference &,
                        bool,
-                       bool)> dropRows;
+                       bool,
+                       OutlinerDropPosition)> dropRows;
     std::function<QString()> stateScopeKey;
     std::function<QString()> treeStateContextKey;
     std::function<bool(QStringList *)> loadExpandedTreePaths;

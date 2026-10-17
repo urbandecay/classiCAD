@@ -3886,15 +3886,20 @@ private:
             [this](const QVector<OutlinerRowReference> &sources,
                    const OutlinerRowReference &target,
                    bool link,
-                   bool parentObjects) {
+                   bool parentObjects,
+                   OutlinerDropPosition position) {
                 if (sources.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
                 bool changed = false;
-                CollectionId destinationCollection =
-                    target.kind == OutlinerRowKind::Collection
-                        ? target.collectionId
-                        : CollectionId::invalid();
-                if (target.kind == OutlinerRowKind::Object) {
+                const bool relativeCollectionDrop =
+                    target.kind == OutlinerRowKind::Collection &&
+                    position != OutlinerDropPosition::Into;
+                CollectionId destinationCollection = relativeCollectionDrop
+                    ? target.parentCollectionId
+                    : (target.kind == OutlinerRowKind::Collection
+                           ? target.collectionId : CollectionId::invalid());
+                if (!relativeCollectionDrop &&
+                    target.kind == OutlinerRowKind::Object) {
                     destinationCollection = target.parentCollectionId;
                 }
                 const ObjectId destinationObject =
@@ -3902,7 +3907,11 @@ private:
                         ? target.objectId : ObjectId::invalid();
                 QSet<quint64> handledObjects;
                 QSet<quint64> handledCollections;
-                for (const OutlinerRowReference &source : sources) {
+                QVector<OutlinerRowReference> orderedSources = sources;
+                if (position == OutlinerDropPosition::After) {
+                    std::reverse(orderedSources.begin(), orderedSources.end());
+                }
+                for (const OutlinerRowReference &source : orderedSources) {
                     if (source.kind == OutlinerRowKind::Collection) {
                         const CollectionId collectionId = source.collectionId;
                         const DocumentCollection *collection =
@@ -3918,7 +3927,8 @@ private:
                             continue;
                         }
                         QVector<CollectionId> parents = collection->parentIds;
-                        if (!link && source.parentCollectionId.isValid()) {
+                        if (!link && source.parentCollectionId.isValid() &&
+                            source.parentCollectionId != destinationCollection) {
                             parents.removeAll(source.parentCollectionId);
                         }
                         if (destinationCollection.isValid() &&
@@ -3926,8 +3936,19 @@ private:
                             parents.append(destinationCollection);
                         }
                         if (parents != collection->parentIds) {
-                            changed = transaction.setCollectionParents(
-                                          collectionId, parents) || changed;
+                            if (!transaction.setCollectionParents(collectionId,
+                                                                 parents)) {
+                                continue;
+                            }
+                            changed = true;
+                        }
+                        if (relativeCollectionDrop &&
+                            collectionId != target.collectionId) {
+                            changed = transaction.moveCollectionRelative(
+                                          collectionId, target.collectionId,
+                                          destinationCollection,
+                                          position == OutlinerDropPosition::After) ||
+                                      changed;
                         }
                         continue;
                     }

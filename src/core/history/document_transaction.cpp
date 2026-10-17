@@ -305,6 +305,26 @@ bool DocumentTransaction::setCollectionParents(
     return true;
 }
 
+bool DocumentTransaction::moveCollectionRelative(
+    CollectionId collectionId,
+    CollectionId targetCollectionId,
+    CollectionId parentCollectionId,
+    bool after)
+{
+    if (!document_.moveCollectionRelative(collectionId, targetCollectionId,
+                                          parentCollectionId, after)) {
+        return false;
+    }
+    changes_.addCollection(collectionId);
+    changes_.addCollection(targetCollectionId);
+    if (parentCollectionId.isValid()) {
+        changes_.addCollection(parentCollectionId);
+    }
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectCollections(
     ObjectId objectId, const QVector<CollectionId> &collectionIds)
 {

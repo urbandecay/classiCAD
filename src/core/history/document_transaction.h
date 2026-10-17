@@ -52,6 +52,10 @@ public:
     bool renameCollection(CollectionId collectionId, const QString &name);
     bool setCollectionParents(CollectionId collectionId,
                               const QVector<CollectionId> &parentIds);
+    bool moveCollectionRelative(CollectionId collectionId,
+                                CollectionId targetCollectionId,
+                                CollectionId parentCollectionId,
+                                bool after);
     bool setObjectCollections(ObjectId objectId,
                               const QVector<CollectionId> &collectionIds);
     bool removeCollection(CollectionId collectionId);

@@ -22,6 +22,7 @@ struct DocumentCollection {
     QString libraryPath;
     QVector<CollectionId> parentIds;
     QVector<CollectionParentOrder> parentOrders;
+    int rootOrder = -1;
     bool hideViewport = false;
     bool hideRender = false;
     bool hideSelect = false;

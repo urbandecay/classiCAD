@@ -993,6 +993,19 @@ bool nonnegativeIntFromJson(const QJsonValue &value, int *number)
     return true;
 }
 
+bool signedIntFromJson(const QJsonValue &value, int *number)
+{
+    if (number == nullptr || !value.isDouble()) return false;
+    const double parsed = value.toDouble();
+    if (!std::isfinite(parsed) || std::floor(parsed) != parsed ||
+        parsed < static_cast<double>(std::numeric_limits<int>::min()) ||
+        parsed > static_cast<double>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    *number = static_cast<int>(parsed);
+    return true;
+}
+
 QJsonArray vector3ToJson(const QVector3D &value)
 {
     return {value.x(), value.y(), value.z()};
@@ -1172,7 +1185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 59);
+    serialized.insert(QStringLiteral("version"), 60);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1239,6 +1252,7 @@ QJsonObject documentToJson(const Document &document)
             parentIds.append(idToJson(parentId.value()));
         }
         record.insert(QStringLiteral("parentIds"), parentIds);
+        record.insert(QStringLiteral("rootOrder"), collection.rootOrder);
         QJsonArray parentOrders;
         for (const CollectionParentOrder &parentOrder : collection.parentOrders) {
             parentOrders.append(QJsonObject{
@@ -1635,7 +1649,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 59) {
+    if (version < 1 || version > 60) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1706,6 +1720,8 @@ bool documentFromJson(const QJsonValue &value,
             const QJsonValue parentIdsValue = record.value(QStringLiteral("parentIds"));
             const QJsonValue parentOrdersValue =
                 record.value(QStringLiteral("parentOrders"));
+            const QJsonValue rootOrderValue =
+                record.value(QStringLiteral("rootOrder"));
             const QJsonValue sourceSceneName = record.value(QStringLiteral("sourceSceneName"));
             const QJsonValue sourceSceneLibraryPath =
                 record.value(QStringLiteral("sourceSceneLibraryPath"));
@@ -1714,6 +1730,7 @@ bool documentFromJson(const QJsonValue &value,
                 collectionIds.contains(collectionValueId) || name.isEmpty() ||
                 !parentIdsValue.isArray() || !sourceId.isString() ||
                 (version >= 59 && !parentOrdersValue.isArray()) ||
+                (version >= 60 && !rootOrderValue.isDouble()) ||
                 !sourceSceneNamesValue.isArray() || !sourceSceneName.isString() ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
@@ -1757,6 +1774,16 @@ bool documentFromJson(const QJsonValue &value,
                 }
                 collection.parentIds.append(CollectionId::fromValue(parentId));
             }
+            if (version >= 60) {
+                if (!signedIntFromJson(rootOrderValue, &collection.rootOrder) ||
+                    (collection.parentIds.isEmpty()
+                         ? collection.rootOrder < 0
+                         : collection.rootOrder != -1)) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid collection root order"));
+                    return false;
+                }
+            }
             if (version >= 59) {
                 const QJsonArray parentOrders = parentOrdersValue.toArray();
                 if (parentOrders.size() != collection.parentIds.size()) {
@@ -1799,6 +1826,8 @@ bool documentFromJson(const QJsonValue &value,
         // Check references after loading all records so collection order is immaterial.
         QHash<quint64, int> nextChildOrder;
         QHash<quint64, QSet<int>> usedChildOrders;
+        int nextRootOrder = 0;
+        QSet<int> usedRootOrders;
         for (DocumentCollection &collection : snapshot.collections) {
             QSet<quint64> parents;
             for (const CollectionId parentId : collection.parentIds) {
@@ -1836,6 +1865,18 @@ bool documentFromJson(const QJsonValue &value,
                     return false;
                 }
             }
+            if (version < 60) {
+                if (collection.parentIds.isEmpty()) {
+                    collection.rootOrder = nextRootOrder++;
+                }
+            } else if (collection.parentIds.isEmpty()) {
+                if (usedRootOrders.contains(collection.rootOrder)) {
+                    setError(errorMessage,
+                             QStringLiteral("duplicate collection root order"));
+                    return false;
+                }
+                usedRootOrders.insert(collection.rootOrder);
+            }
         }
         if (version >= 59) {
             for (auto orders = usedChildOrders.cbegin();
@@ -1847,6 +1888,15 @@ bool documentFromJson(const QJsonValue &value,
                                  QStringLiteral("collection sibling order has a gap"));
                         return false;
                     }
+                }
+            }
+        }
+        if (version >= 60) {
+            for (int expected = 0; expected < usedRootOrders.size(); ++expected) {
+                if (!usedRootOrders.contains(expected)) {
+                    setError(errorMessage,
+                             QStringLiteral("collection root order has a gap"));
+                    return false;
                 }
             }
         }

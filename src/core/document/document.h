@@ -94,6 +94,10 @@ public:
     bool removeCollection(CollectionId id);
     bool renameCollection(CollectionId id, const QString &name);
     bool setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds);
+    bool moveCollectionRelative(CollectionId id,
+                                CollectionId targetId,
+                                CollectionId parentId,
+                                bool after);
     bool setCollectionVisibility(CollectionId id, bool hideViewport, bool hideRender);
     bool setCollectionHideSelect(CollectionId id, bool hideSelect);
     bool setObjectCollections(ObjectId objectId, const QVector<CollectionId> &collectionIds);

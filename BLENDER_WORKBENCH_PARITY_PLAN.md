@@ -10708,9 +10708,12 @@ scene depth.
   enclosing collection unless Shift requests parenting. The implicit Scene
   Collection can be used as the move-to-root target, while Ctrl-linking a
   collection to that implicit root is not representable in the current model.
-  Sibling before/after ordering and Blender's full drag-source operator matrix
-  remain unported. `git diff --check` and `cmake --build build -j4` passed;
-  no GUI interaction comparison was run.
+  Sibling before/after ordering, root-order persistence, quarter-row drop zones,
+  and Blender's selected-parent drag rule are now implemented in the
+  sixty-second tree update. The wider drag-source operator matrix remains
+  partial; external drags and several Blender-specific data-block drag handlers
+  are not represented by the Qt tree. `git diff --check` and
+  `cmake --build build -j4` passed; no GUI interaction comparison was run.
 - The fifth tree update adapts Blender 5.2.2's name-filter traversal and
   wildcard matching in
   [`outliner_tree.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tree.cc#L948-L1089).
@@ -11173,9 +11176,8 @@ scene depth.
 - The fifty-ninth tree update follows Blender's RNA `TreeStoreElem` expansion memory in [`tree_element_rna.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L97-L100). Pointer structures open on first encounter; later expanded and explicitly collapsed states are stored per project and restored as lazy branches are materialized. This fixes repeated reopening and ensures a saved expanded branch is reconstructed even when its parent was closed. It changes only Outliner UI settings; bridge and native document versions are unchanged. `cmake --build build -j4` and `git diff --check` passed; no matched Blender Outliner UI comparison was run.
 - The sixtieth tree update follows Blender 5.2.2's [Data API search rule](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tree.cc#L1112-L1122) and [open-subtree filter](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tree.cc#L1027-L1055). Name filtering in Data API mode now searches already-open branches, and a matching row can search its already-built children; it no longer discovers matches beneath unrelated closed branches. Clearing the filter still restores all materialized rows. No bridge/native version change is needed. `cmake --build build -j4` and `git diff --check` passed; no matched Blender Outliner UI comparison was run.
 - The sixty-first tree update follows Blender's [view-layer child iteration order](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L107-L189). Collection records now retain each parent-to-child position, and the Outliner sorts a collection's child rows by that edge order, including when a collection is linked under multiple parents. Removing or relinking a child compacts the sibling positions; loading rejects duplicate or gapped order records. Legacy bridge/native records keep their prior record-order fallback. Blender bridge version 69 and native document version 59 validate and persist the new order; earlier versions remain loadable. `cmake --build build -j4`, Python syntax parsing, and `git diff --check` passed; no matched Blender Outliner comparison was run.
-- Remaining Outliner scope is live Data API property/keying-set/driver operations and a
-  matched Blender/classiCAD interaction comparison. Those operations require a
-  live Blender RNA database and animation context, which classiCAD does not own.
+- The sixty-second tree update follows Blender 5.2.2's [quarter-row drop target selection](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_dragdrop.cc#L106-L165), [collection target resolution](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_dragdrop.cc#L222-L275), and [collection drop operation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_dragdrop.cc#L1093-L1327). Collection drops now distinguish before, inside, and after using Blender's quarter-row zones; dropping at the top of an expanded collection inserts before its first child when that child is a collection. Before/after drops move or Ctrl-link beside the hovered sibling, preserve multi-selection order, and persist root and child order. The drag source follows Blender's same-type selected-row collection and omits descendants when their collection parent is also selected. Native document version 60 stores root positions; earlier documents synthesize record-order fallbacks. Blender bridge format remains version 69. `cmake --build build -j4`, Python syntax parsing, and `git diff --check` passed; no matched Blender Outliner comparison was run.
+- Remaining Outliner scope includes the wider drag-source/operator matrix, live Data API property/keying-set/driver operations, and a matched Blender/classiCAD interaction comparison. Live Data API operations require a Blender RNA database and animation context, which classiCAD does not own.
   Generic ID dispatch was checked against Blender 5.2.2's full
   `TreeElementID::create_from_id()` switch; its remaining ID types use the
   already-ported generic Animation expansion. Do not mark this port complete

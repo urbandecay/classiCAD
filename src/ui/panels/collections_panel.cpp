@@ -164,7 +164,8 @@ public:
         const QVector<OutlinerRowReference> &,
         const OutlinerRowReference &,
         bool,
-        bool)>;
+        bool,
+        OutlinerDropPosition)>;
 
     explicit OutlinerTreeWidget(QWidget *parent = nullptr)
         : QTreeWidget(parent)
@@ -242,12 +243,41 @@ protected:
     void startDrag(Qt::DropActions supportedActions) override
     {
         draggedRows_.clear();
+        QTreeWidgetItem *current = currentItem();
+        const OutlinerRowReference currentReference = rowReference(current);
+        if (currentReference.kind != OutlinerRowKind::Object &&
+            currentReference.kind != OutlinerRowKind::Collection) {
+            QTreeWidget::startDrag(supportedActions);
+            return;
+        }
+        QSet<const QTreeWidgetItem *> selectedRows;
+        if (current != nullptr) selectedRows.insert(current);
+        for (QTreeWidgetItem *item : selectedItems()) {
+            if (rowReference(item).kind == currentReference.kind) {
+                selectedRows.insert(item);
+            }
+        }
+        const QSet<const QTreeWidgetItem *> selectedCollectionRows =
+            currentReference.kind == OutlinerRowKind::Collection
+                ? selectedRows : QSet<const QTreeWidgetItem *>{};
         QSet<QString> seen;
-        const auto append = [this, &seen](QTreeWidgetItem *item) {
+        const auto append = [this, &seen, &selectedRows,
+                             &selectedCollectionRows,
+                             &currentReference](QTreeWidgetItem *item) {
             if (item == nullptr) return;
+            if (!selectedRows.contains(item)) return;
             const OutlinerRowReference reference = rowReference(item);
-            if (reference.kind != OutlinerRowKind::Object &&
-                reference.kind != OutlinerRowKind::Collection) return;
+            if (reference.kind != currentReference.kind) return;
+            if (reference.kind == OutlinerRowKind::Collection) {
+                for (QTreeWidgetItem *ancestor = item->parent();
+                     ancestor != nullptr; ancestor = ancestor->parent()) {
+                    if (selectedCollectionRows.contains(ancestor) &&
+                        rowReference(ancestor).kind ==
+                            OutlinerRowKind::Collection) {
+                        return;
+                    }
+                }
+            }
             const QString key = reference.kind == OutlinerRowKind::Object
                 ? QStringLiteral("o%1").arg(reference.objectId.value())
                 : QStringLiteral("c%1").arg(reference.collectionId.value());
@@ -255,8 +285,16 @@ protected:
             seen.insert(key);
             draggedRows_.append(reference);
         };
-        append(currentItem());
-        for (QTreeWidgetItem *item : selectedItems()) append(item);
+        std::function<void(QTreeWidgetItem *)> visit =
+            [&append, &visit](QTreeWidgetItem *item) {
+                append(item);
+                for (int index = 0; index < item->childCount(); ++index) {
+                    visit(item->child(index));
+                }
+            };
+        for (int index = 0; index < topLevelItemCount(); ++index) {
+            visit(topLevelItem(index));
+        }
         QTreeWidget::startDrag(supportedActions);
         draggedRows_.clear();
     }
@@ -290,33 +328,63 @@ protected:
         QTreeWidgetItem *targetItem = itemAt(event->position().toPoint());
         OutlinerRowReference target = targetItem == nullptr
             ? OutlinerRowReference{} : rowReference(targetItem);
+        OutlinerDropPosition position = OutlinerDropPosition::Into;
         if (target.kind == OutlinerRowKind::ObjectContent) {
             event->ignore();
             return;
+        }
+        if (target.kind == OutlinerRowKind::Collection &&
+            draggedRows_.first().kind == OutlinerRowKind::Collection) {
+            const QRect targetRect = visualItemRect(targetItem);
+            const int rowY = event->position().toPoint().y() - targetRect.top();
+            if (targetRect.height() > 0 &&
+                rowY < targetRect.height() / 4) {
+                position = OutlinerDropPosition::Before;
+            } else if (targetRect.height() > 0 &&
+                       rowY > (targetRect.height() * 3) / 4) {
+                position = OutlinerDropPosition::After;
+            }
+            if (position == OutlinerDropPosition::Before &&
+                targetRect.height() > 0 && rowY < targetRect.height() / 4 &&
+                targetItem->isExpanded() && targetItem->childCount() > 0) {
+                const OutlinerRowReference firstChild =
+                    rowReference(targetItem->child(0));
+                if (firstChild.kind == OutlinerRowKind::Collection) {
+                    target = firstChild;
+                } else {
+                    position = OutlinerDropPosition::Into;
+                }
+            }
         }
         if (target.kind == OutlinerRowKind::Object &&
             !event->modifiers().testFlag(Qt::ShiftModifier)) {
             target.kind = target.parentCollectionId.isValid()
                 ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
             target.collectionId = target.parentCollectionId;
-        } else if (target.kind == OutlinerRowKind::Collection &&
-                   dropIndicatorPosition() != OnItem) {
-            target.collectionId = target.parentCollectionId;
-            target.kind = target.collectionId.isValid()
-                ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
-        } else if (target.kind == OutlinerRowKind::Object &&
-                   dropIndicatorPosition() != OnItem) {
-            target.collectionId = target.parentCollectionId;
-            target.kind = target.collectionId.isValid()
-                ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
+        }
+        if (event->modifiers().testFlag(Qt::ShiftModifier) &&
+            (draggedRows_.first().kind != OutlinerRowKind::Object ||
+             target.kind != OutlinerRowKind::Object)) {
+            event->ignore();
+            return;
+        }
+        if (target.kind == OutlinerRowKind::Collection &&
+            std::any_of(draggedRows_.cbegin(), draggedRows_.cend(),
+                        [&target](const OutlinerRowReference &source) {
+                return source.kind == OutlinerRowKind::Collection &&
+                       source.collectionId == target.collectionId;
+            })) {
+            event->ignore();
+            return;
         }
 
         const QVector<OutlinerRowReference> sources = draggedRows_;
         const bool link = event->modifiers().testFlag(Qt::ControlModifier);
         const bool parent = event->modifiers().testFlag(Qt::ShiftModifier) &&
                             target.kind == OutlinerRowKind::Object;
-        QTimer::singleShot(0, this, [this, sources, target, link, parent]() {
-            if (applyDrop_) applyDrop_(sources, target, link, parent);
+        QTimer::singleShot(0, this,
+                           [this, sources, target, link, parent, position]() {
+            if (applyDrop_) applyDrop_(sources, target, link, parent, position);
         });
         event->setDropAction(Qt::MoveAction);
         event->accept();
@@ -917,9 +985,10 @@ void CollectionsPanel::createLayout()
         [this](const QVector<OutlinerRowReference> &sources,
                const OutlinerRowReference &target,
                bool link,
-               bool parent) {
+               bool parent,
+               OutlinerDropPosition position) {
             if (callbacks_.dropRows) {
-                callbacks_.dropRows(sources, target, link, parent);
+                callbacks_.dropRows(sources, target, link, parent, position);
             }
         });
     tree_->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -2740,25 +2809,41 @@ void CollectionsPanel::refresh()
                                activeViewLayerKey.isEmpty() ||
                                !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
-    const auto populateSceneRoot = [this](
+    const auto topLevelCollectionIndices = [](
+        const QVector<CollectionPanelEntry> &entries) {
+        QVector<int> roots;
+        for (int index = 0; index < entries.size(); ++index) {
+            const DocumentCollection &collection = entries[index].collection;
+            bool hasKnownParent = false;
+            for (const CollectionId parentId : collection.parentIds) {
+                hasKnownParent = hasKnownParent || std::any_of(
+                    entries.cbegin(), entries.cend(),
+                    [parentId](const CollectionPanelEntry &candidate) {
+                        return candidate.collection.id == parentId;
+                    });
+            }
+            if (!hasKnownParent) roots.append(index);
+        }
+        const auto orderFor = [&entries](int index) {
+            const int explicitOrder = entries[index].collection.rootOrder;
+            return explicitOrder >= 0 ? explicitOrder : index;
+        };
+        std::stable_sort(roots.begin(), roots.end(),
+                         [&orderFor](int left, int right) {
+            return orderFor(left) < orderFor(right);
+        });
+        return roots;
+    };
+    const auto populateSceneRoot = [this, &topLevelCollectionIndices](
                                        QTreeWidgetItem *root,
                                        const QVector<CollectionPanelEntry> &entries,
                                        const QVector<OutlinerObjectEntry> &objects,
                                        const QString &viewLayerKey,
                                        const QString &rootPath) {
         if (showCollections_) {
-            for (const CollectionPanelEntry &entry : entries) {
-                bool hasKnownParent = false;
-                for (const CollectionId parentId : entry.collection.parentIds) {
-                    const auto parent = std::find_if(
-                        entries.cbegin(), entries.cend(),
-                        [parentId](const CollectionPanelEntry &candidate) {
-                            return candidate.collection.id == parentId;
-                        });
-                    hasKnownParent = hasKnownParent ||
-                                     parent != entries.cend();
-                }
-                if (!hasKnownParent) {
+            for (const int rootIndex : topLevelCollectionIndices(entries)) {
+                const CollectionPanelEntry &entry = entries[rootIndex];
+                if (entry.collection.id.isValid()) {
                     appendCollection(tree_, entry, entries, objects, root, {},
                                      {rootPath}, {}, viewLayerKey,
                                      viewLayerKey);
@@ -4206,25 +4291,13 @@ void CollectionsPanel::refresh()
                 collectionsGroup->setData(nameColumn, itemPathRole,
                     rootPath + QStringLiteral("/collections"));
                 collectionsGroup->setFlags(Qt::ItemIsEnabled);
-                for (const CollectionPanelEntry &entry : sceneEntries) {
-                    bool hasKnownParent = false;
-                    for (const CollectionId parentId :
-                         entry.collection.parentIds) {
-                        const auto parent = std::find_if(
-                            sceneEntries.cbegin(), sceneEntries.cend(),
-                            [parentId](const CollectionPanelEntry &candidate) {
-                                return candidate.collection.id == parentId;
-                            });
-                        hasKnownParent = hasKnownParent ||
-                                         parent != sceneEntries.cend();
-                    }
-                    if (!hasKnownParent) {
-                        appendCollection(
-                            tree_, entry, sceneEntries, sceneObjects,
-                            collectionsGroup, {},
-                            {rootPath, QStringLiteral("collections")}, {},
-                            {}, scene.activeViewLayerKey);
-                    }
+                for (const int rootIndex :
+                     topLevelCollectionIndices(sceneEntries)) {
+                    appendCollection(
+                        tree_, sceneEntries[rootIndex], sceneEntries,
+                        sceneObjects, collectionsGroup, {},
+                        {rootPath, QStringLiteral("collections")}, {},
+                        {}, scene.activeViewLayerKey);
                 }
             }
 

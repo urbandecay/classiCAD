@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 52
+BRIDGE_FORMAT_VERSION = 53
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -40,6 +40,9 @@ MAX_OUTLINER_LIBRARY_ITEMS = 20000
 MAX_OUTLINER_ORPHAN_ITEMS = 20000
 MAX_OUTLINER_SEQUENCE_ITEMS = 10000
 MAX_OUTLINER_SEQUENCE_DEPTH = 128
+MAX_OUTLINER_DATA_API_ITEMS = 20000
+MAX_OUTLINER_DATA_API_DEPTH = 32
+MAX_OUTLINER_DATA_API_COLLECTION_ITEMS = 128
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -1016,6 +1019,233 @@ def outliner_sequencer_tree(active_window, fallback_scene):
     record["strips"] = rows
     record["truncated"] = truncated[0]
     return record
+
+
+def outliner_data_api_tree():
+    """Capture Blender's read-only RNA Data API tree with bounded recursion."""
+    remaining = [MAX_OUTLINER_DATA_API_ITEMS - 1]
+    truncated = [False]
+    pending_structs = []
+    root = {
+        "kind": "STRUCT",
+        "key": "main",
+        "name": "RNA",
+        "type": str(getattr(getattr(bpy.data, "bl_rna", None),
+                             "identifier", "BlendData")),
+        "value": "",
+        "children": [],
+    }
+
+    def display_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, (str, bool, int, float)):
+            text = str(value)
+            return text[:4096]
+        return ""
+
+    def struct_name(value):
+        try:
+            name = getattr(value, "name", None)
+            if name:
+                return str(name)[:4096]
+            rna = getattr(value, "bl_rna", None)
+            return str(getattr(rna, "name", "(empty)"))[:4096]
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return "(empty)"
+
+    def identity(value):
+        try:
+            return int(value.as_pointer())
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return id(value)
+
+    def reserve_node(kind, key, name, type_name, value_text=""):
+        if remaining[0] <= 0:
+            truncated[0] = True
+            return None
+        remaining[0] -= 1
+        return {
+            "kind": kind,
+            "key": str(key)[:512],
+            "name": str(name)[:4096],
+            "type": str(type_name)[:256],
+            "value": str(value_text)[:4096],
+            "children": [],
+        }
+
+    def properties_of(value):
+        try:
+            rna = getattr(value, "bl_rna", None)
+            properties = getattr(rna, "properties", ())
+            return list(properties)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return []
+
+    def add_struct(value, key, depth, ancestry):
+        rna = getattr(value, "bl_rna", None)
+        type_name = str(getattr(rna, "identifier", ""))
+        node = reserve_node("STRUCT", key, struct_name(value), type_name)
+        if node is None:
+            return None
+        pointer = identity(value)
+        if pointer in ancestry:
+            truncated[0] = True
+            return node
+        if depth >= MAX_OUTLINER_DATA_API_DEPTH:
+            if properties_of(value):
+                truncated[0] = True
+            return node
+
+        pending_structs.append(
+            (node, value, depth, ancestry | {pointer}))
+        return node
+
+    def populate_struct(node, value, depth, ancestry):
+        for prop in properties_of(value):
+            if remaining[0] <= 0:
+                truncated[0] = True
+                break
+            try:
+                identifier = str(prop.identifier)
+                if identifier == "rna_type" or bool(
+                        getattr(prop, "is_hidden", False)):
+                    continue
+                prop_type = str(prop.type)
+                prop_name = str(prop.name)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                continue
+            property_node = reserve_node(
+                "PROPERTY", identifier, prop_name, prop_type)
+            if property_node is None:
+                break
+            try:
+                property_value = getattr(value, identifier)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                node["children"].append(property_node)
+                continue
+
+            if prop_type == "POINTER":
+                if property_value is not None:
+                    child = add_struct(property_value, "pointer", depth + 1,
+                                       ancestry)
+                    if child is not None:
+                        property_node["children"].append(child)
+            elif prop_type == "COLLECTION":
+                try:
+                    collection_size = len(property_value)
+                    iterator = iter(property_value)
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    continue
+                for index, element in enumerate(iterator):
+                    if (index >= collection_size or
+                            index >= MAX_OUTLINER_DATA_API_COLLECTION_ITEMS or
+                            remaining[0] <= 0):
+                        truncated[0] = True
+                        break
+                    child = add_struct(element, str(index), depth + 1,
+                                       ancestry)
+                    if child is not None:
+                        property_node["children"].append(child)
+            elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
+                  bool(getattr(prop, "is_array", False))):
+                try:
+                    values = list(property_value)
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    values = []
+                subtype = str(getattr(prop, "subtype", ""))
+                labels = ("R", "G", "B", "A") if subtype.startswith("COLOR") else (
+                    "X", "Y", "Z", "W")
+                for index, element in enumerate(values):
+                    array_key = str(index)
+                    array_name = (labels[index] if index < len(labels)
+                                  else str(index + 1))
+                    array_node = reserve_node(
+                        "ARRAY_ELEM", array_key, array_name, prop_type,
+                        display_value(element))
+                    if array_node is None:
+                        break
+                    property_node["children"].append(array_node)
+            else:
+                property_node["value"] = display_value(property_value)
+            node["children"].append(property_node)
+
+    ancestry = {identity(bpy.data)}
+    for prop in properties_of(bpy.data):
+        if remaining[0] <= 0:
+            truncated[0] = True
+            break
+        try:
+            identifier = str(prop.identifier)
+            if identifier == "rna_type" or bool(
+                    getattr(prop, "is_hidden", False)):
+                continue
+            prop_type = str(prop.type)
+            prop_name = str(prop.name)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            continue
+        property_node = reserve_node("PROPERTY", identifier, prop_name,
+                                     prop_type)
+        if property_node is None:
+            break
+        try:
+            property_value = getattr(bpy.data, identifier)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            root["children"].append(property_node)
+            continue
+        if prop_type == "POINTER":
+            if property_value is not None:
+                child = add_struct(property_value, "pointer", 1, ancestry)
+                if child is not None:
+                    property_node["children"].append(child)
+        elif prop_type == "COLLECTION":
+            try:
+                collection_size = len(property_value)
+                iterator = iter(property_value)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                iterator = iter(())
+                collection_size = 0
+            for index, element in enumerate(iterator):
+                if (index >= collection_size or
+                        index >= MAX_OUTLINER_DATA_API_COLLECTION_ITEMS or
+                        remaining[0] <= 0):
+                    truncated[0] = True
+                    break
+                child = add_struct(element, str(index), 1, ancestry)
+                if child is not None:
+                    property_node["children"].append(child)
+        elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
+              bool(getattr(prop, "is_array", False))):
+            try:
+                values = list(property_value)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                values = []
+            subtype = str(getattr(prop, "subtype", ""))
+            labels = ("R", "G", "B", "A") if subtype.startswith("COLOR") else (
+                "X", "Y", "Z", "W")
+            for index, element in enumerate(values):
+                array_name = (labels[index] if index < len(labels)
+                              else str(index + 1))
+                array_node = reserve_node(
+                    "ARRAY_ELEM", str(index), array_name, prop_type,
+                    display_value(element))
+                if array_node is None:
+                    break
+                property_node["children"].append(array_node)
+        else:
+            property_node["value"] = display_value(property_value)
+        root["children"].append(property_node)
+
+    pending_index = 0
+    while pending_index < len(pending_structs):
+        if remaining[0] <= 0:
+            truncated[0] = True
+            break
+        node, value, depth, ancestry = pending_structs[pending_index]
+        pending_index += 1
+        populate_struct(node, value, depth, ancestry)
+
+    return {"root": root, "truncated": truncated[0]}
 
 
 def object_metadata(obj, scene, depsgraph=None):
@@ -3219,6 +3449,7 @@ def extract_scene(input_path, mode):
         "outliner_orphans": outliner_orphan_groups(),
         "outliner_sequencer": outliner_sequencer_tree(
             active_window, active_scene),
+        "outliner_data_api": outliner_data_api_tree(),
         "scenes": [],
         "collections": [],
         "items": [],

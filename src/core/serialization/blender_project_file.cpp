@@ -2703,6 +2703,8 @@ bool loadVignolaDocument(const QString &path,
             importReport.outlinerOrphans;
         snapshot.settings.importedBlenderSequencer =
             importReport.outlinerSequencer;
+        snapshot.settings.importedBlenderDataApi =
+            importReport.outlinerDataApi;
         snapshot.settings.importedBlenderOutlinerOnlyObjects =
             importReport.outlinerOnlyObjects;
         snapshot.settings.importedBlenderColorLuts =
@@ -2833,7 +2835,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 46 && bridgeVersion != 47 &&
          bridgeVersion != 48 && bridgeVersion != 49 &&
          bridgeVersion != 50 && bridgeVersion != 51 &&
-         bridgeVersion != 52)) {
+         bridgeVersion != 52 && bridgeVersion != 53)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3291,6 +3293,63 @@ bool importBlenderScene(const QString &path,
             return false;
         }
         outlinerSequencer = sequence;
+    }
+    QJsonObject outlinerDataApi;
+    if (bridgeVersion >= 53) {
+        const QJsonValue dataApiValue = root.value(
+            QStringLiteral("outliner_data_api"));
+        if (!dataApiValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Data API Outliner tree is invalid"));
+            return false;
+        }
+        const QJsonObject dataApi = dataApiValue.toObject();
+        const QJsonValue rootNodeValue = dataApi.value(QStringLiteral("root"));
+        const QJsonValue truncatedValue = dataApi.value(
+            QStringLiteral("truncated"));
+        if (!rootNodeValue.isObject() || !truncatedValue.isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Data API Outliner tree is invalid"));
+            return false;
+        }
+        int dataApiNodeCount = 0;
+        const auto validateDataApiNode = [&](const auto &self,
+                                              const QJsonObject &node,
+                                              int depth) -> bool {
+            if (depth > 64 || ++dataApiNodeCount > 20000) return false;
+            const QJsonValue kindValue = node.value(QStringLiteral("kind"));
+            const QJsonValue keyValue = node.value(QStringLiteral("key"));
+            const QJsonValue nameValue = node.value(QStringLiteral("name"));
+            const QJsonValue typeValue = node.value(QStringLiteral("type"));
+            const QJsonValue displayValue = node.value(QStringLiteral("value"));
+            const QJsonValue childrenValue = node.value(
+                QStringLiteral("children"));
+            if (!kindValue.isString() ||
+                (kindValue.toString() != QLatin1String("STRUCT") &&
+                 kindValue.toString() != QLatin1String("PROPERTY") &&
+                 kindValue.toString() != QLatin1String("ARRAY_ELEM")) ||
+                !keyValue.isString() || keyValue.toString().size() > 512 ||
+                !nameValue.isString() || nameValue.toString().size() > 4096 ||
+                !typeValue.isString() || typeValue.toString().size() > 256 ||
+                !displayValue.isString() || displayValue.toString().size() > 4096 ||
+                !childrenValue.isArray() || childrenValue.toArray().size() > 20000) {
+                return false;
+            }
+            for (const QJsonValue &childValue : childrenValue.toArray()) {
+                if (!childValue.isObject() ||
+                    !self(self, childValue.toObject(), depth + 1)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!validateDataApiNode(validateDataApiNode,
+                                 rootNodeValue.toObject(), 0)) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender Data API Outliner row is invalid"));
+            return false;
+        }
+        outlinerDataApi = dataApi;
     }
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
@@ -4288,6 +4347,7 @@ bool importBlenderScene(const QString &path,
         report->outlinerLibraries = outlinerLibraries;
         report->outlinerOrphans = outlinerOrphans;
         report->outlinerSequencer = outlinerSequencer;
+        report->outlinerDataApi = outlinerDataApi;
         report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;

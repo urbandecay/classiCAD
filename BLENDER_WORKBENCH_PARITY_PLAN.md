@@ -11093,10 +11093,25 @@ scene depth.
   when the selected mode has no rows, like Blender. `cmake --build build -j4`,
   Python syntax parsing, and `git diff --check` passed; no matched Blender
   Outliner UI comparison was run.
-- Remaining Outliner scope includes unsupported display modes, additional
-  specialized ID branches still under source review, and a matched
-  Blender/classiCAD interaction comparison. Do not mark this port complete
-  until the remaining items have been reviewed against pinned Blender source.
+- The thirty-ninth tree update follows Blender 5.2.2's Data API root in
+  [`tree_display_data.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_data.cc)
+  and RNA struct/property expansion in
+  [`tree_element_rna.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc).
+  Data API mode now shows the `bpy.data` RNA property tree, pointer and
+  collection contents, numeric array components, and scalar values in a
+  separate Value column. The root opens by default while its child rows stay
+  collapsed. Blender bridge version 53 and native document version 43 retain
+  a read-only import snapshot; the capture is capped at 20,000 rows, 32
+  struct levels, and 128 entries per collection. Blender builds this tree
+  lazily and allows property edits/keying-set operations; classiCAD captures
+  it at import and does not edit the source Blender data. `cmake --build
+  build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
+  Blender Outliner UI comparison was run.
+- Remaining Outliner scope includes Blender's Library Overrides display modes,
+  further specialized ID branches, Data API edit/keying-set interactions,
+  Sequencer selection synchronization, and a matched Blender/classiCAD
+  interaction comparison. Do not mark this port complete until the remaining
+  items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

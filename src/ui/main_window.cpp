@@ -3398,6 +3398,9 @@ private:
             }
             return tree;
         };
+        collectionCallbacks.dataApi = [this]() {
+            return session_.document().settings().importedBlenderDataApi;
+        };
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

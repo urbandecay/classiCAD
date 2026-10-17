@@ -44,6 +44,8 @@ struct DocumentSettings {
     QJsonArray importedBlenderOrphans;
     // Current Blender workspace's Sequencer Outliner tree.
     QJsonObject importedBlenderSequencer;
+    // Bounded read-only Blender RNA Data API Outliner tree.
+    QJsonObject importedBlenderDataApi;
     // Blender objects with no classiCAD geometry representation still belong
     // in the Outliner. These source records preserve their tree rows only.
     QJsonArray importedBlenderOutlinerOnlyObjects;

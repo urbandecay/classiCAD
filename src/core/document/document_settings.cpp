@@ -180,6 +180,11 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
            settings.importedBlenderOrphans.size() <= 1024 &&
            settings.importedBlenderSequencer.value(
                QStringLiteral("strips")).toArray().size() <= 10000 &&
+           (settings.importedBlenderDataApi.isEmpty() ||
+            (settings.importedBlenderDataApi.value(
+                 QStringLiteral("root")).isObject() &&
+             settings.importedBlenderDataApi.value(
+                 QStringLiteral("truncated")).isBool())) &&
            settings.importedBlenderOutlinerOnlyObjects.size() <= 100000 &&
            areImportedColorLutsValid(settings.importedBlenderColorLuts,
                                      settings.importedBlenderColorLutMetadata);

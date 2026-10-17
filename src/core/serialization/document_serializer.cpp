@@ -181,6 +181,47 @@ bool isValidImportedBlenderSequencer(const QJsonValue &value)
     return validateRows(validateRows, strips.toArray(), 0);
 }
 
+bool isValidImportedBlenderDataApi(const QJsonValue &value)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject record = value.toObject();
+    if (record.isEmpty()) return true;
+    const QJsonValue root = record.value(QStringLiteral("root"));
+    const QJsonValue truncated = record.value(QStringLiteral("truncated"));
+    if (!root.isObject() || !truncated.isBool()) return false;
+    int nodeCount = 0;
+    const auto validateNode = [&](const auto &self,
+                                  const QJsonObject &node,
+                                  int depth) -> bool {
+        if (depth > 64 || ++nodeCount > 20000) return false;
+        const QJsonValue kind = node.value(QStringLiteral("kind"));
+        const QJsonValue key = node.value(QStringLiteral("key"));
+        const QJsonValue name = node.value(QStringLiteral("name"));
+        const QJsonValue type = node.value(QStringLiteral("type"));
+        const QJsonValue display = node.value(QStringLiteral("value"));
+        const QJsonValue children = node.value(QStringLiteral("children"));
+        if (!kind.isString() ||
+            (kind.toString() != QLatin1String("STRUCT") &&
+             kind.toString() != QLatin1String("PROPERTY") &&
+             kind.toString() != QLatin1String("ARRAY_ELEM")) ||
+            !key.isString() || key.toString().size() > 512 ||
+            !name.isString() || name.toString().size() > 4096 ||
+            !type.isString() || type.toString().size() > 256 ||
+            !display.isString() || display.toString().size() > 4096 ||
+            !children.isArray() || children.toArray().size() > 20000) {
+            return false;
+        }
+        for (const QJsonValue &child : children.toArray()) {
+            if (!child.isObject() ||
+                !self(self, child.toObject(), depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    return validateNode(validateNode, root.toObject(), 0);
+}
+
 void setError(QString *errorMessage, const QString &message)
 {
     if (errorMessage != nullptr) {
@@ -399,7 +440,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 42);
+    serialized.insert(QStringLiteral("version"), 43);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -414,6 +455,8 @@ QJsonObject documentToJson(const Document &document)
                     document.settings().importedBlenderOrphans);
     settings.insert(QStringLiteral("importedBlenderSequencer"),
                     document.settings().importedBlenderSequencer);
+    settings.insert(QStringLiteral("importedBlenderDataApi"),
+                    document.settings().importedBlenderDataApi);
     settings.insert(QStringLiteral("importedBlenderOutlinerOnlyObjects"),
                     document.settings().importedBlenderOutlinerOnlyObjects);
     QJsonObject colorLuts;
@@ -851,7 +894,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 42) {
+    if (version < 1 || version > 43) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1293,6 +1336,16 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.importedBlenderSequencer = importedSequencer.toObject();
+        }
+        if (version >= 43) {
+            const QJsonValue importedDataApi = settingsObject.value(
+                QStringLiteral("importedBlenderDataApi"));
+            if (!isValidImportedBlenderDataApi(importedDataApi)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid imported Blender Data API metadata"));
+                return false;
+            }
+            settings.importedBlenderDataApi = importedDataApi.toObject();
         }
         if (version >= 37) {
             const QJsonValue outlinerOnlyValue = settingsObject.value(

@@ -108,6 +108,7 @@ enum class OutlinerRowKind {
     Collection,
     Library,
     SequencerStrip,
+    DataApi,
     Object,
     SceneRoot,
     SceneGroup,
@@ -193,6 +194,7 @@ struct CollectionsPanelCallbacks {
     std::function<QVector<OutlinerLibraryEntry>()> libraries;
     std::function<QVector<OutlinerOrphanGroup>()> orphanGroups;
     std::function<OutlinerSequenceTree()> sequencer;
+    std::function<QJsonObject()> dataApi;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
@@ -305,6 +307,7 @@ private:
     bool librariesDisplayMode_ = false;
     bool orphanDataDisplayMode_ = false;
     bool sequencerDisplayMode_ = false;
+    bool dataApiDisplayMode_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

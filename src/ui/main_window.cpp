@@ -4278,6 +4278,114 @@ private:
                 session_.selection().setObjectIds(selectableIds, root);
                 session_.selection().setActiveObjectId(root);
             };
+        collectionCallbacks.deleteObjectSelection =
+            [this, objectHierarchyIds](ObjectId contextObjectId,
+                                       bool hierarchy) {
+                const Document &document = session_.document();
+                QVector<ObjectId> roots = session_.selection().objectIds();
+                if (roots.isEmpty() && contextObjectId.isValid()) {
+                    roots.append(contextObjectId);
+                }
+
+                const auto identityFor = [](const SceneObject &object) {
+                    return object.blenderSourceObjectId.isEmpty()
+                        ? QStringLiteral("classiCAD-local-object:%1")
+                              .arg(object.id.value())
+                        : object.blenderSourceObjectId;
+                };
+                QHash<QString, const SceneObject *> objectsByIdentity;
+                for (const SceneObject &object : document.objects()) {
+                    if (object.blenderLooseMeshEdgeCompanion) continue;
+                    objectsByIdentity.insert(identityFor(object), &object);
+                }
+
+                QSet<QString> protectedParentIdentities;
+                for (const SceneObject &object : document.objects()) {
+                    if (object.libraryPath.isEmpty() ||
+                        object.blenderLooseMeshEdgeCompanion) {
+                        continue;
+                    }
+                    QString parentIdentity = object.blenderParentObjectId;
+                    QSet<QString> visited;
+                    while (!parentIdentity.isEmpty() &&
+                           !visited.contains(parentIdentity)) {
+                        visited.insert(parentIdentity);
+                        protectedParentIdentities.insert(parentIdentity);
+                        const SceneObject *parent =
+                            objectsByIdentity.value(parentIdentity, nullptr);
+                        if (parent == nullptr) break;
+                        parentIdentity = parent->blenderParentObjectId;
+                    }
+                }
+
+                QVector<ObjectId> deleteIds;
+                QSet<quint64> deleteIdValues;
+                QSet<QString> deletedObjectIdentities;
+                for (const ObjectId root : roots) {
+                    const SceneObject *rootObject = document.object(root);
+                    if (rootObject == nullptr ||
+                        rootObject->blenderLooseMeshEdgeCompanion) {
+                        continue;
+                    }
+                    QVector<ObjectId> candidates;
+                    if (hierarchy) {
+                        candidates = objectHierarchyIds(root);
+                    } else {
+                        candidates.append(root);
+                        const QString rootIdentity = identityFor(*rootObject);
+                        for (const SceneObject &candidate : document.objects()) {
+                            if (candidate.blenderLooseMeshEdgeCompanion &&
+                                candidate.blenderSourceObjectId == rootIdentity) {
+                                candidates.append(candidate.id);
+                            }
+                        }
+                    }
+                    for (const ObjectId id : candidates) {
+                        const SceneObject *candidate = document.object(id);
+                        if (candidate == nullptr ||
+                            !candidate->libraryPath.isEmpty() ||
+                            (id != root &&
+                             !candidate->blenderLooseMeshEdgeCompanion &&
+                             !document.isObjectVisible(id))) {
+                            continue;
+                        }
+                        const QString identity = candidate->blenderLooseMeshEdgeCompanion
+                            ? candidate->blenderSourceObjectId
+                            : identityFor(*candidate);
+                        if (protectedParentIdentities.contains(identity)) continue;
+                        if (!candidate->blenderLooseMeshEdgeCompanion) {
+                            deletedObjectIdentities.insert(identity);
+                        }
+                        if (!deleteIdValues.contains(id.value())) {
+                            deleteIdValues.insert(id.value());
+                            deleteIds.append(id);
+                        }
+                    }
+                }
+                if (deleteIds.isEmpty()) return;
+
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                for (const SceneObject &object : document.objects()) {
+                    if (deleteIdValues.contains(object.id.value()) ||
+                        !object.libraryPath.isEmpty() ||
+                        !deletedObjectIdentities.contains(
+                            object.blenderParentObjectId)) {
+                        continue;
+                    }
+                    changed = transaction.setObjectParent(
+                                  object.id, ObjectId::invalid()) || changed;
+                }
+                changed = !transaction.removeObjects(deleteIds).isEmpty() ||
+                          changed;
+                if (!changed || !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not delete selected objects"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
         const auto collectionHierarchyIds =
             [this, collectionBelongsToActiveScene](CollectionId root) {
             QVector<CollectionId> result;

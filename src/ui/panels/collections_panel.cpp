@@ -1923,6 +1923,20 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
     } else if (kind == OutlinerRowKind::Object) {
         const ObjectId objectId = ObjectId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
+        if (callbacks_.deleteObjectSelection) {
+            QAction *deleteObjects = menu.addAction(QStringLiteral("Delete"));
+            connect(deleteObjects, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.deleteObjectSelection(objectId, false);
+            });
+            QAction *deleteHierarchy = menu.addAction(
+                QStringLiteral("Delete Hierarchy"));
+            connect(deleteHierarchy, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.deleteObjectSelection(objectId, true);
+            });
+            menu.addSeparator();
+        }
         if (callbacks_.setObjectSelection) {
             QAction *select = menu.addAction(QStringLiteral("Select"));
             connect(select, &QAction::triggered, this, [this, objectId]() {

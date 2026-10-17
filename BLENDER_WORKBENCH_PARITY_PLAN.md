@@ -10746,9 +10746,24 @@ scene depth.
   the selector to the scene whose layer was active on import; changing scenes
   and switching scene-specific geometry are still unsupported. The full build
   passed; no GUI interaction comparison was run.
+- The ninth tree update ports Blender 5.2.2's Shift-click recursive restriction
+  behavior from
+  [`outliner_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L251-L305)
+  and
+  [its collection recursion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L357-L422)
+  and [View Layer/Scene callbacks](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L598-L685).
+  Shift-clicking an object restriction applies that value to its parented
+  descendants. Shift-clicking a collection restriction updates nested
+  collections and their member objects. Active view-layer collection changes
+  follow the clicked collection path, update reachable child paths, and apply
+  object visibility to included (non-excluded) paths. Repeated collection
+  links are handled per path; object and collection cycles are guarded. The
+  changes use one undoable document transaction per click. The full
+  `cmake --build build -j4` passed; no GUI interaction comparison was run.
 - Remaining Outliner scope includes carrying row state inside the project file,
-  other Blender datablock rows and restriction controls, scene switching, and a
-  matched Blender/classiCAD interaction comparison. Do not
+  Ctrl-click collection isolation, other Blender datablock rows and restriction
+  controls, scene switching, and a matched Blender/classiCAD interaction
+  comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

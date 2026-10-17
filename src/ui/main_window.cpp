@@ -3113,15 +3113,221 @@ private:
                         4000);
                 }
             };
+        const auto objectHierarchyIds = [this](ObjectId root) {
+            QVector<ObjectId> result;
+            const Document &document = session_.document();
+            const SceneObject *rootObject = document.object(root);
+            if (rootObject == nullptr ||
+                rootObject->blenderLooseMeshEdgeCompanion) {
+                return result;
+            }
+            result.append(root);
+            QSet<quint64> visited{root.value()};
+            const auto identityFor = [](const SceneObject &object) {
+                return object.blenderSourceObjectId.isEmpty()
+                    ? QStringLiteral("classiCAD-local-object:%1")
+                          .arg(object.id.value())
+                    : object.blenderSourceObjectId;
+            };
+            for (qsizetype index = 0; index < result.size(); ++index) {
+                const SceneObject *parent = document.object(result[index]);
+                if (parent == nullptr) continue;
+                const QString parentIdentity = identityFor(*parent);
+                for (const SceneObject &candidate : document.objects()) {
+                    if (candidate.blenderLooseMeshEdgeCompanion ||
+                        candidate.blenderParentObjectId != parentIdentity ||
+                        visited.contains(candidate.id.value())) {
+                        continue;
+                    }
+                    visited.insert(candidate.id.value());
+                    result.append(candidate.id);
+                }
+            }
+
+            QSet<QString> sourceIdentities;
+            for (const ObjectId id : result) {
+                const SceneObject *object = document.object(id);
+                if (object != nullptr) sourceIdentities.insert(identityFor(*object));
+            }
+            for (const SceneObject &candidate : document.objects()) {
+                if (candidate.blenderLooseMeshEdgeCompanion &&
+                    sourceIdentities.contains(candidate.blenderSourceObjectId) &&
+                    !visited.contains(candidate.id.value())) {
+                    visited.insert(candidate.id.value());
+                    result.append(candidate.id);
+                }
+            }
+            return result;
+        };
+        const auto collectionHierarchyIds = [this](CollectionId root) {
+            QVector<CollectionId> result;
+            if (session_.document().collection(root) == nullptr) return result;
+            result.append(root);
+            QSet<quint64> visited{root.value()};
+            const QVector<DocumentCollection> collections =
+                session_.document().collections();
+            for (qsizetype index = 0; index < result.size(); ++index) {
+                const CollectionId parentId = result[index];
+                for (const DocumentCollection &candidate : collections) {
+                    if (candidate.parentIds.contains(parentId) &&
+                        !visited.contains(candidate.id.value())) {
+                        visited.insert(candidate.id.value());
+                        result.append(candidate.id);
+                    }
+                }
+            }
+            return result;
+        };
+        const auto objectsInCollections = [this](
+            const QVector<CollectionId> &collectionIds) {
+            QVector<ObjectId> result;
+            QSet<quint64> collectionValues;
+            for (const CollectionId id : collectionIds) {
+                collectionValues.insert(id.value());
+            }
+            QSet<quint64> visited;
+            for (const SceneObject &object : session_.document().objects()) {
+                bool member = false;
+                for (const CollectionId id : object.collectionIds) {
+                    if (collectionValues.contains(id.value())) {
+                        member = true;
+                        break;
+                    }
+                }
+                if (member && !visited.contains(object.id.value())) {
+                    visited.insert(object.id.value());
+                    result.append(object.id);
+                }
+            }
+            return result;
+        };
+        const auto objectInViewLayer = [this](const SceneObject &object,
+                                               const QString &viewLayerKey) {
+            if (viewLayerKey.isEmpty() || object.collectionIds.isEmpty()) {
+                return true;
+            }
+            const Document &document = session_.document();
+            const auto matchesPath = [](const QJsonArray &stored,
+                                        const QStringList &expected) {
+                if (stored.size() != expected.size()) return false;
+                for (qsizetype index = 0; index < expected.size(); ++index) {
+                    if (!stored[index].isString() ||
+                        stored[index].toString() != expected[index]) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            for (const CollectionId membershipId : object.collectionIds) {
+                const DocumentCollection *membership =
+                    document.collection(membershipId);
+                if (membership == nullptr) continue;
+                for (const QJsonValue &membershipValue :
+                     membership->viewLayerStates) {
+                    const QJsonObject membershipState =
+                        membershipValue.toObject();
+                    if (membershipState.value(
+                            QStringLiteral("view_layer_key")).toString() !=
+                        viewLayerKey) {
+                        continue;
+                    }
+                    QStringList sourcePath;
+                    const QJsonArray storedPath = membershipState.value(
+                        QStringLiteral("path")).toArray();
+                    for (const QJsonValue &part : storedPath) {
+                        if (!part.isString()) {
+                            sourcePath.clear();
+                            break;
+                        }
+                        sourcePath.append(part.toString());
+                    }
+                    if (sourcePath.isEmpty() ||
+                        sourcePath.back() != membership->sourceId) {
+                        continue;
+                    }
+
+                    bool included = true;
+                    CollectionId previous = CollectionId::invalid();
+                    for (qsizetype index = 0; index < sourcePath.size(); ++index) {
+                        const QString &sourceId = sourcePath[index];
+                        const auto node = std::find_if(
+                            document.collections().cbegin(),
+                            document.collections().cend(),
+                            [&sourceId, previous](
+                                const DocumentCollection &candidate) {
+                                return candidate.sourceId == sourceId &&
+                                    (!previous.isValid() ||
+                                     candidate.parentIds.contains(previous));
+                            });
+                        if (node == document.collections().cend()) {
+                            included = false;
+                            break;
+                        }
+                        QStringList prefix;
+                        for (qsizetype prefixIndex = 0;
+                             prefixIndex <= index; ++prefixIndex) {
+                            prefix.append(sourcePath[prefixIndex]);
+                        }
+                        bool foundState = false;
+                        bool excluded = false;
+                        for (const QJsonValue &stateValue : node->viewLayerStates) {
+                            const QJsonObject state = stateValue.toObject();
+                            if (state.value(QStringLiteral("view_layer_key"))
+                                    .toString() == viewLayerKey &&
+                                matchesPath(state.value(QStringLiteral("path"))
+                                                .toArray(),
+                                            prefix)) {
+                                foundState = true;
+                                excluded = state.value(
+                                    QStringLiteral("exclude")).toBool();
+                                break;
+                            }
+                        }
+                        if (!foundState || excluded) {
+                            included = false;
+                            break;
+                        }
+                        previous = node->id;
+                    }
+                    if (included) return true;
+                }
+            }
+            return false;
+        };
         collectionCallbacks.setViewportVisibility =
-            [this](CollectionId id, bool hideViewport) {
-                const DocumentCollection *collection =
-                    session_.document().collection(id);
-                if (collection == nullptr) return;
+            [this, collectionHierarchyIds, objectsInCollections](
+                CollectionId id, bool hideViewport, bool recursive) {
+                QVector<CollectionId> collectionIds = recursive
+                    ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
+                QVector<ObjectId> objectIds = recursive
+                    ? objectsInCollections(collectionIds) : QVector<ObjectId>{};
+                if (collectionIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setCollectionVisibility(
-                        id, hideViewport, collection->hideRender) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const CollectionId collectionId : collectionIds) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(collectionId);
+                    if (collection == nullptr ||
+                        !collection->libraryPath.isEmpty() ||
+                        collection->hideViewport == hideViewport) {
+                        continue;
+                    }
+                    changed = transaction.setCollectionVisibility(
+                                  collectionId, hideViewport,
+                                  collection->hideRender) || changed;
+                }
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hideViewport == hideViewport) {
+                        continue;
+                    }
+                    changed = transaction.setObjectVisibilityFlags(
+                                  objectId, hideViewport, object->hideSelect) ||
+                              changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update collection visibility"),
                         4000);
@@ -3130,24 +3336,76 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setCollectionRenderVisibility =
-            [this](CollectionId id, bool hideRender) {
-                const DocumentCollection *collection =
-                    session_.document().collection(id);
-                if (collection == nullptr) return;
+            [this, collectionHierarchyIds, objectsInCollections](
+                CollectionId id, bool hideRender, bool recursive) {
+                QVector<CollectionId> collectionIds = recursive
+                    ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
+                QVector<ObjectId> objectIds = recursive
+                    ? objectsInCollections(collectionIds) : QVector<ObjectId>{};
+                if (collectionIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setCollectionVisibility(
-                        id, collection->hideViewport, hideRender) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const CollectionId collectionId : collectionIds) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(collectionId);
+                    if (collection == nullptr ||
+                        !collection->libraryPath.isEmpty() ||
+                        collection->hideRender == hideRender) {
+                        continue;
+                    }
+                    changed = transaction.setCollectionVisibility(
+                                  collectionId, collection->hideViewport,
+                                  hideRender) || changed;
+                }
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hideRender == hideRender) {
+                        continue;
+                    }
+                    changed = transaction.setObjectRenderVisibility(
+                                  objectId, hideRender) || changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update collection render visibility"),
                         4000);
                 }
             };
         collectionCallbacks.setCollectionSelectability =
-            [this](CollectionId id, bool hideSelect) {
+            [this, collectionHierarchyIds, objectsInCollections](
+                CollectionId id, bool hideSelect, bool recursive) {
+                QVector<CollectionId> collectionIds = recursive
+                    ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
+                QVector<ObjectId> objectIds = recursive
+                    ? objectsInCollections(collectionIds) : QVector<ObjectId>{};
+                if (collectionIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setCollectionHideSelect(id, hideSelect) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const CollectionId collectionId : collectionIds) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(collectionId);
+                    if (collection == nullptr ||
+                        !collection->libraryPath.isEmpty() ||
+                        collection->hideSelect == hideSelect) {
+                        continue;
+                    }
+                    changed = transaction.setCollectionHideSelect(
+                                  collectionId, hideSelect) || changed;
+                }
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hideSelect == hideSelect) {
+                        continue;
+                    }
+                    changed = transaction.setObjectVisibilityFlags(
+                                  objectId, object->hideViewport, hideSelect) ||
+                              changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update collection selection lock"),
                         4000);
@@ -3156,13 +3414,25 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setObjectViewportVisibility =
-            [this](ObjectId id, bool hideViewport) {
-                const SceneObject *object = session_.document().object(id);
-                if (object == nullptr) return;
+            [this, objectHierarchyIds](ObjectId id, bool hideViewport,
+                                       bool recursive) {
+                const QVector<ObjectId> objectIds = recursive
+                    ? objectHierarchyIds(id) : QVector<ObjectId>{id};
+                if (objectIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setObjectVisibilityFlags(
-                        id, hideViewport, object->hideSelect) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hideViewport == hideViewport) {
+                        continue;
+                    }
+                    changed = transaction.setObjectVisibilityFlags(
+                                  objectId, hideViewport, object->hideSelect) ||
+                              changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update object visibility"),
                         4000);
@@ -3171,23 +3441,49 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setObjectRenderVisibility =
-            [this](ObjectId id, bool hideRender) {
+            [this, objectHierarchyIds](ObjectId id, bool hideRender,
+                                       bool recursive) {
+                const QVector<ObjectId> objectIds = recursive
+                    ? objectHierarchyIds(id) : QVector<ObjectId>{id};
+                if (objectIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setObjectRenderVisibility(id, hideRender) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hideRender == hideRender) {
+                        continue;
+                    }
+                    changed = transaction.setObjectRenderVisibility(
+                                  objectId, hideRender) || changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update object render visibility"),
                         4000);
                 }
             };
         collectionCallbacks.setObjectSelectability =
-            [this](ObjectId id, bool hideSelect) {
-                const SceneObject *object = session_.document().object(id);
-                if (object == nullptr) return;
+            [this, objectHierarchyIds](ObjectId id, bool hideSelect,
+                                       bool recursive) {
+                const QVector<ObjectId> objectIds = recursive
+                    ? objectHierarchyIds(id) : QVector<ObjectId>{id};
+                if (objectIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setObjectVisibilityFlags(
-                        id, object->hideViewport, hideSelect) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hideSelect == hideSelect) {
+                        continue;
+                    }
+                    changed = transaction.setObjectVisibilityFlags(
+                                  objectId, object->hideViewport, hideSelect) ||
+                              changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update object selection lock"),
                         4000);
@@ -3196,11 +3492,28 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setObjectViewLayerHidden =
-            [this](ObjectId id, const QString &viewLayerKey, bool hidden) {
+            [this, objectHierarchyIds, objectInViewLayer](ObjectId id,
+                                       const QString &viewLayerKey,
+                                       bool hidden, bool recursive) {
+                const QVector<ObjectId> objectIds = recursive
+                    ? objectHierarchyIds(id) : QVector<ObjectId>{id};
+                if (objectIds.isEmpty() || viewLayerKey.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setObjectViewLayerHidden(id, viewLayerKey,
-                                                          hidden) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        !objectInViewLayer(*object, viewLayerKey) ||
+                        (object->viewLayerHidden.contains(viewLayerKey) &&
+                         object->viewLayerHidden.value(viewLayerKey).toBool() ==
+                             hidden)) {
+                        continue;
+                    }
+                    changed = transaction.setObjectViewLayerHidden(
+                                  objectId, viewLayerKey, hidden) || changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update active view layer visibility"),
                         4000);
@@ -3209,15 +3522,134 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setCollectionViewLayerState =
-            [this](CollectionId id,
+            [this, objectsInCollections](
+                   CollectionId id,
                    const QString &viewLayerKey,
                    const QStringList &sourcePath,
                    const QString &stateKey,
-                   bool value) {
+                   bool value,
+                   bool recursive) {
+                if (viewLayerKey.isEmpty() || sourcePath.isEmpty()) return;
+
+                struct LayerCollectionPath {
+                    CollectionId id = CollectionId::invalid();
+                    QStringList sourcePath;
+                    QSet<quint64> ancestors;
+                    bool excluded = false;
+                };
+                const auto stateForPath = [](const DocumentCollection &collection,
+                                             const QString &layerKey,
+                                             const QStringList &path) {
+                    for (const QJsonValue &value : collection.viewLayerStates) {
+                        const QJsonObject state = value.toObject();
+                        if (state.value(QStringLiteral("view_layer_key"))
+                                .toString() != layerKey) {
+                            continue;
+                        }
+                        const QJsonArray storedPath =
+                            state.value(QStringLiteral("path")).toArray();
+                        if (storedPath.size() != path.size()) continue;
+                        bool matches = true;
+                        for (qsizetype index = 0; index < path.size(); ++index) {
+                            if (!storedPath[index].isString() ||
+                                storedPath[index].toString() != path[index]) {
+                                matches = false;
+                                break;
+                            }
+                        }
+                        if (matches) return state;
+                    }
+                    return QJsonObject{};
+                };
+
+                QVector<LayerCollectionPath> paths;
+                const DocumentCollection *rootCollection =
+                    session_.document().collection(id);
+                if (rootCollection == nullptr) return;
+                LayerCollectionPath rootPath;
+                rootPath.id = id;
+                rootPath.sourcePath = sourcePath;
+                rootPath.ancestors.insert(id.value());
+                rootPath.excluded = stateForPath(*rootCollection, viewLayerKey,
+                                                  sourcePath)
+                                        .value(QStringLiteral("exclude"))
+                                        .toBool();
+                paths.append(rootPath);
+                if (recursive) {
+                    const QVector<DocumentCollection> collections =
+                        session_.document().collections();
+                    for (qsizetype index = 0; index < paths.size(); ++index) {
+                        const LayerCollectionPath parent = paths[index];
+                        for (const DocumentCollection &candidate : collections) {
+                            if (!candidate.parentIds.contains(parent.id) ||
+                                parent.ancestors.contains(candidate.id.value())) {
+                                continue;
+                            }
+                            LayerCollectionPath child;
+                            child.id = candidate.id;
+                            child.sourcePath = parent.sourcePath;
+                            child.sourcePath.append(candidate.sourceId);
+                            child.ancestors = parent.ancestors;
+                            child.ancestors.insert(candidate.id.value());
+                            child.excluded = parent.excluded ||
+                                stateForPath(candidate, viewLayerKey,
+                                             child.sourcePath)
+                                    .value(QStringLiteral("exclude"))
+                                    .toBool();
+                            paths.append(child);
+                        }
+                    }
+                }
+
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setCollectionViewLayerState(
-                        id, viewLayerKey, sourcePath, stateKey, value) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (const LayerCollectionPath &path : paths) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(path.id);
+                    if (collection == nullptr ||
+                        !collection->libraryPath.isEmpty()) {
+                        continue;
+                    }
+                    const QJsonObject current = stateForPath(
+                        *collection, viewLayerKey, path.sourcePath);
+                    if (current.isEmpty() ||
+                        (current.value(stateKey).isBool() &&
+                         current.value(stateKey).toBool() == value)) {
+                        continue;
+                    }
+                    changed = transaction.setCollectionViewLayerState(
+                                  path.id, viewLayerKey, path.sourcePath,
+                                  stateKey, value) || changed;
+                }
+
+                if (recursive && stateKey == QStringLiteral("hide_viewport")) {
+                    QSet<quint64> processedObjects;
+                    for (const LayerCollectionPath &path : paths) {
+                        if (path.excluded) continue;
+                        const QVector<ObjectId> objectIds =
+                            objectsInCollections(
+                                QVector<CollectionId>{path.id});
+                        for (const ObjectId objectId : objectIds) {
+                            if (processedObjects.contains(objectId.value())) {
+                                continue;
+                            }
+                            processedObjects.insert(objectId.value());
+                            const SceneObject *object =
+                                session_.document().object(objectId);
+                            if (object == nullptr ||
+                                !object->libraryPath.isEmpty() ||
+                                (object->viewLayerHidden.contains(viewLayerKey) &&
+                                 object->viewLayerHidden.value(viewLayerKey)
+                                         .toBool() == value)) {
+                                continue;
+                            }
+                            changed = transaction.setObjectViewLayerHidden(
+                                          objectId, viewLayerKey, value) || changed;
+                        }
+                    }
+                }
+
+                if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update active view layer collection state"),
                         4000);

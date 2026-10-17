@@ -184,6 +184,11 @@ public:
         applyDrop_ = std::move(applyDrop);
     }
 
+    void setAllowParentingWithoutModifier(bool allow)
+    {
+        allowParentingWithoutModifier_ = allow;
+    }
+
     Qt::KeyboardModifiers restrictionModifiersFor(
         const QTreeWidgetItem *item, int column) const
     {
@@ -337,11 +342,15 @@ protected:
             draggedRows_.first().kind == OutlinerRowKind::Material;
         const bool shiftHeld =
             event->modifiers().testFlag(Qt::ShiftModifier);
+        const bool draggedObject =
+            draggedRows_.first().kind == OutlinerRowKind::Object;
+        const bool parentActionAllowed = draggedObject &&
+            (allowParentingWithoutModifier_ || shiftHeld);
         const QString targetPath = targetItem == nullptr
             ? QString{}
             : targetItem->data(nameColumn, itemPathRole).toString();
         const bool clearParentDrop =
-            draggedRows_.first().kind == OutlinerRowKind::Object && shiftHeld &&
+            parentActionAllowed &&
             ((target.kind == OutlinerRowKind::SceneRoot &&
               target.sceneKey.isEmpty()) ||
              (target.kind == OutlinerRowKind::ObjectContent &&
@@ -382,7 +391,7 @@ protected:
             }
         }
         if (target.kind == OutlinerRowKind::Object && !materialDrop &&
-            !shiftHeld) {
+            !parentActionAllowed) {
             target.kind = target.parentCollectionId.isValid()
                 ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
             target.collectionId = target.parentCollectionId;
@@ -409,7 +418,7 @@ protected:
 
         const QVector<OutlinerRowReference> sources = draggedRows_;
         const bool link = event->modifiers().testFlag(Qt::ControlModifier);
-        const bool parent = shiftHeld &&
+        const bool parent = parentActionAllowed &&
             (target.kind == OutlinerRowKind::Object || clearParentDrop);
         QTimer::singleShot(0, this,
                            [this, sources, target, link, parent, position]() {
@@ -484,6 +493,7 @@ private:
     std::function<void()> syncSelection_;
     ApplyDrop applyDrop_;
     QVector<OutlinerRowReference> draggedRows_;
+    bool allowParentingWithoutModifier_ = false;
     const QTreeWidgetItem *restrictionItem_ = nullptr;
     int restrictionColumn_ = -1;
     Qt::KeyboardModifiers restrictionModifiers_ = Qt::NoModifier;
@@ -2658,6 +2668,8 @@ void CollectionsPanel::refresh()
     const bool overridePropertiesMode = libraryOverridesMode &&
                                          !overrideHierarchiesView_;
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
+    static_cast<OutlinerTreeWidget *>(tree_)->setAllowParentingWithoutModifier(
+        scenesMode || !showCollections_);
     if (!dataApiMode) {
         dataApiExpandedPaths_.clear();
         dataApiCollapsedPaths_.clear();

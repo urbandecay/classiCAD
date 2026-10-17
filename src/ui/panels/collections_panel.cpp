@@ -3089,6 +3089,44 @@ void CollectionsPanel::refresh()
                                 dataPath + QStringLiteral("/item-%1/animation")
                                     .arg(dataIndex));
                         }
+                        const auto dataBlockTree =
+                            sourceGroup.dataBlockTreesByName.constFind(
+                                dataBlockName);
+                        if (dataBlockTree !=
+                            sourceGroup.dataBlockTreesByName.cend()) {
+                            const QString treePath = dataPath +
+                                QStringLiteral("/item-%1").arg(dataIndex);
+                            if (!dataBlockTree->shapeKeyDataName.isEmpty()) {
+                                const QString shapeKeyPath = treePath +
+                                    QStringLiteral("/shape-keys");
+                                QTreeWidgetItem *shapeKeysRow =
+                                    appendLibraryContentRow(
+                                        dataRow,
+                                        dataBlockTree->shapeKeyDataName,
+                                        shapeKeyPath,
+                                        QStringLiteral("Blender shape-key data block"));
+                                for (qsizetype keyIndex = 0;
+                                     keyIndex < dataBlockTree->shapeKeyNames.size();
+                                     ++keyIndex) {
+                                    appendLibraryContentRow(
+                                        shapeKeysRow,
+                                        dataBlockTree->shapeKeyNames[keyIndex],
+                                        shapeKeyPath +
+                                            QStringLiteral("/key-%1").arg(keyIndex),
+                                        QStringLiteral("Blender shape key"));
+                                }
+                            }
+                            for (qsizetype materialIndex = 0;
+                                 materialIndex < dataBlockTree->materialNames.size();
+                                 ++materialIndex) {
+                                appendLibraryContentRow(
+                                    dataRow,
+                                    dataBlockTree->materialNames[materialIndex],
+                                    treePath + QStringLiteral("/material-%1")
+                                        .arg(materialIndex),
+                                    QStringLiteral("Blender data-block material"));
+                            }
+                        }
                     }
                 }
             }

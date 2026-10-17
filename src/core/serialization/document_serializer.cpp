@@ -357,6 +357,7 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
     int totalDataBlockGroups = 0;
     int totalDataBlocks = 0;
     int totalAnimationRows = 0;
+    int totalSpecializedRows = 0;
     for (const QJsonValue &libraryValue : value.toArray()) {
         if (!libraryValue.isObject()) return false;
         const QJsonValue groupsValue = libraryValue.toObject().value(
@@ -498,6 +499,55 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                     if (animationRowCount > 1024 ||
                         totalAnimationRows + animationRowCount > 20000) return false;
                     totalAnimationRows += animationRowCount;
+                }
+            }
+
+            const QJsonValue subtreesValue = group.value(
+                QStringLiteral("data_block_subtrees"));
+            if (!subtreesValue.isUndefined()) {
+                if (!subtreesValue.isArray() ||
+                    subtreesValue.toArray().size() > 20000) return false;
+                QSet<QString> subtreesByDataBlockName;
+                for (const QJsonValue &subtreeValue : subtreesValue.toArray()) {
+                    if (!subtreeValue.isObject()) return false;
+                    const QJsonObject subtree = subtreeValue.toObject();
+                    const QJsonValue dataName = subtree.value(
+                        QStringLiteral("data_block_name"));
+                    const QJsonValue shapeKeyDataName = subtree.value(
+                        QStringLiteral("shape_key_data_name"));
+                    const QJsonValue shapeKeyNames = subtree.value(
+                        QStringLiteral("shape_key_names"));
+                    const QJsonValue materialNames = subtree.value(
+                        QStringLiteral("material_names"));
+                    const QString dataBlockName = dataName.toString();
+                    const QString shapeKeyName = shapeKeyDataName.toString();
+                    if (!dataName.isString() || dataBlockName.size() > 4096 ||
+                        !dataBlockNames.contains(dataBlockName) ||
+                        subtreesByDataBlockName.contains(dataBlockName) ||
+                        !shapeKeyDataName.isString() || shapeKeyName.size() > 4096 ||
+                        !shapeKeyNames.isArray() || shapeKeyNames.toArray().size() > 1024 ||
+                        !materialNames.isArray() || materialNames.toArray().size() > 1024 ||
+                        (shapeKeyName.isEmpty() && !shapeKeyNames.toArray().isEmpty())) {
+                        return false;
+                    }
+                    subtreesByDataBlockName.insert(dataBlockName);
+                    const int subtreeRows =
+                        (shapeKeyName.isEmpty() ? 0 :
+                            1 + shapeKeyNames.toArray().size()) +
+                        materialNames.toArray().size();
+                    if (subtreeRows > 1024 ||
+                        totalSpecializedRows + subtreeRows > 20000) return false;
+                    totalSpecializedRows += subtreeRows;
+                    for (const QJsonValue &name : shapeKeyNames.toArray()) {
+                        if (!name.isString() || name.toString().size() > 4096) {
+                            return false;
+                        }
+                    }
+                    for (const QJsonValue &name : materialNames.toArray()) {
+                        if (!name.isString() || name.toString().size() > 4096) {
+                            return false;
+                        }
+                    }
                 }
             }
         }
@@ -723,7 +773,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 46);
+    serialized.insert(QStringLiteral("version"), 47);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1179,7 +1229,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 46) {
+    if (version < 1 || version > 47) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

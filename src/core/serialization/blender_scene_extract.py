@@ -50,6 +50,7 @@ MAX_OUTLINER_OVERRIDE_DEPTH = 128
 MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID = 2048
 MAX_OUTLINER_ACTION_SLOTS = 20000
 MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS = 20000
+MAX_OUTLINER_LIBRARY_SPECIALIZED_ITEMS = 20000
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -857,6 +858,7 @@ def outliner_library_tree():
     row_count = 0
     action_slot_count = 0
     library_animation_rows_remaining = [MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS]
+    library_specialized_rows_remaining = [MAX_OUTLINER_LIBRARY_SPECIALIZED_ITEMS]
     for property_rna in bpy.data.bl_rna.properties:
         if getattr(property_rna, "type", "") != "COLLECTION":
             continue
@@ -889,6 +891,7 @@ def outliner_library_tree():
                     "names": [],
                     "animations": [],
                     "action_slots": [],
+                    "data_block_subtrees": [],
                 }
                 groups[group_name] = group
                 record["data_blocks"].append(group)
@@ -906,6 +909,62 @@ def outliner_library_tree():
                         "data_block_name": data_block_name,
                         "animation": animation,
                     })
+            id_type = id_block.bl_rna.identifier
+            if id_type in {"Mesh", "Curve", "MetaBall"}:
+                subtree = {
+                    "data_block_name": data_block_name,
+                    "shape_key_data_name": "",
+                    "shape_key_names": [],
+                    "material_names": [],
+                }
+                local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+                subtree_truncated = [False]
+
+                def reserve_subtree_row():
+                    if (local_rows_remaining[0] <= 0 or
+                            library_specialized_rows_remaining[0] <= 0):
+                        subtree_truncated[0] = True
+                        return False
+                    local_rows_remaining[0] -= 1
+                    library_specialized_rows_remaining[0] -= 1
+                    return True
+
+                if id_type == "Mesh":
+                    shape_keys = getattr(id_block, "shape_keys", None)
+                    if shape_keys is not None:
+                        if reserve_subtree_row():
+                            subtree["shape_key_data_name"] = str(shape_keys.name)
+                            try:
+                                for index, key_block in enumerate(shape_keys.key_blocks):
+                                    if index >= MAX_OUTLINER_HIERARCHY_ITEMS:
+                                        subtree_truncated[0] = True
+                                        break
+                                    if not reserve_subtree_row():
+                                        break
+                                    subtree["shape_key_names"].append(
+                                        str(key_block.name))
+                            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                                subtree_truncated[0] = True
+
+                try:
+                    materials = getattr(id_block, "materials", ())
+                    for index, material in enumerate(materials):
+                        if index >= MAX_OUTLINER_HIERARCHY_ITEMS:
+                            subtree_truncated[0] = True
+                            break
+                        if material is None:
+                            continue
+                        if not reserve_subtree_row():
+                            break
+                        subtree["material_names"].append(str(material.name))
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    subtree_truncated[0] = True
+
+                if subtree_truncated[0]:
+                    record["truncated"] = True
+                if (subtree["shape_key_data_name"] or
+                        subtree["material_names"]):
+                    group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []
                 try:

@@ -3377,6 +3377,32 @@ private:
                                 dataBlockName, animation);
                         }
                     }
+                    for (const QJsonValue &subtreeValue : groupRecord.value(
+                             QStringLiteral("data_block_subtrees")).toArray()) {
+                        const QJsonObject subtree = subtreeValue.toObject();
+                        const QString dataBlockName = subtree.value(
+                            QStringLiteral("data_block_name")).toString();
+                        if (dataBlockName.isEmpty()) continue;
+                        OutlinerLibraryDataGroup::DataBlockTree dataBlockTree;
+                        dataBlockTree.shapeKeyDataName = subtree.value(
+                            QStringLiteral("shape_key_data_name")).toString();
+                        for (const QJsonValue &keyName : subtree.value(
+                                 QStringLiteral("shape_key_names")).toArray()) {
+                            const QString name = keyName.toString();
+                            if (!name.isEmpty()) {
+                                dataBlockTree.shapeKeyNames.append(name);
+                            }
+                        }
+                        for (const QJsonValue &materialName : subtree.value(
+                                 QStringLiteral("material_names")).toArray()) {
+                            const QString name = materialName.toString();
+                            if (!name.isEmpty()) {
+                                dataBlockTree.materialNames.append(name);
+                            }
+                        }
+                        group.dataBlockTreesByName.insert(
+                            dataBlockName, std::move(dataBlockTree));
+                    }
                     for (const QJsonValue &actionValue : groupRecord.value(
                              QStringLiteral("action_slots")).toArray()) {
                         const QJsonObject actionRecord = actionValue.toObject();

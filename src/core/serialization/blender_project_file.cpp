@@ -2839,7 +2839,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 50 && bridgeVersion != 51 &&
          bridgeVersion != 52 && bridgeVersion != 53 &&
          bridgeVersion != 54 && bridgeVersion != 55 &&
-         bridgeVersion != 56)) {
+         bridgeVersion != 56 && bridgeVersion != 57)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3098,6 +3098,7 @@ bool importBlenderScene(const QString &path,
         int totalDataBlockRows = 0;
         int totalActionSlotRows = 0;
         int totalLibraryAnimationRows = 0;
+        int totalLibrarySpecializedRows = 0;
         QSet<QString> libraryIds;
         const QJsonArray libraryRecords = librariesValue.toArray();
         for (qsizetype libraryIndex = 0;
@@ -3157,6 +3158,8 @@ bool importBlenderScene(const QString &path,
                     QStringLiteral("action_slots"));
                 const QJsonValue animationsValue = group.value(
                     QStringLiteral("animations"));
+                const QJsonValue subtreesValue = group.value(
+                    QStringLiteral("data_block_subtrees"));
                 if (!groupNameValue.isString() ||
                     groupNameValue.toString().size() > 256 ||
                     !namesValue.isArray() || namesValue.toArray().size() > 20000 ||
@@ -3166,7 +3169,10 @@ bool importBlenderScene(const QString &path,
                       actionSlotsValue.toArray().size() > 20000)) ||
                     (bridgeVersion >= 56 &&
                      (!animationsValue.isArray() ||
-                      animationsValue.toArray().size() > 20000))) {
+                      animationsValue.toArray().size() > 20000)) ||
+                    (bridgeVersion >= 57 &&
+                     (!subtreesValue.isArray() ||
+                      subtreesValue.toArray().size() > 20000))) {
                     setError(errorMessage,
                              QStringLiteral("A Blender Outliner ID group is invalid"));
                     return false;
@@ -3293,6 +3299,74 @@ bool importBlenderScene(const QString &path,
                             return false;
                         }
                         totalLibraryAnimationRows += animationRowCount;
+                    }
+                }
+                if (bridgeVersion >= 57) {
+                    QSet<QString> dataBlockSubtrees;
+                    for (const QJsonValue &subtreeValue :
+                         subtreesValue.toArray()) {
+                        if (!subtreeValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library data-block subtree is invalid"));
+                            return false;
+                        }
+                        const QJsonObject subtree = subtreeValue.toObject();
+                        const QJsonValue dataNameValue = subtree.value(
+                            QStringLiteral("data_block_name"));
+                        const QJsonValue shapeKeyDataNameValue = subtree.value(
+                            QStringLiteral("shape_key_data_name"));
+                        const QJsonValue shapeKeyNamesValue = subtree.value(
+                            QStringLiteral("shape_key_names"));
+                        const QJsonValue materialNamesValue = subtree.value(
+                            QStringLiteral("material_names"));
+                        const QString dataName = dataNameValue.toString();
+                        const QString shapeKeyDataName =
+                            shapeKeyDataNameValue.toString();
+                        if (!dataNameValue.isString() || dataName.size() > 4096 ||
+                            !dataBlockNames.contains(dataName) ||
+                            dataBlockSubtrees.contains(dataName) ||
+                            !shapeKeyDataNameValue.isString() ||
+                            shapeKeyDataName.size() > 4096 ||
+                            !shapeKeyNamesValue.isArray() ||
+                            shapeKeyNamesValue.toArray().size() > 1024 ||
+                            !materialNamesValue.isArray() ||
+                            materialNamesValue.toArray().size() > 1024) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library data-block subtree is invalid"));
+                            return false;
+                        }
+                        dataBlockSubtrees.insert(dataName);
+                        const int subtreeRows =
+                            (shapeKeyDataName.isEmpty() ? 0 :
+                                1 + shapeKeyNamesValue.toArray().size()) +
+                            materialNamesValue.toArray().size();
+                        if ((shapeKeyDataName.isEmpty() &&
+                             !shapeKeyNamesValue.toArray().isEmpty()) ||
+                            subtreeRows > 1024 ||
+                            totalLibrarySpecializedRows + subtreeRows > 20000) {
+                            setError(errorMessage,
+                                     QStringLiteral("A Blender library specialized subtree exceeded its row limit"));
+                            return false;
+                        }
+                        totalLibrarySpecializedRows += subtreeRows;
+                        for (const QJsonValue &keyName :
+                             shapeKeyNamesValue.toArray()) {
+                            if (!keyName.isString() ||
+                                keyName.toString().size() > 4096) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library shape-key name is invalid"));
+                                return false;
+                            }
+                        }
+                        for (const QJsonValue &materialName :
+                             materialNamesValue.toArray()) {
+                            if (!materialName.isString() ||
+                                materialName.toString().size() > 4096) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library material name is invalid"));
+                                return false;
+                            }
+                        }
                     }
                 }
                 if (bridgeVersion >= 55) {

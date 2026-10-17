@@ -45,6 +45,11 @@ public:
     const QVector<DocumentCollection> &collections() const;
     const DocumentSettings &settings() const;
     bool setSettings(const DocumentSettings &settings);
+    // Outliner expansion belongs to saved workspace state, not geometry undo
+    // snapshots. It is serialized with the project outside document history.
+    const QHash<QString, QStringList> &outlinerExpandedPathsByScene() const;
+    bool setOutlinerExpandedPathsByScene(
+        const QHash<QString, QStringList> &expandedPathsByScene);
 
     const SceneObject *object(ObjectId id) const;
     const Shape *shape(ObjectId id) const;
@@ -169,6 +174,7 @@ private:
     QVector<DocumentCollection> collections_;
     QVector<SceneObject> objects_;
     QVector<DocumentMaterial> materials_;
+    QHash<QString, QStringList> outlinerExpandedPathsByScene_;
     QHash<quint64, int> objectIndices_;
     QHash<quint64, quint64> objectGeometryRevisions_;
     quint64 nextObjectValue_ = 1;

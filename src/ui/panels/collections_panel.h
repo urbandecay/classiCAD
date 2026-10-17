@@ -99,6 +99,9 @@ struct CollectionsPanelCallbacks {
                        bool,
                        bool)> dropRows;
     std::function<QString()> stateScopeKey;
+    std::function<QString()> treeStateContextKey;
+    std::function<bool(QStringList *)> loadExpandedTreePaths;
+    std::function<void(const QStringList &)> saveExpandedTreePaths;
 };
 
 // Displays linked collections and scene objects with Blender-style selection
@@ -146,6 +149,7 @@ private:
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;
     QString currentStateScopeKey_;
+    QString currentTreeStateContextKey_;
     bool refreshing_ = false;
     bool restoringTreeState_ = false;
     bool hasRefreshed_ = false;

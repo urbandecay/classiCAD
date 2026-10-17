@@ -10720,15 +10720,9 @@ scene depth.
   normal document refreshes continue to preserve the current tree state.
   Blender's data-block type/state filter matrix is not present. The full build
   passed; no GUI interaction comparison was run.
-- The sixth tree update persists collection/object row expansion state. Blender
-  stores open/closed state in its Outliner `TreeStoreElem` records during tree
-  rebuilds; classiCAD stores the corresponding expanded row paths in QSettings,
-  keyed by the current project path, and reloads them when the Outliner is
-  recreated or the open project changes. Search temporarily expands matching
-  paths without overwriting the saved user expansion state. Unlike Blender's
-  workspace data, this state is local to the classiCAD installation and is not
-  carried inside a copied project file. The full build passed; no GUI
-  interaction comparison was run.
+- The sixth tree update initially stored collection/object row expansion in
+  QSettings, keyed by the current project path. The twelfth update below moves
+  the saved state into native project UI data so it travels with the file.
 - The seventh tree update adds Blender's global render restriction column for
   objects and collections, following the `hide_render` controls in
   [`outliner_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1087-L1107)
@@ -10780,8 +10774,19 @@ scene depth.
   classiCAD exposes the scene switch in its Collections panel as an adaptation.
   The full `cmake --build build -j4` passed; no GUI interaction comparison was
   run.
-- Remaining Outliner scope includes carrying row state inside the project file,
-  other Blender datablock rows and restriction controls, and a matched
+- The twelfth tree update persists Outliner open/closed row paths in the native
+  project, keyed independently for each imported scene. The state is separate
+  from geometry history snapshots, so undoing an object edit does not restore
+  an older tree layout; expanding or collapsing rows marks the project for
+  saving. Existing installation-local QSettings expansion values remain a
+  fallback for older projects without saved row state. The native document
+  format advances to version 27 and bounds stored state size. Blender keeps
+  its corresponding state in Outliner `TreeStoreElem` records in workspace
+  data; this implementation stores equivalent visible-row paths because
+  classiCAD has no workspace model. The full `cmake --build build -j4` passed;
+  no GUI interaction comparison was run.
+- Remaining Outliner scope includes other Blender datablock rows and
+  restriction controls, and a matched
   Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.

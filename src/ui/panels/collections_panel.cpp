@@ -597,18 +597,27 @@ void CollectionsPanel::applyNameFilter(const QString &text)
 void CollectionsPanel::restoreTreeState()
 {
     if (tree_ == nullptr) return;
-    const QString scope = callbacks_.stateScopeKey
-        ? callbacks_.stateScopeKey() : QString{};
-    if (scope.isEmpty()) return;
-    const QString scopeHash = QString::fromLatin1(
-        QCryptographicHash::hash(scope.toUtf8(), QCryptographicHash::Sha256)
-            .toHex());
-    QSettings settings;
-    const QString settingsKey =
-        QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash);
-    if (!settings.contains(settingsKey)) return;
-    const QStringList expandedPaths =
-        settings.value(settingsKey).toStringList();
+    QStringList expandedPaths;
+    bool hasSavedState = callbacks_.loadExpandedTreePaths &&
+        callbacks_.loadExpandedTreePaths(&expandedPaths);
+    if (!hasSavedState) {
+        const QString scope = callbacks_.stateScopeKey
+            ? callbacks_.stateScopeKey() : QString{};
+        if (!scope.isEmpty()) {
+            const QString scopeHash = QString::fromLatin1(
+                QCryptographicHash::hash(scope.toUtf8(),
+                                         QCryptographicHash::Sha256)
+                    .toHex());
+            const QString settingsKey =
+                QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash);
+            QSettings settings;
+            if (settings.contains(settingsKey)) {
+                expandedPaths = settings.value(settingsKey).toStringList();
+                hasSavedState = true;
+            }
+        }
+    }
+    if (!hasSavedState) return;
     const QSet<QString> expanded(expandedPaths.cbegin(), expandedPaths.cend());
 
     restoringTreeState_ = true;
@@ -633,12 +642,6 @@ void CollectionsPanel::saveTreeState()
         !activeFilterText_.isEmpty()) {
         return;
     }
-    const QString scope = callbacks_.stateScopeKey
-        ? callbacks_.stateScopeKey() : QString{};
-    if (scope.isEmpty()) return;
-    const QString scopeHash = QString::fromLatin1(
-        QCryptographicHash::hash(scope.toUtf8(), QCryptographicHash::Sha256)
-            .toHex());
     QStringList expandedPaths;
     QVector<QTreeWidgetItem *> pending;
     for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
@@ -654,9 +657,23 @@ void CollectionsPanel::saveTreeState()
             pending.append(item->child(index));
         }
     }
-    QSettings settings;
-    settings.setValue(QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash),
-                      expandedPaths);
+    expandedPaths.sort(Qt::CaseSensitive);
+    expandedPaths.removeDuplicates();
+    if (callbacks_.saveExpandedTreePaths) {
+        callbacks_.saveExpandedTreePaths(expandedPaths);
+    } else {
+        const QString scope = callbacks_.stateScopeKey
+            ? callbacks_.stateScopeKey() : QString{};
+        if (scope.isEmpty()) return;
+        const QString scopeHash = QString::fromLatin1(
+            QCryptographicHash::hash(scope.toUtf8(),
+                                     QCryptographicHash::Sha256)
+                .toHex());
+        QSettings settings;
+        settings.setValue(
+            QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash),
+            expandedPaths);
+    }
 }
 
 bool CollectionsPanel::activateObjectRow(
@@ -1104,6 +1121,11 @@ void CollectionsPanel::refresh()
         ? callbacks_.stateScopeKey() : QString{};
     const bool stateScopeChanged = stateScopeKey != currentStateScopeKey_;
     currentStateScopeKey_ = stateScopeKey;
+    const QString treeStateContextKey = callbacks_.treeStateContextKey
+        ? callbacks_.treeStateContextKey() : QString{};
+    const bool treeStateContextChanged =
+        treeStateContextKey != currentTreeStateContextKey_;
+    currentTreeStateContextKey_ = treeStateContextKey;
     QHash<QString, bool> expandedPaths;
     const int scrollPosition = tree_->verticalScrollBar()->value();
     for (int topLevelIndex = 0;
@@ -1194,7 +1216,7 @@ void CollectionsPanel::refresh()
         }
     }
     buildObjectParentHierarchy(objects);
-    if (!hasRefreshed_ || stateScopeChanged) {
+    if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
         tree_->expandAll();
         for (const QVector<QTreeWidgetItem *> &rows : objectRows_) {
             for (QTreeWidgetItem *row : rows) {

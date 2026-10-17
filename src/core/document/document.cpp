@@ -91,6 +91,44 @@ bool Document::setSettings(const DocumentSettings &settings)
     return true;
 }
 
+const QHash<QString, QStringList> &Document::outlinerExpandedPathsByScene() const
+{
+    return outlinerExpandedPathsByScene_;
+}
+
+bool Document::setOutlinerExpandedPathsByScene(
+    const QHash<QString, QStringList> &expandedPathsByScene)
+{
+    constexpr qsizetype maxSceneCount = 128;
+    constexpr qsizetype maxPathCountPerScene = 10000;
+    constexpr qsizetype maxKeyLength = 256;
+    constexpr qsizetype maxPathLength = 4096;
+    constexpr qsizetype maxTotalCharacters = 2 * 1024 * 1024;
+    if (expandedPathsByScene.size() > maxSceneCount) return false;
+
+    qsizetype totalCharacters = 0;
+    for (auto sceneIt = expandedPathsByScene.cbegin();
+         sceneIt != expandedPathsByScene.cend(); ++sceneIt) {
+        if (sceneIt.key().isEmpty() || sceneIt.key().size() > maxKeyLength ||
+            sceneIt.value().size() > maxPathCountPerScene) {
+            return false;
+        }
+        totalCharacters += sceneIt.key().size();
+        QSet<QString> uniquePaths;
+        for (const QString &path : sceneIt.value()) {
+            if (path.isEmpty() || path.size() > maxPathLength ||
+                uniquePaths.contains(path)) {
+                return false;
+            }
+            totalCharacters += path.size();
+            if (totalCharacters > maxTotalCharacters) return false;
+            uniquePaths.insert(path);
+        }
+    }
+    outlinerExpandedPathsByScene_ = expandedPathsByScene;
+    return true;
+}
+
 const SceneObject *Document::object(ObjectId id) const
 {
     const int index = indexOf(id);
@@ -180,6 +218,7 @@ void Document::applyChanges(const DocumentChangeSet &changes)
 void Document::replaceWith(const Document &document)
 {
     restoreSnapshot(document.snapshot());
+    setOutlinerExpandedPathsByScene(document.outlinerExpandedPathsByScene());
 }
 
 const Shape &Document::operator[](int index) const

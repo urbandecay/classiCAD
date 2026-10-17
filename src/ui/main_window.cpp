@@ -2940,6 +2940,35 @@ private:
         collectionCallbacks.stateScopeKey = [this]() {
             return currentProjectPath_;
         };
+        const auto outlinerStateSceneKey = [activeSceneRecord]() {
+            const QString sceneId = activeSceneRecord().value(
+                QStringLiteral("scene_id")).toString();
+            return sceneId.isEmpty() ? QStringLiteral("classiCAD-default-scene")
+                                     : sceneId;
+        };
+        collectionCallbacks.treeStateContextKey = outlinerStateSceneKey;
+        collectionCallbacks.loadExpandedTreePaths =
+            [this, outlinerStateSceneKey](QStringList *paths) {
+                if (paths == nullptr) return false;
+                const auto &states = session_.document()
+                                        .outlinerExpandedPathsByScene();
+                const auto saved = states.constFind(outlinerStateSceneKey());
+                if (saved == states.cend()) return false;
+                *paths = saved.value();
+                return true;
+            };
+        collectionCallbacks.saveExpandedTreePaths =
+            [this, outlinerStateSceneKey](const QStringList &paths) {
+                Document &document = session_.document();
+                QHash<QString, QStringList> states =
+                    document.outlinerExpandedPathsByScene();
+                const QString key = outlinerStateSceneKey();
+                if (states.value(key) == paths && states.contains(key)) return;
+                states.insert(key, paths);
+                if (document.setOutlinerExpandedPathsByScene(states)) {
+                    markDocumentModified();
+                }
+            };
         collectionCallbacks.setActiveViewLayer = [this](const QString &key) {
             if (key.isEmpty() || key ==
                     session_.document().settings().activeViewLayerKey) {

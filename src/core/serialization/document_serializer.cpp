@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 26);
+    serialized.insert(QStringLiteral("version"), 27);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -369,6 +369,15 @@ QJsonObject documentToJson(const Document &document)
     }
     settings.insert(QStringLiteral("importedBlenderColorLuts"), colorLuts);
     serialized.insert(QStringLiteral("settings"), settings);
+    QJsonObject outlinerExpandedPathsByScene;
+    for (auto it = document.outlinerExpandedPathsByScene().cbegin();
+         it != document.outlinerExpandedPathsByScene().cend(); ++it) {
+        QJsonArray paths;
+        for (const QString &path : it.value()) paths.append(path);
+        outlinerExpandedPathsByScene.insert(it.key(), paths);
+    }
+    serialized.insert(QStringLiteral("outlinerExpandedPathsByScene"),
+                      outlinerExpandedPathsByScene);
     QJsonArray collections;
     for (const DocumentCollection &collection : document.collections()) {
         QJsonObject record;
@@ -630,8 +639,44 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 26) {
+    if (version < 1 || version > 27) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
+        return false;
+    }
+
+    QHash<QString, QStringList> outlinerExpandedPathsByScene;
+    if (version >= 27) {
+        const QJsonValue outlinerStateValue = serialized.value(
+            QStringLiteral("outlinerExpandedPathsByScene"));
+        if (!outlinerStateValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("invalid saved Outliner expansion state"));
+            return false;
+        }
+        const QJsonObject outlinerState = outlinerStateValue.toObject();
+        for (auto it = outlinerState.begin(); it != outlinerState.end(); ++it) {
+            if (!it.value().isArray()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid saved Outliner expansion paths"));
+                return false;
+            }
+            QStringList paths;
+            for (const QJsonValue &pathValue : it.value().toArray()) {
+                if (!pathValue.isString()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid saved Outliner expansion path"));
+                    return false;
+                }
+                paths.append(pathValue.toString());
+            }
+            outlinerExpandedPathsByScene.insert(it.key(), paths);
+        }
+    }
+    Document validatedOutlinerState;
+    if (!validatedOutlinerState.setOutlinerExpandedPathsByScene(
+            outlinerExpandedPathsByScene)) {
+        setError(errorMessage,
+                 QStringLiteral("saved Outliner expansion state exceeds its limits"));
         return false;
     }
 
@@ -1586,6 +1631,12 @@ bool documentFromJson(const QJsonValue &value,
     }
     snapshot.nextObjectValue = nextObjectValue;
     document->restoreSnapshot(snapshot);
+    if (!document->setOutlinerExpandedPathsByScene(
+            outlinerExpandedPathsByScene)) {
+        setError(errorMessage,
+                 QStringLiteral("invalid saved Outliner expansion state"));
+        return false;
+    }
     return true;
 }
 

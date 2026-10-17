@@ -58,6 +58,7 @@ struct OutlinerObjectEntry {
     bool outlinerOnly = false;
     QString sourceObjectId;
     QString outlinerDescription;
+    QString instancedCollectionName;
     QString name;
     QString blenderType;
     QString dataBlockName;

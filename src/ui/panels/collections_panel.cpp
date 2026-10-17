@@ -1918,6 +1918,12 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                         QStringLiteral("/vertex-groups"),
                         QStringLiteral("Blender mesh vertex groups"),
                         entry.vertexGroupNames, QStringLiteral("/vertex-group"));
+        if (!entry.instancedCollectionName.isEmpty()) {
+            appendContentRow(
+                item, entry.instancedCollectionName,
+                QStringLiteral("/instance-collection"),
+                QStringLiteral("Blender collection instanced by this object"));
+        }
     }
     return item;
 }

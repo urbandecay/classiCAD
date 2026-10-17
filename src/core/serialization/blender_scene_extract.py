@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 43
+BRIDGE_FORMAT_VERSION = 44
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -2140,6 +2140,8 @@ def unsupported_object_record(obj, scene, depsgraph=None):
     if obj.type == "EMPTY" and obj.instance_collection is not None:
         record["reason"] = "collection instance is metadata only; no geometry was fabricated"
         record["instance_collection"] = obj.instance_collection.name_full
+        record["instance_collection_name"] = obj.instance_collection.name
+        record["instance_collection_id"] = stable_id(obj.instance_collection)
     elif obj.type == "EMPTY" and str(
             getattr(obj, "empty_display_type", "")) == "IMAGE":
         record["reason"] = "Image Empty image is not supported as a still file-backed picture"
@@ -3016,6 +3018,11 @@ def extract_scene(input_path, mode):
                     "collection_instance_hierarchy",
                     "collection instances are expanded into supported mesh, curve, and surface copies; their hierarchy, instance selection, and per-instance Random variation are not represented",
                 )
+                unsupported_item = unsupported_object_record(
+                    obj, scene, depsgraph)
+                unsupported_item["reason"] = (
+                    "collection instance is shown in the Outliner only; copied geometry is imported separately")
+                output["unsupported_items"].append(unsupported_item)
                 continue
             if obj.type == "EMPTY":
                 item, image_error = extract_image_empty(

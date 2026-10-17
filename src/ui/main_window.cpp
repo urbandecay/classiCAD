@@ -3078,6 +3078,12 @@ private:
                 entry.sourceObjectId = sourceId;
                 entry.outlinerDescription = record.value(
                     QStringLiteral("reason")).toString();
+                entry.instancedCollectionName = record.value(
+                    QStringLiteral("instance_collection_name")).toString();
+                if (entry.instancedCollectionName.isEmpty()) {
+                    entry.instancedCollectionName = record.value(
+                        QStringLiteral("instance_collection")).toString();
+                }
                 entry.name = record.value(QStringLiteral("name")).toString();
                 entry.blenderType = objectType;
                 entry.dataBlockName = record.value(

@@ -10979,6 +10979,17 @@ scene depth.
   geometry, selection, rename, visibility-toggle, or drag behavior, and
   unsupported-object hierarchy links are not yet reconstructed. Build passed;
   no matched Blender Outliner UI comparison was run.
+- The twenty-ninth tree update follows Blender's collection-instancer rows in
+  [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L115-L124)
+  and its rule that an instanced collection is not recursively opened beneath
+  an object in [`tree_element_id_collection.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_collection.cc#L19-L24).
+  Collection-instance Empties now remain in the Outliner and show the
+  instanced collection name as a child row. Their copied geometry continues
+  through the existing instance import path; the tree does not fabricate or
+  duplicate editable CAD objects. Blender bridge version 44 records the
+  collection ID and display name, while native document version 37 already
+  preserves the optional source record. Build passed; no matched Outliner UI
+  comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

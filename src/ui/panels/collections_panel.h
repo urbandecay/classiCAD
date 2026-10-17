@@ -119,7 +119,8 @@ enum class OutlinerRowKind {
     ObjectContent,
     SourceObject,
     Material,
-    DataStackEntry
+    DataStackEntry,
+    DataStackGroup
 };
 enum class OutlinerDropPosition {
     Into,

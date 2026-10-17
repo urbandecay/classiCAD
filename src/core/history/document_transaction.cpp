@@ -5,6 +5,8 @@
 #include <cmath>
 #include <utility>
 
+#include <QSet>
+
 namespace classiCAD {
 
 namespace {
@@ -19,6 +21,64 @@ bool moveListEntry(List *entries, qsizetype fromIndex, qsizetype toIndex)
     }
     auto entry = entries->takeAt(fromIndex);
     entries->insert(toIndex, std::move(entry));
+    return true;
+}
+
+QString uniqueStackName(const QString &sourceName, QSet<QString> *usedNames)
+{
+    const QString base = sourceName.trimmed().isEmpty()
+        ? QStringLiteral("Data") : sourceName.trimmed();
+    if (usedNames == nullptr || !usedNames->contains(base)) {
+        if (usedNames != nullptr) usedNames->insert(base);
+        return base;
+    }
+
+    QString stem = base;
+    int nextSuffix = 1;
+    const qsizetype dot = base.lastIndexOf(QLatin1Char('.'));
+    if (dot >= 0) {
+        bool parsed = false;
+        const int existingSuffix = base.mid(dot + 1).toInt(&parsed);
+        if (parsed && existingSuffix >= 0) {
+            stem = base.left(dot);
+            nextSuffix = existingSuffix + 1;
+        }
+    }
+    for (int suffix = nextSuffix;; ++suffix) {
+        const QString candidate = QStringLiteral("%1.%2")
+            .arg(stem)
+            .arg(suffix, 3, 10, QLatin1Char('0'));
+        if (usedNames->contains(candidate)) continue;
+        usedNames->insert(candidate);
+        return candidate;
+    }
+}
+
+bool sameModifierStack(const QVector<BlenderSourceModifier> &left,
+                       const QVector<BlenderSourceModifier> &right)
+{
+    if (left.size() != right.size()) return false;
+    for (qsizetype index = 0; index < left.size(); ++index) {
+        if (left[index].name != right[index].name ||
+            left[index].linkedName != right[index].linkedName ||
+            left[index].linkedType != right[index].linkedType) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool sameShaderEffectStack(const QVector<BlenderSourceShaderEffect> &left,
+                           const QVector<BlenderSourceShaderEffect> &right)
+{
+    if (left.size() != right.size()) return false;
+    for (qsizetype index = 0; index < left.size(); ++index) {
+        if (left[index].name != right[index].name ||
+            left[index].linkedName != right[index].linkedName ||
+            left[index].linkedType != right[index].linkedType) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -338,6 +398,172 @@ bool DocumentTransaction::moveBlenderSourceDataStackEntry(
     }
     if (!moved) return false;
     changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::transferBlenderSourceDataStack(
+    ObjectId sourceObjectId,
+    ObjectId destinationObjectId,
+    BlenderSourceDataStackKind stackKind,
+    qsizetype sourceIndex,
+    bool replaceStack)
+{
+    if (!sourceObjectId.isValid() || !destinationObjectId.isValid() ||
+        sourceObjectId == destinationObjectId ||
+        !document_.isObjectEditable(destinationObjectId)) {
+        return false;
+    }
+    const SceneObject *source = document_.object(sourceObjectId);
+    if (source == nullptr) return false;
+    const SceneObject sourceSnapshot = *source;
+    SceneObject *destination = document_.mutableObject(destinationObjectId);
+    if (destination == nullptr) return false;
+
+    const bool sourceIsGreasePencil =
+        sourceSnapshot.blenderSourceObjectType ==
+        QLatin1String("GREASE_PENCIL");
+    const bool destinationIsGreasePencil =
+        destination->blenderSourceObjectType ==
+        QLatin1String("GREASE_PENCIL");
+    if ((stackKind == BlenderSourceDataStackKind::Modifier &&
+         sourceIsGreasePencil != destinationIsGreasePencil) ||
+        (stackKind == BlenderSourceDataStackKind::ShaderEffect &&
+         (!sourceIsGreasePencil || !destinationIsGreasePencil))) {
+        return false;
+    }
+
+    bool changed = false;
+    switch (stackKind) {
+    case BlenderSourceDataStackKind::Modifier: {
+        if (replaceStack) {
+            QStringList sourceNames =
+                sourceSnapshot.blenderSourceModifierNames;
+            if (!sourceSnapshot.blenderSourceModifiers.isEmpty()) {
+                sourceNames.clear();
+                for (const BlenderSourceModifier &modifier :
+                     sourceSnapshot.blenderSourceModifiers) {
+                    sourceNames.append(modifier.name);
+                }
+            }
+            changed = !sameModifierStack(
+                          destination->blenderSourceModifiers,
+                          sourceSnapshot.blenderSourceModifiers) ||
+                destination->blenderSourceModifierNames != sourceNames;
+            if (changed) {
+                destination->blenderSourceModifiers =
+                    sourceSnapshot.blenderSourceModifiers;
+                destination->blenderSourceModifierNames = sourceNames;
+            }
+            break;
+        }
+
+        BlenderSourceModifier copiedModifier;
+        QString sourceName;
+        if (!sourceSnapshot.blenderSourceModifiers.isEmpty()) {
+            if (sourceIndex < 0 || sourceIndex >=
+                                      sourceSnapshot.blenderSourceModifiers.size()) {
+                return false;
+            }
+            copiedModifier =
+                sourceSnapshot.blenderSourceModifiers[sourceIndex];
+            sourceName = copiedModifier.name;
+        } else {
+            if (sourceIndex < 0 || sourceIndex >=
+                                      sourceSnapshot.blenderSourceModifierNames.size()) {
+                return false;
+            }
+            sourceName =
+                sourceSnapshot.blenderSourceModifierNames[sourceIndex];
+            copiedModifier.name = sourceName;
+        }
+        QSet<QString> usedNames;
+        for (const QString &name : destination->blenderSourceModifierNames) {
+            usedNames.insert(name);
+        }
+        if (destination->blenderSourceModifierNames.isEmpty()) {
+            for (const BlenderSourceModifier &modifier :
+                 destination->blenderSourceModifiers) {
+                usedNames.insert(modifier.name);
+            }
+        }
+        copiedModifier.name = uniqueStackName(sourceName, &usedNames);
+        if (destination->blenderSourceModifiers.isEmpty() &&
+            !destination->blenderSourceModifierNames.isEmpty()) {
+            for (const QString &name :
+                 destination->blenderSourceModifierNames) {
+                BlenderSourceModifier existing;
+                existing.name = name;
+                destination->blenderSourceModifiers.append(
+                    std::move(existing));
+            }
+        }
+        destination->blenderSourceModifiers.append(
+            std::move(copiedModifier));
+        destination->blenderSourceModifierNames.clear();
+        for (const BlenderSourceModifier &modifier :
+             destination->blenderSourceModifiers) {
+            destination->blenderSourceModifierNames.append(modifier.name);
+        }
+        changed = true;
+        break;
+    }
+    case BlenderSourceDataStackKind::Constraint: {
+        if (replaceStack) {
+            changed = destination->blenderSourceConstraintNames !=
+                sourceSnapshot.blenderSourceConstraintNames;
+            if (changed) {
+                destination->blenderSourceConstraintNames =
+                    sourceSnapshot.blenderSourceConstraintNames;
+            }
+            break;
+        }
+        if (sourceIndex < 0 || sourceIndex >=
+                                  sourceSnapshot.blenderSourceConstraintNames.size()) {
+            return false;
+        }
+        QSet<QString> usedNames;
+        for (const QString &name : destination->blenderSourceConstraintNames) {
+            usedNames.insert(name);
+        }
+        destination->blenderSourceConstraintNames.append(uniqueStackName(
+            sourceSnapshot.blenderSourceConstraintNames[sourceIndex],
+            &usedNames));
+        changed = true;
+        break;
+    }
+    case BlenderSourceDataStackKind::ShaderEffect: {
+        if (replaceStack) {
+            changed = !sameShaderEffectStack(
+                destination->blenderSourceShaderEffects,
+                sourceSnapshot.blenderSourceShaderEffects);
+            if (changed) {
+                destination->blenderSourceShaderEffects =
+                    sourceSnapshot.blenderSourceShaderEffects;
+            }
+            break;
+        }
+        if (sourceIndex < 0 || sourceIndex >=
+                                  sourceSnapshot.blenderSourceShaderEffects.size()) {
+            return false;
+        }
+        BlenderSourceShaderEffect copiedEffect =
+            sourceSnapshot.blenderSourceShaderEffects[sourceIndex];
+        QSet<QString> usedNames;
+        for (const BlenderSourceShaderEffect &effect :
+             destination->blenderSourceShaderEffects) {
+            usedNames.insert(effect.name);
+        }
+        copiedEffect.name = uniqueStackName(copiedEffect.name, &usedNames);
+        destination->blenderSourceShaderEffects.append(
+            std::move(copiedEffect));
+        changed = true;
+        break;
+    }
+    }
+
+    if (!changed) return false;
+    changes_.addObject(destinationObjectId);
     changes_.structureChanged = true;
     return true;
 }

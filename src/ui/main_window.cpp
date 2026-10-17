@@ -5631,30 +5631,65 @@ private:
                    bool parentObjects,
                    OutlinerDropPosition position) {
                 if (sources.isEmpty()) return;
-                if (sources.first().kind ==
-                    OutlinerRowKind::DataStackEntry) {
+                if (sources.first().kind == OutlinerRowKind::DataStackEntry ||
+                    sources.first().kind == OutlinerRowKind::DataStackGroup) {
                     const OutlinerRowReference &source = sources.first();
-                    if (sources.size() != 1 ||
-                        target.kind != OutlinerRowKind::DataStackEntry ||
-                        source.objectId != target.objectId ||
-                        source.dataStackKind != target.dataStackKind) {
+                    if (sources.size() != 1 || !source.objectId.isValid()) {
                         return;
                     }
-                    qsizetype destinationIndex = target.dataStackIndex +
-                        (position == OutlinerDropPosition::After ? 1 : 0);
-                    if (source.dataStackIndex < destinationIndex) {
-                        --destinationIndex;
+
+                    const bool sourceIsEntry =
+                        source.kind == OutlinerRowKind::DataStackEntry;
+                    const bool reorderWithinStack = sourceIsEntry &&
+                        target.kind == OutlinerRowKind::DataStackEntry &&
+                        source.objectId == target.objectId &&
+                        source.dataStackKind == target.dataStackKind;
+                    if (reorderWithinStack) {
+                        qsizetype destinationIndex = target.dataStackIndex +
+                            (position == OutlinerDropPosition::After ? 1 : 0);
+                        if (source.dataStackIndex < destinationIndex) {
+                            --destinationIndex;
+                        }
+                        DocumentTransaction stackTransaction =
+                            session_.beginTransaction();
+                        if (!stackTransaction.moveBlenderSourceDataStackEntry(
+                                source.objectId, source.dataStackKind,
+                                source.dataStackIndex, destinationIndex)) {
+                            return;
+                        }
+                        if (!session_.commitTransaction(stackTransaction)) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not reorder Blender data stack entry"),
+                                4000);
+                        }
+                        return;
+                    }
+
+                    const bool targetIsObject =
+                        target.kind == OutlinerRowKind::Object;
+                    const bool targetIsStackRow =
+                        target.kind == OutlinerRowKind::DataStackGroup ||
+                        target.kind == OutlinerRowKind::DataStackEntry;
+                    const bool targetStackMatches = targetIsStackRow &&
+                        target.dataStackKind == source.dataStackKind;
+                    if ((!targetIsObject && !targetStackMatches) ||
+                        (!sourceIsEntry &&
+                         target.kind == OutlinerRowKind::DataStackEntry) ||
+                        !target.objectId.isValid() ||
+                        target.objectId == source.objectId) {
+                        return;
                     }
                     DocumentTransaction stackTransaction =
                         session_.beginTransaction();
-                    if (!stackTransaction.moveBlenderSourceDataStackEntry(
-                            source.objectId, source.dataStackKind,
-                            source.dataStackIndex, destinationIndex)) {
+                    if (!stackTransaction.transferBlenderSourceDataStack(
+                            source.objectId, target.objectId,
+                            source.dataStackKind, source.dataStackIndex,
+                            !sourceIsEntry)) {
                         return;
                     }
                     if (!session_.commitTransaction(stackTransaction)) {
                         statusBar()->showMessage(
-                            QStringLiteral("Could not reorder Blender data stack entry"),
+                            QStringLiteral("Could not copy Blender data stack data"),
                             4000);
                     }
                     return;

@@ -51,6 +51,12 @@ public:
         BlenderSourceDataStackKind stackKind,
         qsizetype fromIndex,
         qsizetype toIndex);
+    bool transferBlenderSourceDataStack(
+        ObjectId sourceObjectId,
+        ObjectId destinationObjectId,
+        BlenderSourceDataStackKind stackKind,
+        qsizetype sourceIndex,
+        bool replaceStack);
     bool setCollectionViewLayerState(CollectionId collectionId,
                                      const QString &viewLayerKey,
                                      const QStringList &sourcePath,

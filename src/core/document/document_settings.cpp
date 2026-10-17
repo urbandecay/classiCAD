@@ -83,6 +83,41 @@ bool areActiveCollectionPathsValid(const QJsonObject &pathsByViewLayer)
     return true;
 }
 
+bool areImportedDataApiDriverPathsValid(const QJsonObject &dataApi)
+{
+    const QJsonValue pathsValue = dataApi.value(
+        QStringLiteral("driver_paths"));
+    const QJsonValue truncatedValue = dataApi.value(
+        QStringLiteral("driver_paths_truncated"));
+    if (pathsValue.isUndefined() && truncatedValue.isUndefined()) return true;
+    if (!pathsValue.isArray() || pathsValue.toArray().size() > 20000 ||
+        !truncatedValue.isBool()) {
+        return false;
+    }
+    for (const QJsonValue &pathValue : pathsValue.toArray()) {
+        if (!pathValue.isObject()) return false;
+        const QJsonObject path = pathValue.toObject();
+        const QJsonValue arrayIndexValue = path.value(
+            QStringLiteral("array_index"));
+        const double arrayIndexNumber = arrayIndexValue.toDouble(-2.0);
+        if (!path.value(QStringLiteral("id_type")).isString() ||
+            path.value(QStringLiteral("id_type")).toString().isEmpty() ||
+            path.value(QStringLiteral("id_type")).toString().size() > 256 ||
+            !path.value(QStringLiteral("id_name")).isString() ||
+            path.value(QStringLiteral("id_name")).toString().isEmpty() ||
+            path.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+            !path.value(QStringLiteral("data_path")).isString() ||
+            path.value(QStringLiteral("data_path")).toString().isEmpty() ||
+            path.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+            !arrayIndexValue.isDouble() || !std::isfinite(arrayIndexNumber) ||
+            std::floor(arrayIndexNumber) != arrayIndexNumber ||
+            arrayIndexNumber < -1.0 || arrayIndexNumber > 32766.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool parseLengthNumber(const QString &text, qreal *value)
 {
     if (value == nullptr) return false;
@@ -212,7 +247,9 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
             (settings.importedBlenderDataApi.value(
                  QStringLiteral("root")).isObject() &&
              settings.importedBlenderDataApi.value(
-                 QStringLiteral("truncated")).isBool())) &&
+                 QStringLiteral("truncated")).isBool() &&
+             areImportedDataApiDriverPathsValid(
+                 settings.importedBlenderDataApi))) &&
            (settings.importedBlenderLibraryOverrides.isEmpty() ||
             (settings.importedBlenderLibraryOverrides.value(
                  QStringLiteral("properties")).isObject() &&

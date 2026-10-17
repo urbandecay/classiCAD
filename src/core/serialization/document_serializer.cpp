@@ -203,6 +203,40 @@ bool isValidImportedBlenderDataApi(const QJsonValue &value)
     const QJsonValue root = record.value(QStringLiteral("root"));
     const QJsonValue truncated = record.value(QStringLiteral("truncated"));
     if (!root.isObject() || !truncated.isBool()) return false;
+    const QJsonValue driverPathsValue = record.value(
+        QStringLiteral("driver_paths"));
+    const QJsonValue driverPathsTruncatedValue = record.value(
+        QStringLiteral("driver_paths_truncated"));
+    if (!driverPathsValue.isUndefined() ||
+        !driverPathsTruncatedValue.isUndefined()) {
+        if (!driverPathsValue.isArray() ||
+            driverPathsValue.toArray().size() > 20000 ||
+            !driverPathsTruncatedValue.isBool()) {
+            return false;
+        }
+        for (const QJsonValue &driverPathValue : driverPathsValue.toArray()) {
+            if (!driverPathValue.isObject()) return false;
+            const QJsonObject driverPath = driverPathValue.toObject();
+            const QJsonValue arrayIndexValue = driverPath.value(
+                QStringLiteral("array_index"));
+            const double arrayIndexNumber = arrayIndexValue.toDouble(-2.0);
+            if (!driverPath.value(QStringLiteral("id_type")).isString() ||
+                driverPath.value(QStringLiteral("id_type")).toString().isEmpty() ||
+                driverPath.value(QStringLiteral("id_type")).toString().size() > 256 ||
+                !driverPath.value(QStringLiteral("id_name")).isString() ||
+                driverPath.value(QStringLiteral("id_name")).toString().isEmpty() ||
+                driverPath.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+                !driverPath.value(QStringLiteral("data_path")).isString() ||
+                driverPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
+                driverPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+                !arrayIndexValue.isDouble() ||
+                !std::isfinite(arrayIndexNumber) ||
+                std::floor(arrayIndexNumber) != arrayIndexNumber ||
+                arrayIndexNumber < -1.0 || arrayIndexNumber > 32766.0) {
+                return false;
+            }
+        }
+    }
     int nodeCount = 0;
     const auto validateNode = [&](const auto &self,
                                   const QJsonObject &node,
@@ -214,6 +248,8 @@ bool isValidImportedBlenderDataApi(const QJsonValue &value)
         const QJsonValue type = node.value(QStringLiteral("type"));
         const QJsonValue display = node.value(QStringLiteral("value"));
         const QJsonValue children = node.value(QStringLiteral("children"));
+        const QJsonValue animationPathValue = node.value(
+            QStringLiteral("animation_path"));
         if (!kind.isString() ||
             (kind.toString() != QLatin1String("STRUCT") &&
              kind.toString() != QLatin1String("PROPERTY") &&
@@ -224,6 +260,27 @@ bool isValidImportedBlenderDataApi(const QJsonValue &value)
             !display.isString() || display.toString().size() > 4096 ||
             !children.isArray() || children.toArray().size() > 20000) {
             return false;
+        }
+        if (!animationPathValue.isUndefined()) {
+            if (!animationPathValue.isObject()) return false;
+            const QJsonObject animationPath = animationPathValue.toObject();
+            const QJsonValue arrayIndexValue = animationPath.value(
+                QStringLiteral("array_index"));
+            const double arrayIndexNumber = arrayIndexValue.toDouble(-1.0);
+            if (!animationPath.value(QStringLiteral("id_type")).isString() ||
+                animationPath.value(QStringLiteral("id_type")).toString().isEmpty() ||
+                animationPath.value(QStringLiteral("id_type")).toString().size() > 256 ||
+                !animationPath.value(QStringLiteral("id_name")).isString() ||
+                animationPath.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+                !animationPath.value(QStringLiteral("data_path")).isString() ||
+                animationPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
+                animationPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+                !arrayIndexValue.isDouble() || !std::isfinite(arrayIndexNumber) ||
+                std::floor(arrayIndexNumber) != arrayIndexNumber ||
+                arrayIndexNumber < 0.0 || arrayIndexNumber > 32766.0 ||
+                !animationPath.value(QStringLiteral("use_entire_array")).isBool()) {
+                return false;
+            }
         }
         for (const QJsonValue &child : children.toArray()) {
             if (!child.isObject() ||

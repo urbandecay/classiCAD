@@ -719,6 +719,16 @@ void CollectionsPanel::createLayout()
     removeKeyingSetPathsButton_->setToolTip(QStringLiteral(
         "Remove selected animatable properties from the active Keying Set"));
     keyingSetRow->addWidget(removeKeyingSetPathsButton_);
+    addDataApiDriverButton_ = new QToolButton(this);
+    addDataApiDriverButton_->setText(QStringLiteral("D+"));
+    addDataApiDriverButton_->setToolTip(QStringLiteral(
+        "Add driver paths for selected animatable properties. classiCAD stores the paths but does not evaluate Blender drivers."));
+    keyingSetRow->addWidget(addDataApiDriverButton_);
+    removeDataApiDriverButton_ = new QToolButton(this);
+    removeDataApiDriverButton_->setText(QStringLiteral("D−"));
+    removeDataApiDriverButton_->setToolTip(QStringLiteral(
+        "Remove driver paths for selected animatable properties. classiCAD stores the paths but does not evaluate Blender drivers."));
+    keyingSetRow->addWidget(removeDataApiDriverButton_);
     layout->addLayout(keyingSetRow);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
@@ -1173,6 +1183,10 @@ void CollectionsPanel::createLayout()
             [this]() { editSelectedDataApiKeyingSetPaths(true); });
     connect(removeKeyingSetPathsButton_, &QToolButton::clicked, this,
             [this]() { editSelectedDataApiKeyingSetPaths(false); });
+    connect(addDataApiDriverButton_, &QToolButton::clicked, this,
+            [this]() { editSelectedDataApiDriverPaths(true); });
+    connect(removeDataApiDriverButton_, &QToolButton::clicked, this,
+            [this]() { editSelectedDataApiDriverPaths(false); });
     connect(sceneCombo_, &QComboBox::activated, this, [this](int index) {
         if (index < 0 || !callbacks_.setActiveScene) return;
         const QString key = sceneCombo_->itemData(index).toString();
@@ -1700,14 +1714,20 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
     }
 }
 
-void CollectionsPanel::updateDataApiKeyingSetControls()
+void CollectionsPanel::updateDataApiAnimationControls()
 {
     const bool visible = dataApiDisplayMode_;
     dataApiKeyingSetCombo_->setVisible(visible);
     addKeyingSetPathsButton_->setVisible(visible);
     removeKeyingSetPathsButton_->setVisible(visible);
+    addDataApiDriverButton_->setVisible(visible);
+    removeDataApiDriverButton_->setVisible(visible);
     addKeyingSetPathsButton_->setEnabled(
         visible && static_cast<bool>(callbacks_.editKeyingSetPaths));
+    addDataApiDriverButton_->setEnabled(
+        visible && static_cast<bool>(callbacks_.editDataApiDriverPaths));
+    removeDataApiDriverButton_->setEnabled(
+        visible && static_cast<bool>(callbacks_.editDataApiDriverPaths));
 
     const QJsonObject scene = callbacks_.activeSceneRecord
         ? callbacks_.activeSceneRecord() : QJsonObject{};
@@ -1796,6 +1816,71 @@ void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
     if (paths.isEmpty()) return;
     const QString currentKey = dataApiKeyingSetCombo_->currentData().toString();
     callbacks_.editKeyingSetPaths(currentKey, paths, add);
+    refresh();
+}
+
+void CollectionsPanel::editSelectedDataApiDriverPaths(bool add)
+{
+    if (!dataApiDisplayMode_ || tree_ == nullptr ||
+        !callbacks_.editDataApiDriverPaths) {
+        return;
+    }
+    QJsonArray paths;
+    QSet<QString> uniquePaths;
+    const auto appendPath = [&paths, &uniquePaths](QJsonObject path) {
+        const QJsonValue idType = path.value(QStringLiteral("id_type"));
+        const QJsonValue idName = path.value(QStringLiteral("id_name"));
+        const QJsonValue dataPath = path.value(QStringLiteral("data_path"));
+        const QJsonValue arrayIndex = path.value(QStringLiteral("array_index"));
+        if (!idType.isString() || idType.toString().isEmpty() ||
+            !idName.isString() || idName.toString().isEmpty() ||
+            !dataPath.isString() || dataPath.toString().isEmpty() ||
+            !arrayIndex.isDouble() || arrayIndex.toInt(-1) < 0 ||
+            arrayIndex.toInt(-1) > 32766) {
+            return;
+        }
+        path.insert(QStringLiteral("use_entire_array"), false);
+        const QString identity = idType.toString() + QLatin1Char('\x1f') +
+            idName.toString() + QLatin1Char('\x1f') + dataPath.toString() +
+            QLatin1Char('\x1f') + QString::number(arrayIndex.toInt());
+        if (uniquePaths.contains(identity)) return;
+        uniquePaths.insert(identity);
+        paths.append(path);
+    };
+    for (QTreeWidgetItem *item : tree_->selectedItems()) {
+        if (item == nullptr || item->data(nameColumn, itemKindRole).toInt() !=
+                static_cast<int>(OutlinerRowKind::DataApi)) {
+            continue;
+        }
+        const QJsonObject node = item->data(
+            nameColumn, itemDataApiNodeRole).toJsonObject();
+        const QJsonValue animationPathValue = node.value(
+            QStringLiteral("animation_path"));
+        if (!animationPathValue.isObject()) continue;
+        const QJsonObject animationPath = animationPathValue.toObject();
+        if (animationPath.value(QStringLiteral("use_entire_array")).toBool()) {
+            bool addedComponent = false;
+            for (const QJsonValue &childValue : node.value(
+                     QStringLiteral("children")).toArray()) {
+                if (!childValue.isObject()) continue;
+                const QJsonObject child = childValue.toObject();
+                if (child.value(QStringLiteral("kind")).toString() !=
+                    QLatin1String("ARRAY_ELEM")) {
+                    continue;
+                }
+                const QJsonValue componentPathValue = child.value(
+                    QStringLiteral("animation_path"));
+                if (!componentPathValue.isObject()) continue;
+                appendPath(componentPathValue.toObject());
+                addedComponent = true;
+            }
+            if (!addedComponent) continue;
+        } else {
+            appendPath(animationPath);
+        }
+    }
+    if (paths.isEmpty()) return;
+    callbacks_.editDataApiDriverPaths(paths, add);
     refresh();
 }
 
@@ -3672,7 +3757,7 @@ void CollectionsPanel::refresh()
                                           overrideHierarchiesView_;
     const bool overridePropertiesMode = libraryOverridesMode &&
                                          !overrideHierarchiesView_;
-    updateDataApiKeyingSetControls();
+    updateDataApiAnimationControls();
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
     static_cast<OutlinerTreeWidget *>(tree_)->setAllowParentingWithoutModifier(
         scenesMode || !showCollections_);

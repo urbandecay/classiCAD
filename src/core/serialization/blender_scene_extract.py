@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 74
+BRIDGE_FORMAT_VERSION = 75
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -43,6 +43,7 @@ MAX_OUTLINER_SEQUENCE_ITEMS = 10000
 MAX_OUTLINER_SEQUENCE_DEPTH = 128
 MAX_OUTLINER_DATA_API_ITEMS = 20000
 MAX_OUTLINER_DATA_API_DEPTH = 32
+MAX_OUTLINER_DATA_API_DRIVER_PATHS = 20000
 MAX_OUTLINER_KEYING_SETS = 1024
 MAX_OUTLINER_KEYING_SET_PATHS = 20000
 # Blender's RNA Outliner stores collection indices in a signed short.
@@ -2186,6 +2187,10 @@ def outliner_data_api_tree():
     remaining = [MAX_OUTLINER_DATA_API_ITEMS - 1]
     truncated = [False]
     pending_structs = []
+    driver_paths = []
+    seen_driver_ids = set()
+    remaining_driver_paths = [MAX_OUTLINER_DATA_API_DRIVER_PATHS]
+    driver_paths_truncated = [False]
     root = {
         "kind": "STRUCT",
         "key": "main",
@@ -2278,6 +2283,42 @@ def outliner_data_api_tree():
                 ValueError):
             return None
 
+    def capture_driver_paths(value):
+        if not isinstance(value, bpy.types.ID):
+            return
+        pointer = identity(value)
+        if pointer in seen_driver_ids:
+            return
+        seen_driver_ids.add(pointer)
+        try:
+            animation_data = value.animation_data
+            source_drivers = animation_data.drivers if animation_data else ()
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return
+        try:
+            for fcurve in source_drivers:
+                if remaining_driver_paths[0] <= 0:
+                    driver_paths_truncated[0] = True
+                    break
+                try:
+                    driver = fcurve.driver
+                    data_path = str(fcurve.data_path)
+                    array_index = int(fcurve.array_index)
+                    if driver is None or not data_path or len(data_path) > 4096:
+                        continue
+                    driver_paths.append({
+                        "id_type": str(value.id_type)[:256],
+                        "id_name": str(value.name_full)[:4096],
+                        "data_path": data_path,
+                        "array_index": array_index,
+                    })
+                    remaining_driver_paths[0] -= 1
+                except (AttributeError, ReferenceError, RuntimeError,
+                        TypeError, ValueError):
+                    continue
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return
+
     def add_struct(value, key, depth, ancestry):
         rna = getattr(value, "bl_rna", None)
         type_name = str(getattr(rna, "identifier", ""))
@@ -2285,6 +2326,7 @@ def outliner_data_api_tree():
         if node is None:
             return None
         pointer = identity(value)
+        capture_driver_paths(value)
         if pointer in ancestry:
             truncated[0] = True
             return node
@@ -2449,7 +2491,13 @@ def outliner_data_api_tree():
         pending_index += 1
         populate_struct(node, value, depth, ancestry)
 
-    return {"root": root, "truncated": truncated[0]}
+    return {
+        "root": root,
+        "truncated": truncated[0],
+        "driver_paths": driver_paths,
+        "driver_paths_truncated": (
+            driver_paths_truncated[0] or truncated[0]),
+    }
 
 
 def outliner_scene_keying_sets(scene):

@@ -4272,6 +4272,91 @@ private:
                 }
                 return activeKey;
             };
+        collectionCallbacks.editDataApiDriverPaths =
+            [this](const QJsonArray &paths, bool add) {
+                if (paths.isEmpty()) return;
+                DocumentSettings settings = session_.document().settings();
+                QJsonObject dataApi = settings.importedBlenderDataApi;
+                if (!dataApi.value(QStringLiteral("root")).isObject()) return;
+                QJsonArray driverPaths = dataApi.value(
+                    QStringLiteral("driver_paths")).toArray();
+                if (driverPaths.size() > 20000) return;
+                const auto samePath = [](const QJsonObject &left,
+                                         const QJsonObject &right) {
+                    return left.value(QStringLiteral("id_type")) ==
+                               right.value(QStringLiteral("id_type")) &&
+                           left.value(QStringLiteral("id_name")) ==
+                               right.value(QStringLiteral("id_name")) &&
+                           left.value(QStringLiteral("data_path")) ==
+                               right.value(QStringLiteral("data_path")) &&
+                           left.value(QStringLiteral("array_index")) ==
+                               right.value(QStringLiteral("array_index"));
+                };
+                bool changed = false;
+                if (add) {
+                    for (const QJsonValue &candidateValue : paths) {
+                        if (!candidateValue.isObject() ||
+                            driverPaths.size() >= 20000) {
+                            continue;
+                        }
+                        const QJsonObject candidate = candidateValue.toObject();
+                        const bool exists = std::any_of(
+                            driverPaths.cbegin(), driverPaths.cend(),
+                            [&candidate, &samePath](const QJsonValue &value) {
+                                return value.isObject() && samePath(
+                                    value.toObject(), candidate);
+                            });
+                        if (exists) continue;
+                        QJsonObject driverPath;
+                        driverPath.insert(QStringLiteral("id_type"),
+                            candidate.value(QStringLiteral("id_type")));
+                        driverPath.insert(QStringLiteral("id_name"),
+                            candidate.value(QStringLiteral("id_name")));
+                        driverPath.insert(QStringLiteral("data_path"),
+                            candidate.value(QStringLiteral("data_path")));
+                        driverPath.insert(QStringLiteral("array_index"),
+                            candidate.value(QStringLiteral("array_index")));
+                        driverPaths.append(driverPath);
+                        changed = true;
+                    }
+                } else {
+                    QJsonArray remainingPaths;
+                    for (const QJsonValue &existingValue : driverPaths) {
+                        bool remove = false;
+                        if (existingValue.isObject()) {
+                            for (const QJsonValue &candidateValue : paths) {
+                                if (candidateValue.isObject() && samePath(
+                                        existingValue.toObject(),
+                                        candidateValue.toObject())) {
+                                    remove = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (remove) changed = true;
+                        else remainingPaths.append(existingValue);
+                    }
+                    driverPaths = remainingPaths;
+                }
+                if (!changed) return;
+                dataApi.insert(QStringLiteral("driver_paths"), driverPaths);
+                if (dataApi.value(QStringLiteral("driver_paths_truncated")).isUndefined()) {
+                    dataApi.insert(QStringLiteral("driver_paths_truncated"), false);
+                }
+                settings.importedBlenderDataApi = dataApi;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setSettings(settings) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not edit Blender driver paths"),
+                        4000);
+                    return;
+                }
+                statusBar()->showMessage(
+                    add ? QStringLiteral("Blender driver paths added to the imported Data API metadata")
+                        : QStringLiteral("Blender driver paths removed from the imported Data API metadata"),
+                    3000);
+            };
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;
         };

@@ -248,6 +248,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QString &)> setActiveKeyingSet;
     std::function<QString(const QString &, const QJsonArray &, bool)>
         editKeyingSetPaths;
+    std::function<void(const QJsonArray &, bool)> editDataApiDriverPaths;
     std::function<QJsonObject()> libraryOverrides;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
@@ -347,7 +348,8 @@ private:
     void saveTreeState();
     void populateDataApiChildren(QTreeWidgetItem *item);
     void editSelectedDataApiKeyingSetPaths(bool add);
-    void updateDataApiKeyingSetControls();
+    void editSelectedDataApiDriverPaths(bool add);
+    void updateDataApiAnimationControls();
     void showContextMenu(const QPoint &position);
     bool activateObjectRow(QTreeWidgetItem *item,
                            Qt::KeyboardModifiers modifiers);
@@ -378,6 +380,8 @@ private:
     QComboBox *dataApiKeyingSetCombo_ = nullptr;
     QToolButton *addKeyingSetPathsButton_ = nullptr;
     QToolButton *removeKeyingSetPathsButton_ = nullptr;
+    QToolButton *addDataApiDriverButton_ = nullptr;
+    QToolButton *removeDataApiDriverButton_ = nullptr;
     QComboBox *libraryOverrideViewCombo_ = nullptr;
     QComboBox *idTypeCombo_ = nullptr;
     QCheckBox *showSystemOverridesCheck_ = nullptr;

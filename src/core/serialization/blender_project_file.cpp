@@ -2849,7 +2849,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 66 && bridgeVersion != 67 &&
          bridgeVersion != 68 && bridgeVersion != 69 && bridgeVersion != 70 &&
          bridgeVersion != 71 && bridgeVersion != 72 &&
-         bridgeVersion != 73 && bridgeVersion != 74)) {
+         bridgeVersion != 73 && bridgeVersion != 74 &&
+         bridgeVersion != 75)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4166,6 +4167,44 @@ bool importBlenderScene(const QString &path,
             setError(errorMessage,
                      QStringLiteral("A Blender Data API Outliner row is invalid"));
             return false;
+        }
+        if (bridgeVersion >= 75) {
+            const QJsonValue driverPathsValue = dataApi.value(
+                QStringLiteral("driver_paths"));
+            const QJsonValue driverPathsTruncatedValue = dataApi.value(
+                QStringLiteral("driver_paths_truncated"));
+            if (!driverPathsValue.isArray() ||
+                driverPathsValue.toArray().size() > 20000 ||
+                !driverPathsTruncatedValue.isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("The Blender Data API driver paths are invalid"));
+                return false;
+            }
+            for (const QJsonValue &driverPathValue : driverPathsValue.toArray()) {
+                if (!driverPathValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender Data API driver path is invalid"));
+                    return false;
+                }
+                const QJsonObject driverPath = driverPathValue.toObject();
+                int arrayIndex = -1;
+                if (!driverPath.value(QStringLiteral("id_type")).isString() ||
+                    driverPath.value(QStringLiteral("id_type")).toString().isEmpty() ||
+                    driverPath.value(QStringLiteral("id_type")).toString().size() > 256 ||
+                    !driverPath.value(QStringLiteral("id_name")).isString() ||
+                    driverPath.value(QStringLiteral("id_name")).toString().isEmpty() ||
+                    driverPath.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+                    !driverPath.value(QStringLiteral("data_path")).isString() ||
+                    driverPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
+                    driverPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+                    !jsonInteger(driverPath.value(QStringLiteral("array_index")),
+                                 &arrayIndex) ||
+                    arrayIndex < -1 || arrayIndex > 32766) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender Data API driver path is invalid"));
+                    return false;
+                }
+            }
         }
         outlinerDataApi = dataApi;
     }

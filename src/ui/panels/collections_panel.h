@@ -106,6 +106,7 @@ struct OutlinerObjectEntry {
 
 enum class OutlinerRowKind {
     Collection,
+    Library,
     Object,
     SceneRoot,
     SceneGroup,
@@ -145,10 +146,25 @@ struct OutlinerSceneEntry {
     QString activeViewLayerKey;
 };
 
+struct OutlinerLibraryDataGroup {
+    QString displayName;
+    QStringList dataBlockNames;
+};
+
+struct OutlinerLibraryEntry {
+    QString id;
+    QString displayName;
+    QString parentId;
+    bool currentFile = false;
+    bool truncated = false;
+    QVector<OutlinerLibraryDataGroup> dataGroups;
+};
+
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
     std::function<QVector<OutlinerSceneEntry>()> scenes;
+    std::function<QVector<OutlinerLibraryEntry>()> libraries;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
@@ -234,6 +250,7 @@ private:
     QLineEdit *filterEdit_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
+    QComboBox *libraryTypeCombo_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
@@ -244,6 +261,7 @@ private:
     QHash<QString, OutlinerObjectEntry> sourceOnlyEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;
+    QString libraryIdTypeFilter_;
     QHash<QString, bool> objectTypeFilters_;
     QString currentStateScopeKey_;
     QString currentTreeStateContextKey_;
@@ -256,6 +274,7 @@ private:
     bool showAllViewLayers_ = false;
     bool scrollToActive_ = true;
     bool scenesDisplayMode_ = false;
+    bool librariesDisplayMode_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 49
+BRIDGE_FORMAT_VERSION = 50
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -36,6 +36,7 @@ SCENE_LINEAR_FLOAT_PAYLOAD_CACHE = {}
 MAX_COLOR_LUTS = 8
 MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
 MAX_OUTLINER_HIERARCHY_ITEMS = 1024
+MAX_OUTLINER_LIBRARY_ITEMS = 20000
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -753,6 +754,72 @@ def outliner_grease_pencil_layer_tree(obj):
         if remaining[0] <= 0:
             break
     return rows
+
+
+def outliner_library_tree():
+    """Capture Blender's linked-library/type grouping for Libraries mode."""
+    current_file = {
+        "id": "CURRENT_FILE",
+        "name": "Current File",
+        "filepath": "",
+        "parent_library_id": "",
+        "is_current_file": True,
+        "data_blocks": [],
+        "truncated": False,
+    }
+    libraries = [current_file]
+    records_by_id = {current_file["id"]: current_file}
+    for library in list(bpy.data.libraries)[:MAX_OUTLINER_HIERARCHY_ITEMS - 1]:
+        library_id = stable_id(library)
+        parent = getattr(library, "parent", None)
+        record = {
+            "id": library_id,
+            "name": str(library.filepath or library.name_full),
+            "filepath": str(library.filepath),
+            "parent_library_id": stable_id(parent) if parent is not None else "",
+            "is_current_file": False,
+            "data_blocks": [],
+            "truncated": False,
+        }
+        libraries.append(record)
+        records_by_id[library_id] = record
+
+    groups_by_library = {}
+    seen_ids = set()
+    row_count = 0
+    for property_rna in bpy.data.bl_rna.properties:
+        if getattr(property_rna, "type", "") != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, property_rna.identifier)
+        except (AttributeError, RuntimeError, TypeError):
+            continue
+        for id_block in collection:
+            if not isinstance(id_block, bpy.types.ID):
+                continue
+            id_key = stable_id(id_block)
+            if id_key in seen_ids:
+                continue
+            seen_ids.add(id_key)
+            library = getattr(id_block, "library", None)
+            library_id = stable_id(library) if library is not None else "CURRENT_FILE"
+            record = records_by_id.get(library_id)
+            if record is None:
+                continue
+            if row_count >= MAX_OUTLINER_LIBRARY_ITEMS:
+                record["truncated"] = True
+                continue
+            row_count += 1
+            groups = groups_by_library.setdefault(library_id, {})
+            group_name = str(property_rna.name)
+            group = groups.get(group_name)
+            if group is None:
+                group = {"name": group_name, "names": []}
+                groups[group_name] = group
+                record["data_blocks"].append(group)
+            group["names"].append(str(id_block.name_full))
+
+    return libraries
 
 
 def object_metadata(obj, scene, depsgraph=None):
@@ -2952,6 +3019,7 @@ def extract_scene(input_path, mode):
             if active_scene is not None and active_view_layer is not None else ""
         ),
         "saved_viewport_view": saved_viewport_view_record(active_scene),
+        "outliner_libraries": outliner_library_tree(),
         "scenes": [],
         "collections": [],
         "items": [],

@@ -13,6 +13,8 @@
  * The Scenes tree mode is adapted from tree_display_scenes.cc and the
  * scene/object tree elements in tree_element_id_scene.cc and
  * tree_element_scene_objects.cc.
+ * The Libraries tree and its ID-type filtering follow
+ * tree_display_libraries.cc and the RNA labels from common.cc.
  * Generic object contents follow tree_element_id_object.cc, with Animation
  * rows following tree_element_anim_data.cc, tree_element_driver.cc, and
  * tree_element_nla.cc.
@@ -69,6 +71,7 @@ constexpr int itemParentCollectionRole = Qt::UserRole + 8;
 constexpr int itemViewLayerKeyRole = Qt::UserRole + 9;
 constexpr int itemSceneKeyRole = Qt::UserRole + 10;
 constexpr int itemSourceObjectIdRole = Qt::UserRole + 11;
+constexpr int itemLibraryCurrentFileRole = Qt::UserRole + 12;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -366,9 +369,16 @@ void CollectionsPanel::createLayout()
     displayModeCombo_ = new QComboBox(this);
     displayModeCombo_->addItem(QStringLiteral("View Layer"));
     displayModeCombo_->addItem(QStringLiteral("Scenes"));
+    displayModeCombo_->addItem(QStringLiteral("Libraries"));
     displayModeCombo_->setToolTip(QStringLiteral(
         "Choose the Blender Outliner tree display."));
     filterRow->addWidget(displayModeCombo_);
+    libraryTypeCombo_ = new QComboBox(this);
+    libraryTypeCombo_->setToolTip(QStringLiteral(
+        "Filter Blender Library rows by data-block type."));
+    libraryTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
+    libraryTypeCombo_->setVisible(false);
+    filterRow->addWidget(libraryTypeCombo_);
     sceneCombo_ = new QComboBox(this);
     sceneCombo_->setToolTip(QStringLiteral("Active Blender scene"));
     filterRow->addWidget(sceneCombo_);
@@ -464,7 +474,14 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/displayMode"),
         QStringLiteral("VIEW_LAYER")).toString() ==
         QLatin1String("SCENES");
-    displayModeCombo_->setCurrentIndex(scenesDisplayMode_ ? 1 : 0);
+    librariesDisplayMode_ = outlinerSettings.value(
+        QStringLiteral("outliner/displayMode"),
+        QStringLiteral("VIEW_LAYER")).toString() ==
+        QLatin1String("LIBRARIES");
+    libraryIdTypeFilter_ = outlinerSettings.value(
+        QStringLiteral("outliner/libraries/typeFilter")).toString();
+    displayModeCombo_->setCurrentIndex(
+        librariesDisplayMode_ ? 2 : (scenesDisplayMode_ ? 1 : 0));
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -497,7 +514,8 @@ void CollectionsPanel::createLayout()
         QStringLiteral("All View Layers"));
     allViewLayersAction->setCheckable(true);
     allViewLayersAction->setChecked(showAllViewLayers_);
-    allViewLayersAction->setEnabled(!scenesDisplayMode_);
+    allViewLayersAction->setEnabled(
+        !scenesDisplayMode_ && !librariesDisplayMode_);
     connect(allViewLayersAction, &QAction::toggled, this,
             [this](bool visible) {
         showAllViewLayers_ = visible;
@@ -509,11 +527,24 @@ void CollectionsPanel::createLayout()
     connect(displayModeCombo_, &QComboBox::activated, this,
             [this, allViewLayersAction](int index) {
         scenesDisplayMode_ = index == 1;
+        librariesDisplayMode_ = index == 2;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/displayMode"),
-                          scenesDisplayMode_ ? QStringLiteral("SCENES")
-                                             : QStringLiteral("VIEW_LAYER"));
-        allViewLayersAction->setEnabled(!scenesDisplayMode_);
+                          librariesDisplayMode_
+                              ? QStringLiteral("LIBRARIES")
+                              : (scenesDisplayMode_
+                                     ? QStringLiteral("SCENES")
+                                     : QStringLiteral("VIEW_LAYER")));
+        allViewLayersAction->setEnabled(
+            !scenesDisplayMode_ && !librariesDisplayMode_);
+        refresh();
+    });
+    connect(libraryTypeCombo_, &QComboBox::activated, this,
+            [this](int index) {
+        libraryIdTypeFilter_ = libraryTypeCombo_->itemData(index).toString();
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/libraries/typeFilter"),
+                          libraryIdTypeFilter_);
         refresh();
     });
     QAction *collectionsAction = filterMenu->addAction(
@@ -1094,9 +1125,11 @@ void CollectionsPanel::restoreTreeState()
             .toHex());
     const QString settingsKey = scenesDisplayMode_
         ? QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash)
-        : QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash);
+        : (librariesDisplayMode_
+               ? QStringLiteral("outliner/%1/librariesExpandedPaths").arg(scopeHash)
+               : QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash));
     bool hasSavedState = false;
-    if (scenesDisplayMode_) {
+    if (scenesDisplayMode_ || librariesDisplayMode_) {
         QSettings settings;
         if (!scope.isEmpty() && settings.contains(settingsKey)) {
             expandedPaths = settings.value(settingsKey).toStringList();
@@ -1155,7 +1188,7 @@ void CollectionsPanel::saveTreeState()
     }
     expandedPaths.sort(Qt::CaseSensitive);
     expandedPaths.removeDuplicates();
-    if (scenesDisplayMode_) {
+    if (scenesDisplayMode_ || librariesDisplayMode_) {
         const QString scope = callbacks_.stateScopeKey
             ? callbacks_.stateScopeKey() : QString{};
         if (scope.isEmpty()) return;
@@ -1165,7 +1198,10 @@ void CollectionsPanel::saveTreeState()
                 .toHex());
         QSettings settings;
         settings.setValue(
-            QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash),
+            QStringLiteral("outliner/%1/%2ExpandedPaths")
+                .arg(scopeHash,
+                     scenesDisplayMode_ ? QStringLiteral("scenes")
+                                        : QStringLiteral("libraries")),
             expandedPaths);
     } else if (callbacks_.saveExpandedTreePaths) {
         callbacks_.saveExpandedTreePaths(expandedPaths);
@@ -1335,7 +1371,9 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
     if (item == nullptr) return;
     const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
         item->data(nameColumn, itemKindRole).toInt());
-    if (kind == OutlinerRowKind::ObjectContent) return;
+    if (kind == OutlinerRowKind::ObjectContent ||
+        kind == OutlinerRowKind::SceneGroup ||
+        kind == OutlinerRowKind::Library) return;
     QMenu menu(this);
 
     if (kind == OutlinerRowKind::SceneRoot &&
@@ -2126,7 +2164,9 @@ void CollectionsPanel::refresh()
         (callbacks_.treeStateContextKey
              ? callbacks_.treeStateContextKey() : QString{}) +
         (scenesDisplayMode_ ? QStringLiteral("/Scenes")
-                            : QStringLiteral("/ViewLayer"));
+             : (librariesDisplayMode_
+                    ? QStringLiteral("/Libraries/%1").arg(libraryIdTypeFilter_)
+                                      : QStringLiteral("/ViewLayer")));
     const bool treeStateContextChanged =
         treeStateContextKey != currentTreeStateContextKey_;
     currentTreeStateContextKey_ = treeStateContextKey;
@@ -2158,8 +2198,40 @@ void CollectionsPanel::refresh()
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
     const QVector<OutlinerSceneEntry> scenes = callbacks_.scenes
         ? callbacks_.scenes() : QVector<OutlinerSceneEntry>{};
+    const QVector<OutlinerLibraryEntry> libraries = callbacks_.libraries
+        ? callbacks_.libraries() : QVector<OutlinerLibraryEntry>{};
+    const bool librariesMode = librariesDisplayMode_;
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
-    displayModeCombo_->setEnabled(!scenes.isEmpty());
+    displayModeCombo_->setEnabled(!scenes.isEmpty() || !libraries.isEmpty());
+    {
+        const QSignalBlocker blocker(libraryTypeCombo_);
+        libraryTypeCombo_->clear();
+        libraryTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
+        QSet<QString> addedTypes;
+        for (const OutlinerLibraryEntry &library : libraries) {
+            for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
+                if (group.displayName.isEmpty() ||
+                    addedTypes.contains(group.displayName)) {
+                    continue;
+                }
+                addedTypes.insert(group.displayName);
+                libraryTypeCombo_->addItem(group.displayName,
+                                           group.displayName);
+            }
+        }
+        int typeIndex = libraryTypeCombo_->findData(libraryIdTypeFilter_);
+        if (typeIndex < 0) {
+            libraryIdTypeFilter_.clear();
+            typeIndex = 0;
+            QSettings settings;
+            settings.setValue(
+                QStringLiteral("outliner/libraries/typeFilter"), QString{});
+        }
+        libraryTypeCombo_->setCurrentIndex(typeIndex);
+        libraryTypeCombo_->setVisible(librariesMode);
+        libraryTypeCombo_->setEnabled(librariesMode &&
+                                      libraryTypeCombo_->count() > 1);
+    }
     QVector<OutlinerObjectEntry> displayObjects;
     if (showObjects_) displayObjects = allObjects;
     const QVector<OutlinerViewLayerEntry> viewLayers = callbacks_.viewLayers
@@ -2226,7 +2298,8 @@ void CollectionsPanel::refresh()
             }
         }
         sceneCombo_->setCurrentIndex(activeIndex);
-        sceneCombo_->setVisible(!scenesMode && scenes.size() > 1);
+        sceneCombo_->setVisible(
+            !scenesMode && !librariesMode && scenes.size() > 1);
     }
     {
         const QSignalBlocker blocker(viewLayerCombo_);
@@ -2239,22 +2312,26 @@ void CollectionsPanel::refresh()
             }
         }
         viewLayerCombo_->setCurrentIndex(activeIndex);
-        viewLayerCombo_->setVisible(!scenesMode && viewLayers.size() > 1);
+        viewLayerCombo_->setVisible(
+            !scenesMode && !librariesMode && viewLayers.size() > 1);
     }
-    tree_->setColumnHidden(viewportColumn, !showViewportColumn_);
-    tree_->setColumnHidden(renderColumn, !showRenderColumn_);
-    tree_->setColumnHidden(selectColumn, !showSelectColumn_);
+    tree_->setColumnHidden(viewportColumn,
+                           librariesMode || !showViewportColumn_);
+    tree_->setColumnHidden(renderColumn,
+                           librariesMode || !showRenderColumn_);
+    tree_->setColumnHidden(selectColumn,
+                           librariesMode || !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
-                           scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
                                !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
-                           scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
                                !showHoldoutColumn_);
     tree_->setColumnHidden(indirectOnlyColumn,
-                           scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
                                !showIndirectOnlyColumn_);
     tree_->setColumnHidden(excludeColumn,
-                           scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
                                !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
     const auto populateSceneRoot = [this](
@@ -2296,7 +2373,102 @@ void CollectionsPanel::refresh()
             }
         }
     };
-    if (scenesMode) {
+    if (librariesMode) {
+        QHash<QString, QTreeWidgetItem *> libraryRows;
+        for (const OutlinerLibraryEntry &library : libraries) {
+            auto *row = new QTreeWidgetItem;
+            row->setText(nameColumn, library.displayName);
+            row->setData(nameColumn, itemKindRole,
+                         static_cast<int>(OutlinerRowKind::Library));
+            row->setData(nameColumn, itemLibraryCurrentFileRole,
+                         library.currentFile);
+            const QString path = QStringLiteral("libraries/%1")
+                                     .arg(library.id);
+            row->setData(nameColumn, itemPathRole, path);
+            row->setToolTip(
+                nameColumn,
+                library.currentFile
+                    ? QStringLiteral("Blender current file data blocks")
+                    : QStringLiteral("Linked Blender library: %1")
+                          .arg(library.displayName));
+            libraryRows.insert(library.id, row);
+        }
+        for (const OutlinerLibraryEntry &library : libraries) {
+            QTreeWidgetItem *row = libraryRows.value(library.id);
+            QTreeWidgetItem *parent = libraryRows.value(library.parentId);
+            if (library.currentFile || parent == nullptr || parent == row) {
+                tree_->addTopLevelItem(row);
+                sceneRoots.append(row);
+            } else {
+                parent->addChild(row);
+            }
+            const QString libraryPath = QStringLiteral("libraries/%1")
+                                            .arg(library.id);
+            for (qsizetype groupIndex = 0;
+                 groupIndex < library.dataGroups.size(); ++groupIndex) {
+                const OutlinerLibraryDataGroup &sourceGroup =
+                    library.dataGroups[groupIndex];
+                if (sourceGroup.dataBlockNames.isEmpty()) continue;
+                if (!libraryIdTypeFilter_.isEmpty() &&
+                    sourceGroup.displayName != libraryIdTypeFilter_) {
+                    continue;
+                }
+                QTreeWidgetItem *dataParent = row;
+                QString dataPath = libraryPath;
+                if (libraryIdTypeFilter_.isEmpty()) {
+                    auto *groupRow = new QTreeWidgetItem(row);
+                    groupRow->setText(nameColumn, sourceGroup.displayName);
+                    groupRow->setData(nameColumn, itemKindRole,
+                        static_cast<int>(OutlinerRowKind::SceneGroup));
+                    dataPath += QStringLiteral("/type-%1").arg(groupIndex);
+                    groupRow->setData(nameColumn, itemPathRole, dataPath);
+                    groupRow->setToolTip(
+                        nameColumn,
+                        QStringLiteral("Blender data blocks of this ID type"));
+                    groupRow->setFlags(Qt::ItemIsEnabled);
+                    dataParent = groupRow;
+                } else {
+                    dataPath += QStringLiteral("/filtered-type-%1")
+                                    .arg(groupIndex);
+                }
+                for (qsizetype dataIndex = 0;
+                     dataIndex < sourceGroup.dataBlockNames.size(); ++dataIndex) {
+                    auto *dataRow = new QTreeWidgetItem(dataParent);
+                    dataRow->setText(nameColumn,
+                                     sourceGroup.dataBlockNames[dataIndex]);
+                    dataRow->setData(nameColumn, itemKindRole,
+                        static_cast<int>(OutlinerRowKind::ObjectContent));
+                    dataRow->setData(
+                        nameColumn, itemPathRole,
+                        dataPath + QStringLiteral("/item-%1").arg(dataIndex));
+                    dataRow->setToolTip(
+                        nameColumn,
+                        QStringLiteral("Blender data block"));
+                    dataRow->setFlags(Qt::ItemIsEnabled);
+                }
+            }
+            if (library.truncated) {
+                auto *truncatedRow = new QTreeWidgetItem(row);
+                truncatedRow->setText(
+                    nameColumn,
+                    QStringLiteral("Additional data blocks omitted"));
+                truncatedRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                truncatedRow->setData(
+                    nameColumn, itemPathRole,
+                    libraryPath + QStringLiteral("/truncated"));
+                truncatedRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("The 20,000-row extraction limit was reached"));
+                truncatedRow->setFlags(Qt::ItemIsEnabled);
+            }
+        }
+        for (const OutlinerLibraryEntry &library : libraries) {
+            if (!library.currentFile) continue;
+            QTreeWidgetItem *currentFileRow = libraryRows.value(library.id);
+            if (currentFileRow != nullptr) currentFileRow->setExpanded(true);
+        }
+    } else if (scenesMode) {
         const auto appendSceneContentRow = [this](
             QTreeWidgetItem *parent, const QString &name,
             const QString &path, const QString &viewLayerKey,
@@ -2522,7 +2694,7 @@ void CollectionsPanel::refresh()
                           activeViewLayerKey,
                           QStringLiteral("scene"));
     }
-    if (showObjectChildren_) {
+    if (showObjectChildren_ && !librariesMode) {
         buildObjectParentHierarchy(displayObjects);
     }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
@@ -2531,6 +2703,23 @@ void CollectionsPanel::refresh()
             for (QTreeWidgetItem *row : rows) {
                 if (row != nullptr && row->childCount() > 0) {
                     row->setExpanded(false);
+                }
+            }
+        }
+        if (librariesMode) {
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
+            }
+            while (!pending.isEmpty()) {
+                QTreeWidgetItem *item = pending.takeLast();
+                if (item->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::Library)) {
+                    item->setExpanded(item->data(
+                        nameColumn, itemLibraryCurrentFileRole).toBool());
+                }
+                for (int index = 0; index < item->childCount(); ++index) {
+                    pending.append(item->child(index));
                 }
             }
         }
@@ -2548,6 +2737,12 @@ void CollectionsPanel::refresh()
                            static_cast<int>(OutlinerRowKind::Collection) ||
                        item->data(nameColumn, itemKindRole).toInt() ==
                            static_cast<int>(OutlinerRowKind::SceneGroup)) {
+                item->setExpanded(true);
+            } else if (librariesMode &&
+                       item->data(nameColumn, itemKindRole).toInt() ==
+                           static_cast<int>(OutlinerRowKind::Library) &&
+                       item->data(nameColumn,
+                                  itemLibraryCurrentFileRole).toBool()) {
                 item->setExpanded(true);
             } else if (scenesMode &&
                        item->data(nameColumn, itemSceneKeyRole).isValid()) {

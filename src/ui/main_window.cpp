@@ -3301,6 +3301,40 @@ private:
             }
             return scenes;
         };
+        collectionCallbacks.libraries = [this]() {
+            QVector<OutlinerLibraryEntry> libraries;
+            for (const QJsonValue &libraryValue :
+                 session_.document().settings().importedBlenderLibraries) {
+                const QJsonObject record = libraryValue.toObject();
+                OutlinerLibraryEntry entry;
+                entry.id = record.value(QStringLiteral("id")).toString();
+                entry.displayName = record.value(
+                    QStringLiteral("name")).toString();
+                entry.parentId = record.value(
+                    QStringLiteral("parent_library_id")).toString();
+                entry.currentFile = record.value(
+                    QStringLiteral("is_current_file")).toBool();
+                entry.truncated = record.value(
+                    QStringLiteral("truncated")).toBool();
+                for (const QJsonValue &groupValue : record.value(
+                         QStringLiteral("data_blocks")).toArray()) {
+                    const QJsonObject groupRecord = groupValue.toObject();
+                    OutlinerLibraryDataGroup group;
+                    group.displayName = groupRecord.value(
+                        QStringLiteral("name")).toString();
+                    for (const QJsonValue &nameValue : groupRecord.value(
+                             QStringLiteral("names")).toArray()) {
+                        const QString name = nameValue.toString();
+                        if (!name.isEmpty()) group.dataBlockNames.append(name);
+                    }
+                    entry.dataGroups.append(std::move(group));
+                }
+                if (!entry.id.isEmpty() && !entry.displayName.isEmpty()) {
+                    libraries.append(std::move(entry));
+                }
+            }
+            return libraries;
+        };
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

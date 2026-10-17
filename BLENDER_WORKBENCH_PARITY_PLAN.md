@@ -11053,6 +11053,18 @@ scene depth.
   document-version change. The tree order now follows Blender's View Layers,
   World, Collections, Objects, and Animation sequence. `cmake --build build
   -j4` passed; no matched Blender Outliner UI comparison was run.
+- The thirty-sixth tree update follows Blender 5.2.2's Libraries display mode
+  in [`tree_display_libraries.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_libraries.cc)
+  and its Blender RNA data-block labels. The import bridge now preserves a
+  bounded tree of the current file, linked libraries, and each file's data
+  blocks grouped by Blender ID type. The Outliner can filter by ID type; as in
+  Blender, filtered data blocks appear directly under their file row, while
+  the unfiltered tree shows type groups. Library nesting follows each linked
+  library's parent. Bridge version 50 and native document version 40 preserve
+  the read-only metadata; extraction caps linked-file rows at 1,024 and data
+  block rows at 20,000, and import validates those bounds. `cmake --build
+  build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
+  Blender Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, additional
   specialized ID branches still under source review, and a matched
   Blender/classiCAD interaction comparison. Do not mark this port complete

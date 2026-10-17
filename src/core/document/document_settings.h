@@ -37,6 +37,8 @@ struct DocumentSettings {
     // Imported Blender scene metadata, including each scene's active camera.
     // Kept scene-qualified because Blender files may contain multiple scenes.
     QJsonArray importedBlenderScenes;
+    // Blender Outliner Libraries-mode data, grouped by owning .blend and ID type.
+    QJsonArray importedBlenderLibraries;
     // Blender objects with no classiCAD geometry representation still belong
     // in the Outliner. These source records preserve their tree rows only.
     QJsonArray importedBlenderOutlinerOnlyObjects;

@@ -176,6 +176,7 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
     const bool validUnit = documentLengthUnitKey(settings.lengthUnit).size() > 0;
     return validUnit && std::isfinite(settings.gridSpacing) &&
            settings.gridSpacing >= 1.0e-9 && settings.gridSpacing <= 1.0e9 &&
+           settings.importedBlenderLibraries.size() <= 1024 &&
            settings.importedBlenderOutlinerOnlyObjects.size() <= 100000 &&
            areImportedColorLutsValid(settings.importedBlenderColorLuts,
                                      settings.importedBlenderColorLutMetadata);

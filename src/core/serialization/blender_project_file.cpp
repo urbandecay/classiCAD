@@ -2697,6 +2697,8 @@ bool loadVignolaDocument(const QString &path,
         snapshot.nextObjectValue = nextObjectValue;
         snapshot.nextCollectionValue = quint64(snapshot.collections.size()) + 1;
         snapshot.settings.importedBlenderScenes = importReport.scenes;
+        snapshot.settings.importedBlenderLibraries =
+            importReport.outlinerLibraries;
         snapshot.settings.importedBlenderOutlinerOnlyObjects =
             importReport.outlinerOnlyObjects;
         snapshot.settings.importedBlenderColorLuts =
@@ -2825,7 +2827,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 42 && bridgeVersion != 43 &&
          bridgeVersion != 44 && bridgeVersion != 45 &&
          bridgeVersion != 46 && bridgeVersion != 47 &&
-         bridgeVersion != 48 && bridgeVersion != 49)) {
+         bridgeVersion != 48 && bridgeVersion != 49 &&
+         bridgeVersion != 50)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3067,6 +3070,100 @@ bool importBlenderScene(const QString &path,
     QVector<QString> sourceObjectIdsByImportedIndex;
     QHash<QString, CollectionId> collectionIdsBySource;
     QHash<QString, QString> sceneLibraryPaths;
+    QJsonArray outlinerLibraries;
+    if (bridgeVersion >= 50) {
+        const QJsonValue librariesValue = root.value(
+            QStringLiteral("outliner_libraries"));
+        if (!librariesValue.isArray() ||
+            librariesValue.toArray().isEmpty() ||
+            librariesValue.toArray().size() > 1024) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Outliner library tree is invalid"));
+            return false;
+        }
+        int currentFileCount = 0;
+        int totalDataBlockRows = 0;
+        QSet<QString> libraryIds;
+        const QJsonArray libraryRecords = librariesValue.toArray();
+        for (qsizetype libraryIndex = 0;
+             libraryIndex < libraryRecords.size(); ++libraryIndex) {
+            const QJsonValue libraryValue = libraryRecords[libraryIndex];
+            if (!libraryValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender Outliner library record is invalid"));
+                return false;
+            }
+            const QJsonObject library = libraryValue.toObject();
+            const QJsonValue idValue = library.value(QStringLiteral("id"));
+            const QJsonValue nameValue = library.value(QStringLiteral("name"));
+            const QJsonValue filepathValue = library.value(
+                QStringLiteral("filepath"));
+            const QJsonValue parentIdValue = library.value(
+                QStringLiteral("parent_library_id"));
+            const QJsonValue currentValue = library.value(
+                QStringLiteral("is_current_file"));
+            const QJsonValue groupsValue = library.value(
+                QStringLiteral("data_blocks"));
+            const QJsonValue truncatedValue = library.value(
+                QStringLiteral("truncated"));
+            const bool isCurrent = currentValue.toBool();
+            const QString libraryId = idValue.toString();
+            if (!idValue.isString() || libraryId.isEmpty() ||
+                libraryIds.contains(libraryId) || !nameValue.isString() ||
+                nameValue.toString().size() > 4096 ||
+                !filepathValue.isString() ||
+                filepathValue.toString().size() > 4096 ||
+                !parentIdValue.isString() ||
+                parentIdValue.toString().size() > 4096 ||
+                !currentValue.isBool() || !groupsValue.isArray() ||
+                groupsValue.toArray().size() > 1024 ||
+                !truncatedValue.isBool() ||
+                (isCurrent != (libraryId == QLatin1String("CURRENT_FILE"))) ||
+                (isCurrent && libraryIndex != 0) ||
+                (isCurrent && !filepathValue.toString().isEmpty())) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender Outliner library identity is invalid"));
+                return false;
+            }
+            libraryIds.insert(libraryId);
+            currentFileCount += isCurrent ? 1 : 0;
+            for (const QJsonValue &groupValue : groupsValue.toArray()) {
+                if (!groupValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender Outliner ID group is invalid"));
+                    return false;
+                }
+                const QJsonObject group = groupValue.toObject();
+                const QJsonValue groupNameValue = group.value(
+                    QStringLiteral("name"));
+                const QJsonValue namesValue = group.value(
+                    QStringLiteral("names"));
+                if (!groupNameValue.isString() ||
+                    groupNameValue.toString().size() > 256 ||
+                    !namesValue.isArray() || namesValue.toArray().size() > 20000 ||
+                    totalDataBlockRows + namesValue.toArray().size() > 20000) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender Outliner ID group is invalid"));
+                    return false;
+                }
+                totalDataBlockRows += namesValue.toArray().size();
+                for (const QJsonValue &dataNameValue : namesValue.toArray()) {
+                    if (!dataNameValue.isString() ||
+                        dataNameValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender Outliner data-block name is invalid"));
+                        return false;
+                    }
+                }
+            }
+        }
+        if (currentFileCount != 1) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Outliner library tree has no current file"));
+            return false;
+        }
+        outlinerLibraries = libraryRecords;
+    }
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
     if (activeSceneId.isEmpty() || activeViewLayerKey.isEmpty()) {
@@ -4060,6 +4157,7 @@ bool importBlenderScene(const QString &path,
         report->warningMessage = conciseImportWarnings(
             warnings, skippedCount, unsupportedFeatureCount);
         report->scenes = importedSceneRecords;
+        report->outlinerLibraries = outlinerLibraries;
         report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;

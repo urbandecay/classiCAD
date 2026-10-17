@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 39);
+    serialized.insert(QStringLiteral("version"), 40);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -352,6 +352,8 @@ QJsonObject documentToJson(const Document &document)
                     document.settings().activeViewLayerKey);
     settings.insert(QStringLiteral("importedBlenderScenes"),
                     document.settings().importedBlenderScenes);
+    settings.insert(QStringLiteral("importedBlenderLibraries"),
+                    document.settings().importedBlenderLibraries);
     settings.insert(QStringLiteral("importedBlenderOutlinerOnlyObjects"),
                     document.settings().importedBlenderOutlinerOnlyObjects);
     QJsonObject colorLuts;
@@ -789,7 +791,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 39) {
+    if (version < 1 || version > 40) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1199,6 +1201,17 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.importedBlenderScenes = importedScenes.toArray();
+        }
+        if (version >= 40) {
+            const QJsonValue importedLibraries = settingsObject.value(
+                QStringLiteral("importedBlenderLibraries"));
+            if (!importedLibraries.isArray() ||
+                importedLibraries.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("invalid imported Blender library metadata"));
+                return false;
+            }
+            settings.importedBlenderLibraries = importedLibraries.toArray();
         }
         if (version >= 37) {
             const QJsonValue outlinerOnlyValue = settingsObject.value(

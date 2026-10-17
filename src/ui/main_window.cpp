@@ -4870,26 +4870,161 @@ private:
                         .arg(targetCollection.name),
                     4000);
             };
+        collectionCallbacks.hasOutlinerCollectionClipboard = [this]() {
+            return !outlinerCollectionClipboardCollections_.isEmpty();
+        };
+        collectionCallbacks.copyOutlinerCollection =
+            [this](CollectionId rootId) {
+                const Document &document = session_.document();
+                const DocumentCollection *root = document.collection(rootId);
+                if (root == nullptr) return;
+
+                outlinerCollectionClipboardRootId_ = rootId;
+                outlinerCollectionClipboardCollections_.clear();
+                outlinerCollectionClipboardObjects_.clear();
+                outlinerCollectionClipboardMaterials_.clear();
+                outlinerCollectionClipboardAnchorIdentities_.clear();
+                outlinerCollectionClipboardCollectionIdentities_.clear();
+
+                for (const DocumentCollection &collection :
+                     document.collections()) {
+                    const QString identity = collection.sourceId.isEmpty()
+                        ? QStringLiteral("classiCAD-local-collection:%1")
+                              .arg(collection.id.value())
+                        : QStringLiteral("%1\n%2")
+                              .arg(collection.libraryPath,
+                                   collection.sourceId);
+                    outlinerCollectionClipboardCollectionIdentities_.insert(
+                        collection.id.value(), identity);
+                }
+
+                QVector<CollectionId> hierarchy{rootId};
+                QSet<quint64> hierarchyValues{rootId.value()};
+                for (qsizetype index = 0; index < hierarchy.size(); ++index) {
+                    const CollectionId parentId = hierarchy[index];
+                    for (const DocumentCollection &candidate :
+                         document.collections()) {
+                        if (candidate.parentIds.contains(parentId) &&
+                            !hierarchyValues.contains(candidate.id.value())) {
+                            hierarchyValues.insert(candidate.id.value());
+                            hierarchy.append(candidate.id);
+                        }
+                    }
+                }
+                for (const DocumentCollection &collection :
+                     document.collections()) {
+                    if (hierarchyValues.contains(collection.id.value())) {
+                        outlinerCollectionClipboardCollections_.append(
+                            collection);
+                    }
+                }
+
+                QSet<QString> copiedObjectIdentities;
+                for (const SceneObject &object : document.objects()) {
+                    if (object.blenderLooseMeshEdgeCompanion) continue;
+                    const bool belongsToCopiedTree = std::any_of(
+                        object.collectionIds.cbegin(),
+                        object.collectionIds.cend(),
+                        [&hierarchyValues](CollectionId collectionId) {
+                            return hierarchyValues.contains(
+                                collectionId.value());
+                        });
+                    if (!belongsToCopiedTree) continue;
+                    outlinerCollectionClipboardObjects_.append(object);
+                    copiedObjectIdentities.insert(
+                        object.blenderSourceObjectId.isEmpty()
+                            ? QStringLiteral("classiCAD-local-object:%1")
+                                  .arg(object.id.value())
+                            : object.blenderSourceObjectId);
+                }
+                for (const SceneObject &object : document.objects()) {
+                    if (object.blenderLooseMeshEdgeCompanion &&
+                        copiedObjectIdentities.contains(
+                            object.blenderSourceObjectId)) {
+                        outlinerCollectionClipboardObjects_.append(object);
+                    }
+                }
+
+                QSet<QString> materialIds;
+                for (const SceneObject &object :
+                     outlinerCollectionClipboardObjects_) {
+                    for (const QString &materialId :
+                         object.geometry.polygonMesh.materialSlotIds) {
+                        materialIds.insert(materialId);
+                    }
+                    for (const QString &materialId :
+                         object.nurbsSolidFaceMaterialIds) {
+                        materialIds.insert(materialId);
+                    }
+                    for (const DimensionAnchorReference &anchor :
+                         object.geometry.dimensionAnchors) {
+                        const SceneObject *target =
+                            document.object(anchor.objectId);
+                        if (target == nullptr) continue;
+                        const QString identity =
+                            target->blenderSourceObjectId.isEmpty()
+                                ? QStringLiteral("classiCAD-local-object:%1")
+                                      .arg(target->id.value())
+                                : target->blenderSourceObjectId;
+                        outlinerCollectionClipboardAnchorIdentities_.insert(
+                            anchor.objectId.value(), identity);
+                    }
+                }
+                for (const DocumentMaterial &material : document.materials()) {
+                    if (materialIds.contains(material.id)) {
+                        outlinerCollectionClipboardMaterials_.append(material);
+                    }
+                }
+
+                const qsizetype copiedObjectCount = std::count_if(
+                    outlinerCollectionClipboardObjects_.cbegin(),
+                    outlinerCollectionClipboardObjects_.cend(),
+                    [](const SceneObject &object) {
+                        return !object.blenderLooseMeshEdgeCompanion;
+                    });
+                statusBar()->showMessage(
+                    QStringLiteral("Copied collection %1 and %2 object(s) to the Outliner clipboard")
+                        .arg(root->name)
+                        .arg(copiedObjectCount),
+                    4000);
+            };
         collectionCallbacks.duplicateCollection =
             [this, activeSceneRecord, collectionBelongsToScene,
              updateSceneCollectionIds](CollectionId rootId,
                                       CollectionId contextParentId,
-                                      bool linkedData) {
+                                      bool linkedData,
+                                      bool fromClipboard) {
                 const Document &document = session_.document();
                 const QVector<DocumentCollection> sourceCollections =
-                    document.collections();
+                    fromClipboard
+                        ? outlinerCollectionClipboardCollections_
+                        : document.collections();
+                const QVector<SceneObject> sourceObjects =
+                    fromClipboard ? outlinerCollectionClipboardObjects_
+                                  : document.objects();
                 QHash<quint64, DocumentCollection> collectionsById;
                 for (const DocumentCollection &collection : sourceCollections) {
                     collectionsById.insert(collection.id.value(), collection);
                 }
                 const auto rootIt = collectionsById.constFind(rootId.value());
                 if (rootIt == collectionsById.cend()) return;
-                if (contextParentId.isValid() &&
-                    (!collectionsById.contains(contextParentId.value()) ||
-                     !rootIt->parentIds.contains(contextParentId))) {
+                if (fromClipboard) {
+                    const DocumentCollection *destination =
+                        contextParentId.isValid()
+                            ? document.collection(contextParentId)
+                            : nullptr;
+                    if (contextParentId.isValid() &&
+                        (destination == nullptr ||
+                         !destination->libraryPath.isEmpty())) {
+                        contextParentId = CollectionId::invalid();
+                    }
+                } else if (contextParentId.isValid() &&
+                           (!collectionsById.contains(
+                                contextParentId.value()) ||
+                            !rootIt->parentIds.contains(contextParentId))) {
                     contextParentId = CollectionId::invalid();
                 }
-                if (contextParentId.isValid() &&
+                if (!fromClipboard && contextParentId.isValid() &&
                     !collectionsById.value(contextParentId.value())
                          .libraryPath.isEmpty()) {
                     contextParentId = CollectionId::invalid();
@@ -4942,24 +5077,61 @@ private:
                 };
 
                 QSet<QString> collectionNames;
+                for (const DocumentCollection &collection :
+                     document.collections()) {
+                    collectionNames.insert(collection.name);
+                }
                 for (const DocumentCollection &collection : sourceCollections) {
                     collectionNames.insert(collection.name);
                 }
                 QSet<QString> objectNames;
                 QSet<QString> dataNames;
-                const QVector<SceneObject> sourceObjects = document.objects();
                 const QString activeSceneName = activeSceneRecord().value(
                     QStringLiteral("name")).toString();
-                for (const SceneObject &object : sourceObjects) {
-                    if (!object.displayName.isEmpty()) {
-                        objectNames.insert(object.displayName);
-                    }
-                    if (!object.blenderSourceDataName.isEmpty()) {
-                        dataNames.insert(object.blenderSourceDataName);
+                const auto collectObjectNames =
+                    [&objectNames, &dataNames](
+                        const QVector<SceneObject> &objects) {
+                        for (const SceneObject &object : objects) {
+                            if (!object.displayName.isEmpty()) {
+                                objectNames.insert(object.displayName);
+                            }
+                            if (!object.blenderSourceDataName.isEmpty()) {
+                                dataNames.insert(object.blenderSourceDataName);
+                            }
+                        }
+                    };
+                collectObjectNames(document.objects());
+                collectObjectNames(sourceObjects);
+
+                QHash<QString, QString> materialIdRemap;
+                QVector<DocumentMaterial> materialsToAdd;
+                if (fromClipboard) {
+                    for (DocumentMaterial material :
+                         outlinerCollectionClipboardMaterials_) {
+                        const QString sourceMaterialId = material.id;
+                        if (sourceMaterialId.isEmpty() ||
+                            materialIdRemap.contains(sourceMaterialId)) {
+                            continue;
+                        }
+                        material.id = QStringLiteral(
+                            "classiCAD-outliner-copy-material:%1")
+                            .arg(QUuid::createUuid().toString(
+                                QUuid::WithoutBraces));
+                        material.libraryPath.clear();
+                        materialIdRemap.insert(sourceMaterialId, material.id);
+                        materialsToAdd.append(std::move(material));
                     }
                 }
 
                 DocumentTransaction transaction = session_.beginTransaction();
+                for (const DocumentMaterial &material : materialsToAdd) {
+                    if (!transaction.addMaterial(material)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not copy collection materials"),
+                            4000);
+                        return;
+                    }
+                }
                 QHash<quint64, CollectionId> clonedCollectionIds;
                 CollectionId clonedRootId = CollectionId::invalid();
                 for (const CollectionId sourceId : hierarchy) {
@@ -5008,7 +5180,7 @@ private:
                     clonedCollectionIds.insert(sourceId.value(), cloneId);
                     if (sourceId == rootId) clonedRootId = cloneId;
                 }
-                if (clonedRootId.isValid()) {
+                if (clonedRootId.isValid() && !fromClipboard) {
                     transaction.moveCollectionRelative(
                         clonedRootId, rootId, contextParentId, true);
                 }
@@ -5054,6 +5226,48 @@ private:
                     clone.libraryPath.clear();
                     clone.workbenchRandomLibraryPath.clear();
                     clone.blenderSourceObjectId.clear();
+                    if (fromClipboard) {
+                        clone.blenderParentObjectId.clear();
+                    }
+                    if (clone.instanceCollectionId.isValid()) {
+                        const auto mappedInstance = clonedCollectionIds.constFind(
+                            clone.instanceCollectionId.value());
+                        if (mappedInstance != clonedCollectionIds.cend()) {
+                            clone.instanceCollectionId = mappedInstance.value();
+                        } else if (fromClipboard) {
+                            const QString sourceIdentity =
+                                outlinerCollectionClipboardCollectionIdentities_
+                                    .value(clone.instanceCollectionId.value());
+                            CollectionId currentTarget =
+                                CollectionId::invalid();
+                            for (const DocumentCollection &candidate :
+                                 document.collections()) {
+                                const QString candidateIdentity =
+                                    candidate.sourceId.isEmpty()
+                                        ? QStringLiteral(
+                                              "classiCAD-local-collection:%1")
+                                              .arg(candidate.id.value())
+                                        : QStringLiteral("%1\n%2")
+                                              .arg(candidate.libraryPath,
+                                                   candidate.sourceId);
+                                if (!sourceIdentity.isEmpty() &&
+                                    candidateIdentity == sourceIdentity) {
+                                    currentTarget = candidate.id;
+                                    break;
+                                }
+                            }
+                            clone.instanceCollectionId = currentTarget;
+                        } else if (document.collection(
+                                       clone.instanceCollectionId) == nullptr) {
+                            clone.instanceCollectionId =
+                                CollectionId::invalid();
+                        }
+                    }
+                    if (fromClipboard) {
+                        clone.viewLayerHidden = QJsonObject{};
+                        clone.defaultViewLayerKey =
+                            document.settings().activeViewLayerKey;
+                    }
                     if (!linkedData &&
                         !clone.blenderSourceDataName.isEmpty()) {
                         clone.blenderSourceDataName = uniqueName(
@@ -5064,6 +5278,20 @@ private:
                         clone.displayName = uniqueName(
                             clone.displayName, objectNames,
                             QStringLiteral("Object"));
+                    }
+                    if (fromClipboard) {
+                        for (QString &materialId :
+                             clone.geometry.polygonMesh.materialSlotIds) {
+                            materialId = materialIdRemap.value(materialId);
+                        }
+                        for (auto materialIt =
+                                 clone.nurbsSolidFaceMaterialIds.begin();
+                             materialIt !=
+                                 clone.nurbsSolidFaceMaterialIds.end();
+                             ++materialIt) {
+                            materialIt.value() = materialIdRemap.value(
+                                materialIt.value());
+                        }
                     }
                     const int cloneIndex = clones.size();
                     cloneIndexBySourceIdentity.insert(objectIdentity(source),
@@ -5173,9 +5401,23 @@ private:
                         clonedObjectsByIdentity.value(
                             source.sourceParentIdentity,
                             ObjectId::invalid());
-                    if (parentCloneId.isValid() &&
-                        !transaction.setObjectParent(cloneId,
-                                                     parentCloneId)) {
+                    ObjectId parentId = parentCloneId;
+                    if (!parentId.isValid() && fromClipboard &&
+                        !source.sourceParentIdentity.isEmpty()) {
+                        for (const SceneObject &candidate :
+                             document.objects()) {
+                            if (candidate.blenderLooseMeshEdgeCompanion) {
+                                continue;
+                            }
+                            if (objectIdentity(candidate) ==
+                                source.sourceParentIdentity) {
+                                parentId = candidate.id;
+                                break;
+                            }
+                        }
+                    }
+                    if (parentId.isValid() &&
+                        !transaction.setObjectParent(cloneId, parentId)) {
                         statusBar()->showMessage(
                             QStringLiteral("Could not duplicate object hierarchy"),
                             4000);
@@ -5190,10 +5432,32 @@ private:
                     if (geometry == nullptr) continue;
                     for (DimensionAnchorReference &anchor :
                          geometry->dimensionAnchors) {
-                        const auto mapped = clonedObjectsBySourceId.constFind(
-                            anchor.objectId.value());
-                        if (mapped != clonedObjectsBySourceId.cend()) {
-                            anchor.objectId = mapped.value();
+                        ObjectId targetId = ObjectId::invalid();
+                        if (fromClipboard) {
+                            const QString identity =
+                                outlinerCollectionClipboardAnchorIdentities_
+                                    .value(anchor.objectId.value());
+                            targetId = clonedObjectsByIdentity.value(
+                                identity, ObjectId::invalid());
+                            if (!targetId.isValid() && !identity.isEmpty()) {
+                                for (const SceneObject &candidate :
+                                     document.objects()) {
+                                    if (objectIdentity(candidate) == identity) {
+                                        targetId = candidate.id;
+                                        break;
+                                    }
+                                }
+                            }
+                        } else {
+                            const auto mapped =
+                                clonedObjectsBySourceId.constFind(
+                                    anchor.objectId.value());
+                            if (mapped != clonedObjectsBySourceId.cend()) {
+                                targetId = mapped.value();
+                            }
+                        }
+                        if (targetId.isValid()) {
+                            anchor.objectId = targetId;
                         } else {
                             anchor = DimensionAnchorReference{};
                         }
@@ -5244,7 +5508,23 @@ private:
                     statusBar()->showMessage(
                         QStringLiteral("Duplicate Linked created; shared object-data editing is not represented"),
                         6000);
+                } else if (fromClipboard) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Pasted collection %1")
+                            .arg(rootIt->name),
+                        4000);
                 }
+            };
+        const auto duplicateCollectionForPaste =
+            collectionCallbacks.duplicateCollection;
+        collectionCallbacks.pasteOutlinerCollection =
+            [this, duplicateCollectionForPaste](CollectionId parentId) {
+                if (outlinerCollectionClipboardCollections_.isEmpty() ||
+                    !outlinerCollectionClipboardRootId_.isValid()) {
+                    return;
+                }
+                duplicateCollectionForPaste(
+                    outlinerCollectionClipboardRootId_, parentId, false, true);
             };
         collectionCallbacks.renameCollection =
             [this](CollectionId id, const QString &name) {
@@ -6806,6 +7086,13 @@ private:
     QVector<SceneObject> outlinerObjectClipboard_;
     QVector<DocumentMaterial> outlinerObjectClipboardMaterials_;
     QHash<quint64, QString> outlinerObjectClipboardAnchorIdentities_;
+    CollectionId outlinerCollectionClipboardRootId_ =
+        CollectionId::invalid();
+    QVector<DocumentCollection> outlinerCollectionClipboardCollections_;
+    QVector<SceneObject> outlinerCollectionClipboardObjects_;
+    QVector<DocumentMaterial> outlinerCollectionClipboardMaterials_;
+    QHash<quint64, QString> outlinerCollectionClipboardAnchorIdentities_;
+    QHash<quint64, QString> outlinerCollectionClipboardCollectionIdentities_;
     QHash<QString, SavedViewLayerSelection> viewLayerSelections_;
     QHash<QString, QString> activeViewLayerByScene_;
     ProjectController projectController_{session_};

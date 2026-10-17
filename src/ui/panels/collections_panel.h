@@ -253,10 +253,14 @@ struct CollectionsPanelCallbacks {
     std::function<bool()> hasOutlinerObjectClipboard;
     std::function<void(ObjectId)> copyOutlinerObject;
     std::function<void()> pasteOutlinerObjects;
+    std::function<bool()> hasOutlinerCollectionClipboard;
+    std::function<void(CollectionId)> copyOutlinerCollection;
+    std::function<void(CollectionId)> pasteOutlinerCollection;
     std::function<void(ObjectId, bool)> deleteObjectSelection;
     std::function<void(CollectionId, bool)> setCollectionObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
-    std::function<void(CollectionId, CollectionId, bool)> duplicateCollection;
+    std::function<void(CollectionId, CollectionId, bool, bool)>
+        duplicateCollection;
     std::function<void(CollectionId)> linkCollectionToActiveScene;
     std::function<void(CollectionId)> instanceCollectionToScene;
     std::function<void(CollectionId, CollectionId)> unlinkCollection;

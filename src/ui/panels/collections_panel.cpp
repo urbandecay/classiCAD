@@ -1869,6 +1869,22 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 createCollection(collectionId);
             });
         }
+        if (callbacks_.copyOutlinerCollection) {
+            QAction *copy = menu.addAction(QStringLiteral("Copy"));
+            connect(copy, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.copyOutlinerCollection(collectionId);
+            });
+        }
+        if (callbacks_.pasteOutlinerCollection) {
+            QAction *paste = menu.addAction(QStringLiteral("Paste"));
+            paste->setEnabled(callbacks_.hasOutlinerCollectionClipboard &&
+                               callbacks_.hasOutlinerCollectionClipboard());
+            connect(paste, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.pasteOutlinerCollection(collectionId);
+            });
+        }
         if (callbacks_.duplicateCollection) {
             const CollectionId parentId = CollectionId::fromValue(
                 item->data(nameColumn, itemParentCollectionRole)
@@ -1878,13 +1894,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             connect(duplicate, &QAction::triggered, this,
                     [this, collectionId, parentId]() {
                 callbacks_.duplicateCollection(collectionId, parentId,
-                                               false);
+                                               false, false);
             });
             QAction *duplicateLinked = menu.addAction(
                 QStringLiteral("Duplicate Linked"));
             connect(duplicateLinked, &QAction::triggered, this,
                     [this, collectionId, parentId]() {
-                callbacks_.duplicateCollection(collectionId, parentId, true);
+                callbacks_.duplicateCollection(collectionId, parentId, true,
+                                               false);
             });
         }
         if (callbacks_.instanceCollectionToScene) {

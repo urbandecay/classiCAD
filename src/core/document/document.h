@@ -14,6 +14,13 @@
 
 namespace classiCAD {
 
+struct OutlinerTreeExpansionState {
+    QStringList expandedPaths;
+    QStringList collapsedPaths;
+
+    bool operator==(const OutlinerTreeExpansionState &) const = default;
+};
+
 // Document owns persistent scene objects. Blender collections and view-layer
 // state are modeled independently from geometry storage.
 class Document final {
@@ -55,6 +62,10 @@ public:
         const QHash<QString, QStringList> &expandedPathsByScene);
     const QJsonObject &outlinerWorkspaceState() const;
     bool setOutlinerWorkspaceState(const QJsonObject &state);
+    const QHash<QString, OutlinerTreeExpansionState> &
+    outlinerTreeExpansionByContext() const;
+    bool setOutlinerTreeExpansionByContext(
+        const QHash<QString, OutlinerTreeExpansionState> &expansionByContext);
     const QHash<QString, Point3D> &sceneCursorLocationsByScene() const;
     bool setSceneCursorLocationsByScene(
         const QHash<QString, Point3D> &locationsByScene);
@@ -200,6 +211,8 @@ private:
     QVector<DocumentMaterial> materials_;
     QHash<QString, QStringList> outlinerExpandedPathsByScene_;
     QJsonObject outlinerWorkspaceState_;
+    QHash<QString, OutlinerTreeExpansionState>
+        outlinerTreeExpansionByContext_;
     // Blender's scene cursor is persistent editor state and is not part of
     // geometry undo snapshots, matching the 3D cursor operator behavior.
     QHash<QString, Point3D> sceneCursorLocationsByScene_;

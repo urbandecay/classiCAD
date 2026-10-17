@@ -2370,53 +2370,73 @@ void CollectionsPanel::restoreTreeState()
 {
     if (tree_ == nullptr) return;
     QStringList expandedPaths;
+    QStringList collapsedPaths;
+    bool hasSavedState = callbacks_.loadOutlinerTreeExpansionState &&
+        callbacks_.loadOutlinerTreeExpansionState(
+            currentTreeStateContextKey_, &expandedPaths, &collapsedPaths);
+    bool loadedLegacyState = false;
     const QString scope = callbacks_.stateScopeKey
         ? callbacks_.stateScopeKey() : QString{};
-    const QString scopeHash = QString::fromLatin1(
-        QCryptographicHash::hash(scope.toUtf8(),
-                                 QCryptographicHash::Sha256)
-            .toHex());
-    QString expansionMode = QStringLiteral("expandedPaths");
-    if (scenesDisplayMode_) {
-        expansionMode = QStringLiteral("scenesExpandedPaths");
-    } else if (sequencerDisplayMode_) {
-        expansionMode = QStringLiteral("sequenceExpandedPaths");
-    } else if (dataApiDisplayMode_) {
-        expansionMode = QStringLiteral("dataApiExpandedPaths");
-    } else if (libraryOverridesDisplayMode_) {
-        expansionMode = QStringLiteral("libraryOverrides%1ExpandedPaths")
-            .arg(overrideHierarchiesView_
-                     ? QStringLiteral("Hierarchies")
-                     : QStringLiteral("Properties"));
-    } else if (librariesDisplayMode_) {
-        expansionMode = QStringLiteral("librariesExpandedPaths");
-    } else if (orphanDataDisplayMode_) {
-        expansionMode = QStringLiteral("orphanDataExpandedPaths");
-    }
-    const QString settingsKey = QStringLiteral("outliner/%1/%2")
-                                    .arg(scopeHash, expansionMode);
-    bool hasSavedState = false;
-    if (scenesDisplayMode_ || librariesDisplayMode_ ||
-        orphanDataDisplayMode_ || sequencerDisplayMode_ ||
-        dataApiDisplayMode_ || libraryOverridesDisplayMode_) {
-        QSettings settings;
-        if (!scope.isEmpty() && settings.contains(settingsKey)) {
-            expandedPaths = settings.value(settingsKey).toStringList();
-            hasSavedState = true;
+    if (!hasSavedState) {
+        const QString scopeHash = QString::fromLatin1(
+            QCryptographicHash::hash(scope.toUtf8(),
+                                     QCryptographicHash::Sha256)
+                .toHex());
+        QString expansionMode = QStringLiteral("expandedPaths");
+        if (scenesDisplayMode_) {
+            expansionMode = QStringLiteral("scenesExpandedPaths");
+        } else if (sequencerDisplayMode_) {
+            expansionMode = QStringLiteral("sequenceExpandedPaths");
+        } else if (dataApiDisplayMode_) {
+            expansionMode = QStringLiteral("dataApiExpandedPaths");
+        } else if (libraryOverridesDisplayMode_) {
+            expansionMode = QStringLiteral("libraryOverrides%1ExpandedPaths")
+                .arg(overrideHierarchiesView_
+                         ? QStringLiteral("Hierarchies")
+                         : QStringLiteral("Properties"));
+        } else if (librariesDisplayMode_) {
+            expansionMode = QStringLiteral("librariesExpandedPaths");
+        } else if (orphanDataDisplayMode_) {
+            expansionMode = QStringLiteral("orphanDataExpandedPaths");
         }
-    } else {
-        hasSavedState = callbacks_.loadExpandedTreePaths &&
-        callbacks_.loadExpandedTreePaths(&expandedPaths);
+        const QString settingsKey = QStringLiteral("outliner/%1/%2")
+                                        .arg(scopeHash, expansionMode);
+        const bool viewLayerMode = !scenesDisplayMode_ &&
+            !sequencerDisplayMode_ && !dataApiDisplayMode_ &&
+            !libraryOverridesDisplayMode_ && !librariesDisplayMode_ &&
+            !orphanDataDisplayMode_;
+        if (viewLayerMode) {
+            hasSavedState = callbacks_.loadExpandedTreePaths &&
+                callbacks_.loadExpandedTreePaths(&expandedPaths);
+            loadedLegacyState = hasSavedState;
+        }
         if (!hasSavedState && !scope.isEmpty()) {
             QSettings settings;
             if (settings.contains(settingsKey)) {
                 expandedPaths = settings.value(settingsKey).toStringList();
+                hasSavedState = true;
+                loadedLegacyState = true;
+            }
+        }
+        if (dataApiDisplayMode_ && !scope.isEmpty()) {
+            QSettings settings;
+            if (settings.contains(QStringLiteral("outliner/%1/dataApiCollapsedPaths")
+                                      .arg(scopeHash))) {
+                collapsedPaths = settings.value(
+                    QStringLiteral("outliner/%1/dataApiCollapsedPaths")
+                        .arg(scopeHash)).toStringList();
+                loadedLegacyState = true;
                 hasSavedState = true;
             }
         }
     }
     if (!hasSavedState) return;
     const QSet<QString> expanded(expandedPaths.cbegin(), expandedPaths.cend());
+    const QSet<QString> collapsed(collapsedPaths.cbegin(), collapsedPaths.cend());
+    if (dataApiDisplayMode_) {
+        dataApiExpandedPaths_ = expanded;
+        dataApiCollapsedPaths_ = collapsed;
+    }
 
     restoringTreeState_ = true;
     QVector<QTreeWidgetItem *> pending;
@@ -2430,7 +2450,7 @@ void CollectionsPanel::restoreTreeState()
             const bool pointerStruct =
                 dataApiDisplayMode_ && isDataApiPointerStruct(item);
             const bool explicitlyCollapsed = pointerStruct &&
-                dataApiCollapsedPaths_.contains(path);
+                collapsed.contains(path);
             item->setExpanded(!explicitlyCollapsed &&
                 (expanded.contains(path) || pointerStruct));
         }
@@ -2439,6 +2459,11 @@ void CollectionsPanel::restoreTreeState()
         }
     }
     restoringTreeState_ = false;
+    if (loadedLegacyState && callbacks_.saveOutlinerTreeExpansionState &&
+        !currentTreeStateContextKey_.isEmpty()) {
+        callbacks_.saveOutlinerTreeExpansionState(
+            currentTreeStateContextKey_, expandedPaths, collapsedPaths);
+    }
 }
 
 void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
@@ -2727,6 +2752,13 @@ void CollectionsPanel::saveTreeState()
                                                expandedPaths.cend());
         dataApiCollapsedPaths_ = QSet<QString>(
             collapsedDataApiPaths.cbegin(), collapsedDataApiPaths.cend());
+    }
+    if (callbacks_.saveOutlinerTreeExpansionState &&
+        !currentTreeStateContextKey_.isEmpty()) {
+        callbacks_.saveOutlinerTreeExpansionState(
+            currentTreeStateContextKey_, expandedPaths,
+            collapsedDataApiPaths);
+        return;
     }
     if (scenesDisplayMode_ || librariesDisplayMode_ ||
         orphanDataDisplayMode_ || sequencerDisplayMode_ ||
@@ -4995,24 +5027,43 @@ void CollectionsPanel::refresh()
     if (!dataApiMode) {
         dataApiExpandedPaths_.clear();
         dataApiCollapsedPaths_.clear();
-    } else if (!stateScopeKey.isEmpty()) {
+    } else {
         dataApiExpandedPaths_.clear();
         dataApiCollapsedPaths_.clear();
-        const QString scopeHash = QString::fromLatin1(
-            QCryptographicHash::hash(stateScopeKey.toUtf8(),
-                                     QCryptographicHash::Sha256)
-                .toHex());
-        QSettings settings;
-        const QStringList expandedDataApiPaths = settings.value(
-            QStringLiteral("outliner/%1/dataApiExpandedPaths")
-                .arg(scopeHash)).toStringList();
-        const QStringList collapsedPaths = settings.value(
-            QStringLiteral("outliner/%1/dataApiCollapsedPaths")
-                .arg(scopeHash)).toStringList();
-        dataApiExpandedPaths_ = QSet<QString>(
-            expandedDataApiPaths.cbegin(), expandedDataApiPaths.cend());
-        dataApiCollapsedPaths_ = QSet<QString>(collapsedPaths.cbegin(),
-                                                collapsedPaths.cend());
+        bool hasDocumentTreeState = false;
+        if (callbacks_.loadOutlinerTreeExpansionState &&
+               !currentTreeStateContextKey_.isEmpty()) {
+            QStringList expandedDataApiPaths;
+            QStringList collapsedDataApiPaths;
+            hasDocumentTreeState = callbacks_.loadOutlinerTreeExpansionState(
+                currentTreeStateContextKey_, &expandedDataApiPaths,
+                &collapsedDataApiPaths);
+            if (hasDocumentTreeState) {
+                dataApiExpandedPaths_ = QSet<QString>(
+                    expandedDataApiPaths.cbegin(),
+                    expandedDataApiPaths.cend());
+                dataApiCollapsedPaths_ = QSet<QString>(
+                    collapsedDataApiPaths.cbegin(),
+                    collapsedDataApiPaths.cend());
+            }
+        }
+        if (!hasDocumentTreeState && !stateScopeKey.isEmpty()) {
+            const QString scopeHash = QString::fromLatin1(
+                QCryptographicHash::hash(stateScopeKey.toUtf8(),
+                                         QCryptographicHash::Sha256)
+                    .toHex());
+            QSettings settings;
+            const QStringList expandedDataApiPaths = settings.value(
+                QStringLiteral("outliner/%1/dataApiExpandedPaths")
+                    .arg(scopeHash)).toStringList();
+            const QStringList collapsedPaths = settings.value(
+                QStringLiteral("outliner/%1/dataApiCollapsedPaths")
+                    .arg(scopeHash)).toStringList();
+            dataApiExpandedPaths_ = QSet<QString>(
+                expandedDataApiPaths.cbegin(), expandedDataApiPaths.cend());
+            dataApiCollapsedPaths_ = QSet<QString>(
+                collapsedPaths.cbegin(), collapsedPaths.cend());
+        }
     }
     libraryOverrideViewCombo_->setVisible(libraryOverridesMode);
     libraryOverrideViewCombo_->setEnabled(libraryOverridesMode);

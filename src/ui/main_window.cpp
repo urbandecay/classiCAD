@@ -4397,6 +4397,41 @@ private:
                     markDocumentModified();
                 }
             };
+        collectionCallbacks.loadOutlinerTreeExpansionState =
+            [this](const QString &context,
+                   QStringList *expandedPaths,
+                   QStringList *collapsedPaths) {
+                if (context.isEmpty() || expandedPaths == nullptr ||
+                    collapsedPaths == nullptr) {
+                    return false;
+                }
+                const auto &states = session_.document()
+                                         .outlinerTreeExpansionByContext();
+                const auto saved = states.constFind(context);
+                if (saved == states.cend()) return false;
+                *expandedPaths = saved->expandedPaths;
+                *collapsedPaths = saved->collapsedPaths;
+                return true;
+            };
+        collectionCallbacks.saveOutlinerTreeExpansionState =
+            [this](const QString &context,
+                   const QStringList &expandedPaths,
+                   const QStringList &collapsedPaths) {
+                if (context.isEmpty()) return;
+                Document &document = session_.document();
+                QHash<QString, OutlinerTreeExpansionState> states =
+                    document.outlinerTreeExpansionByContext();
+                const OutlinerTreeExpansionState state{
+                    expandedPaths, collapsedPaths};
+                if (states.value(context) == state &&
+                    states.contains(context)) {
+                    return;
+                }
+                states.insert(context, state);
+                if (document.setOutlinerTreeExpansionByContext(states)) {
+                    markDocumentModified();
+                }
+            };
         const auto outlinerStateSceneKey = [activeSceneRecord]() {
             const QString sceneId = activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

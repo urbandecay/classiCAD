@@ -327,6 +327,57 @@ bool Document::setOutlinerWorkspaceState(const QJsonObject &state)
     return true;
 }
 
+const QHash<QString, OutlinerTreeExpansionState> &
+Document::outlinerTreeExpansionByContext() const
+{
+    return outlinerTreeExpansionByContext_;
+}
+
+bool Document::setOutlinerTreeExpansionByContext(
+    const QHash<QString, OutlinerTreeExpansionState> &expansionByContext)
+{
+    constexpr qsizetype maxContextCount = 1024;
+    constexpr qsizetype maxPathCountPerContext = 10000;
+    constexpr qsizetype maxContextLength = 512;
+    constexpr qsizetype maxPathLength = 4096;
+    constexpr qsizetype maxTotalCharacters = 2 * 1024 * 1024;
+    if (expansionByContext.size() > maxContextCount) return false;
+
+    qsizetype totalCharacters = 0;
+    for (auto contextIt = expansionByContext.cbegin();
+         contextIt != expansionByContext.cend(); ++contextIt) {
+        const QString &context = contextIt.key();
+        const OutlinerTreeExpansionState &state = contextIt.value();
+        if (context.isEmpty() || context.size() > maxContextLength ||
+            state.expandedPaths.size() > maxPathCountPerContext ||
+            state.collapsedPaths.size() > maxPathCountPerContext) {
+            return false;
+        }
+        totalCharacters += context.size();
+        QSet<QString> uniquePaths;
+        const auto validatePaths = [&totalCharacters, &uniquePaths](
+                                      const QStringList &paths) {
+            for (const QString &path : paths) {
+                if (path.isEmpty() || path.size() > maxPathLength ||
+                    uniquePaths.contains(path)) {
+                    return false;
+                }
+                totalCharacters += path.size();
+                if (totalCharacters > maxTotalCharacters) return false;
+                uniquePaths.insert(path);
+            }
+            return true;
+        };
+        if (!validatePaths(state.expandedPaths) ||
+            !validatePaths(state.collapsedPaths) ||
+            totalCharacters > maxTotalCharacters) {
+            return false;
+        }
+    }
+    outlinerTreeExpansionByContext_ = expansionByContext;
+    return true;
+}
+
 const QHash<QString, Point3D> &Document::sceneCursorLocationsByScene() const
 {
     return sceneCursorLocationsByScene_;
@@ -442,6 +493,8 @@ void Document::replaceWith(const Document &document)
     restoreSnapshot(document.snapshot());
     setOutlinerExpandedPathsByScene(document.outlinerExpandedPathsByScene());
     setOutlinerWorkspaceState(document.outlinerWorkspaceState());
+    setOutlinerTreeExpansionByContext(
+        document.outlinerTreeExpansionByContext());
     setSceneCursorLocationsByScene(document.sceneCursorLocationsByScene());
 }
 

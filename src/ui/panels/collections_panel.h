@@ -355,6 +355,13 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QStringList &)> saveExpandedTreePaths;
     std::function<QJsonObject()> loadOutlinerWorkspaceState;
     std::function<void(const QJsonObject &)> saveOutlinerWorkspaceState;
+    std::function<bool(const QString &,
+                       QStringList *,
+                       QStringList *)> loadOutlinerTreeExpansionState;
+    std::function<void(const QString &,
+                       const QStringList &,
+                       const QStringList &)>
+        saveOutlinerTreeExpansionState;
 };
 
 // Displays linked collections and scene objects with Blender-style selection

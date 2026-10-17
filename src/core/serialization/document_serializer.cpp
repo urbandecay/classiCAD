@@ -1242,7 +1242,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 69);
+    serialized.insert(QStringLiteral("version"), 70);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1293,6 +1293,23 @@ QJsonObject documentToJson(const Document &document)
                       outlinerExpandedPathsByScene);
     serialized.insert(QStringLiteral("outlinerWorkspaceState"),
                       document.outlinerWorkspaceState());
+    QJsonObject outlinerTreeExpansionByContext;
+    for (auto it = document.outlinerTreeExpansionByContext().cbegin();
+         it != document.outlinerTreeExpansionByContext().cend(); ++it) {
+        QJsonArray expandedPaths;
+        for (const QString &path : it.value().expandedPaths) {
+            expandedPaths.append(path);
+        }
+        QJsonArray collapsedPaths;
+        for (const QString &path : it.value().collapsedPaths) {
+            collapsedPaths.append(path);
+        }
+        outlinerTreeExpansionByContext.insert(it.key(), QJsonObject{
+            {QStringLiteral("expanded"), expandedPaths},
+            {QStringLiteral("collapsed"), collapsedPaths}});
+    }
+    serialized.insert(QStringLiteral("outlinerTreeExpansionByContext"),
+                      outlinerTreeExpansionByContext);
     QJsonObject sceneCursorLocationsByScene;
     for (auto it = document.sceneCursorLocationsByScene().cbegin();
          it != document.sceneCursorLocationsByScene().cend(); ++it) {
@@ -1742,13 +1759,15 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 69) {
+    if (version < 1 || version > 70) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
 
     QHash<QString, QStringList> outlinerExpandedPathsByScene;
     QJsonObject outlinerWorkspaceState;
+    QHash<QString, OutlinerTreeExpansionState>
+        outlinerTreeExpansionByContext;
     QHash<QString, Point3D> sceneCursorLocationsByScene;
     if (version >= 27) {
         const QJsonValue outlinerStateValue = serialized.value(
@@ -1787,6 +1806,55 @@ bool documentFromJson(const QJsonValue &value,
         }
         outlinerWorkspaceState = workspaceStateValue.toObject();
     }
+    if (version >= 70) {
+        const QJsonValue expansionByContextValue = serialized.value(
+            QStringLiteral("outlinerTreeExpansionByContext"));
+        if (!expansionByContextValue.isObject() ||
+            expansionByContextValue.toObject().size() > 1024) {
+            setError(errorMessage,
+                     QStringLiteral("invalid saved Outliner tree expansion state"));
+            return false;
+        }
+        const QJsonObject expansionByContext =
+            expansionByContextValue.toObject();
+        for (auto it = expansionByContext.begin();
+             it != expansionByContext.end(); ++it) {
+            if (!it.value().isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid saved Outliner tree context"));
+                return false;
+            }
+            const QJsonObject contextState = it.value().toObject();
+            const QJsonValue expandedValue = contextState.value(
+                QStringLiteral("expanded"));
+            const QJsonValue collapsedValue = contextState.value(
+                QStringLiteral("collapsed"));
+            if (contextState.size() != 2 || !expandedValue.isArray() ||
+                !collapsedValue.isArray()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid saved Outliner tree paths"));
+                return false;
+            }
+            OutlinerTreeExpansionState state;
+            for (const QJsonValue &pathValue : expandedValue.toArray()) {
+                if (!pathValue.isString()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid saved expanded Outliner path"));
+                    return false;
+                }
+                state.expandedPaths.append(pathValue.toString());
+            }
+            for (const QJsonValue &pathValue : collapsedValue.toArray()) {
+                if (!pathValue.isString()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid saved collapsed Outliner path"));
+                    return false;
+                }
+                state.collapsedPaths.append(pathValue.toString());
+            }
+            outlinerTreeExpansionByContext.insert(it.key(), state);
+        }
+    }
     if (version >= 66) {
         const QJsonValue cursorLocationsValue = serialized.value(
             QStringLiteral("sceneCursorLocationsByScene"));
@@ -1821,6 +1889,8 @@ bool documentFromJson(const QJsonValue &value,
             outlinerExpandedPathsByScene) ||
         !validatedOutlinerState.setOutlinerWorkspaceState(
             outlinerWorkspaceState) ||
+        !validatedOutlinerState.setOutlinerTreeExpansionByContext(
+            outlinerTreeExpansionByContext) ||
         !validatedOutlinerState.setSceneCursorLocationsByScene(
             sceneCursorLocationsByScene)) {
         setError(errorMessage,
@@ -3570,6 +3640,12 @@ bool documentFromJson(const QJsonValue &value,
     if (!document->setOutlinerWorkspaceState(outlinerWorkspaceState)) {
         setError(errorMessage,
                  QStringLiteral("invalid saved Outliner workspace state"));
+        return false;
+    }
+    if (!document->setOutlinerTreeExpansionByContext(
+            outlinerTreeExpansionByContext)) {
+        setError(errorMessage,
+                 QStringLiteral("invalid saved Outliner tree expansion state"));
         return false;
     }
     if (!document->setSceneCursorLocationsByScene(

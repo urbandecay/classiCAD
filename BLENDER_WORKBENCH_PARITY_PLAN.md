@@ -11616,11 +11616,12 @@ scene depth.
   stored View Layer object, collection, or type filters to its rows. Native
   classiCAD documents and older Blender imports do not retain a full
   unused-data-block inventory, so their category availability falls back to
-  known objects. Remaining differences: expansion paths in display modes other
-  than View Layer still use path-hashed QSettings, and Library Override
-  hierarchy rows lack Blender object identity/state metadata for carried object
-  filters. `cmake --build build -j4` and `git diff --check` passed; no matched
-  Blender Outliner comparison was run.
+  known objects. Remaining differences: Library Override hierarchy rows still
+  need Blender object identity and state metadata so carried object filters can
+  apply to them. Flattened object-only View Layer display also needs a focused
+  check that excluded LayerCollection membership is respected. `cmake --build
+  build -j4` and `git diff --check` passed; no matched Blender Outliner
+  comparison was run.
 - The hundred-twenty-first Outliner data update preserves Blender's per-path
   View Layer restriction state when extracting collections. `holdout` and
   `indirect_only` were already captured in each Blender LayerCollection
@@ -11637,8 +11638,18 @@ scene depth.
   copied when a document is replaced, and serialized in native document version
   69. Switching documents reloads that document's controls; missing state
   resets to Blender-style defaults. `QSettings` remains as the initial UI
-  preference source for the first Outliner session. View Layer expansion paths
-  already use document state; expansion paths for other display modes remain
-  path-scoped `QSettings` and are still a follow-up. `cmake --build build -j4`
-  and `git diff --check` passed; no GUI or matched Blender Outliner comparison
-  was run.
+  preference source for the first Outliner session. Tree expansion persistence
+  for all display modes is addressed in the following entry. `cmake --build
+  build -j4` and `git diff --check` passed; no GUI or matched Blender Outliner
+  comparison was run.
+- The hundred-twenty-third Outliner workspace update stores expanded and
+  collapsed tree paths in the native document by scene and display-mode
+  context, including Data API pointer-structure collapse state. Older View
+  Layer document paths and project-path-scoped `QSettings` paths remain read as
+  migration fallbacks and are copied into the new document state on restore.
+  Subsequent changes save to the document, so expansion state survives Save As
+  and untitled projects. Native document version 70 carries this state outside
+  geometry undo. Library Override hierarchy filtering and flattened View Layer
+  membership checks remain open items. `cmake --build build -j4` and
+  `git diff --check` passed; no GUI or matched Blender Outliner comparison was
+  run.

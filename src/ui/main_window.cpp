@@ -3898,6 +3898,48 @@ private:
                     ? target.parentCollectionId
                     : (target.kind == OutlinerRowKind::Collection
                            ? target.collectionId : CollectionId::invalid());
+                const bool sceneDropTarget =
+                    target.kind == OutlinerRowKind::SceneRoot &&
+                    !target.sceneKey.isEmpty();
+                QString destinationSceneName;
+                QSet<QString> destinationSceneObjectIds;
+                if (sceneDropTarget) {
+                    const DocumentSettings &settings =
+                        session_.document().settings();
+                    for (const QJsonValue &sceneValue :
+                         settings.importedBlenderScenes) {
+                        const QJsonObject scene = sceneValue.toObject();
+                        if (scene.value(QStringLiteral("scene_id")).toString() !=
+                            target.sceneKey) {
+                            continue;
+                        }
+                        destinationSceneName = scene.value(
+                            QStringLiteral("name")).toString();
+                        for (const QJsonValue &objectIdValue : scene.value(
+                                 QStringLiteral("object_ids")).toArray()) {
+                            if (objectIdValue.isString()) {
+                                destinationSceneObjectIds.insert(
+                                    objectIdValue.toString());
+                            }
+                        }
+                        break;
+                    }
+                    if (destinationSceneName.isEmpty()) return;
+                    const auto masterCollection = std::find_if(
+                        session_.document().collections().cbegin(),
+                        session_.document().collections().cend(),
+                        [&destinationSceneName](
+                            const DocumentCollection &collection) {
+                            return collection.parentIds.isEmpty() &&
+                                collection.sourceSceneNames.contains(
+                                    destinationSceneName);
+                        });
+                    if (masterCollection ==
+                        session_.document().collections().cend()) {
+                        return;
+                    }
+                    destinationCollection = masterCollection->id;
+                }
                 if (!relativeCollectionDrop &&
                     target.kind == OutlinerRowKind::Object) {
                     destinationCollection = target.parentCollectionId;
@@ -3920,6 +3962,10 @@ private:
                     std::reverse(orderedSources.begin(), orderedSources.end());
                 }
                 for (const OutlinerRowReference &source : orderedSources) {
+                    if (sceneDropTarget &&
+                        source.kind != OutlinerRowKind::Object) {
+                        continue;
+                    }
                     if (source.kind == OutlinerRowKind::Collection) {
                         const CollectionId collectionId = source.collectionId;
                         const DocumentCollection *collection =
@@ -3979,6 +4025,24 @@ private:
                     if (object == nullptr || !object->libraryPath.isEmpty()) {
                         continue;
                     }
+                    if (sceneDropTarget) {
+                        bool alreadyInScene =
+                            destinationSceneObjectIds.contains(
+                                object->blenderSourceObjectId);
+                        for (const CollectionId membershipId :
+                             object->collectionIds) {
+                            const DocumentCollection *membership =
+                                session_.document().collection(membershipId);
+                            if (membership != nullptr &&
+                                (membership->id == destinationCollection ||
+                                 membership->sourceSceneNames.contains(
+                                     destinationSceneName))) {
+                                alreadyInScene = true;
+                                break;
+                            }
+                        }
+                        if (alreadyInScene) continue;
+                    }
                     if (parentObjects && destinationObject.isValid()) {
                         const SceneObject *parentObject =
                             session_.document().object(destinationObject);
@@ -4000,7 +4064,8 @@ private:
                     if (link && !destinationCollection.isValid()) continue;
 
                     QVector<CollectionId> memberships = object->collectionIds;
-                    if (!link && source.linkedCollectionId.isValid() &&
+                    if (!link && !sceneDropTarget &&
+                        source.linkedCollectionId.isValid() &&
                         !source.syntheticParentRow) {
                         const DocumentCollection *sourceCollection =
                             session_.document().collection(

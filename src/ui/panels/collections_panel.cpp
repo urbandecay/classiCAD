@@ -333,6 +333,12 @@ protected:
             event->ignore();
             return;
         }
+        if (target.kind == OutlinerRowKind::SceneRoot &&
+            !target.sceneKey.isEmpty() &&
+            draggedRows_.first().kind != OutlinerRowKind::Object) {
+            event->ignore();
+            return;
+        }
         if (target.kind == OutlinerRowKind::Collection &&
             draggedRows_.first().kind == OutlinerRowKind::Collection) {
             const QRect targetRect = visualItemRect(targetItem);
@@ -405,6 +411,10 @@ private:
         reference.kind = static_cast<OutlinerRowKind>(
             item->data(nameColumn, itemKindRole).toInt());
         const quint64 value = item->data(nameColumn, itemIdRole).toULongLong();
+        if (reference.kind == OutlinerRowKind::SceneRoot) {
+            reference.sceneKey = item->data(nameColumn, itemSceneKeyRole)
+                                     .toString();
+        }
         if (reference.kind == OutlinerRowKind::Object) {
             reference.objectId = ObjectId::fromValue(value);
             reference.linkedCollectionId = CollectionId::fromValue(
@@ -4232,7 +4242,8 @@ void CollectionsPanel::refresh()
             sceneRoot->setData(nameColumn, itemPathRole, rootPath);
             sceneRoot->setToolTip(nameColumn,
                                   QStringLiteral("Click to activate this scene"));
-            sceneRoot->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            sceneRoot->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                                Qt::ItemIsDropEnabled);
             QFont sceneFont = sceneRoot->font(nameColumn);
             sceneFont.setBold(scene.key == activeSceneKey);
             sceneRoot->setFont(nameColumn, sceneFont);

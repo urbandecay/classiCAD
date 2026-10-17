@@ -136,6 +136,7 @@ struct OutlinerRowReference {
     CollectionId collectionId = CollectionId::invalid();
     CollectionId linkedCollectionId = CollectionId::invalid();
     CollectionId parentCollectionId = CollectionId::invalid();
+    QString sceneKey;
     bool syntheticParentRow = false;
 };
 

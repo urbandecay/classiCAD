@@ -1474,6 +1474,7 @@ void CollectionsPanel::createLayout()
                 (!callbacks_.activeViewLayerKey ||
                  callbacks_.activeViewLayerKey().isEmpty());
             tree_->setColumnHidden(column, !visible || unavailable);
+            if (column == excludeColumn) refresh();
         });
         return action;
     };
@@ -4231,81 +4232,90 @@ void CollectionsPanel::appendCollection(
         entry.collection, activeViewLayerKey, sourcePath);
     if (!activeViewLayerKey.isEmpty() && layerState.isEmpty()) return;
 
-    auto *item = parent == nullptr
-        ? new QTreeWidgetItem(tree)
-        : new QTreeWidgetItem(parent);
-    item->setText(nameColumn, entry.collection.name);
-    item->setIcon(nameColumn, collectionIcon(entry.collection.colorTag));
-    if (entry.collection.colorTag != QLatin1String("NONE")) {
-        item->setToolTip(nameColumn,
-                         QStringLiteral("Color tag: %1")
-                             .arg(collectionColorTagLabel(
-                                 entry.collection.colorTag)));
-    }
-    item->setData(nameColumn, itemKindRole,
-                  static_cast<int>(OutlinerRowKind::Collection));
-    item->setData(nameColumn, itemIdRole,
-                  QVariant::fromValue<qulonglong>(entry.collection.id.value()));
-    item->setData(nameColumn, itemAssetMarkedRole,
-                  entry.collection.assetMarked);
-    item->setData(nameColumn, itemLinkedLibraryRole,
-                  !entry.collection.libraryPath.isEmpty());
-    item->setData(nameColumn, itemSceneMasterRole,
-                  entry.collection.isSceneMaster);
-    item->setData(nameColumn, itemParentCollectionRole,
-                  QVariant::fromValue<qulonglong>(
-                      parent != nullptr &&
-                              parent->data(nameColumn, itemKindRole).toInt() ==
-                                  static_cast<int>(OutlinerRowKind::Collection)
-                          ? parent->data(nameColumn, itemIdRole).toULongLong()
-                          : 0));
     path.append(QStringLiteral("c%1").arg(entry.collection.id.value()));
-    item->setData(nameColumn, itemPathRole, path.join(QLatin1Char('/')));
-    item->setData(nameColumn, itemSourcePathRole,
-                  QVariant::fromValue(sourcePath));
-    item->setData(nameColumn, itemViewLayerKeyRole, rowViewLayerKey);
-    const QString currentViewLayerKey = callbacks_.activeViewLayerKey
-        ? callbacks_.activeViewLayerKey() : QString{};
-    if (rowViewLayerKey == currentViewLayerKey &&
-        callbacks_.activeCollectionSourcePath &&
-        sourcePath == callbacks_.activeCollectionSourcePath()) {
-        QFont activeFont = item->font(nameColumn);
-        activeFont.setBold(true);
-        item->setFont(nameColumn, activeFont);
-        QStringList tooltip{QStringLiteral("Active collection")};
+    const bool excludedFromThisLayer = layerState.value(
+        QStringLiteral("exclude")).toBool();
+    const bool flattenExcludedCollection =
+        !showEnableColumn_ && excludedFromThisLayer;
+    QTreeWidgetItem *item = parent;
+    if (!flattenExcludedCollection) {
+        item = parent == nullptr
+            ? new QTreeWidgetItem(tree)
+            : new QTreeWidgetItem(parent);
+        item->setText(nameColumn, entry.collection.name);
+        item->setIcon(nameColumn, collectionIcon(entry.collection.colorTag));
         if (entry.collection.colorTag != QLatin1String("NONE")) {
-            tooltip.append(QStringLiteral("Color tag: %1")
-                               .arg(collectionColorTagLabel(
-                                   entry.collection.colorTag)));
+            item->setToolTip(nameColumn,
+                             QStringLiteral("Color tag: %1")
+                                 .arg(collectionColorTagLabel(
+                                     entry.collection.colorTag)));
         }
-        item->setToolTip(nameColumn, tooltip.join(QLatin1Char('\n')));
-    }
-    item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
-                   Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
-                   Qt::ItemIsDropEnabled);
-    item->setCheckState(viewportColumn, entry.collection.hideViewport
-                               ? Qt::Unchecked : Qt::Checked);
-    item->setCheckState(renderColumn, entry.collection.hideRender
-                             ? Qt::Unchecked : Qt::Checked);
-    item->setCheckState(selectColumn, entry.collection.hideSelect
-                               ? Qt::Unchecked : Qt::Checked);
-    if (!layerState.isEmpty()) {
-        item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
-        item->setData(holdoutColumn, itemViewLayerEditableRole, true);
-        item->setData(indirectOnlyColumn, itemViewLayerEditableRole, true);
-        item->setData(excludeColumn, itemViewLayerEditableRole, true);
-        item->setCheckState(viewLayerViewportColumn,
-            layerState.value(QStringLiteral("hide_viewport")).toBool()
-                ? Qt::Unchecked : Qt::Checked);
-        item->setCheckState(holdoutColumn,
-            layerState.value(QStringLiteral("holdout")).toBool()
-                ? Qt::Checked : Qt::Unchecked);
-        item->setCheckState(indirectOnlyColumn,
-            layerState.value(QStringLiteral("indirect_only")).toBool()
-                ? Qt::Checked : Qt::Unchecked);
-        item->setCheckState(excludeColumn,
-            layerState.value(QStringLiteral("exclude")).toBool()
-                ? Qt::Unchecked : Qt::Checked);
+        item->setData(nameColumn, itemKindRole,
+                      static_cast<int>(OutlinerRowKind::Collection));
+        item->setData(nameColumn, itemIdRole,
+                      QVariant::fromValue<qulonglong>(
+                          entry.collection.id.value()));
+        item->setData(nameColumn, itemAssetMarkedRole,
+                      entry.collection.assetMarked);
+        item->setData(nameColumn, itemLinkedLibraryRole,
+                      !entry.collection.libraryPath.isEmpty());
+        item->setData(nameColumn, itemSceneMasterRole,
+                      entry.collection.isSceneMaster);
+        item->setData(nameColumn, itemParentCollectionRole,
+                      QVariant::fromValue<qulonglong>(
+                          parent != nullptr &&
+                                  parent->data(nameColumn, itemKindRole).toInt() ==
+                                      static_cast<int>(OutlinerRowKind::Collection)
+                              ? parent->data(nameColumn, itemIdRole)
+                                    .toULongLong()
+                              : 0));
+        item->setData(nameColumn, itemPathRole, path.join(QLatin1Char('/')));
+        item->setData(nameColumn, itemSourcePathRole,
+                      QVariant::fromValue(sourcePath));
+        item->setData(nameColumn, itemViewLayerKeyRole, rowViewLayerKey);
+        const QString currentViewLayerKey = callbacks_.activeViewLayerKey
+            ? callbacks_.activeViewLayerKey() : QString{};
+        if (rowViewLayerKey == currentViewLayerKey &&
+            callbacks_.activeCollectionSourcePath &&
+            sourcePath == callbacks_.activeCollectionSourcePath()) {
+            QFont activeFont = item->font(nameColumn);
+            activeFont.setBold(true);
+            item->setFont(nameColumn, activeFont);
+            QStringList tooltip{QStringLiteral("Active collection")};
+            if (entry.collection.colorTag != QLatin1String("NONE")) {
+                tooltip.append(QStringLiteral("Color tag: %1")
+                                   .arg(collectionColorTagLabel(
+                                       entry.collection.colorTag)));
+            }
+            item->setToolTip(nameColumn, tooltip.join(QLatin1Char('\n')));
+        }
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
+                       Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
+                       Qt::ItemIsDropEnabled);
+        item->setCheckState(viewportColumn, entry.collection.hideViewport
+                                   ? Qt::Unchecked : Qt::Checked);
+        item->setCheckState(renderColumn, entry.collection.hideRender
+                                 ? Qt::Unchecked : Qt::Checked);
+        item->setCheckState(selectColumn, entry.collection.hideSelect
+                                   ? Qt::Unchecked : Qt::Checked);
+        if (!layerState.isEmpty()) {
+            item->setData(viewLayerViewportColumn,
+                          itemViewLayerEditableRole, true);
+            item->setData(holdoutColumn, itemViewLayerEditableRole, true);
+            item->setData(indirectOnlyColumn, itemViewLayerEditableRole, true);
+            item->setData(excludeColumn, itemViewLayerEditableRole, true);
+            item->setCheckState(viewLayerViewportColumn,
+                layerState.value(QStringLiteral("hide_viewport")).toBool()
+                    ? Qt::Unchecked : Qt::Checked);
+            item->setCheckState(holdoutColumn,
+                layerState.value(QStringLiteral("holdout")).toBool()
+                    ? Qt::Checked : Qt::Unchecked);
+            item->setCheckState(indirectOnlyColumn,
+                layerState.value(QStringLiteral("indirect_only")).toBool()
+                    ? Qt::Checked : Qt::Unchecked);
+            item->setCheckState(excludeColumn,
+                excludedFromThisLayer ? Qt::Unchecked : Qt::Checked);
+        }
     }
 
     bool excludedFromViewLayer = false;

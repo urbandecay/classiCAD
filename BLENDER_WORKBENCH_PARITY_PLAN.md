@@ -11688,3 +11688,5 @@ scene depth.
   scene-wide objects after the flat list had been corrected. `cmake --build
   build -j4` and `git diff --check` passed; no matched Blender Outliner
   comparison was run.
+- The hundred-twenty-seventh Outliner update follows Blender 5.2.2's
+  [View Layer tree builder](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L153-L162): when the Enable / Exclude restriction toggle is hidden, excluded collection rows are flattened into their visible parent while their children are still traversed. Toggling the column now rebuilds the tree to apply that layout. The source collection path remains attached to visible descendants for per-path state. `cmake --build build -j4` and `git diff --check` passed; no matched Blender Outliner comparison was run.

@@ -6991,6 +6991,40 @@ private:
                 }
                 pruneOutlinerSelection();
             };
+        collectionCallbacks.setCollectionViewportEnabled =
+            [this](CollectionId id, const QString &viewLayerKey,
+                   const QStringList &sourcePath, bool enabled) {
+                const DocumentCollection *collection =
+                    session_.document().collection(id);
+                if (collection == nullptr ||
+                    !collection->libraryPath.isEmpty()) {
+                    return;
+                }
+
+                const bool hideViewport = !enabled;
+                const bool hideRender = collection->hideRender;
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                if (collection->hideViewport != hideViewport) {
+                    changed = transaction.setCollectionVisibility(
+                                  id, hideViewport, hideRender) || changed;
+                }
+                if (enabled && !viewLayerKey.isEmpty() &&
+                    !sourcePath.isEmpty()) {
+                    changed = transaction.setCollectionViewLayerState(
+                                  id, viewLayerKey, sourcePath,
+                                  QStringLiteral("hide_viewport"), false) ||
+                              changed;
+                }
+                if (!changed) return;
+                if (!session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update collection viewport visibility"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
         collectionCallbacks.setCollectionRenderVisibility =
             [this, collectionHierarchyIds, objectsInCollections,
              collectionIsolationPlan, collectionBelongsToActiveScene](
@@ -7051,7 +7085,8 @@ private:
                     changed = transaction.setObjectRenderVisibility(
                                   objectId, hideRender) || changed;
                 }
-                if (!changed || !session_.commitTransaction(transaction)) {
+                if (!changed) return;
+                if (!session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update collection render visibility"),
                         4000);
@@ -7471,7 +7506,8 @@ private:
                     }
                 }
 
-                if (!changed || !session_.commitTransaction(transaction)) {
+                if (!changed) return;
+                if (!session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update active view layer collection state"),
                         4000);

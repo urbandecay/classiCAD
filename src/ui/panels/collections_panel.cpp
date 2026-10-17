@@ -1977,6 +1977,132 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.unlinkCollection(collectionId, parentId);
             });
         }
+        const QString viewLayerKey = item->data(
+            nameColumn, itemViewLayerKeyRole).toString();
+        const QStringList sourcePath = item->data(
+            nameColumn, itemSourcePathRole).toStringList();
+        const bool hasViewLayerPath = !viewLayerKey.isEmpty() &&
+                                      !sourcePath.isEmpty();
+        if ((hasViewLayerPath && callbacks_.setCollectionViewLayerState) ||
+            callbacks_.setCollectionViewportEnabled ||
+            callbacks_.setCollectionRenderVisibility) {
+            menu.addSeparator();
+            QMenu *visibility = menu.addMenu(QStringLiteral("Visibility"));
+            if (hasViewLayerPath && callbacks_.setCollectionViewLayerState) {
+                QAction *isolate = visibility->addAction(
+                    QStringLiteral("Isolate"));
+                connect(isolate, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewLayerState(
+                        collectionId, viewLayerKey, sourcePath,
+                        QStringLiteral("hide_viewport"), true, false, true);
+                });
+                visibility->addSeparator();
+
+                QAction *show = visibility->addAction(
+                    QStringLiteral("Show"));
+                connect(show, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewLayerState(
+                        collectionId, viewLayerKey, sourcePath,
+                        QStringLiteral("hide_viewport"), false, false, false);
+                });
+                QAction *showInside = visibility->addAction(
+                    QStringLiteral("Show All Inside"));
+                connect(showInside, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewLayerState(
+                        collectionId, viewLayerKey, sourcePath,
+                        QStringLiteral("hide_viewport"), false, true, false);
+                });
+                QAction *hide = visibility->addAction(
+                    QStringLiteral("Hide"));
+                connect(hide, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewLayerState(
+                        collectionId, viewLayerKey, sourcePath,
+                        QStringLiteral("hide_viewport"), true, false, false);
+                });
+                QAction *hideInside = visibility->addAction(
+                    QStringLiteral("Hide All Inside"));
+                connect(hideInside, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewLayerState(
+                        collectionId, viewLayerKey, sourcePath,
+                        QStringLiteral("hide_viewport"), true, true, false);
+                });
+            }
+
+            if (callbacks_.setCollectionViewportEnabled) {
+                if (hasViewLayerPath && callbacks_.setCollectionViewLayerState) {
+                    visibility->addSeparator();
+                }
+                QAction *enableViewport = visibility->addAction(
+                    QStringLiteral("Enable in Viewports"));
+                connect(enableViewport, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewportEnabled(
+                        collectionId, viewLayerKey, sourcePath, true);
+                });
+                QAction *disableViewport = visibility->addAction(
+                    QStringLiteral("Disable in Viewports"));
+                connect(disableViewport, &QAction::triggered, this,
+                        [this, collectionId, viewLayerKey, sourcePath]() {
+                    callbacks_.setCollectionViewportEnabled(
+                        collectionId, viewLayerKey, sourcePath, false);
+                });
+            }
+
+            if (callbacks_.setCollectionRenderVisibility) {
+                visibility->addSeparator();
+                QAction *enableRender = visibility->addAction(
+                    QStringLiteral("Enable in Render"));
+                connect(enableRender, &QAction::triggered, this,
+                        [this, collectionId]() {
+                    callbacks_.setCollectionRenderVisibility(
+                        collectionId, false, false, false);
+                });
+                QAction *disableRender = visibility->addAction(
+                    QStringLiteral("Disable in Render"));
+                connect(disableRender, &QAction::triggered, this,
+                        [this, collectionId]() {
+                    callbacks_.setCollectionRenderVisibility(
+                        collectionId, true, false, false);
+                });
+            }
+        }
+        if (hasViewLayerPath && !scenesDisplayMode_ &&
+            callbacks_.setCollectionViewLayerState) {
+            QMenu *viewLayer = menu.addMenu(QStringLiteral("View Layer"));
+            const auto addViewLayerStateActions =
+                [this, viewLayer, collectionId, viewLayerKey, sourcePath](
+                    const QString &label, const QString &stateKey) {
+                    QAction *set = viewLayer->addAction(
+                        QStringLiteral("%1 Set").arg(label));
+                    connect(set, &QAction::triggered, this,
+                            [this, collectionId, viewLayerKey, sourcePath,
+                             stateKey]() {
+                        callbacks_.setCollectionViewLayerState(
+                            collectionId, viewLayerKey, sourcePath, stateKey,
+                            true, false, false);
+                    });
+                    QAction *clear = viewLayer->addAction(
+                        QStringLiteral("%1 Clear").arg(label));
+                    connect(clear, &QAction::triggered, this,
+                            [this, collectionId, viewLayerKey, sourcePath,
+                             stateKey]() {
+                        callbacks_.setCollectionViewLayerState(
+                            collectionId, viewLayerKey, sourcePath, stateKey,
+                            false, false, false);
+                    });
+                };
+            addViewLayerStateActions(QStringLiteral("Exclude"),
+                                     QStringLiteral("exclude"));
+            addViewLayerStateActions(QStringLiteral("Holdout"),
+                                     QStringLiteral("holdout"));
+            addViewLayerStateActions(QStringLiteral("Indirect Only"),
+                                     QStringLiteral("indirect_only"));
+        }
         if (callbacks_.renameCollection) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, collectionId]() {

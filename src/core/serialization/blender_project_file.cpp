@@ -2820,7 +2820,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
          bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38 &&
          bridgeVersion != 39 && bridgeVersion != 40 && bridgeVersion != 41 &&
-         bridgeVersion != 42)) {
+         bridgeVersion != 42 && bridgeVersion != 43)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3567,6 +3567,71 @@ bool importBlenderScene(const QString &path,
                 return false;
             }
         }
+        if (bridgeVersion >= 43) {
+            const auto validAnimationRecord = [](const QJsonValue &value) {
+                if (!value.isObject()) return false;
+                const QJsonObject animation = value.toObject();
+                const QJsonValue actionName = animation.value(
+                    QStringLiteral("action_name"));
+                const QJsonValue actionSlotName = animation.value(
+                    QStringLiteral("action_slot_name"));
+                const QJsonValue driverNames = animation.value(
+                    QStringLiteral("driver_target_names"));
+                const QJsonValue tracks = animation.value(
+                    QStringLiteral("nla_tracks"));
+                if (!animation.value(QStringLiteral("has_animation_data")).isBool() ||
+                    !actionName.isString() || actionName.toString().size() > 4096 ||
+                    !actionSlotName.isString() || actionSlotName.toString().size() > 4096 ||
+                    !animation.value(QStringLiteral("has_drivers")).isBool() ||
+                    !driverNames.isArray() || driverNames.toArray().size() > 1024 ||
+                    !tracks.isArray() || tracks.toArray().size() > 1024) {
+                    return false;
+                }
+                for (const QJsonValue &name : driverNames.toArray()) {
+                    if (!name.isString() || name.toString().size() > 4096)
+                        return false;
+                }
+                for (const QJsonValue &trackValue : tracks.toArray()) {
+                    if (!trackValue.isObject()) return false;
+                    const QJsonObject track = trackValue.toObject();
+                    const QJsonValue name = track.value(QStringLiteral("name"));
+                    const QJsonValue actions = track.value(
+                        QStringLiteral("action_names"));
+                    if (!name.isString() || name.toString().size() > 4096 ||
+                        !actions.isArray() || actions.toArray().size() > 1024) {
+                        return false;
+                    }
+                    for (const QJsonValue &action : actions.toArray()) {
+                        if (!action.isString() || action.toString().size() > 4096)
+                            return false;
+                    }
+                }
+                return true;
+            };
+            const auto validAnimationList = [&item, &validAnimationRecord](
+                const QString &animationKey, const QString &namesKey) {
+                const QJsonValue animationValues = item.value(animationKey);
+                const QJsonValue namesValue = item.value(namesKey);
+                if (!animationValues.isArray() ||
+                    animationValues.toArray().size() > 1024 ||
+                    !namesValue.isArray() ||
+                    animationValues.toArray().size() != namesValue.toArray().size()) {
+                    return false;
+                }
+                for (const QJsonValue &animation : animationValues.toArray()) {
+                    if (!validAnimationRecord(animation)) return false;
+                }
+                return true;
+            };
+            if (!validAnimationList(QStringLiteral("material_slot_animations"),
+                                   QStringLiteral("material_slot_names")) ||
+                !validAnimationList(QStringLiteral("data_material_animations"),
+                                   QStringLiteral("data_material_names"))) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender material animation list is invalid"));
+                return false;
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3706,6 +3771,47 @@ bool importBlenderScene(const QString &path,
                      QStringLiteral("material_slot_names")).toArray()) {
                 sceneObject.blenderSourceMaterialNames.append(
                     materialNameValue.toString());
+            }
+        }
+        if (bridgeVersion >= 43) {
+            const auto parseAnimationMetadata = [](const QJsonValue &value) {
+                const QJsonObject source = value.toObject();
+                BlenderSourceAnimationData animation;
+                animation.hasAnimationData = source.value(
+                    QStringLiteral("has_animation_data")).toBool();
+                animation.actionName = source.value(
+                    QStringLiteral("action_name")).toString();
+                animation.actionSlotName = source.value(
+                    QStringLiteral("action_slot_name")).toString();
+                animation.hasDrivers = source.value(
+                    QStringLiteral("has_drivers")).toBool();
+                for (const QJsonValue &nameValue : source.value(
+                         QStringLiteral("driver_target_names")).toArray()) {
+                    animation.driverTargetNames.append(nameValue.toString());
+                }
+                for (const QJsonValue &trackValue : source.value(
+                         QStringLiteral("nla_tracks")).toArray()) {
+                    const QJsonObject sourceTrack = trackValue.toObject();
+                    BlenderSourceNlaTrack track;
+                    track.name = sourceTrack.value(
+                        QStringLiteral("name")).toString();
+                    for (const QJsonValue &actionValue : sourceTrack.value(
+                             QStringLiteral("action_names")).toArray()) {
+                        track.actionNames.append(actionValue.toString());
+                    }
+                    animation.nlaTracks.append(std::move(track));
+                }
+                return animation;
+            };
+            for (const QJsonValue &animationValue : item.value(
+                     QStringLiteral("material_slot_animations")).toArray()) {
+                sceneObject.blenderSourceMaterialAnimations.append(
+                    parseAnimationMetadata(animationValue));
+            }
+            for (const QJsonValue &animationValue : item.value(
+                     QStringLiteral("data_material_animations")).toArray()) {
+                sceneObject.blenderSourceDataMaterialAnimations.append(
+                    parseAnimationMetadata(animationValue));
             }
         }
         if (bridgeVersion >= 37) {

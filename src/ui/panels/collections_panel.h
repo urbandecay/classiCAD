@@ -32,6 +32,20 @@ struct OutlinerNlaTrackEntry {
     QStringList actionNames;
 };
 
+struct OutlinerAnimationEntry {
+    bool hasAnimationData = false;
+    QString actionName;
+    QString actionSlotName;
+    bool hasDrivers = false;
+    QStringList driverTargetNames;
+    QVector<OutlinerNlaTrackEntry> nlaTracks;
+};
+
+struct OutlinerMaterialEntry {
+    QString name;
+    OutlinerAnimationEntry animation;
+};
+
 struct OutlinerModifierEntry {
     QString name;
     QString linkedName;
@@ -46,6 +60,7 @@ struct OutlinerObjectEntry {
     QString shapeKeyDataName;
     QStringList shapeKeyNames;
     QStringList dataMaterialNames;
+    QVector<OutlinerMaterialEntry> dataMaterialEntries;
     bool dataHasAnimationData = false;
     QString dataAnimationActionName;
     QString dataAnimationActionSlotName;
@@ -53,6 +68,7 @@ struct OutlinerObjectEntry {
     QStringList dataDriverTargetNames;
     QVector<OutlinerNlaTrackEntry> dataNlaTracks;
     QStringList materialNames;
+    QVector<OutlinerMaterialEntry> materialEntries;
     QStringList modifierNames;
     QVector<OutlinerModifierEntry> modifiers;
     QStringList constraintNames;

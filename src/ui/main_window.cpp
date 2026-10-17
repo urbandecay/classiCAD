@@ -2865,6 +2865,19 @@ private:
                     : object.blenderSourceObjectId;
                 objectIdsByIdentity.insert(identity, object.id);
             }
+            const auto toOutlinerAnimation = [](
+                const BlenderSourceAnimationData &source) {
+                OutlinerAnimationEntry animation;
+                animation.hasAnimationData = source.hasAnimationData;
+                animation.actionName = source.actionName;
+                animation.actionSlotName = source.actionSlotName;
+                animation.hasDrivers = source.hasDrivers;
+                animation.driverTargetNames = source.driverTargetNames;
+                for (const BlenderSourceNlaTrack &track : source.nlaTracks) {
+                    animation.nlaTracks.append({track.name, track.actionNames});
+                }
+                return animation;
+            };
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
                 QString name = object.displayName.trimmed();
@@ -2883,6 +2896,16 @@ private:
                 entry.shapeKeyNames = object.blenderSourceShapeKeyNames;
                 entry.dataMaterialNames =
                     object.blenderSourceDataMaterialNames;
+                for (qsizetype index = 0;
+                     index < entry.dataMaterialNames.size(); ++index) {
+                    OutlinerMaterialEntry material;
+                    material.name = entry.dataMaterialNames[index];
+                    if (index < object.blenderSourceDataMaterialAnimations.size()) {
+                        material.animation = toOutlinerAnimation(
+                            object.blenderSourceDataMaterialAnimations[index]);
+                    }
+                    entry.dataMaterialEntries.append(std::move(material));
+                }
                 entry.dataHasAnimationData =
                     object.blenderSourceDataAnimation.hasAnimationData;
                 entry.dataAnimationActionName =
@@ -2954,6 +2977,16 @@ private:
                             }
                         }
                     }
+                }
+                for (qsizetype index = 0;
+                     index < entry.materialNames.size(); ++index) {
+                    OutlinerMaterialEntry material;
+                    material.name = entry.materialNames[index];
+                    if (index < object.blenderSourceMaterialAnimations.size()) {
+                        material.animation = toOutlinerAnimation(
+                            object.blenderSourceMaterialAnimations[index]);
+                    }
+                    entry.materialEntries.append(std::move(material));
                 }
                 entry.collectionIds = object.collectionIds;
                 entry.hideViewport = object.hideViewport;

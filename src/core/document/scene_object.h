@@ -159,9 +159,11 @@ struct SceneObject {
     QString blenderSourceShapeKeyDataName;
     QStringList blenderSourceShapeKeyNames;
     QStringList blenderSourceDataMaterialNames;
+    QVector<BlenderSourceAnimationData> blenderSourceDataMaterialAnimations;
     BlenderSourceAnimationData blenderSourceDataAnimation;
     // Assigned Blender materials shown beneath any supported Outliner object.
     QStringList blenderSourceMaterialNames;
+    QVector<BlenderSourceAnimationData> blenderSourceMaterialAnimations;
     // Blender Outliner object subtrees retained from the source file.
     QStringList blenderSourceModifierNames;
     QVector<BlenderSourceModifier> blenderSourceModifiers;

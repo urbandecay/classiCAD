@@ -1623,6 +1623,66 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             content->setFlags(Qt::ItemIsEnabled);
             return content;
         };
+        const auto appendMaterialRow = [&appendContentRow](
+            QTreeWidgetItem *parent, const OutlinerMaterialEntry &material,
+            const QString &path, const QString &description) {
+            QTreeWidgetItem *materialRow = appendContentRow(
+                parent, material.name, path, description);
+            const OutlinerAnimationEntry &source = material.animation;
+            if (!source.hasAnimationData) return;
+            QTreeWidgetItem *animation = appendContentRow(
+                materialRow, QStringLiteral("Animation"),
+                path + QStringLiteral("/animation"),
+                QStringLiteral("Blender material animation data"));
+            QTreeWidgetItem *action = appendContentRow(
+                animation, source.actionName,
+                path + QStringLiteral("/animation/action"),
+                QStringLiteral("Blender active action data block"));
+            appendContentRow(
+                action, source.actionSlotName,
+                path + QStringLiteral("/animation/action/slot"),
+                QStringLiteral("Blender assigned action slot"));
+            if (source.hasDrivers) {
+                QTreeWidgetItem *drivers = appendContentRow(
+                    animation, QStringLiteral("Drivers"),
+                    path + QStringLiteral("/animation/drivers"),
+                    QStringLiteral("Blender material animation drivers"));
+                for (qsizetype index = 0;
+                     index < source.driverTargetNames.size(); ++index) {
+                    appendContentRow(
+                        drivers, source.driverTargetNames[index],
+                        path + QStringLiteral("/animation/driver-target-%1")
+                                   .arg(index),
+                        QStringLiteral("Blender driver target data block"));
+                }
+            }
+            if (!source.nlaTracks.isEmpty()) {
+                QTreeWidgetItem *tracks = appendContentRow(
+                    animation, QStringLiteral("NLA Tracks"),
+                    path + QStringLiteral("/animation/nla-tracks"),
+                    QStringLiteral("Blender material NLA tracks"));
+                for (qsizetype trackIndex = 0;
+                     trackIndex < source.nlaTracks.size(); ++trackIndex) {
+                    const OutlinerNlaTrackEntry &sourceTrack =
+                        source.nlaTracks[trackIndex];
+                    QTreeWidgetItem *track = appendContentRow(
+                        tracks, sourceTrack.name,
+                        path + QStringLiteral("/animation/nla-track-%1")
+                                   .arg(trackIndex),
+                        QStringLiteral("Blender NLA track"));
+                    for (qsizetype actionIndex = 0;
+                         actionIndex < sourceTrack.actionNames.size();
+                         ++actionIndex) {
+                        appendContentRow(
+                            track, sourceTrack.actionNames[actionIndex],
+                            path + QStringLiteral(
+                                       "/animation/nla-track-%1/action-%2")
+                                       .arg(trackIndex).arg(actionIndex),
+                            QStringLiteral("Blender NLA action data block"));
+                    }
+                }
+            }
+        };
         if (entry.hasAnimationData) {
             QTreeWidgetItem *animation = appendContentRow(
                 item, QStringLiteral("Animation"), QStringLiteral("/animation"),
@@ -1746,18 +1806,30 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             }
             for (qsizetype index = 0;
                  index < entry.dataMaterialNames.size(); ++index) {
-                appendContentRow(
-                    dataBlock, entry.dataMaterialNames[index],
-                    QStringLiteral("/data/material-%1").arg(index),
-                    QStringLiteral("Blender data-block material"));
+                const QString path =
+                    QStringLiteral("/data/material-%1").arg(index);
+                if (index < entry.dataMaterialEntries.size()) {
+                    appendMaterialRow(
+                        dataBlock, entry.dataMaterialEntries[index], path,
+                        QStringLiteral("Blender data-block material"));
+                } else {
+                    appendContentRow(
+                        dataBlock, entry.dataMaterialNames[index], path,
+                        QStringLiteral("Blender data-block material"));
+                }
             }
         }
         for (qsizetype index = 0; index < entry.materialNames.size(); ++index) {
-            appendContentRow(
-                item,
-                entry.materialNames[index],
-                QStringLiteral("/material-%1").arg(index),
-                QStringLiteral("Blender material data block"));
+            const QString path = QStringLiteral("/material-%1").arg(index);
+            if (index < entry.materialEntries.size()) {
+                appendMaterialRow(
+                    item, entry.materialEntries[index], path,
+                    QStringLiteral("Blender material data block"));
+            } else {
+                appendContentRow(
+                    item, entry.materialNames[index], path,
+                    QStringLiteral("Blender material data block"));
+            }
         }
         const auto appendNameGroup = [&appendContentRow](
             QTreeWidgetItem *objectItem, const QString &groupName,

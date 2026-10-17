@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 42
+BRIDGE_FORMAT_VERSION = 43
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -717,6 +717,11 @@ def object_metadata(obj, scene, depsgraph=None):
             getattr(getattr(obj, "data", None), "materials", ())
             if material is not None
         ][:1024],
+        "data_material_animations": [
+            data_block_animation_metadata(material) for material in
+            getattr(getattr(obj, "data", None), "materials", ())
+            if material is not None
+        ][:1024],
         "shape_key_data_name": (
             obj.data.shape_keys.name
             if obj.type == "MESH" and obj.data is not None and
@@ -727,9 +732,13 @@ def object_metadata(obj, scene, depsgraph=None):
         ][:1024] if obj.type == "MESH" and obj.data is not None and
             obj.data.shape_keys is not None else [],
         "material_slot_names": [
-            slot.material.name_full for slot in obj.material_slots
+            slot.material.name for slot in obj.material_slots
             if slot.material is not None
-        ],
+        ][:1024],
+        "material_slot_animations": [
+            data_block_animation_metadata(slot.material)
+            for slot in obj.material_slots if slot.material is not None
+        ][:1024],
         "modifier_names": [modifier.name for modifier in obj.modifiers][:1024],
         "modifier_entries": modifier_entries,
         "constraint_names": [

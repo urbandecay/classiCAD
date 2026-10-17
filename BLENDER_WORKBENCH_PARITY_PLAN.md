@@ -10954,6 +10954,20 @@ scene depth.
   no slot row. NLA strip actions remain simple action rows, matching their
   separate Blender tree-element type. No matched UI comparison was run;
   `cmake --build build -j4` passed.
+- The twenty-seventh tree update follows Blender's generic data-block expansion
+  in [`tree_element_id.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id.cc#L117-L130)
+  and object/data material row creation in
+  [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L58-L67),
+  [`tree_element_id_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_mesh.cc#L37-L46),
+  and [`tree_element_id_curve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_curve.cc#L21-L36).
+  Object-assigned and data-block-owned material rows now expand their own
+  Animation data, including action, assigned slot, driver targets, NLA tracks,
+  and strip actions when present. Material labels use Blender's ID display
+  name without the linked-library suffix. Blender bridge version 43 and native
+  document version 36 retain animation metadata aligned with each material
+  row; older files continue to load without it. Material rows remain
+  display-only. No matched Outliner UI comparison was run;
+  `cmake --build build -j4` passed.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

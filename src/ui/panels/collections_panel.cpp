@@ -2494,6 +2494,39 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             }
             selectedCollectionIds.append(target.collectionId);
         }
+        QVector<CollectionId> linkedCollectionIds;
+        bool canMarkCollectionAsset = false;
+        bool canClearCollectionAsset = false;
+        QVector<QTreeWidgetItem *> collectionTargetRows;
+        if (item->isSelected()) {
+            for (QTreeWidgetItem *selected : tree_->selectedItems()) {
+                if (selected->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::Collection)) {
+                    collectionTargetRows.append(selected);
+                }
+            }
+        } else {
+            collectionTargetRows.append(item);
+        }
+        for (QTreeWidgetItem *candidate : collectionTargetRows) {
+            const CollectionId candidateId = CollectionId::fromValue(
+                candidate->data(nameColumn, itemIdRole).toULongLong());
+            if (!selectedCollectionIds.contains(candidateId)) continue;
+            const bool linked = candidate->data(
+                nameColumn, itemLinkedLibraryRole).toBool();
+            if (linked && !linkedCollectionIds.contains(candidateId)) {
+                linkedCollectionIds.append(candidateId);
+            }
+            if (linked || candidate->data(
+                    nameColumn, itemSceneMasterRole).toBool()) {
+                continue;
+            }
+            if (candidate->data(nameColumn, itemAssetMarkedRole).toBool()) {
+                canClearCollectionAsset = true;
+            } else {
+                canMarkCollectionAsset = true;
+            }
+        }
         QVector<CollectionId> topLevelCollectionIds;
         QHash<quint64, CollectionId> topLevelCollectionParentIds;
         for (const OutlinerCollectionContext &target : collectionTargets) {
@@ -2760,26 +2793,24 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 });
             }
         }
-        if (callbacks_.setCollectionAssetMarked &&
-            collectionId.isValid()) {
+        if (callbacks_.setCollectionsAssetMarked &&
+            !selectedCollectionIds.isEmpty()) {
             QMenu *assetMenu = menu.addMenu(QStringLiteral("Asset"));
-            const bool assetMarked = item->data(
-                nameColumn, itemAssetMarkedRole).toBool();
-            const bool linked = item->data(
-                nameColumn, itemLinkedLibraryRole).toBool();
             QAction *mark = assetMenu->addAction(
                 QStringLiteral("Mark as Asset"));
-            mark->setEnabled(!assetMarked && !linked);
+            mark->setEnabled(canMarkCollectionAsset);
             connect(mark, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.setCollectionAssetMarked(collectionId, true);
+                    [this, selectedCollectionIds]() {
+                callbacks_.setCollectionsAssetMarked(
+                    selectedCollectionIds, true);
             });
             QAction *clear = assetMenu->addAction(
                 QStringLiteral("Clear Asset"));
-            clear->setEnabled(assetMarked && !linked);
+            clear->setEnabled(canClearCollectionAsset);
             connect(clear, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.setCollectionAssetMarked(collectionId, false);
+                    [this, selectedCollectionIds]() {
+                callbacks_.setCollectionsAssetMarked(
+                    selectedCollectionIds, false);
             });
         }
         if (callbacks_.renameCollection) {
@@ -2798,12 +2829,12 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
-        if (callbacks_.makeCollectionLocal &&
-            item->data(nameColumn, itemLinkedLibraryRole).toBool()) {
+        if (callbacks_.makeCollectionsLocal &&
+            !linkedCollectionIds.isEmpty()) {
             QAction *makeLocal = menu.addAction(QStringLiteral("Make Local"));
             connect(makeLocal, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.makeCollectionLocal(collectionId);
+                    [this, linkedCollectionIds]() {
+                callbacks_.makeCollectionsLocal(linkedCollectionIds);
             });
         }
         if (callbacks_.setCollectionsObjectSelection &&
@@ -2856,6 +2887,36 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
     } else if (kind == OutlinerRowKind::Object) {
         const ObjectId objectId = ObjectId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
+        QVector<ObjectId> objectTargetIds;
+        QVector<ObjectId> linkedObjectIds;
+        bool canMarkObjectAsset = false;
+        bool canClearObjectAsset = false;
+        QVector<QTreeWidgetItem *> objectTargetRows;
+        if (item->isSelected()) {
+            for (QTreeWidgetItem *selected : tree_->selectedItems()) {
+                if (selected->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::Object)) {
+                    objectTargetRows.append(selected);
+                }
+            }
+        } else {
+            objectTargetRows.append(item);
+        }
+        for (QTreeWidgetItem *candidate : objectTargetRows) {
+            const ObjectId candidateId = ObjectId::fromValue(
+                candidate->data(nameColumn, itemIdRole).toULongLong());
+            if (!candidateId.isValid() || objectTargetIds.contains(candidateId)) {
+                continue;
+            }
+            objectTargetIds.append(candidateId);
+            const bool linked = candidate->data(
+                nameColumn, itemLinkedLibraryRole).toBool();
+            if (linked) linkedObjectIds.append(candidateId);
+            const bool assetMarked = candidate->data(
+                nameColumn, itemAssetMarkedRole).toBool();
+            if (!linked && assetMarked) canClearObjectAsset = true;
+            if (!linked && !assetMarked) canMarkObjectAsset = true;
+        }
         if (callbacks_.copyOutlinerObject && objectId.isValid()) {
             QAction *copy = menu.addAction(QStringLiteral("Copy"));
             connect(copy, &QAction::triggered, this,
@@ -2930,33 +2991,29 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
-        if (callbacks_.makeObjectLocal &&
-            item->data(nameColumn, itemLinkedLibraryRole).toBool()) {
+        if (callbacks_.makeObjectsLocal && !linkedObjectIds.isEmpty()) {
             QAction *makeLocal = menu.addAction(QStringLiteral("Make Local"));
             connect(makeLocal, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.makeObjectLocal(objectId);
+                    [this, linkedObjectIds]() {
+                callbacks_.makeObjectsLocal(linkedObjectIds);
             });
         }
-        if (callbacks_.setObjectAssetMarked && objectId.isValid()) {
+        if (callbacks_.setObjectsAssetMarked &&
+            !objectTargetIds.isEmpty()) {
             QMenu *assetMenu = menu.addMenu(QStringLiteral("Asset"));
-            const bool assetMarked = item->data(
-                nameColumn, itemAssetMarkedRole).toBool();
-            const bool linked = item->data(
-                nameColumn, itemLinkedLibraryRole).toBool();
             QAction *mark = assetMenu->addAction(
                 QStringLiteral("Mark as Asset"));
-            mark->setEnabled(!assetMarked && !linked);
+            mark->setEnabled(canMarkObjectAsset);
             connect(mark, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.setObjectAssetMarked(objectId, true);
+                    [this, objectTargetIds]() {
+                callbacks_.setObjectsAssetMarked(objectTargetIds, true);
             });
             QAction *clear = assetMenu->addAction(
                 QStringLiteral("Clear Asset"));
-            clear->setEnabled(assetMarked && !linked);
+            clear->setEnabled(canClearObjectAsset);
             connect(clear, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.setObjectAssetMarked(objectId, false);
+                    [this, objectTargetIds]() {
+                callbacks_.setObjectsAssetMarked(objectTargetIds, false);
             });
         }
         const CollectionId linkedCollectionId = CollectionId::fromValue(
@@ -2977,20 +3034,45 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 createCollection(CollectionId::invalid());
             });
         }
-        if (objectId.isValid() && callbacks_.hasLinkedObjectData &&
-            callbacks_.hasLinkedObjectData(objectId) &&
+        const bool hasLinkedObjectDataTarget =
+            callbacks_.hasLinkedObjectData &&
+            std::any_of(objectTargetIds.cbegin(), objectTargetIds.cend(),
+                        [this](ObjectId id) {
+                return callbacks_.hasLinkedObjectData(id);
+            });
+        if (!objectTargetIds.isEmpty() && hasLinkedObjectDataTarget &&
             callbacks_.selectLinkedObjectData) {
             QMenu *idDataMenu = menu.addMenu(QStringLiteral("ID Data"));
             QAction *selectLinked = idDataMenu->addAction(
                 QStringLiteral("Select Linked"));
             connect(selectLinked, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.selectLinkedObjectData(objectId);
+                    [this, objectTargetIds]() {
+                callbacks_.selectLinkedObjectData(objectTargetIds);
             });
         }
     } else if (kind == OutlinerRowKind::Material) {
         const QString materialId = item->data(
             nameColumn, itemIdRole).toString();
+        QStringList materialTargetIds;
+        QVector<QTreeWidgetItem *> materialTargetRows;
+        if (item->isSelected()) {
+            for (QTreeWidgetItem *selected : tree_->selectedItems()) {
+                if (selected->data(nameColumn, itemKindRole).toInt() ==
+                    static_cast<int>(OutlinerRowKind::Material)) {
+                    materialTargetRows.append(selected);
+                }
+            }
+        } else {
+            materialTargetRows.append(item);
+        }
+        for (QTreeWidgetItem *candidate : materialTargetRows) {
+            const QString candidateId = candidate->data(
+                nameColumn, itemIdRole).toString();
+            if (!candidateId.isEmpty() &&
+                !materialTargetIds.contains(candidateId)) {
+                materialTargetIds.append(candidateId);
+            }
+        }
         if (!materialId.isEmpty() && callbacks_.hasLinkedMaterial &&
             callbacks_.hasLinkedMaterial(materialId) &&
             callbacks_.selectLinkedMaterial) {
@@ -3008,8 +3090,9 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             }
             connect(selectLinked, &QAction::triggered, this,
-                    [this, materialId, clickedObjectId]() {
-                callbacks_.selectLinkedMaterial(materialId, clickedObjectId);
+                    [this, materialTargetIds, clickedObjectId]() {
+                callbacks_.selectLinkedMaterial(
+                    materialTargetIds, clickedObjectId);
             });
         }
     }

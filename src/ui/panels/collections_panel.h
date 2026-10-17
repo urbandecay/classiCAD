@@ -267,9 +267,9 @@ struct CollectionsPanelCallbacks {
     std::function<bool(ObjectId, const QString &)> objectSelectableInViewLayer;
     std::function<void(const QVector<ObjectId> &, ObjectId)> setObjectSelection;
     std::function<bool(ObjectId)> hasLinkedObjectData;
-    std::function<void(ObjectId)> selectLinkedObjectData;
+    std::function<void(const QVector<ObjectId> &)> selectLinkedObjectData;
     std::function<bool(const QString &)> hasLinkedMaterial;
-    std::function<void(const QString &, ObjectId)> selectLinkedMaterial;
+    std::function<void(const QStringList &, ObjectId)> selectLinkedMaterial;
     std::function<void(ObjectId)> selectObjectHierarchy;
     std::function<void()> deselectSelectedObjects;
     std::function<bool()> hasOutlinerObjectClipboard;
@@ -281,8 +281,9 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId, bool)> deleteObjectSelection;
     std::function<void(const QVector<CollectionId> &, const QString &)>
         setCollectionColorTag;
-    std::function<void(CollectionId, bool)> setCollectionAssetMarked;
-    std::function<void(CollectionId)> makeCollectionLocal;
+    std::function<void(const QVector<CollectionId> &, bool)>
+        setCollectionsAssetMarked;
+    std::function<void(const QVector<CollectionId> &)> makeCollectionsLocal;
     std::function<void(const QVector<CollectionId> &, bool)>
         setCollectionsObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
@@ -300,8 +301,8 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<CollectionId> &)> removeCollection;
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;
     std::function<void(ObjectId, const QString &)> renameObject;
-    std::function<void(ObjectId, bool)> setObjectAssetMarked;
-    std::function<void(ObjectId)> makeObjectLocal;
+    std::function<void(const QVector<ObjectId> &, bool)> setObjectsAssetMarked;
+    std::function<void(const QVector<ObjectId> &)> makeObjectsLocal;
     std::function<void(ObjectId, CollectionId)> unlinkObject;
     std::function<void(const QVector<CollectionId> &)>
         removeCollectionHierarchy;

@@ -5087,19 +5087,28 @@ private:
                 session_.selection().setObjectIds(selectableIds, active);
                 session_.selection().setActiveObjectId(active);
             };
-        const auto linkedObjectDataUsers = [this](ObjectId sourceId) {
+        const auto linkedObjectDataUsers =
+            [this](const QVector<ObjectId> &sourceIds) {
             QVector<ObjectId> users;
             const Document &document = session_.document();
-            const SceneObject *source = document.object(sourceId);
-            if (source == nullptr || source->blenderSourceDataName.isEmpty() ||
-                source->blenderSourceObjectType.isEmpty()) {
-                return users;
+            QSet<QString> sourceDataKeys;
+            for (const ObjectId sourceId : sourceIds) {
+                const SceneObject *source = document.object(sourceId);
+                if (source == nullptr ||
+                    source->blenderSourceDataName.isEmpty() ||
+                    source->blenderSourceObjectType.isEmpty()) {
+                    continue;
+                }
+                sourceDataKeys.insert(
+                    source->blenderSourceObjectType + QChar(0x1f) +
+                    source->blenderSourceDataName);
             }
+            if (sourceDataKeys.isEmpty()) return users;
             for (const SceneObject &candidate : document.objects()) {
-                if (candidate.blenderSourceDataName !=
-                        source->blenderSourceDataName ||
-                    candidate.blenderSourceObjectType !=
-                        source->blenderSourceObjectType ||
+                const QString candidateKey =
+                    candidate.blenderSourceObjectType + QChar(0x1f) +
+                    candidate.blenderSourceDataName;
+                if (!sourceDataKeys.contains(candidateKey) ||
                     !document.isObjectEditable(candidate.id)) {
                     continue;
                 }
@@ -5109,11 +5118,13 @@ private:
         };
         collectionCallbacks.hasLinkedObjectData =
             [linkedObjectDataUsers](ObjectId id) {
-                return !linkedObjectDataUsers(id).isEmpty();
+                return !linkedObjectDataUsers({id}).isEmpty();
             };
         collectionCallbacks.selectLinkedObjectData =
-            [this, linkedObjectDataUsers](ObjectId id) {
-                const QVector<ObjectId> users = linkedObjectDataUsers(id);
+            [this, linkedObjectDataUsers](
+                const QVector<ObjectId> &sourceIds) {
+                const QVector<ObjectId> users =
+                    linkedObjectDataUsers(sourceIds);
                 if (users.isEmpty()) return;
                 QVector<ObjectId> selectedIds = session_.selection().objectIds();
                 for (const ObjectId user : users) {
@@ -5121,24 +5132,41 @@ private:
                 }
                 ObjectId active = session_.selection().activeObjectId();
                 if (!selectedIds.contains(active)) {
-                    active = users.contains(id) ? id : users.front();
+                    active = sourceIds.isEmpty() ||
+                                     !users.contains(sourceIds.front())
+                        ? users.front() : sourceIds.front();
                 }
                 session_.selection().setObjectIds(selectedIds, active);
                 session_.selection().setActiveObjectId(active);
             };
-        const auto linkedMaterialUsers = [this](const QString &materialId) {
+        const auto linkedMaterialUsers =
+            [this](const QStringList &materialIds) {
             QVector<ObjectId> users;
-            if (materialId.isEmpty()) return users;
+            QSet<QString> materialIdSet;
+            for (const QString &materialId : materialIds) {
+                if (!materialId.isEmpty()) materialIdSet.insert(materialId);
+            }
+            if (materialIdSet.isEmpty()) return users;
             const Document &document = session_.document();
             for (const SceneObject &candidate : document.objects()) {
-                bool usesMaterial =
-                    candidate.geometry.geometryType ==
-                        GeometryType::PolygonMesh &&
-                    candidate.geometry.polygonMesh.materialSlotIds.contains(
-                        materialId);
-                if (!usesMaterial && candidate.nurbsSolidFaceMaterialIds
-                        .values().contains(materialId)) {
-                    usesMaterial = true;
+                bool usesMaterial = false;
+                if (candidate.geometry.geometryType ==
+                    GeometryType::PolygonMesh) {
+                    usesMaterial = std::any_of(
+                        candidate.geometry.polygonMesh.materialSlotIds.cbegin(),
+                        candidate.geometry.polygonMesh.materialSlotIds.cend(),
+                        [&materialIdSet](const QString &materialId) {
+                            return materialIdSet.contains(materialId);
+                        });
+                }
+                if (!usesMaterial) {
+                    const QList<QString> solidMaterialIds =
+                        candidate.nurbsSolidFaceMaterialIds.values();
+                    usesMaterial = std::any_of(
+                        solidMaterialIds.cbegin(), solidMaterialIds.cend(),
+                        [&materialIdSet](const QString &materialId) {
+                            return materialIdSet.contains(materialId);
+                        });
                 }
                 if (usesMaterial && document.isObjectEditable(candidate.id)) {
                     users.append(candidate.id);
@@ -5148,12 +5176,13 @@ private:
         };
         collectionCallbacks.hasLinkedMaterial =
             [linkedMaterialUsers](const QString &materialId) {
-                return !linkedMaterialUsers(materialId).isEmpty();
+                return !linkedMaterialUsers({materialId}).isEmpty();
             };
         collectionCallbacks.selectLinkedMaterial =
-            [this, linkedMaterialUsers](const QString &materialId,
+            [this, linkedMaterialUsers](const QStringList &materialIds,
                                         ObjectId clickedObjectId) {
-                const QVector<ObjectId> users = linkedMaterialUsers(materialId);
+                const QVector<ObjectId> users =
+                    linkedMaterialUsers(materialIds);
                 if (users.isEmpty()) return;
                 QVector<ObjectId> selectedIds = session_.selection().objectIds();
                 for (const ObjectId user : users) {
@@ -6697,35 +6726,52 @@ private:
                         4000);
                 }
             };
-        collectionCallbacks.setCollectionAssetMarked =
-            [this](CollectionId id, bool assetMarked) {
-                const DocumentCollection *collection =
-                    session_.document().collection(id);
-                if (collection == nullptr ||
-                    !collection->libraryPath.isEmpty() ||
-                    collection->assetMarked == assetMarked) {
-                    return;
-                }
+        collectionCallbacks.setCollectionsAssetMarked =
+            [this](const QVector<CollectionId> &ids, bool assetMarked) {
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setCollectionAssetMarked(id, assetMarked) ||
-                    !session_.commitTransaction(transaction)) {
+                QSet<quint64> seenIds;
+                bool changed = false;
+                for (const CollectionId id : ids) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection == nullptr ||
+                        seenIds.contains(id.value())) {
+                        continue;
+                    }
+                    seenIds.insert(id.value());
+                    if (collection->isSceneMaster ||
+                        !collection->libraryPath.isEmpty() ||
+                        collection->assetMarked == assetMarked) {
+                        continue;
+                    }
+                    changed = transaction.setCollectionAssetMarked(
+                                  id, assetMarked) || changed;
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not change collection asset mark"),
+                        QStringLiteral("Could not change collection asset marks"),
                         4000);
                 }
             };
-        collectionCallbacks.makeCollectionLocal =
-            [this](CollectionId id) {
-                const DocumentCollection *collection =
-                    session_.document().collection(id);
-                if (collection == nullptr || collection->libraryPath.isEmpty()) {
-                    return;
-                }
+        collectionCallbacks.makeCollectionsLocal =
+            [this](const QVector<CollectionId> &ids) {
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.makeCollectionLocal(id) ||
-                    !session_.commitTransaction(transaction)) {
+                QSet<quint64> seenIds;
+                bool changed = false;
+                for (const CollectionId id : ids) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection == nullptr ||
+                        seenIds.contains(id.value())) {
+                        continue;
+                    }
+                    seenIds.insert(id.value());
+                    if (collection->libraryPath.isEmpty()) continue;
+                    changed = transaction.makeCollectionLocal(id) || changed;
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not make collection local"),
+                        QStringLiteral("Could not make collections local"),
                         4000);
                 }
             };
@@ -7198,30 +7244,48 @@ private:
                         QStringLiteral("Could not rename object"), 4000);
                 }
             };
-        collectionCallbacks.setObjectAssetMarked =
-            [this](ObjectId id, bool assetMarked) {
-                const SceneObject *object = session_.document().object(id);
-                if (object == nullptr || !object->libraryPath.isEmpty() ||
-                    object->assetMarked == assetMarked) {
-                    return;
-                }
+        collectionCallbacks.setObjectsAssetMarked =
+            [this](const QVector<ObjectId> &ids, bool assetMarked) {
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setObjectAssetMarked(id, assetMarked) ||
-                    !session_.commitTransaction(transaction)) {
+                QSet<quint64> seenIds;
+                bool changed = false;
+                for (const ObjectId id : ids) {
+                    const SceneObject *object = session_.document().object(id);
+                    if (object == nullptr || seenIds.contains(id.value())) {
+                        continue;
+                    }
+                    seenIds.insert(id.value());
+                    if (object->blenderLooseMeshEdgeCompanion ||
+                        !object->libraryPath.isEmpty() ||
+                        object->assetMarked == assetMarked) {
+                        continue;
+                    }
+                    changed = transaction.setObjectAssetMarked(
+                                  id, assetMarked) || changed;
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not change object asset mark"),
+                        QStringLiteral("Could not change object asset marks"),
                         4000);
                 }
             };
-        collectionCallbacks.makeObjectLocal =
-            [this](ObjectId id) {
-                const SceneObject *object = session_.document().object(id);
-                if (object == nullptr || object->libraryPath.isEmpty()) return;
+        collectionCallbacks.makeObjectsLocal =
+            [this](const QVector<ObjectId> &ids) {
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.makeObjectLocal(id) ||
-                    !session_.commitTransaction(transaction)) {
+                QSet<quint64> seenIds;
+                bool changed = false;
+                for (const ObjectId id : ids) {
+                    const SceneObject *object = session_.document().object(id);
+                    if (object == nullptr || seenIds.contains(id.value())) {
+                        continue;
+                    }
+                    seenIds.insert(id.value());
+                    if (object->libraryPath.isEmpty()) continue;
+                    changed = transaction.makeObjectLocal(id) || changed;
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not make object local"), 4000);
+                        QStringLiteral("Could not make objects local"), 4000);
                 }
             };
         collectionCallbacks.unlinkObject =

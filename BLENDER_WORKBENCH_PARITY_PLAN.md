@@ -11418,7 +11418,8 @@ scene depth.
   Blender object-data type and full data-block name match the clicked object.
   Selection adds the linked objects to the current selection and preserves its
   active object, matching Blender's operation over previously unselected
-  visible bases.
+  visible bases. When multiple object rows are selected, the command combines
+  users of each selected object's data identity.
   The extractor supplies `data_name` from Blender's `ID.name_full`, which
   distinguishes same-named IDs from linked libraries. This reproduces linked
   selection from the imported identity snapshot; classiCAD still has per-object
@@ -11432,8 +11433,21 @@ scene depth.
   Imported Outliner material rows with a retained material ID now offer ID Data
   > Select Linked. The action adds currently selectable objects whose polygon
   mesh slot or NURBS-solid face assignment references that same material ID,
-  while preserving existing selection and active-object state. It uses
+  while preserving existing selection and active-object state. When multiple
+  material rows are selected, users of all selected materials are combined. It uses
   classiCAD's shared document-material IDs; display-only material names without
   an ID do not expose the action. `cmake --build build -j4` and
   `git diff --check` passed; no matched Blender Outliner interaction
+  comparison was run.
+- The hundred-eighth tree update follows Blender 5.2.2's selected-ID dispatch
+  in [`outliner_id_operation_exec()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L3130-L3308)
+  and the common [Asset menu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L365-L378).
+  Make Local, Mark as Asset, and Clear Asset now apply to the selected object
+  or collection rows in one undoable transaction, skipping linked IDs and
+  master collections where Blender disallows the edit. Select Linked combines
+  the users of all selected object-data or material IDs, adds them to the
+  existing viewport selection, and keeps the active object. Right-clicking an
+  unselected row operates on that row alone. These operations use imported
+  identity snapshots and do not edit the source `.blend`. `cmake --build build
+  -j4` and `git diff --check` passed; no matched Blender Outliner interaction
   comparison was run.

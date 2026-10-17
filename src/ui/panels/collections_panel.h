@@ -178,6 +178,11 @@ private:
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;
+    bool showEnableColumn_ = true;
+    bool showSelectColumn_ = false;
+    bool showHideColumn_ = true;
+    bool showViewportColumn_ = false;
+    bool showRenderColumn_ = true;
     bool showHoldoutColumn_ = false;
     bool showIndirectOnlyColumn_ = false;
     bool refreshing_ = false;

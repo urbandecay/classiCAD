@@ -10841,10 +10841,20 @@ scene depth.
   child rows do not have Blender's separate data-block selection or context
   actions. The preference is installation-local. `cmake --build build -j4`
   passed; no GUI interaction comparison was run.
+- The seventeenth tree update ports Blender 5.2.2's seven View Layer
+  restriction-column visibility controls from
+  [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L390-L399).
+  The header menu can show or hide Enable/Exclude, Select, Hide in View Layer,
+  Viewport, Render, Holdout, and Indirect Only. Its fresh-install defaults
+  match Blender's `SO_RESTRICT_ENABLE | SO_RESTRICT_HIDE | SO_RESTRICT_RENDER`
+  initialization in
+  [`space_outliner.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/space_outliner.cc#L372-L385).
+  View-layer-specific columns are disabled when the active scene has no
+  imported view layer. These preferences use QSettings; no matched Blender UI
+  comparison was run. `cmake --build build -j4` passed.
 - Remaining Outliner scope includes Blender's additional display modes and
-  data-block subtrees beyond the supported Object Contents rows, other
-  unported view-layer restriction toggles, and a matched Blender/classiCAD
-  interaction comparison. Do not
+  data-block subtrees beyond the supported Object Contents rows, and a matched
+  Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

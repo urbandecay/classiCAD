@@ -419,6 +419,16 @@ void CollectionsPanel::createLayout()
     tree_->setItemDelegateForColumn(excludeColumn,
                                     new ViewLayerCheckDelegate(tree_));
     QSettings outlinerSettings;
+    showEnableColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showEnableColumn"), true).toBool();
+    showSelectColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showSelectColumn"), false).toBool();
+    showHideColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showHideColumn"), true).toBool();
+    showViewportColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showViewportColumn"), false).toBool();
+    showRenderColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showRenderColumn"), true).toBool();
     showHoldoutColumn_ = outlinerSettings.value(
         QStringLiteral("outliner/showHoldoutColumn"), false).toBool();
     showIndirectOnlyColumn_ = outlinerSettings.value(
@@ -607,31 +617,62 @@ void CollectionsPanel::createLayout()
     connect(tree_->header(), &QHeaderView::customContextMenuRequested,
             this, [this](const QPoint &position) {
         QMenu menu(this);
-        QAction *holdout = menu.addAction(QStringLiteral("Show Holdout Column"));
-        holdout->setCheckable(true);
-        holdout->setChecked(showHoldoutColumn_);
-        QAction *indirect = menu.addAction(
-            QStringLiteral("Show Indirect Only Column (Cycles)"));
-        indirect->setCheckable(true);
-        indirect->setChecked(showIndirectOnlyColumn_);
-        connect(holdout, &QAction::toggled, this, [this](bool visible) {
-            showHoldoutColumn_ = visible;
-            QSettings settings;
-            settings.setValue(QStringLiteral("outliner/showHoldoutColumn"),
-                              visible);
-            tree_->setColumnHidden(
-                holdoutColumn,
-                !visible || tree_->isColumnHidden(viewLayerViewportColumn));
-        });
-        connect(indirect, &QAction::toggled, this, [this](bool visible) {
-            showIndirectOnlyColumn_ = visible;
-            QSettings settings;
-            settings.setValue(
-                QStringLiteral("outliner/showIndirectOnlyColumn"), visible);
-            tree_->setColumnHidden(
-                indirectOnlyColumn,
-                !visible || tree_->isColumnHidden(viewLayerViewportColumn));
-        });
+        menu.addSection(QStringLiteral("Restriction Toggles"));
+        const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+            ? callbacks_.activeViewLayerKey() : QString{};
+        const auto addColumnToggle =
+            [this, &menu, &activeViewLayerKey](
+                const QString &label, bool checked, int column,
+                const QString &settingsKey, bool viewLayerSpecific) {
+            QAction *action = menu.addAction(label);
+            action->setCheckable(true);
+            action->setChecked(checked);
+            if (viewLayerSpecific && activeViewLayerKey.isEmpty()) {
+                action->setEnabled(false);
+            }
+            connect(action, &QAction::toggled, this,
+                    [this, column, settingsKey, viewLayerSpecific](bool visible) {
+                switch (column) {
+                case viewportColumn: showViewportColumn_ = visible; break;
+                case renderColumn: showRenderColumn_ = visible; break;
+                case viewLayerViewportColumn: showHideColumn_ = visible; break;
+                case holdoutColumn: showHoldoutColumn_ = visible; break;
+                case indirectOnlyColumn:
+                    showIndirectOnlyColumn_ = visible;
+                    break;
+                case selectColumn: showSelectColumn_ = visible; break;
+                case excludeColumn: showEnableColumn_ = visible; break;
+                default: break;
+                }
+                QSettings settings;
+                settings.setValue(settingsKey, visible);
+                const bool unavailable = viewLayerSpecific &&
+                    (!callbacks_.activeViewLayerKey ||
+                     callbacks_.activeViewLayerKey().isEmpty());
+                tree_->setColumnHidden(column, !visible || unavailable);
+            });
+        };
+        addColumnToggle(QStringLiteral("Enable / Exclude"),
+                        showEnableColumn_, excludeColumn,
+                        QStringLiteral("outliner/showEnableColumn"), true);
+        addColumnToggle(QStringLiteral("Select"), showSelectColumn_,
+                        selectColumn,
+                        QStringLiteral("outliner/showSelectColumn"), false);
+        addColumnToggle(QStringLiteral("Hide in View Layer"),
+                        showHideColumn_, viewLayerViewportColumn,
+                        QStringLiteral("outliner/showHideColumn"), true);
+        addColumnToggle(QStringLiteral("Viewport"), showViewportColumn_,
+                        viewportColumn,
+                        QStringLiteral("outliner/showViewportColumn"), false);
+        addColumnToggle(QStringLiteral("Render"), showRenderColumn_,
+                        renderColumn,
+                        QStringLiteral("outliner/showRenderColumn"), false);
+        addColumnToggle(QStringLiteral("Holdout"), showHoldoutColumn_,
+                        holdoutColumn,
+                        QStringLiteral("outliner/showHoldoutColumn"), true);
+        addColumnToggle(QStringLiteral("Indirect Only (Cycles)"),
+                        showIndirectOnlyColumn_, indirectOnlyColumn,
+                        QStringLiteral("outliner/showIndirectOnlyColumn"), true);
         menu.exec(tree_->header()->mapToGlobal(position));
     });
     tree_->setToolTip(QStringLiteral(
@@ -1683,15 +1724,19 @@ void CollectionsPanel::refresh()
         viewLayerCombo_->setCurrentIndex(activeIndex);
         viewLayerCombo_->setVisible(viewLayers.size() > 1);
     }
+    tree_->setColumnHidden(viewportColumn, !showViewportColumn_);
+    tree_->setColumnHidden(renderColumn, !showRenderColumn_);
+    tree_->setColumnHidden(selectColumn, !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
-                           activeViewLayerKey.isEmpty());
+                           activeViewLayerKey.isEmpty() || !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
                            activeViewLayerKey.isEmpty() ||
                                !showHoldoutColumn_);
     tree_->setColumnHidden(indirectOnlyColumn,
                            activeViewLayerKey.isEmpty() ||
                                !showIndirectOnlyColumn_);
-    tree_->setColumnHidden(excludeColumn, activeViewLayerKey.isEmpty());
+    tree_->setColumnHidden(excludeColumn,
+                           activeViewLayerKey.isEmpty() || !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
     const auto populateSceneRoot = [this, &entries, &displayObjects](
                                        QTreeWidgetItem *root,

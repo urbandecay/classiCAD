@@ -44,6 +44,11 @@ public:
                                   const QString &viewLayerKey,
                                   bool hidden);
     bool setObjectParent(ObjectId objectId, ObjectId parentObjectId);
+    bool moveBlenderSourceDataStackEntry(
+        ObjectId objectId,
+        BlenderSourceDataStackKind stackKind,
+        qsizetype fromIndex,
+        qsizetype toIndex);
     bool setCollectionViewLayerState(CollectionId collectionId,
                                      const QString &viewLayerKey,
                                      const QStringList &sourcePath,

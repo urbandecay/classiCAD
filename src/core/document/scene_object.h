@@ -126,6 +126,12 @@ struct BlenderSourceShaderEffect {
     QString linkedType;
 };
 
+enum class BlenderSourceDataStackKind {
+    Modifier,
+    Constraint,
+    ShaderEffect,
+};
+
 struct BlenderSourceAnimationData {
     bool hasAnimationData = false;
     QString actionName;

@@ -7,6 +7,23 @@
 
 namespace classiCAD {
 
+namespace {
+
+template <typename List>
+bool moveListEntry(List *entries, qsizetype fromIndex, qsizetype toIndex)
+{
+    if (entries == nullptr || fromIndex < 0 || toIndex < 0 ||
+        fromIndex >= entries->size() || toIndex >= entries->size() ||
+        fromIndex == toIndex) {
+        return false;
+    }
+    auto entry = entries->takeAt(fromIndex);
+    entries->insert(toIndex, std::move(entry));
+    return true;
+}
+
+} // namespace
+
 DocumentTransaction::DocumentTransaction(Document &document, History &history)
     : document_(document),
       history_(history),
@@ -269,6 +286,46 @@ bool DocumentTransaction::setObjectParent(ObjectId objectId,
     if (!document_.setObjectParent(objectId, parentObjectId)) return false;
     changes_.addObject(objectId);
     if (parentObjectId.isValid()) changes_.addObject(parentObjectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::moveBlenderSourceDataStackEntry(
+    ObjectId objectId,
+    BlenderSourceDataStackKind stackKind,
+    qsizetype fromIndex,
+    qsizetype toIndex)
+{
+    SceneObject *object = document_.mutableObject(objectId);
+    if (object == nullptr || !document_.isObjectEditable(objectId)) return false;
+
+    bool moved = false;
+    switch (stackKind) {
+    case BlenderSourceDataStackKind::Modifier:
+        if (!object->blenderSourceModifiers.isEmpty()) {
+            moved = moveListEntry(&object->blenderSourceModifiers,
+                                  fromIndex, toIndex);
+            if (moved && object->blenderSourceModifierNames.size() ==
+                             object->blenderSourceModifiers.size()) {
+                moveListEntry(&object->blenderSourceModifierNames,
+                              fromIndex, toIndex);
+            }
+        } else {
+            moved = moveListEntry(&object->blenderSourceModifierNames,
+                                  fromIndex, toIndex);
+        }
+        break;
+    case BlenderSourceDataStackKind::Constraint:
+        moved = moveListEntry(&object->blenderSourceConstraintNames,
+                              fromIndex, toIndex);
+        break;
+    case BlenderSourceDataStackKind::ShaderEffect:
+        moved = moveListEntry(&object->blenderSourceShaderEffects,
+                              fromIndex, toIndex);
+        break;
+    }
+    if (!moved) return false;
+    changes_.addObject(objectId);
     changes_.structureChanged = true;
     return true;
 }

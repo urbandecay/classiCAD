@@ -4,6 +4,7 @@
 
 #include "core/document/document_collection.h"
 #include "core/document/object_id.h"
+#include "core/document/scene_object.h"
 
 #include <QFrame>
 #include <QHash>
@@ -117,7 +118,8 @@ enum class OutlinerRowKind {
     SceneGroup,
     ObjectContent,
     SourceObject,
-    Material
+    Material,
+    DataStackEntry
 };
 enum class OutlinerDropPosition {
     Into,
@@ -142,6 +144,9 @@ struct OutlinerRowReference {
     QString sceneKey;
     QStringList sceneMembershipKeys;
     QString materialId;
+    BlenderSourceDataStackKind dataStackKind =
+        BlenderSourceDataStackKind::Modifier;
+    qsizetype dataStackIndex = -1;
     bool syntheticParentRow = false;
 };
 

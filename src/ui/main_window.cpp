@@ -3902,6 +3902,34 @@ private:
                    bool parentObjects,
                    OutlinerDropPosition position) {
                 if (sources.isEmpty()) return;
+                if (sources.first().kind ==
+                    OutlinerRowKind::DataStackEntry) {
+                    const OutlinerRowReference &source = sources.first();
+                    if (sources.size() != 1 ||
+                        target.kind != OutlinerRowKind::DataStackEntry ||
+                        source.objectId != target.objectId ||
+                        source.dataStackKind != target.dataStackKind) {
+                        return;
+                    }
+                    qsizetype destinationIndex = target.dataStackIndex +
+                        (position == OutlinerDropPosition::After ? 1 : 0);
+                    if (source.dataStackIndex < destinationIndex) {
+                        --destinationIndex;
+                    }
+                    DocumentTransaction stackTransaction =
+                        session_.beginTransaction();
+                    if (!stackTransaction.moveBlenderSourceDataStackEntry(
+                            source.objectId, source.dataStackKind,
+                            source.dataStackIndex, destinationIndex)) {
+                        return;
+                    }
+                    if (!session_.commitTransaction(stackTransaction)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not reorder Blender data stack entry"),
+                            4000);
+                    }
+                    return;
+                }
                 if (sources.first().kind == OutlinerRowKind::Material) {
                     if (target.kind != OutlinerRowKind::Object ||
                         !target.objectId.isValid()) {

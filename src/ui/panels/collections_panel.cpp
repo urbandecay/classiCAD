@@ -93,6 +93,8 @@ constexpr int itemDataApiChildrenBuiltRole = Qt::UserRole + 18;
 constexpr int itemDataApiTruncatedRole = Qt::UserRole + 19;
 constexpr int itemDataApiPlaceholderRole = Qt::UserRole + 20;
 constexpr int itemSceneMembershipsRole = Qt::UserRole + 21;
+constexpr int itemDataStackKindRole = Qt::UserRole + 22;
+constexpr int itemDataStackIndexRole = Qt::UserRole + 23;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -253,15 +255,18 @@ protected:
         const OutlinerRowReference currentReference = rowReference(current);
         if (currentReference.kind != OutlinerRowKind::Object &&
             currentReference.kind != OutlinerRowKind::Collection &&
-            currentReference.kind != OutlinerRowKind::Material) {
+            currentReference.kind != OutlinerRowKind::Material &&
+            currentReference.kind != OutlinerRowKind::DataStackEntry) {
             QTreeWidget::startDrag(supportedActions);
             return;
         }
         QSet<const QTreeWidgetItem *> selectedRows;
         if (current != nullptr) selectedRows.insert(current);
-        for (QTreeWidgetItem *item : selectedItems()) {
-            if (rowReference(item).kind == currentReference.kind) {
-                selectedRows.insert(item);
+        if (currentReference.kind != OutlinerRowKind::DataStackEntry) {
+            for (QTreeWidgetItem *item : selectedItems()) {
+                if (rowReference(item).kind == currentReference.kind) {
+                    selectedRows.insert(item);
+                }
             }
         }
         const QSet<const QTreeWidgetItem *> selectedCollectionRows =
@@ -285,7 +290,12 @@ protected:
                     }
                 }
             }
-            const QString key = reference.kind == OutlinerRowKind::Object
+            const QString key = reference.kind == OutlinerRowKind::DataStackEntry
+                ? QStringLiteral("s%1:%2:%3")
+                      .arg(reference.objectId.value())
+                      .arg(static_cast<int>(reference.dataStackKind))
+                      .arg(reference.dataStackIndex)
+                : reference.kind == OutlinerRowKind::Object
                 ? QStringLiteral("o%1").arg(reference.objectId.value())
                 : reference.kind == OutlinerRowKind::Collection
                     ? QStringLiteral("c%1").arg(reference.collectionId.value())
@@ -349,6 +359,40 @@ protected:
         const QString targetPath = targetItem == nullptr
             ? QString{}
             : targetItem->data(nameColumn, itemPathRole).toString();
+        if (draggedRows_.first().kind == OutlinerRowKind::DataStackEntry) {
+            const OutlinerRowReference &source = draggedRows_.first();
+            if (draggedRows_.size() != 1 ||
+                target.kind != OutlinerRowKind::DataStackEntry ||
+                source.objectId != target.objectId ||
+                source.dataStackKind != target.dataStackKind ||
+                targetItem == nullptr) {
+                event->ignore();
+                return;
+            }
+            const QRect targetRect = visualItemRect(targetItem);
+            if (targetRect.height() <= 0) {
+                event->ignore();
+                return;
+            }
+            const int rowY = event->position().toPoint().y() - targetRect.top();
+            if (rowY < targetRect.height() / 4) {
+                position = OutlinerDropPosition::Before;
+            } else if (rowY > (targetRect.height() * 3) / 4) {
+                position = OutlinerDropPosition::After;
+            } else {
+                event->ignore();
+                return;
+            }
+            const QVector<OutlinerRowReference> sources = draggedRows_;
+            QTimer::singleShot(0, this, [this, sources, target, position]() {
+                if (applyDrop_) {
+                    applyDrop_(sources, target, false, false, position);
+                }
+            });
+            event->setDropAction(Qt::MoveAction);
+            event->accept();
+            return;
+        }
         const bool clearParentDrop =
             parentActionAllowed &&
             (((target.kind == OutlinerRowKind::SceneRoot &&
@@ -450,6 +494,13 @@ private:
         }
         if (reference.kind == OutlinerRowKind::Material) {
             reference.materialId = item->data(nameColumn, itemIdRole).toString();
+        }
+        if (reference.kind == OutlinerRowKind::DataStackEntry) {
+            reference.objectId = ObjectId::fromValue(value);
+            reference.dataStackKind = static_cast<BlenderSourceDataStackKind>(
+                item->data(nameColumn, itemDataStackKindRole).toInt());
+            reference.dataStackIndex = item->data(
+                nameColumn, itemDataStackIndexRole).toLongLong();
         }
         if (reference.kind == OutlinerRowKind::Object) {
             reference.objectId = ObjectId::fromValue(value);
@@ -2133,6 +2184,28 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             content->setFlags(Qt::ItemIsEnabled);
             return content;
         };
+        const auto appendDataStackEntry =
+            [&appendContentRow, &entry](
+                QTreeWidgetItem *parent, const QString &name,
+                const QString &suffix, const QString &description,
+                BlenderSourceDataStackKind stackKind,
+                qsizetype index) -> QTreeWidgetItem * {
+            QTreeWidgetItem *row = appendContentRow(
+                parent, name, suffix, description);
+            if (row != nullptr && entry.id.isValid() && !entry.outlinerOnly) {
+                row->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::DataStackEntry));
+                row->setData(nameColumn, itemIdRole,
+                    QVariant::fromValue<qulonglong>(entry.id.value()));
+                row->setData(nameColumn, itemDataStackKindRole,
+                             static_cast<int>(stackKind));
+                row->setData(nameColumn, itemDataStackIndexRole,
+                             QVariant::fromValue<qlonglong>(index));
+                row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                              Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
+            }
+            return row;
+        };
         const auto appendMaterialRow = [&appendContentRow](
             QTreeWidgetItem *parent, const OutlinerMaterialEntry &material,
             const QString &path, const QString &description) {
@@ -2430,25 +2503,46 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                     description);
             }
         };
-        appendNameGroup(item, QStringLiteral("Constraints"),
-                        QStringLiteral("/constraints"),
-                        QStringLiteral("Blender object constraints"),
-                        entry.constraintNames, QStringLiteral("/constraint"));
+        const auto appendDataStackNameGroup =
+            [&appendContentRow, &appendDataStackEntry](
+                QTreeWidgetItem *objectItem, const QString &groupName,
+                const QString &groupPath, const QString &description,
+                const QStringList &names, const QString &itemPathPrefix,
+                BlenderSourceDataStackKind stackKind) {
+            if (names.isEmpty()) return;
+            QTreeWidgetItem *group = appendContentRow(
+                objectItem, groupName, groupPath, description);
+            for (qsizetype index = 0; index < names.size(); ++index) {
+                appendDataStackEntry(
+                    group, names[index],
+                    QStringLiteral("%1-%2").arg(itemPathPrefix).arg(index),
+                    description, stackKind, index);
+            }
+        };
+        appendDataStackNameGroup(
+            item, QStringLiteral("Constraints"),
+            QStringLiteral("/constraints"),
+            QStringLiteral("Blender object constraints"),
+            entry.constraintNames, QStringLiteral("/constraint"),
+            BlenderSourceDataStackKind::Constraint);
         if (entry.modifiers.isEmpty()) {
-            appendNameGroup(item, QStringLiteral("Modifiers"),
-                            QStringLiteral("/modifiers"),
-                            QStringLiteral("Blender object modifiers"),
-                            entry.modifierNames, QStringLiteral("/modifier"));
+            appendDataStackNameGroup(
+                item, QStringLiteral("Modifiers"),
+                QStringLiteral("/modifiers"),
+                QStringLiteral("Blender object modifiers"),
+                entry.modifierNames, QStringLiteral("/modifier"),
+                BlenderSourceDataStackKind::Modifier);
         } else {
             QTreeWidgetItem *modifiers = appendContentRow(
                 item, QStringLiteral("Modifiers"), QStringLiteral("/modifiers"),
                 QStringLiteral("Blender object modifiers"));
             for (qsizetype index = 0; index < entry.modifiers.size(); ++index) {
                 const OutlinerModifierEntry &sourceModifier = entry.modifiers[index];
-                QTreeWidgetItem *modifier = appendContentRow(
+                QTreeWidgetItem *modifier = appendDataStackEntry(
                     modifiers, sourceModifier.name,
                     QStringLiteral("/modifier-%1").arg(index),
-                    QStringLiteral("Blender object modifier"));
+                    QStringLiteral("Blender object modifier"),
+                    BlenderSourceDataStackKind::Modifier, index);
                 if (sourceModifier.linkedName.isEmpty()) continue;
                 const QString linkedDescription =
                     sourceModifier.linkedType == QLatin1String("node_tree")
@@ -2467,10 +2561,11 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                 QStringLiteral("Blender Grease Pencil shader effects"));
             for (qsizetype index = 0; index < entry.shaderEffects.size(); ++index) {
                 const OutlinerModifierEntry &sourceEffect = entry.shaderEffects[index];
-                QTreeWidgetItem *effect = appendContentRow(
+                QTreeWidgetItem *effect = appendDataStackEntry(
                     effects, sourceEffect.name,
                     QStringLiteral("/effect-%1").arg(index),
-                    QStringLiteral("Blender Grease Pencil shader effect"));
+                    QStringLiteral("Blender Grease Pencil shader effect"),
+                    BlenderSourceDataStackKind::ShaderEffect, index);
                 if (!sourceEffect.linkedName.isEmpty()) {
                     appendContentRow(
                         effect, sourceEffect.linkedName,

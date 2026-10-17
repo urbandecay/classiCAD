@@ -3090,6 +3090,58 @@ void CollectionsPanel::refresh()
             libraryRows.insert(library.id, row);
         }
         for (const OutlinerLibraryEntry &library : libraries) {
+            const auto findLibraryDataGroup = [&library](
+                const QString &displayName) -> const OutlinerLibraryDataGroup * {
+                for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
+                    if (group.displayName == displayName) return &group;
+                }
+                return nullptr;
+            };
+            const auto appendLibraryAnimationByGroup = [
+                &findLibraryDataGroup, &appendLibraryAnimation](
+                QTreeWidgetItem *parent, const QString &groupName,
+                const QString &dataBlockName, const QString &path) {
+                const OutlinerLibraryDataGroup *group =
+                    findLibraryDataGroup(groupName);
+                if (group == nullptr) return;
+                const auto animation =
+                    group->animationsByDataBlockName.constFind(dataBlockName);
+                if (animation != group->animationsByDataBlockName.cend()) {
+                    appendLibraryAnimation(parent, animation.value(), path);
+                }
+            };
+            const auto appendLibraryTextureImage = [
+                &findLibraryDataGroup, &appendLibraryContentRow,
+                &appendLibraryAnimationByGroup](QTreeWidgetItem *parent,
+                    const QString &textureName, const QString &texturePath) {
+                const OutlinerLibraryDataGroup *texturesGroup =
+                    findLibraryDataGroup(QStringLiteral("Textures"));
+                if (texturesGroup == nullptr) return;
+                const auto textureTree =
+                    texturesGroup->dataBlockTreesByName.constFind(textureName);
+                if (textureTree == texturesGroup->dataBlockTreesByName.cend() ||
+                    textureTree->textureImageName.isEmpty()) return;
+                const QString imagePath = texturePath + QStringLiteral("/image");
+                QTreeWidgetItem *imageRow = appendLibraryContentRow(
+                    parent, textureTree->textureImageName, imagePath,
+                    QStringLiteral("Blender Texture image ID"));
+                appendLibraryAnimationByGroup(
+                    imageRow, QStringLiteral("Images"),
+                    textureTree->textureImageName,
+                    imagePath + QStringLiteral("/animation"));
+            };
+            const auto appendLibraryTextureId = [
+                &appendLibraryContentRow, &appendLibraryAnimationByGroup,
+                &appendLibraryTextureImage](QTreeWidgetItem *parent,
+                    const QString &textureName, const QString &path) {
+                QTreeWidgetItem *textureRow = appendLibraryContentRow(
+                    parent, textureName, path,
+                    QStringLiteral("Blender Line Style texture ID"));
+                appendLibraryAnimationByGroup(
+                    textureRow, QStringLiteral("Textures"), textureName,
+                    path + QStringLiteral("/animation"));
+                appendLibraryTextureImage(textureRow, textureName, path);
+            };
             QTreeWidgetItem *row = libraryRows.value(library.id);
             QTreeWidgetItem *parent = libraryRows.value(library.parentId);
             if (library.currentFile || parent == nullptr || parent == row) {
@@ -3187,21 +3239,16 @@ void CollectionsPanel::refresh()
                                 appendLibraryObjectTree, dataRow,
                                 dataBlockTree->objectTree,
                                 treePath + QStringLiteral("/object-tree"));
-                            if (!dataBlockTree->textureImageName.isEmpty()) {
-                                appendLibraryContentRow(
-                                    dataRow, dataBlockTree->textureImageName,
-                                    treePath + QStringLiteral("/texture-image"),
-                                    QStringLiteral("Blender Texture image ID"));
-                            }
+                            appendLibraryTextureImage(
+                                dataRow, dataBlockName, treePath);
                             for (qsizetype textureIndex = 0;
                                  textureIndex < dataBlockTree->lineStyleTextureNames.size();
                                  ++textureIndex) {
-                                appendLibraryContentRow(
+                                appendLibraryTextureId(
                                     dataRow,
                                     dataBlockTree->lineStyleTextureNames[textureIndex],
                                     treePath + QStringLiteral("/line-style-texture-%1")
-                                        .arg(textureIndex),
-                                    QStringLiteral("Blender Line Style texture ID"));
+                                        .arg(textureIndex));
                             }
                             appendLibraryCollectionTree(
                                 appendLibraryCollectionTree, dataRow,

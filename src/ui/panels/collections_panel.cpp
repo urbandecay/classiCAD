@@ -1759,8 +1759,7 @@ void CollectionsPanel::updateDataApiAnimationControls()
         visible && dataApiKeyingSetCombo_->count() > 1 &&
         static_cast<bool>(callbacks_.setActiveKeyingSet));
     removeKeyingSetPathsButton_->setEnabled(
-        visible && !dataApiKeyingSetCombo_->currentData().toString().isEmpty() &&
-        static_cast<bool>(callbacks_.editKeyingSetPaths));
+        visible && static_cast<bool>(callbacks_.editKeyingSetPaths));
 }
 
 void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
@@ -1813,7 +1812,6 @@ void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
         uniquePaths.insert(identity);
         paths.append(path);
     }
-    if (paths.isEmpty()) return;
     const QString currentKey = dataApiKeyingSetCombo_->currentData().toString();
     callbacks_.editKeyingSetPaths(currentKey, paths, add);
     refresh();

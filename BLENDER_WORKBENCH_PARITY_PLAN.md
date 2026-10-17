@@ -11364,3 +11364,13 @@ scene depth.
   evaluate them. `cmake --build build -j4`, Python syntax parsing, and
   `git diff --check` passed; no matched Blender Outliner interaction
   comparison was run.
+- The hundred-second tree update follows Blender 5.2.2's [Keying Set
+  add/remove operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L2173-L2245)
+  and [Data API header](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L73-L88).
+  Both Blender operators request an active Keying Set with creation enabled,
+  including Remove when no set is active and even when no property row is
+  selected. classiCAD now leaves Remove available in that state, passes an
+  empty selection through, and creates/activates the same empty absolute set
+  in an undoable transaction. `cmake --build build -j4` and
+  `git diff --check` passed; no matched Blender Outliner interaction
+  comparison was run.

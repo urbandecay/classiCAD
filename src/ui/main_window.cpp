@@ -4142,7 +4142,7 @@ private:
                 QJsonArray scenes = settings.importedBlenderScenes;
                 const QString sceneId = activeSceneRecord().value(
                     QStringLiteral("scene_id")).toString();
-                if (sceneId.isEmpty() || paths.isEmpty()) return requestedKey;
+                if (sceneId.isEmpty()) return requestedKey;
                 QString activeKey = requestedKey;
                 bool changed = false;
                 for (qsizetype sceneIndex = 0; sceneIndex < scenes.size();
@@ -4162,7 +4162,6 @@ private:
                             break;
                         }
                     }
-                    if (keyingSetIndex < 0 && !add) return activeKey;
                     if (keyingSetIndex < 0) {
                         if (keyingSets.size() >= 1024) return activeKey;
                         QSet<QString> existingNames;

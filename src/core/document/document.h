@@ -101,6 +101,7 @@ public:
     bool removeCollection(CollectionId id);
     bool renameCollection(CollectionId id, const QString &name);
     bool setCollectionColorTag(CollectionId id, const QString &colorTag);
+    bool setCollectionAssetMarked(CollectionId id, bool assetMarked);
     bool setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds);
     bool moveCollectionRelative(CollectionId id,
                                 CollectionId targetId,
@@ -123,6 +124,7 @@ public:
                                      const QString &stateKey,
                                      bool value);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
+    bool setObjectAssetMarked(ObjectId objectId, bool assetMarked);
     bool isObjectVisible(ObjectId objectId) const;
     bool isObjectVisible(ObjectId objectId,
                          const QString &viewLayerKey) const;

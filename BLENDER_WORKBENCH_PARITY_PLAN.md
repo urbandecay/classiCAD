@@ -11385,3 +11385,15 @@ scene depth.
   duplicate-add and remove behavior for array paths and grouped imported
   Keying Sets. `cmake --build build -j4` and `git diff --check` passed; no
   matched Blender Outliner interaction comparison was run.
+- The hundred-fourth tree update follows Blender 5.2.2's
+  [common Outliner Asset menu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L336-L348)
+  and [`bpy.types.ID` asset API](https://docs.blender.org/api/5.2/bpy.types.ID.html).
+  Blender object and collection imports now retain whether `ID.asset_data`
+  exists. Their Outliner row menus can mark or clear asset state for local
+  IDs, and native document version 67 persists it through undo and save/load.
+  Linked IDs remain read-only. This carries the asset-mark presence only;
+  Asset Browser catalogs and metadata are not modeled. Blender's fake-user
+  clear variant is also absent because classiCAD does not model datablock user
+  counts or orphan retention. `cmake --build build -j4`, Python syntax
+  parsing, and `git diff --check` passed; no matched Blender Outliner
+  interaction comparison was run.

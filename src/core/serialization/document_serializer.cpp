@@ -1242,7 +1242,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 66);
+    serialized.insert(QStringLiteral("version"), 67);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1305,6 +1305,7 @@ QJsonObject documentToJson(const Document &document)
         record.insert(QStringLiteral("id"), idToJson(collection.id.value()));
         record.insert(QStringLiteral("name"), collection.name);
         record.insert(QStringLiteral("colorTag"), collection.colorTag);
+        record.insert(QStringLiteral("assetMarked"), collection.assetMarked);
         record.insert(QStringLiteral("isSceneMaster"),
                       collection.isSceneMaster);
         record.insert(QStringLiteral("sourceId"), collection.sourceId);
@@ -1474,6 +1475,7 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("defaultViewLayerKey"), sceneObject.defaultViewLayerKey);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
         serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
+        serializedObject.insert(QStringLiteral("assetMarked"), sceneObject.assetMarked);
         serializedObject.insert(QStringLiteral("workbenchRandomLibraryPath"),
                                 sceneObject.workbenchRandomLibraryPath);
         serializedObject.insert(QStringLiteral("blenderSourceVersion"),
@@ -1736,7 +1738,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 66) {
+    if (version < 1 || version > 67) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1860,6 +1862,8 @@ bool documentFromJson(const QJsonValue &value,
                   !isValidDocumentCollectionColorTag(
                       record.value(QStringLiteral("colorTag")).toString()) ||
                   !record.value(QStringLiteral("isSceneMaster")).isBool())) ||
+                (version >= 67 &&
+                 !record.value(QStringLiteral("assetMarked")).isBool()) ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
                 !record.value(QStringLiteral("hideRender")).isBool() ||
@@ -1876,6 +1880,10 @@ bool documentFromJson(const QJsonValue &value,
                     QStringLiteral("colorTag")).toString();
                 collection.isSceneMaster = record.value(
                     QStringLiteral("isSceneMaster")).toBool();
+            }
+            if (version >= 67) {
+                collection.assetMarked = record.value(
+                    QStringLiteral("assetMarked")).toBool();
             }
             collection.sourceId = sourceId.toString();
             collection.sourceSceneName = sourceSceneName.toString();
@@ -2851,6 +2859,16 @@ bool documentFromJson(const QJsonValue &value,
             }
             sceneObject.displayName = displayName.toString();
             sceneObject.libraryPath = libraryPath.toString();
+            if (version >= 67) {
+                const QJsonValue assetMarked = serializedObject.value(
+                    QStringLiteral("assetMarked"));
+                if (!assetMarked.isBool()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender asset-mark state"));
+                    return false;
+                }
+                sceneObject.assetMarked = assetMarked.toBool();
+            }
             if (version >= 22) {
                 const QJsonValue randomLibraryPath =
                     serializedObject.value(

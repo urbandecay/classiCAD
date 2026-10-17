@@ -99,6 +99,8 @@ constexpr int itemDataApiPlaceholderRole = Qt::UserRole + 20;
 constexpr int itemSceneMembershipsRole = Qt::UserRole + 21;
 constexpr int itemDataStackKindRole = Qt::UserRole + 22;
 constexpr int itemDataStackIndexRole = Qt::UserRole + 23;
+constexpr int itemAssetMarkedRole = Qt::UserRole + 24;
+constexpr int itemLinkedLibraryRole = Qt::UserRole + 25;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -2757,6 +2759,28 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 });
             }
         }
+        if (callbacks_.setCollectionAssetMarked &&
+            collectionId.isValid()) {
+            QMenu *assetMenu = menu.addMenu(QStringLiteral("Asset"));
+            const bool assetMarked = item->data(
+                nameColumn, itemAssetMarkedRole).toBool();
+            const bool linked = item->data(
+                nameColumn, itemLinkedLibraryRole).toBool();
+            QAction *mark = assetMenu->addAction(
+                QStringLiteral("Mark as Asset"));
+            mark->setEnabled(!assetMarked && !linked);
+            connect(mark, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.setCollectionAssetMarked(collectionId, true);
+            });
+            QAction *clear = assetMenu->addAction(
+                QStringLiteral("Clear Asset"));
+            clear->setEnabled(assetMarked && !linked);
+            connect(clear, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.setCollectionAssetMarked(collectionId, false);
+            });
+        }
         if (callbacks_.renameCollection) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, collectionId]() {
@@ -2892,6 +2916,27 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
+        if (callbacks_.setObjectAssetMarked && objectId.isValid()) {
+            QMenu *assetMenu = menu.addMenu(QStringLiteral("Asset"));
+            const bool assetMarked = item->data(
+                nameColumn, itemAssetMarkedRole).toBool();
+            const bool linked = item->data(
+                nameColumn, itemLinkedLibraryRole).toBool();
+            QAction *mark = assetMenu->addAction(
+                QStringLiteral("Mark as Asset"));
+            mark->setEnabled(!assetMarked && !linked);
+            connect(mark, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.setObjectAssetMarked(objectId, true);
+            });
+            QAction *clear = assetMenu->addAction(
+                QStringLiteral("Clear Asset"));
+            clear->setEnabled(assetMarked && !linked);
+            connect(clear, &QAction::triggered, this,
+                    [this, objectId]() {
+                callbacks_.setObjectAssetMarked(objectId, false);
+            });
+        }
         const CollectionId linkedCollectionId = CollectionId::fromValue(
             item->data(nameColumn, itemLinkedCollectionRole).toULongLong());
         if (callbacks_.unlinkObject && linkedCollectionId.isValid()) {
@@ -2954,6 +2999,10 @@ void CollectionsPanel::appendCollection(
                   static_cast<int>(OutlinerRowKind::Collection));
     item->setData(nameColumn, itemIdRole,
                   QVariant::fromValue<qulonglong>(entry.collection.id.value()));
+    item->setData(nameColumn, itemAssetMarkedRole,
+                  entry.collection.assetMarked);
+    item->setData(nameColumn, itemLinkedLibraryRole,
+                  !entry.collection.libraryPath.isEmpty());
     item->setData(nameColumn, itemParentCollectionRole,
                   QVariant::fromValue<qulonglong>(
                       parent != nullptr &&
@@ -3088,6 +3137,9 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     } else {
         item->setData(nameColumn, itemIdRole,
                       QVariant::fromValue<qulonglong>(entry.id.value()));
+        item->setData(nameColumn, itemAssetMarkedRole, entry.assetMarked);
+        item->setData(nameColumn, itemLinkedLibraryRole,
+                      !entry.libraryPath.isEmpty());
     }
     item->setData(nameColumn, itemLinkedCollectionRole,
                   QVariant::fromValue<qulonglong>(

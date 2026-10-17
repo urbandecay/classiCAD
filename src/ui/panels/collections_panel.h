@@ -74,6 +74,8 @@ struct OutlinerObjectEntry {
     QJsonArray greasePencilLayerTree;
     QString name;
     QString blenderType;
+    bool assetMarked = false;
+    QString libraryPath;
     QString dataBlockName;
     QString shapeKeyDataName;
     QStringList shapeKeyNames;
@@ -275,6 +277,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId, bool)> deleteObjectSelection;
     std::function<void(const QVector<CollectionId> &, const QString &)>
         setCollectionColorTag;
+    std::function<void(CollectionId, bool)> setCollectionAssetMarked;
     std::function<void(const QVector<CollectionId> &, bool)>
         setCollectionsObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
@@ -292,6 +295,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<CollectionId> &)> removeCollection;
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;
     std::function<void(ObjectId, const QString &)> renameObject;
+    std::function<void(ObjectId, bool)> setObjectAssetMarked;
     std::function<void(ObjectId, CollectionId)> unlinkObject;
     std::function<void(const QVector<CollectionId> &)>
         removeCollectionHierarchy;

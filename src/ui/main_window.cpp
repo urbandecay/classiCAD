@@ -3435,6 +3435,8 @@ private:
                 entry.parentHierarchyIdentity = object.blenderParentObjectId;
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
+                entry.assetMarked = object.assetMarked;
+                entry.libraryPath = object.libraryPath;
                 if (object.instanceCollectionId.isValid()) {
                     const DocumentCollection *instanceCollection =
                         document.collection(object.instanceCollectionId);
@@ -6615,6 +6617,23 @@ private:
                         4000);
                 }
             };
+        collectionCallbacks.setCollectionAssetMarked =
+            [this](CollectionId id, bool assetMarked) {
+                const DocumentCollection *collection =
+                    session_.document().collection(id);
+                if (collection == nullptr ||
+                    !collection->libraryPath.isEmpty() ||
+                    collection->assetMarked == assetMarked) {
+                    return;
+                }
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setCollectionAssetMarked(id, assetMarked) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not change collection asset mark"),
+                        4000);
+                }
+            };
         collectionCallbacks.removeCollection =
             [this, updateAllSceneCollectionIds](
                 const QVector<CollectionId> &requestedIds) {
@@ -7082,6 +7101,21 @@ private:
                     !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not rename object"), 4000);
+                }
+            };
+        collectionCallbacks.setObjectAssetMarked =
+            [this](ObjectId id, bool assetMarked) {
+                const SceneObject *object = session_.document().object(id);
+                if (object == nullptr || !object->libraryPath.isEmpty() ||
+                    object->assetMarked == assetMarked) {
+                    return;
+                }
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectAssetMarked(id, assetMarked) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not change object asset mark"),
+                        4000);
                 }
             };
         collectionCallbacks.unlinkObject =

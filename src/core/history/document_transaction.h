@@ -72,9 +72,12 @@ public:
     bool removeCollectionViewLayerStates(
         CollectionId collectionId, const QStringList &viewLayerKeys);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
+    bool setObjectAssetMarked(ObjectId objectId, bool assetMarked);
     bool renameCollection(CollectionId collectionId, const QString &name);
     bool setCollectionColorTag(CollectionId collectionId,
                                const QString &colorTag);
+    bool setCollectionAssetMarked(CollectionId collectionId,
+                                  bool assetMarked);
     bool setCollectionParents(CollectionId collectionId,
                               const QVector<CollectionId> &parentIds);
     bool moveCollectionRelative(CollectionId collectionId,

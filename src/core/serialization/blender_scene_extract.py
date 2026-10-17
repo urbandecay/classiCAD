@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 75
+BRIDGE_FORMAT_VERSION = 76
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -2697,6 +2697,7 @@ def object_metadata(obj, scene, depsgraph=None):
         "driver_target_names": driver_target_names[:1024],
         "nla_tracks": nla_tracks,
         "library_path": library_path,
+        "asset_marked": getattr(obj, "asset_data", None) is not None,
         # Blender resolves a linked ID's relative filepath before Workbench
         # hashes it; preserve that render identity beside the source path.
         "workbench_random_library_path": (
@@ -4872,6 +4873,7 @@ def extract_scene(input_path, mode):
             "color_tag": str(collection.color_tag),
             "is_master": collection_id in master_collection_ids,
             "library_path": source_library_path(collection),
+            "asset_marked": getattr(collection, "asset_data", None) is not None,
             "parent_ids": sorted(parent_ids_by_collection.get(collection_id, set())),
             "parent_orders": parent_orders_by_collection.get(collection_id, []),
             "source_scene_names": sorted(scene_names_by_collection.get(collection_id, set())),

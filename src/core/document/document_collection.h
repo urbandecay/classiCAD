@@ -17,6 +17,8 @@ struct DocumentCollection {
     CollectionId id = CollectionId::invalid();
     QString name;
     QString colorTag = QStringLiteral("NONE");
+    // Blender ID.asset_data presence, retained for Outliner asset actions.
+    bool assetMarked = false;
     // Blender's per-scene master collection cannot be deleted or color-tagged.
     bool isSceneMaster = false;
     QString sourceId;

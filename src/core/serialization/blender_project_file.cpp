@@ -2850,7 +2850,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 68 && bridgeVersion != 69 && bridgeVersion != 70 &&
          bridgeVersion != 71 && bridgeVersion != 72 &&
          bridgeVersion != 73 && bridgeVersion != 74 &&
-         bridgeVersion != 75)) {
+         bridgeVersion != 75 && bridgeVersion != 76)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4735,6 +4735,16 @@ bool importBlenderScene(const QString &path,
             collection.isSceneMaster = parentIdsValue.isArray() &&
                 parentIdsValue.toArray().isEmpty();
         }
+        if (bridgeVersion >= 76) {
+            const QJsonValue assetMarkedValue = record.value(
+                QStringLiteral("asset_marked"));
+            if (!assetMarkedValue.isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender collection asset state is invalid"));
+                return false;
+            }
+            collection.assetMarked = assetMarkedValue.toBool();
+        }
         collection.hideViewport = record.value(QStringLiteral("hide_viewport")).toBool();
         collection.hideRender = record.value(QStringLiteral("hide_render")).toBool();
         if (bridgeVersion >= 32 &&
@@ -5292,6 +5302,12 @@ bool importBlenderScene(const QString &path,
                      QStringLiteral("A Blender object surface-pick state is invalid"));
             return false;
         }
+        if (bridgeVersion >= 76 &&
+            !item.value(QStringLiteral("asset_marked")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender object asset state is invalid"));
+            return false;
+        }
         if (importedIds.contains(objectId)) {
             const auto existingIndex = importedIndexBySourceId.constFind(objectId);
             if (existingIndex != importedIndexBySourceId.cend()) {
@@ -5361,6 +5377,8 @@ bool importBlenderScene(const QString &path,
                                 .arg(blenderItemLabel(item), itemError));
             continue;
         }
+        sceneObject.assetMarked = bridgeVersion >= 76 &&
+            item.value(QStringLiteral("asset_marked")).toBool();
         if (bridgeVersion >= 33) {
             sceneObject.hideSurfacePick =
                 item.value(QStringLiteral("visibility")).toObject()

@@ -999,6 +999,20 @@ bool Document::setCollectionColorTag(CollectionId id, const QString &colorTag)
     return true;
 }
 
+bool Document::setCollectionAssetMarked(CollectionId id, bool assetMarked)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    if (candidate == nullptr || !candidate->libraryPath.isEmpty()) return false;
+    if (candidate->assetMarked == assetMarked) return true;
+    candidate->assetMarked = assetMarked;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds)
 {
     DocumentCollection *candidate = mutableCollection(id);
@@ -1403,6 +1417,19 @@ bool Document::setObjectDisplayName(ObjectId objectId, const QString &name)
     if (candidate == nullptr || trimmed.isEmpty()) return false;
     if (candidate->displayName == trimmed) return true;
     candidate->displayName = trimmed;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setObjectAssetMarked(ObjectId objectId, bool assetMarked)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr || !candidate->libraryPath.isEmpty()) return false;
+    if (candidate->assetMarked == assetMarked) return true;
+    candidate->assetMarked = assetMarked;
     DocumentChangeSet changes;
     changes.addObject(objectId);
     changes.structureChanged = true;

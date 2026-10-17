@@ -714,6 +714,15 @@ bool DocumentTransaction::setObjectDisplayName(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::setObjectAssetMarked(ObjectId objectId,
+                                               bool assetMarked)
+{
+    if (!document_.setObjectAssetMarked(objectId, assetMarked)) return false;
+    changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::renameCollection(CollectionId collectionId,
                                             const QString &name)
 {
@@ -730,6 +739,18 @@ bool DocumentTransaction::setCollectionColorTag(CollectionId collectionId,
     if (!document_.setCollectionColorTag(collectionId, colorTag)) return false;
     changes_.addCollection(collectionId);
     changes_.collectionsChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setCollectionAssetMarked(CollectionId collectionId,
+                                                   bool assetMarked)
+{
+    if (!document_.setCollectionAssetMarked(collectionId, assetMarked)) {
+        return false;
+    }
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
     return true;
 }
 

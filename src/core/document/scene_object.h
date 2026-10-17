@@ -208,6 +208,8 @@ struct SceneObject {
     // objects retain the source library path when the importer provides it.
     QString displayName;
     QString libraryPath;
+    // Blender ID.asset_data presence, retained for Outliner asset actions.
+    bool assetMarked = false;
     // Blender's in-memory linked ID filepath used by Workbench's Random hash.
     // This may be absolute even when libraryPath retains Blender's // form.
     QString workbenchRandomLibraryPath;

@@ -740,7 +740,8 @@ private:
         }
 
         if (!importedObjects.isEmpty() || !importedCollections.isEmpty() ||
-            !importedMaterials.isEmpty() || !report.scenes.isEmpty()) {
+            !importedMaterials.isEmpty() || !report.scenes.isEmpty() ||
+            !report.outlinerOnlyObjects.isEmpty()) {
             DocumentTransaction transaction = session_.beginTransaction();
             QHash<quint64, CollectionId> collectionRemap;
             QVector<DocumentCollection> pendingCollections = importedCollections;
@@ -858,6 +859,34 @@ private:
                     }
                 }
                 if (!replaced) settings.importedBlenderScenes.append(importedScene);
+            }
+            QHash<QString, int> outlinerOnlyIndices;
+            for (int index = 0;
+                 index < settings.importedBlenderOutlinerOnlyObjects.size();
+                 ++index) {
+                const QString sourceId = settings
+                    .importedBlenderOutlinerOnlyObjects[index].toObject()
+                    .value(QStringLiteral("object_id")).toString();
+                if (!sourceId.isEmpty()) {
+                    outlinerOnlyIndices.insert(sourceId, index);
+                }
+            }
+            for (const QJsonValue &recordValue : report.outlinerOnlyObjects) {
+                const QJsonObject record = recordValue.toObject();
+                const QString sourceId = record.value(
+                    QStringLiteral("object_id")).toString();
+                if (sourceId.isEmpty()) continue;
+                const auto existing = outlinerOnlyIndices.constFind(sourceId);
+                if (existing != outlinerOnlyIndices.cend()) {
+                    settings.importedBlenderOutlinerOnlyObjects.replace(
+                        existing.value(), record);
+                } else if (settings.importedBlenderOutlinerOnlyObjects.size() <
+                           100000) {
+                    outlinerOnlyIndices.insert(
+                        sourceId,
+                        settings.importedBlenderOutlinerOnlyObjects.size());
+                    settings.importedBlenderOutlinerOnlyObjects.append(record);
+                }
             }
             if (!report.activeViewLayerKey.isEmpty()) {
                 settings.activeViewLayerKey = report.activeViewLayerKey;
@@ -2847,7 +2876,12 @@ private:
                 }
             }
             QHash<quint64, QStringList> sceneKeysByCollectionId;
+            QHash<QString, CollectionId> collectionIdBySourceId;
             for (const DocumentCollection &collection : document.collections()) {
+                if (!collection.sourceId.isEmpty()) {
+                    collectionIdBySourceId.insert(collection.sourceId,
+                                                  collection.id);
+                }
                 for (const QString &sceneName : collection.sourceSceneNames) {
                     const QString sceneKey = sceneKeyByName.value(sceneName);
                     if (!sceneKey.isEmpty()) {
@@ -2878,6 +2912,36 @@ private:
                 }
                 return animation;
             };
+            const auto jsonStringList = [](const QJsonValue &value) {
+                QStringList names;
+                for (const QJsonValue &nameValue : value.toArray()) {
+                    if (nameValue.isString()) names.append(nameValue.toString());
+                }
+                return names;
+            };
+            const auto toOutlinerAnimationFromJson =
+                [&jsonStringList](const QJsonObject &source) {
+                    OutlinerAnimationEntry animation;
+                    animation.hasAnimationData = source.value(
+                        QStringLiteral("has_animation_data")).toBool();
+                    animation.actionName = source.value(
+                        QStringLiteral("action_name")).toString();
+                    animation.actionSlotName = source.value(
+                        QStringLiteral("action_slot_name")).toString();
+                    animation.hasDrivers = source.value(
+                        QStringLiteral("has_drivers")).toBool();
+                    animation.driverTargetNames = jsonStringList(source.value(
+                        QStringLiteral("driver_target_names")));
+                    for (const QJsonValue &trackValue : source.value(
+                             QStringLiteral("nla_tracks")).toArray()) {
+                        const QJsonObject track = trackValue.toObject();
+                        animation.nlaTracks.append({
+                            track.value(QStringLiteral("name")).toString(),
+                            jsonStringList(track.value(
+                                QStringLiteral("action_names")))});
+                    }
+                    return animation;
+                };
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
                 QString name = object.displayName.trimmed();
@@ -2996,6 +3060,118 @@ private:
                 entry.selectable = document.isObjectEditable(object.id);
                 entry.viewLayerHidden = object.viewLayerHidden;
                 entry.parentObjectId = parentObjectId;
+                objects.append(std::move(entry));
+            }
+            for (const QJsonValue &recordValue :
+                 document.settings().importedBlenderOutlinerOnlyObjects) {
+                if (!recordValue.isObject()) continue;
+                const QJsonObject record = recordValue.toObject();
+                const QString sourceId = record.value(
+                    QStringLiteral("object_id")).toString();
+                const QString objectType = record.value(
+                    QStringLiteral("object_type")).toString();
+                if (sourceId.isEmpty() || objectType.isEmpty() ||
+                    objectIdsByIdentity.contains(sourceId)) continue;
+
+                OutlinerObjectEntry entry;
+                entry.outlinerOnly = true;
+                entry.sourceObjectId = sourceId;
+                entry.outlinerDescription = record.value(
+                    QStringLiteral("reason")).toString();
+                entry.name = record.value(QStringLiteral("name")).toString();
+                entry.blenderType = objectType;
+                entry.dataBlockName = record.value(
+                    QStringLiteral("data_name")).toString();
+                entry.shapeKeyDataName = record.value(
+                    QStringLiteral("shape_key_data_name")).toString();
+                entry.shapeKeyNames = jsonStringList(record.value(
+                    QStringLiteral("shape_key_names")));
+                entry.dataMaterialNames = jsonStringList(record.value(
+                    QStringLiteral("data_material_names")));
+                const QJsonArray dataMaterialAnimations = record.value(
+                    QStringLiteral("data_material_animations")).toArray();
+                for (qsizetype index = 0;
+                     index < entry.dataMaterialNames.size(); ++index) {
+                    OutlinerMaterialEntry material;
+                    material.name = entry.dataMaterialNames[index];
+                    if (index < dataMaterialAnimations.size()) {
+                        material.animation = toOutlinerAnimationFromJson(
+                            dataMaterialAnimations[index].toObject());
+                    }
+                    entry.dataMaterialEntries.append(std::move(material));
+                }
+                const OutlinerAnimationEntry dataAnimation =
+                    toOutlinerAnimationFromJson(record.value(
+                        QStringLiteral("data_animation")).toObject());
+                entry.dataHasAnimationData = dataAnimation.hasAnimationData;
+                entry.dataAnimationActionName = dataAnimation.actionName;
+                entry.dataAnimationActionSlotName = dataAnimation.actionSlotName;
+                entry.dataHasDrivers = dataAnimation.hasDrivers;
+                entry.dataDriverTargetNames = dataAnimation.driverTargetNames;
+                entry.dataNlaTracks = dataAnimation.nlaTracks;
+
+                entry.materialNames = jsonStringList(record.value(
+                    QStringLiteral("material_slot_names")));
+                const QJsonArray materialAnimations = record.value(
+                    QStringLiteral("material_slot_animations")).toArray();
+                for (qsizetype index = 0; index < entry.materialNames.size();
+                     ++index) {
+                    OutlinerMaterialEntry material;
+                    material.name = entry.materialNames[index];
+                    if (index < materialAnimations.size()) {
+                        material.animation = toOutlinerAnimationFromJson(
+                            materialAnimations[index].toObject());
+                    }
+                    entry.materialEntries.append(std::move(material));
+                }
+                entry.modifierNames = jsonStringList(record.value(
+                    QStringLiteral("modifier_names")));
+                for (const QJsonValue &modifierValue : record.value(
+                         QStringLiteral("modifier_entries")).toArray()) {
+                    const QJsonObject modifier = modifierValue.toObject();
+                    entry.modifiers.append({
+                        modifier.value(QStringLiteral("name")).toString(),
+                        modifier.value(QStringLiteral("linked_name")).toString(),
+                        modifier.value(QStringLiteral("linked_type")).toString()});
+                }
+                entry.constraintNames = jsonStringList(record.value(
+                    QStringLiteral("constraint_names")));
+                entry.vertexGroupNames = jsonStringList(record.value(
+                    QStringLiteral("vertex_group_names")));
+                const OutlinerAnimationEntry animation =
+                    toOutlinerAnimationFromJson(record);
+                entry.hasAnimationData = animation.hasAnimationData;
+                entry.animationActionName = animation.actionName;
+                entry.animationActionSlotName = animation.actionSlotName;
+                entry.hasDrivers = animation.hasDrivers;
+                entry.driverTargetNames = animation.driverTargetNames;
+                entry.nlaTracks = animation.nlaTracks;
+
+                for (const QJsonValue &sourceCollectionId : record.value(
+                         QStringLiteral("collection_ids")).toArray()) {
+                    const CollectionId collectionId =
+                        collectionIdBySourceId.value(
+                            sourceCollectionId.toString(),
+                            CollectionId::invalid());
+                    if (collectionId.isValid() &&
+                        !entry.collectionIds.contains(collectionId)) {
+                        entry.collectionIds.append(collectionId);
+                    }
+                }
+                entry.sceneKeys = sceneKeysBySourceObjectId.value(sourceId);
+                const QJsonObject visibility = record.value(
+                    QStringLiteral("visibility")).toObject();
+                entry.hideViewport = visibility.value(
+                    QStringLiteral("hide_viewport")).toBool();
+                entry.hideRender = visibility.value(
+                    QStringLiteral("hide_render")).toBool();
+                entry.hideSelect = visibility.value(
+                    QStringLiteral("hide_select")).toBool();
+                entry.visible = !entry.hideViewport &&
+                    !visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+                entry.selectable = false;
+                entry.viewLayerHidden = record.value(
+                    QStringLiteral("view_layer_hidden")).toObject();
                 objects.append(std::move(entry));
             }
             return objects;

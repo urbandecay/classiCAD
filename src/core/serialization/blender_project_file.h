@@ -78,6 +78,7 @@ struct BlenderSceneImportReport {
     QString activeViewLayerKey;
     ProjectViewportViewState initialViewportView;
     QJsonArray scenes;
+    QJsonArray outlinerOnlyObjects;
     // Indices refer to the imported-object array produced by
     // importBlenderScene(); ordinary .blend open also resolves these to the
     // newly assigned classiCAD IDs before returning the report.

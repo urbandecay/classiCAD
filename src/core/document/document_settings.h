@@ -37,6 +37,9 @@ struct DocumentSettings {
     // Imported Blender scene metadata, including each scene's active camera.
     // Kept scene-qualified because Blender files may contain multiple scenes.
     QJsonArray importedBlenderScenes;
+    // Blender objects with no classiCAD geometry representation still belong
+    // in the Outliner. These source records preserve their tree rows only.
+    QJsonArray importedBlenderOutlinerOnlyObjects;
     // Exact decoded RGB float LUT bytes, keyed by their lowercase SHA-256.
     QHash<QString, QByteArray> importedBlenderColorLuts;
     // Metadata is keyed by the LUT payload's SHA-256, which remains its identity.

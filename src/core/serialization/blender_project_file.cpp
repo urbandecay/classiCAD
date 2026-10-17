@@ -2697,6 +2697,8 @@ bool loadVignolaDocument(const QString &path,
         snapshot.nextObjectValue = nextObjectValue;
         snapshot.nextCollectionValue = quint64(snapshot.collections.size()) + 1;
         snapshot.settings.importedBlenderScenes = importReport.scenes;
+        snapshot.settings.importedBlenderOutlinerOnlyObjects =
+            importReport.outlinerOnlyObjects;
         snapshot.settings.importedBlenderColorLuts =
             importReport.importedBlenderColorLuts;
         snapshot.settings.importedBlenderColorLutMetadata =
@@ -3299,8 +3301,20 @@ bool importBlenderScene(const QString &path,
         }
     }
     int skippedCount = unsupportedItems.size();
+    QJsonArray outlinerOnlyObjects;
+    QSet<QString> outlinerOnlyObjectIds;
     for (const QJsonValue &unsupportedValue : unsupportedItems) {
         const QJsonObject unsupported = unsupportedValue.toObject();
+        const QString unsupportedObjectId = unsupported.value(
+            QStringLiteral("object_id")).toString();
+        if (!unsupportedObjectId.isEmpty() &&
+            unsupported.value(QStringLiteral("object_type")).isString() &&
+            unsupported.value(QStringLiteral("name")).isString() &&
+            !outlinerOnlyObjectIds.contains(unsupportedObjectId) &&
+            outlinerOnlyObjects.size() < 100000) {
+            outlinerOnlyObjectIds.insert(unsupportedObjectId);
+            outlinerOnlyObjects.append(unsupported);
+        }
         warnings.append(QStringLiteral("%1: %2")
                             .arg(blenderItemLabel(unsupported),
                                  unsupported.value(QStringLiteral("reason")).toString()));
@@ -3961,6 +3975,7 @@ bool importBlenderScene(const QString &path,
         report->warningMessage = conciseImportWarnings(
             warnings, skippedCount, unsupportedFeatureCount);
         report->scenes = importedSceneRecords;
+        report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;
         report->selectedObjectIndices = selectedObjectIndices;

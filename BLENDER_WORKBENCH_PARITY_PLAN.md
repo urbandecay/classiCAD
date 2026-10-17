@@ -10968,6 +10968,17 @@ scene depth.
   row; older files continue to load without it. Material rows remain
   display-only. No matched Outliner UI comparison was run;
   `cmake --build build -j4` passed.
+- The twenty-eighth tree update follows Blender's generic object ID tree in
+  [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L35-L67).
+  Blender objects whose geometry classiCAD cannot display (such as cameras,
+  lights, armatures, and unsupported empties) are now retained as non-editable
+  Outliner rows under their imported collections and scenes. Their available
+  data, animation, material, modifier, constraint, and vertex-group names feed
+  the same display-only subtrees. Native document version 37 saves this
+  metadata; older documents load with no such rows. These rows have no CAD
+  geometry, selection, rename, visibility-toggle, or drag behavior, and
+  unsupported-object hierarchy links are not yet reconstructed. Build passed;
+  no matched Blender Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

@@ -68,6 +68,7 @@ constexpr int itemNotInCollectionRole = Qt::UserRole + 7;
 constexpr int itemParentCollectionRole = Qt::UserRole + 8;
 constexpr int itemViewLayerKeyRole = Qt::UserRole + 9;
 constexpr int itemSceneKeyRole = Qt::UserRole + 10;
+constexpr int itemSourceObjectIdRole = Qt::UserRole + 11;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -918,8 +919,19 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         if (item == nullptr) return false;
         const quint64 objectValue = item->data(
             nameColumn, itemIdRole).toULongLong();
-        const OutlinerObjectEntry entry = objectEntries_.value(objectValue);
-        if (!entry.id.isValid()) return false;
+        const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
+            item->data(nameColumn, itemKindRole).toInt());
+        const OutlinerObjectEntry entry = kind == OutlinerRowKind::SourceObject
+            ? sourceOnlyEntries_.value(item->data(
+                  nameColumn, itemSourceObjectIdRole).toString())
+            : objectEntries_.value(objectValue);
+        if (kind == OutlinerRowKind::SourceObject) {
+            if (!entry.outlinerOnly || entry.sourceObjectId.isEmpty()) {
+                return false;
+            }
+        } else if (!entry.id.isValid()) {
+            return false;
+        }
         const QString sourceType = entry.blenderType.toUpper();
         QString typeKey = QStringLiteral("OTHER");
         if (sourceType == QLatin1String("MESH")) {
@@ -942,9 +954,11 @@ void CollectionsPanel::applyNameFilter(const QString &text)
             nameColumn, itemViewLayerKeyRole).toString();
         bool visible = entry.visible;
         bool selectable = entry.selectable;
-        const bool hasLayerVisibilityCallback = !rowViewLayerKey.isEmpty() &&
+        const bool hasLayerVisibilityCallback = entry.id.isValid() &&
+            !rowViewLayerKey.isEmpty() &&
             static_cast<bool>(callbacks_.objectVisibleInViewLayer);
-        const bool hasLayerSelectableCallback = !rowViewLayerKey.isEmpty() &&
+        const bool hasLayerSelectableCallback = entry.id.isValid() &&
+            !rowViewLayerKey.isEmpty() &&
             static_cast<bool>(callbacks_.objectSelectableInViewLayer);
         if (hasLayerVisibilityCallback) {
             visible = callbacks_.objectVisibleInViewLayer(
@@ -993,10 +1007,11 @@ void CollectionsPanel::applyNameFilter(const QString &text)
             matchesState = !visible;
             break;
         case OutlinerObjectStateFilter::Selected:
-            matchesState = selectedValues.contains(objectValue);
+            matchesState = entry.id.isValid() &&
+                           selectedValues.contains(objectValue);
             break;
         case OutlinerObjectStateFilter::Active:
-            matchesState = activeId.isValid() &&
+            matchesState = entry.id.isValid() && activeId.isValid() &&
                            activeId.value() == objectValue;
             break;
         case OutlinerObjectStateFilter::Selectable:
@@ -1024,7 +1039,8 @@ void CollectionsPanel::applyNameFilter(const QString &text)
             item->data(nameColumn, itemKindRole).toInt());
         if (kind == OutlinerRowKind::Collection) {
             eligible = showCollections_;
-        } else if (kind == OutlinerRowKind::Object) {
+        } else if (kind == OutlinerRowKind::Object ||
+                   kind == OutlinerRowKind::SourceObject) {
             eligible = showObjects_ && objectMatchesFilter(item);
         }
         const bool nameMatches = text.isEmpty() ||
@@ -1571,39 +1587,61 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     CollectionId linkedCollectionId,
     const QString &activeViewLayerKey)
 {
-    if (parent == nullptr || !entry.id.isValid()) return nullptr;
+    if (parent == nullptr || (!entry.id.isValid() && !entry.outlinerOnly)) {
+        return nullptr;
+    }
     auto *item = new QTreeWidgetItem(parent);
     item->setText(nameColumn, entry.name);
     item->setData(nameColumn, itemKindRole,
-                  static_cast<int>(OutlinerRowKind::Object));
-    item->setData(nameColumn, itemIdRole,
-                  QVariant::fromValue<qulonglong>(entry.id.value()));
+                  static_cast<int>(entry.outlinerOnly
+                      ? OutlinerRowKind::SourceObject
+                      : OutlinerRowKind::Object));
+    if (entry.outlinerOnly) {
+        item->setData(nameColumn, itemSourceObjectIdRole,
+                      entry.sourceObjectId);
+        item->setToolTip(nameColumn, entry.outlinerDescription);
+    } else {
+        item->setData(nameColumn, itemIdRole,
+                      QVariant::fromValue<qulonglong>(entry.id.value()));
+    }
     item->setData(nameColumn, itemLinkedCollectionRole,
                   QVariant::fromValue<qulonglong>(
                       linkedCollectionId.isValid()
                           ? linkedCollectionId.value() : 0));
     item->setData(nameColumn, itemViewLayerKeyRole, activeViewLayerKey);
     QStringList objectPath = path;
-    objectPath.append(QStringLiteral("o%1").arg(entry.id.value()));
+    if (entry.outlinerOnly) {
+        const QByteArray rowDigest = QCryptographicHash::hash(
+            entry.sourceObjectId.toUtf8(), QCryptographicHash::Sha256).toHex();
+        objectPath.append(QStringLiteral("b%1")
+                               .arg(QString::fromLatin1(rowDigest.left(20))));
+    } else {
+        objectPath.append(QStringLiteral("o%1").arg(entry.id.value()));
+    }
     item->setData(nameColumn, itemPathRole,
                   objectPath.join(QLatin1Char('/')));
-    item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
-                   Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
-                   Qt::ItemIsDropEnabled);
-    item->setCheckState(viewportColumn, entry.hideViewport
-                               ? Qt::Unchecked : Qt::Checked);
-    item->setCheckState(renderColumn, entry.hideRender
-                               ? Qt::Unchecked : Qt::Checked);
-    item->setCheckState(selectColumn, entry.hideSelect
-                               ? Qt::Unchecked : Qt::Checked);
-    if (!activeViewLayerKey.isEmpty()) {
-        item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
-        item->setCheckState(viewLayerViewportColumn,
-            entry.viewLayerHidden.value(activeViewLayerKey).toBool()
-                ? Qt::Unchecked : Qt::Checked);
+    if (entry.outlinerOnly) {
+        item->setFlags(Qt::ItemIsEnabled);
+        sourceOnlyEntries_.insert(entry.sourceObjectId, entry);
+    } else {
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
+                       Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
+                       Qt::ItemIsDropEnabled);
+        item->setCheckState(viewportColumn, entry.hideViewport
+                                   ? Qt::Unchecked : Qt::Checked);
+        item->setCheckState(renderColumn, entry.hideRender
+                                   ? Qt::Unchecked : Qt::Checked);
+        item->setCheckState(selectColumn, entry.hideSelect
+                                   ? Qt::Unchecked : Qt::Checked);
+        if (!activeViewLayerKey.isEmpty()) {
+            item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
+            item->setCheckState(viewLayerViewportColumn,
+                entry.viewLayerHidden.value(activeViewLayerKey).toBool()
+                    ? Qt::Unchecked : Qt::Checked);
+        }
+        objectRows_[entry.id.value()].append(item);
+        objectEntries_.insert(entry.id.value(), entry);
     }
-    objectRows_[entry.id.value()].append(item);
-    objectEntries_.insert(entry.id.value(), entry);
     if (showObjectContents_) {
         const auto appendContentRow =
             [&objectPath, &activeViewLayerKey](
@@ -2015,6 +2053,7 @@ void CollectionsPanel::refresh()
     rangeAnchorItem_ = nullptr;
     objectRows_.clear();
     objectEntries_.clear();
+    sourceOnlyEntries_.clear();
     const QVector<CollectionPanelEntry> allEntries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> allObjects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};

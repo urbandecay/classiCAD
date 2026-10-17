@@ -54,6 +54,10 @@ struct OutlinerModifierEntry {
 
 struct OutlinerObjectEntry {
     ObjectId id = ObjectId::invalid();
+    // Source-only Blender object rows have no editable CAD scene object.
+    bool outlinerOnly = false;
+    QString sourceObjectId;
+    QString outlinerDescription;
     QString name;
     QString blenderType;
     QString dataBlockName;
@@ -95,7 +99,8 @@ enum class OutlinerRowKind {
     Object,
     SceneRoot,
     SceneGroup,
-    ObjectContent
+    ObjectContent,
+    SourceObject
 };
 enum class OutlinerObjectStateFilter {
     All,
@@ -220,6 +225,7 @@ private:
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
+    QHash<QString, OutlinerObjectEntry> sourceOnlyEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;
     QHash<QString, bool> objectTypeFilters_;

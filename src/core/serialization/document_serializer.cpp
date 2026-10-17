@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 36);
+    serialized.insert(QStringLiteral("version"), 37);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -352,6 +352,8 @@ QJsonObject documentToJson(const Document &document)
                     document.settings().activeViewLayerKey);
     settings.insert(QStringLiteral("importedBlenderScenes"),
                     document.settings().importedBlenderScenes);
+    settings.insert(QStringLiteral("importedBlenderOutlinerOnlyObjects"),
+                    document.settings().importedBlenderOutlinerOnlyObjects);
     QJsonObject colorLuts;
     for (auto it = document.settings().importedBlenderColorLuts.cbegin();
          it != document.settings().importedBlenderColorLuts.cend(); ++it) {
@@ -775,7 +777,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 36) {
+    if (version < 1 || version > 37) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1185,6 +1187,34 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.importedBlenderScenes = importedScenes.toArray();
+        }
+        if (version >= 37) {
+            const QJsonValue outlinerOnlyValue = settingsObject.value(
+                QStringLiteral("importedBlenderOutlinerOnlyObjects"));
+            if (!outlinerOnlyValue.isArray() ||
+                outlinerOnlyValue.toArray().size() > 100000) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender Outliner-only object metadata"));
+                return false;
+            }
+            for (const QJsonValue &recordValue : outlinerOnlyValue.toArray()) {
+                if (!recordValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender Outliner-only object record"));
+                    return false;
+                }
+                const QJsonObject record = recordValue.toObject();
+                if (!record.value(QStringLiteral("object_id")).isString() ||
+                    record.value(QStringLiteral("object_id")).toString().isEmpty() ||
+                    !record.value(QStringLiteral("name")).isString() ||
+                    !record.value(QStringLiteral("object_type")).isString()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender Outliner-only object identity"));
+                    return false;
+                }
+            }
+            settings.importedBlenderOutlinerOnlyObjects =
+                outlinerOnlyValue.toArray();
         }
         if (version >= 15) {
             const QJsonValue lutValue = settingsObject.value(

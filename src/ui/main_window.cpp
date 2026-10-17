@@ -12,6 +12,7 @@
 #include "input_helpers.h"
 #include "../core/debug_log.h"
 #include "../core/serialization/blender_project_file.h"
+#include "../core/serialization/document_serializer.h"
 #include "../core/serialization/rhino3dm_interchange.h"
 
 #include <QApplication>
@@ -32,6 +33,8 @@
 #include <QHash>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
@@ -41,11 +44,13 @@
 #include <QMainWindow>
 #include <QPushButton>
 #include <QPixmap>
+#include <QSaveFile>
 #include <QShortcut>
 #include <QSettings>
 #include <QSet>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStandardPaths>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QStatusBar>
@@ -85,6 +90,7 @@ class MainWindow final : public QMainWindow {
 public:
     MainWindow()
     {
+        restoreOutlinerClipboard();
         session_.setChangeObserver([this](ApplicationSessionChange change) {
             switch (change) {
             case ApplicationSessionChange::History:
@@ -211,6 +217,310 @@ protected:
     }
 
 private:
+    QString outlinerClipboardFilePath() const
+    {
+        const QString dataDirectory = QStandardPaths::writableLocation(
+            QStandardPaths::AppDataLocation);
+        if (dataDirectory.isEmpty()) return {};
+        return QDir(dataDirectory).filePath(
+            QStringLiteral("outliner-copybuffer.json"));
+    }
+
+    bool persistOutlinerClipboard()
+    {
+        const bool collectionClipboard =
+            !outlinerCollectionClipboardCollections_.isEmpty();
+        const QVector<SceneObject> &sourceObjects = collectionClipboard
+            ? outlinerCollectionClipboardObjects_ : outlinerObjectClipboard_;
+        const QVector<DocumentMaterial> &sourceMaterials = collectionClipboard
+            ? outlinerCollectionClipboardMaterials_
+            : outlinerObjectClipboardMaterials_;
+        if ((!collectionClipboard && sourceObjects.isEmpty()) ||
+            (collectionClipboard &&
+             outlinerCollectionClipboardCollections_.isEmpty()) ||
+            (collectionClipboard &&
+             !outlinerCollectionClipboardRootId_.isValid())) {
+            return false;
+        }
+
+        Document clipboardDocument;
+        Document::Snapshot snapshot = clipboardDocument.snapshot();
+        snapshot.objects = sourceObjects;
+        snapshot.materials = sourceMaterials;
+        QSet<quint64> clipboardCollectionIds;
+        if (collectionClipboard) {
+            snapshot.collections = outlinerCollectionClipboardCollections_;
+            for (const DocumentCollection &collection : snapshot.collections) {
+                clipboardCollectionIds.insert(collection.id.value());
+            }
+            for (DocumentCollection &collection : snapshot.collections) {
+                QVector<CollectionId> parents;
+                QVector<CollectionParentOrder> parentOrders;
+                for (const CollectionId parentId : collection.parentIds) {
+                    if (!clipboardCollectionIds.contains(parentId.value())) {
+                        continue;
+                    }
+                    parents.append(parentId);
+                    const auto order = std::find_if(
+                        collection.parentOrders.cbegin(),
+                        collection.parentOrders.cend(),
+                        [parentId](const CollectionParentOrder &candidate) {
+                            return candidate.parentId == parentId;
+                        });
+                    if (order != collection.parentOrders.cend()) {
+                        parentOrders.append(*order);
+                    }
+                }
+                collection.parentIds = std::move(parents);
+                collection.parentOrders = std::move(parentOrders);
+                if (collection.parentIds.isEmpty()) {
+                    collection.rootOrder = qMax(0, collection.rootOrder);
+                } else {
+                    collection.rootOrder = -1;
+                }
+            }
+            for (SceneObject &object : snapshot.objects) {
+                object.collectionIds.erase(
+                    std::remove_if(object.collectionIds.begin(),
+                                   object.collectionIds.end(),
+                                   [&clipboardCollectionIds](
+                                       CollectionId collectionId) {
+                        return !clipboardCollectionIds.contains(
+                            collectionId.value());
+                    }),
+                    object.collectionIds.end());
+                object.instanceCollectionId = CollectionId::invalid();
+            }
+        } else {
+            for (SceneObject &object : snapshot.objects) {
+                object.collectionIds.clear();
+                object.instanceCollectionId = CollectionId::invalid();
+            }
+        }
+        for (const SceneObject &object : snapshot.objects) {
+            if (object.id.isValid() &&
+                object.id.value() < std::numeric_limits<quint64>::max()) {
+                snapshot.nextObjectValue = qMax(
+                    snapshot.nextObjectValue, object.id.value() + 1);
+            }
+        }
+        for (const DocumentCollection &collection : snapshot.collections) {
+            if (collection.id.isValid() &&
+                collection.id.value() < std::numeric_limits<quint64>::max()) {
+                snapshot.nextCollectionValue = qMax(
+                    snapshot.nextCollectionValue, collection.id.value() + 1);
+            }
+        }
+        clipboardDocument.restoreSnapshot(snapshot);
+
+        const auto serializeIdentityMap = [](
+            const QHash<quint64, QString> &identities) {
+            QJsonArray result;
+            for (auto it = identities.cbegin(); it != identities.cend(); ++it) {
+                result.append(QJsonObject{
+                    {QStringLiteral("id"), QString::number(it.key())},
+                    {QStringLiteral("identity"), it.value()}});
+            }
+            return result;
+        };
+        QJsonArray instanceReferences;
+        for (const SceneObject &object : sourceObjects) {
+            if (!object.id.isValid() || !object.instanceCollectionId.isValid()) {
+                continue;
+            }
+            instanceReferences.append(QJsonObject{
+                {QStringLiteral("object_id"),
+                 QString::number(object.id.value())},
+                {QStringLiteral("collection_id"),
+                 QString::number(object.instanceCollectionId.value())}});
+        }
+        const QHash<quint64, QString> &anchorIdentities = collectionClipboard
+            ? outlinerCollectionClipboardAnchorIdentities_
+            : outlinerObjectClipboardAnchorIdentities_;
+        const QHash<quint64, QString> &collectionIdentities =
+            collectionClipboard
+                ? outlinerCollectionClipboardCollectionIdentities_
+                : outlinerObjectClipboardCollectionIdentities_;
+        QJsonObject payload{
+            {QStringLiteral("format"),
+             QStringLiteral("classiCAD-outliner-copybuffer")},
+            {QStringLiteral("version"), 1},
+            {QStringLiteral("kind"), collectionClipboard
+                 ? QStringLiteral("collection") : QStringLiteral("object")},
+            {QStringLiteral("document"), documentToJson(clipboardDocument)},
+            {QStringLiteral("anchor_identities"),
+             serializeIdentityMap(anchorIdentities)},
+            {QStringLiteral("collection_identities"),
+             serializeIdentityMap(collectionIdentities)},
+            {QStringLiteral("instance_collection_references"),
+             instanceReferences}};
+        if (collectionClipboard) {
+            payload.insert(QStringLiteral("root_collection_id"),
+                           QString::number(
+                               outlinerCollectionClipboardRootId_.value()));
+        }
+        const QByteArray serialized =
+            QJsonDocument(payload).toJson(QJsonDocument::Compact);
+        constexpr qsizetype maximumClipboardBytes = 512 * 1024 * 1024;
+        if (serialized.isEmpty() ||
+            serialized.size() > maximumClipboardBytes) {
+            return false;
+        }
+        const QString path = outlinerClipboardFilePath();
+        if (path.isEmpty() || !QDir().mkpath(QFileInfo(path).absolutePath())) {
+            return false;
+        }
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly) ||
+            file.write(serialized) != serialized.size()) {
+            file.cancelWriting();
+            return false;
+        }
+        return file.commit();
+    }
+
+    void restoreOutlinerClipboard()
+    {
+        const QString path = outlinerClipboardFilePath();
+        if (path.isEmpty()) return;
+        QFile file(path);
+        constexpr qint64 maximumClipboardBytes = 512LL * 1024 * 1024;
+        if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 ||
+            file.size() > maximumClipboardBytes) {
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument json = QJsonDocument::fromJson(
+            file.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError ||
+            !json.isObject()) {
+            return;
+        }
+        const QJsonObject payload = json.object();
+        if (payload.value(QStringLiteral("format")).toString() !=
+                QLatin1String("classiCAD-outliner-copybuffer") ||
+            payload.value(QStringLiteral("version")).toInt() != 1) {
+            return;
+        }
+        const QString kind = payload.value(QStringLiteral("kind")).toString();
+        const bool collectionClipboard = kind == QLatin1String("collection");
+        if (!collectionClipboard && kind != QLatin1String("object")) return;
+
+        Document clipboardDocument;
+        if (!documentFromJson(payload.value(QStringLiteral("document")),
+                              &clipboardDocument) ||
+            (collectionClipboard
+                 ? clipboardDocument.collections().isEmpty()
+                 : clipboardDocument.objects().isEmpty())) {
+            return;
+        }
+        const auto readIdentityMap = [](
+            const QJsonValue &value,
+            QHash<quint64, QString> *identities) {
+            if (identities == nullptr || !value.isArray() ||
+                value.toArray().size() > 100000) {
+                return false;
+            }
+            QHash<quint64, QString> parsed;
+            for (const QJsonValue &entryValue : value.toArray()) {
+                if (!entryValue.isObject()) return false;
+                const QJsonObject entry = entryValue.toObject();
+                bool idValid = false;
+                const quint64 id = entry.value(QStringLiteral("id"))
+                    .toString().toULongLong(&idValid);
+                const QString identity = entry.value(
+                    QStringLiteral("identity")).toString();
+                if (!idValid || id == 0 || identity.isEmpty() ||
+                    identity.size() > 4096 || parsed.contains(id)) {
+                    return false;
+                }
+                parsed.insert(id, identity);
+            }
+            *identities = std::move(parsed);
+            return true;
+        };
+        QHash<quint64, QString> anchorIdentities;
+        QHash<quint64, QString> collectionIdentities;
+        if (!readIdentityMap(payload.value(QStringLiteral("anchor_identities")),
+                             &anchorIdentities) ||
+            !readIdentityMap(
+                payload.value(QStringLiteral("collection_identities")),
+                &collectionIdentities)) {
+            return;
+        }
+        QHash<quint64, quint64> instanceCollectionReferences;
+        const QJsonValue instanceReferencesValue = payload.value(
+            QStringLiteral("instance_collection_references"));
+        if (!instanceReferencesValue.isArray() ||
+            instanceReferencesValue.toArray().size() >
+                clipboardDocument.objects().size()) {
+            return;
+        }
+        for (const QJsonValue &referenceValue :
+             instanceReferencesValue.toArray()) {
+            if (!referenceValue.isObject()) return;
+            const QJsonObject reference = referenceValue.toObject();
+            bool objectIdValid = false;
+            bool collectionIdValid = false;
+            const quint64 objectId = reference.value(
+                QStringLiteral("object_id")).toString()
+                .toULongLong(&objectIdValid);
+            const quint64 collectionId = reference.value(
+                QStringLiteral("collection_id")).toString()
+                .toULongLong(&collectionIdValid);
+            if (!objectIdValid || objectId == 0 || !collectionIdValid ||
+                collectionId == 0 ||
+                instanceCollectionReferences.contains(objectId) ||
+                std::none_of(clipboardDocument.objects().cbegin(),
+                             clipboardDocument.objects().cend(),
+                             [objectId](const SceneObject &object) {
+                    return object.id.value() == objectId;
+                })) {
+                return;
+            }
+            instanceCollectionReferences.insert(objectId, collectionId);
+        }
+        QVector<SceneObject> restoredObjects = clipboardDocument.objects();
+        for (SceneObject &object : restoredObjects) {
+            const auto reference = instanceCollectionReferences.constFind(
+                object.id.value());
+            if (reference != instanceCollectionReferences.cend()) {
+                object.instanceCollectionId =
+                    CollectionId::fromValue(reference.value());
+            }
+        }
+
+        if (collectionClipboard) {
+            bool rootIdValid = false;
+            const quint64 rootId = payload.value(
+                QStringLiteral("root_collection_id")).toString()
+                .toULongLong(&rootIdValid);
+            if (!rootIdValid || rootId == 0 ||
+                clipboardDocument.collection(CollectionId::fromValue(rootId)) ==
+                    nullptr) {
+                return;
+            }
+            outlinerCollectionClipboardRootId_ =
+                CollectionId::fromValue(rootId);
+            outlinerCollectionClipboardCollections_ =
+                clipboardDocument.collections();
+            outlinerCollectionClipboardObjects_ = std::move(restoredObjects);
+            outlinerCollectionClipboardMaterials_ =
+                clipboardDocument.materials();
+            outlinerCollectionClipboardAnchorIdentities_ =
+                std::move(anchorIdentities);
+            outlinerCollectionClipboardCollectionIdentities_ =
+                std::move(collectionIdentities);
+        } else {
+            outlinerObjectClipboard_ = std::move(restoredObjects);
+            outlinerObjectClipboardMaterials_ = clipboardDocument.materials();
+            outlinerObjectClipboardAnchorIdentities_ =
+                std::move(anchorIdentities);
+            outlinerObjectClipboardCollectionIdentities_ =
+                std::move(collectionIdentities);
+        }
+    }
+
     bool maybeSaveDocument()
     {
         if (!documentModified_) {
@@ -3909,6 +4219,22 @@ private:
             outlinerObjectClipboard_.clear();
             outlinerObjectClipboardMaterials_.clear();
             outlinerObjectClipboardAnchorIdentities_.clear();
+            outlinerObjectClipboardCollectionIdentities_.clear();
+            outlinerCollectionClipboardRootId_ = CollectionId::invalid();
+            outlinerCollectionClipboardCollections_.clear();
+            outlinerCollectionClipboardObjects_.clear();
+            outlinerCollectionClipboardMaterials_.clear();
+            outlinerCollectionClipboardAnchorIdentities_.clear();
+            outlinerCollectionClipboardCollectionIdentities_.clear();
+            for (const DocumentCollection &collection : document.collections()) {
+                const QString identity = collection.sourceId.isEmpty()
+                    ? QStringLiteral("classiCAD-local-collection:%1")
+                          .arg(collection.id.value())
+                    : QStringLiteral("%1\n%2")
+                          .arg(collection.libraryPath, collection.sourceId);
+                outlinerObjectClipboardCollectionIdentities_.insert(
+                    collection.id.value(), identity);
+            }
             QVector<ObjectId> selectedIds =
                 session_.selection().objectIds();
             if (!selectedIds.contains(objectId)) selectedIds = {objectId};
@@ -3946,6 +4272,10 @@ private:
                      object.geometry.polygonMesh.materialSlotIds) {
                     materialIds.insert(materialId);
                 }
+                for (const QString &materialId :
+                     object.nurbsSolidFaceMaterialIds) {
+                    materialIds.insert(materialId);
+                }
                 for (const DimensionAnchorReference &anchor :
                      object.geometry.dimensionAnchors) {
                     const SceneObject *target = document.object(anchor.objectId);
@@ -3970,9 +4300,15 @@ private:
                 [](const SceneObject &object) {
                     return !object.blenderLooseMeshEdgeCompanion;
                 });
-            statusBar()->showMessage(
-                QStringLiteral("Copied %1 object(s) to the Outliner clipboard")
-                    .arg(copiedObjectCount), 3000);
+            if (!persistOutlinerClipboard()) {
+                statusBar()->showMessage(
+                    QStringLiteral("Copied %1 object(s), but could not save the Outliner clipboard")
+                        .arg(copiedObjectCount), 4000);
+            } else {
+                statusBar()->showMessage(
+                    QStringLiteral("Copied %1 object(s) to the Outliner clipboard")
+                        .arg(copiedObjectCount), 3000);
+            }
         };
         collectionCallbacks.pasteOutlinerObjects =
             [this, activeSceneRecord,
@@ -4014,9 +4350,30 @@ private:
                     copy.defaultViewLayerKey =
                         document.settings().activeViewLayerKey;
                     copy.collectionIds.clear();
-                    if (copy.instanceCollectionId.isValid() &&
-                        document.collection(copy.instanceCollectionId) == nullptr) {
-                        copy.instanceCollectionId = CollectionId::invalid();
+                    if (copy.instanceCollectionId.isValid()) {
+                        const QString instanceIdentity =
+                            outlinerObjectClipboardCollectionIdentities_.value(
+                                copy.instanceCollectionId.value());
+                        CollectionId currentCollectionId =
+                            CollectionId::invalid();
+                        if (!instanceIdentity.isEmpty()) {
+                            for (const DocumentCollection &collection :
+                                 document.collections()) {
+                                const QString identity =
+                                    collection.sourceId.isEmpty()
+                                        ? QStringLiteral(
+                                              "classiCAD-local-collection:%1")
+                                              .arg(collection.id.value())
+                                        : QStringLiteral("%1\n%2")
+                                              .arg(collection.libraryPath,
+                                                   collection.sourceId);
+                                if (identity == instanceIdentity) {
+                                    currentCollectionId = collection.id;
+                                    break;
+                                }
+                            }
+                        }
+                        copy.instanceCollectionId = currentCollectionId;
                     }
                 }
                 for (int index = 0; index < copies.size(); ++index) {
@@ -4170,6 +4527,14 @@ private:
                          copy.geometry.polygonMesh.materialSlotIds) {
                         materialId = materialIdRemap.value(materialId,
                                                             materialId);
+                    }
+                    for (auto materialIt =
+                             copy.nurbsSolidFaceMaterialIds.begin();
+                         materialIt !=
+                             copy.nurbsSolidFaceMaterialIds.end();
+                         ++materialIt) {
+                        materialIt.value() = materialIdRemap.value(
+                            materialIt.value(), materialIt.value());
                     }
                 }
 
@@ -4879,6 +5244,10 @@ private:
                 const DocumentCollection *root = document.collection(rootId);
                 if (root == nullptr) return;
 
+                outlinerObjectClipboard_.clear();
+                outlinerObjectClipboardMaterials_.clear();
+                outlinerObjectClipboardAnchorIdentities_.clear();
+                outlinerObjectClipboardCollectionIdentities_.clear();
                 outlinerCollectionClipboardRootId_ = rootId;
                 outlinerCollectionClipboardCollections_.clear();
                 outlinerCollectionClipboardObjects_.clear();
@@ -4982,11 +5351,18 @@ private:
                     [](const SceneObject &object) {
                         return !object.blenderLooseMeshEdgeCompanion;
                     });
-                statusBar()->showMessage(
-                    QStringLiteral("Copied collection %1 and %2 object(s) to the Outliner clipboard")
-                        .arg(root->name)
-                        .arg(copiedObjectCount),
-                    4000);
+                if (!persistOutlinerClipboard()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Copied collection %1, but could not save the Outliner clipboard")
+                            .arg(root->name),
+                        4000);
+                } else {
+                    statusBar()->showMessage(
+                        QStringLiteral("Copied collection %1 and %2 object(s) to the Outliner clipboard")
+                            .arg(root->name)
+                            .arg(copiedObjectCount),
+                        4000);
+                }
             };
         collectionCallbacks.duplicateCollection =
             [this, activeSceneRecord, collectionBelongsToScene,
@@ -7121,6 +7497,7 @@ private:
     QVector<SceneObject> outlinerObjectClipboard_;
     QVector<DocumentMaterial> outlinerObjectClipboardMaterials_;
     QHash<quint64, QString> outlinerObjectClipboardAnchorIdentities_;
+    QHash<quint64, QString> outlinerObjectClipboardCollectionIdentities_;
     CollectionId outlinerCollectionClipboardRootId_ =
         CollectionId::invalid();
     QVector<DocumentCollection> outlinerCollectionClipboardCollections_;

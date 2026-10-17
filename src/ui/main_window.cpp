@@ -3178,6 +3178,63 @@ private:
             }
             return result;
         };
+        const auto collectionRelationIds =
+            [this, collectionHierarchyIds](CollectionId root) {
+                QVector<CollectionId> result = collectionHierarchyIds(root);
+                QSet<quint64> visited;
+                for (const CollectionId id : result) visited.insert(id.value());
+                QVector<CollectionId> pending{root};
+                for (qsizetype index = 0; index < pending.size(); ++index) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(pending[index]);
+                    if (collection == nullptr) continue;
+                    for (const CollectionId parentId : collection->parentIds) {
+                        if (visited.contains(parentId.value())) continue;
+                        visited.insert(parentId.value());
+                        result.append(parentId);
+                        pending.append(parentId);
+                    }
+                }
+                return result;
+            };
+        const auto collectionIsolationPlan =
+            [this, collectionRelationIds](
+                CollectionId root,
+                bool clickedHidden,
+                const std::function<bool(const DocumentCollection &)> &flagValue) {
+                const QVector<DocumentCollection> collections =
+                    session_.document().collections();
+                const QVector<CollectionId> relatedIds =
+                    collectionRelationIds(root);
+                QSet<quint64> related;
+                for (const CollectionId id : relatedIds) {
+                    related.insert(id.value());
+                }
+
+                bool alreadyIsolated = clickedHidden && !related.isEmpty();
+                if (alreadyIsolated) {
+                    for (const DocumentCollection &candidate : collections) {
+                        if (candidate.id == root ||
+                            !candidate.libraryPath.isEmpty()) {
+                            continue;
+                        }
+                        const bool expectedHidden =
+                            !related.contains(candidate.id.value());
+                        if (flagValue(candidate) != expectedHidden) {
+                            alreadyIsolated = false;
+                            break;
+                        }
+                    }
+                }
+
+                QHash<quint64, bool> plan;
+                for (const DocumentCollection &candidate : collections) {
+                    const bool hidden = alreadyIsolated
+                        ? false : !related.contains(candidate.id.value());
+                    plan.insert(candidate.id.value(), hidden);
+                }
+                return plan;
+            };
         const auto objectsInCollections = [this](
             const QVector<CollectionId> &collectionIds) {
             QVector<ObjectId> result;
@@ -3295,8 +3352,33 @@ private:
             return false;
         };
         collectionCallbacks.setViewportVisibility =
-            [this, collectionHierarchyIds, objectsInCollections](
-                CollectionId id, bool hideViewport, bool recursive) {
+            [this, collectionHierarchyIds, objectsInCollections,
+             collectionIsolationPlan](CollectionId id, bool hideViewport,
+                                      bool recursive, bool isolate) {
+                if (isolate) {
+                    const QHash<quint64, bool> plan = collectionIsolationPlan(
+                        id, hideViewport, [](const DocumentCollection &entry) {
+                            return entry.hideViewport;
+                        });
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    bool changed = false;
+                    for (const DocumentCollection &entry :
+                         session_.document().collections()) {
+                        if (!entry.libraryPath.isEmpty()) continue;
+                        const bool hidden = plan.value(entry.id.value());
+                        if (entry.hideViewport == hidden) continue;
+                        changed = transaction.setCollectionVisibility(
+                                      entry.id, hidden, entry.hideRender) || changed;
+                    }
+                    if (changed && !session_.commitTransaction(transaction)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not isolate collection visibility"),
+                            4000);
+                        return;
+                    }
+                    if (changed) pruneOutlinerSelection();
+                    return;
+                }
                 QVector<CollectionId> collectionIds = recursive
                     ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
                 QVector<ObjectId> objectIds = recursive
@@ -3336,8 +3418,31 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setCollectionRenderVisibility =
-            [this, collectionHierarchyIds, objectsInCollections](
-                CollectionId id, bool hideRender, bool recursive) {
+            [this, collectionHierarchyIds, objectsInCollections,
+             collectionIsolationPlan](CollectionId id, bool hideRender,
+                                      bool recursive, bool isolate) {
+                if (isolate) {
+                    const QHash<quint64, bool> plan = collectionIsolationPlan(
+                        id, hideRender, [](const DocumentCollection &entry) {
+                            return entry.hideRender;
+                        });
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    bool changed = false;
+                    for (const DocumentCollection &entry :
+                         session_.document().collections()) {
+                        if (!entry.libraryPath.isEmpty()) continue;
+                        const bool hidden = plan.value(entry.id.value());
+                        if (entry.hideRender == hidden) continue;
+                        changed = transaction.setCollectionVisibility(
+                                      entry.id, entry.hideViewport, hidden) || changed;
+                    }
+                    if (changed && !session_.commitTransaction(transaction)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not isolate collection render visibility"),
+                            4000);
+                    }
+                    return;
+                }
                 QVector<CollectionId> collectionIds = recursive
                     ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
                 QVector<ObjectId> objectIds = recursive
@@ -3374,8 +3479,33 @@ private:
                 }
             };
         collectionCallbacks.setCollectionSelectability =
-            [this, collectionHierarchyIds, objectsInCollections](
-                CollectionId id, bool hideSelect, bool recursive) {
+            [this, collectionHierarchyIds, objectsInCollections,
+             collectionIsolationPlan](CollectionId id, bool hideSelect,
+                                      bool recursive, bool isolate) {
+                if (isolate) {
+                    const QHash<quint64, bool> plan = collectionIsolationPlan(
+                        id, hideSelect, [](const DocumentCollection &entry) {
+                            return entry.hideSelect;
+                        });
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    bool changed = false;
+                    for (const DocumentCollection &entry :
+                         session_.document().collections()) {
+                        if (!entry.libraryPath.isEmpty()) continue;
+                        const bool hidden = plan.value(entry.id.value());
+                        if (entry.hideSelect == hidden) continue;
+                        changed = transaction.setCollectionHideSelect(
+                                      entry.id, hidden) || changed;
+                    }
+                    if (changed && !session_.commitTransaction(transaction)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not isolate collection selection"),
+                            4000);
+                        return;
+                    }
+                    pruneOutlinerSelection();
+                    return;
+                }
                 QVector<CollectionId> collectionIds = recursive
                     ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
                 QVector<ObjectId> objectIds = recursive
@@ -3522,13 +3652,14 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setCollectionViewLayerState =
-            [this, objectsInCollections](
+            [this, objectsInCollections, collectionRelationIds](
                    CollectionId id,
                    const QString &viewLayerKey,
                    const QStringList &sourcePath,
                    const QString &stateKey,
                    bool value,
-                   bool recursive) {
+                   bool recursive,
+                   bool isolate) {
                 if (viewLayerKey.isEmpty() || sourcePath.isEmpty()) return;
 
                 struct LayerCollectionPath {
@@ -3561,6 +3692,104 @@ private:
                     }
                     return QJsonObject{};
                 };
+
+                if (isolate) {
+                    QVector<LayerCollectionPath> allPaths;
+                    for (const DocumentCollection &collection :
+                         session_.document().collections()) {
+                        for (const QJsonValue &stateValue :
+                             collection.viewLayerStates) {
+                            const QJsonObject state = stateValue.toObject();
+                            if (state.value(QStringLiteral("view_layer_key"))
+                                    .toString() != viewLayerKey) {
+                                continue;
+                            }
+                            QStringList path;
+                            for (const QJsonValue &part : state.value(
+                                     QStringLiteral("path")).toArray()) {
+                                if (!part.isString()) {
+                                    path.clear();
+                                    break;
+                                }
+                                path.append(part.toString());
+                            }
+                            if (path.isEmpty()) continue;
+                            LayerCollectionPath entry;
+                            entry.id = collection.id;
+                            entry.sourcePath = path;
+                            allPaths.append(entry);
+                        }
+                    }
+                    const auto isPrefix = [](const QStringList &prefix,
+                                             const QStringList &path) {
+                        if (prefix.size() > path.size()) return false;
+                        for (qsizetype index = 0; index < prefix.size(); ++index) {
+                            if (prefix[index] != path[index]) return false;
+                        }
+                        return true;
+                    };
+                    QSet<quint64> relatedCollections;
+                    for (const CollectionId relatedId :
+                         collectionRelationIds(id)) {
+                        relatedCollections.insert(relatedId.value());
+                    }
+                    bool alreadyIsolated = value;
+                    if (alreadyIsolated) {
+                        for (const LayerCollectionPath &path : allPaths) {
+                            const DocumentCollection *collection =
+                                session_.document().collection(path.id);
+                            if (collection == nullptr ||
+                                !collection->libraryPath.isEmpty() ||
+                                path.id == id) {
+                                continue;
+                            }
+                            const QJsonObject current = stateForPath(
+                                *collection, viewLayerKey, path.sourcePath);
+                            const bool related = relatedCollections.contains(
+                                path.id.value());
+                            const bool expectedHidden = !related;
+                            if (current.value(stateKey).toBool() !=
+                                expectedHidden) {
+                                alreadyIsolated = false;
+                                break;
+                            }
+                        }
+                    }
+
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    bool changed = false;
+                    for (const LayerCollectionPath &path : allPaths) {
+                        const DocumentCollection *collection =
+                            session_.document().collection(path.id);
+                        if (collection == nullptr ||
+                            !collection->libraryPath.isEmpty()) {
+                            continue;
+                        }
+                        const QJsonObject current = stateForPath(
+                            *collection, viewLayerKey, path.sourcePath);
+                        if (current.isEmpty()) continue;
+                        const bool visibleInTargetBranch =
+                            isPrefix(sourcePath, path.sourcePath) ||
+                            isPrefix(path.sourcePath, sourcePath);
+                        const bool hidden = alreadyIsolated
+                            ? false : !visibleInTargetBranch;
+                        if (current.value(stateKey).isBool() &&
+                            current.value(stateKey).toBool() == hidden) {
+                            continue;
+                        }
+                        changed = transaction.setCollectionViewLayerState(
+                                      path.id, viewLayerKey, path.sourcePath,
+                                      stateKey, hidden) || changed;
+                    }
+                    if (changed && !session_.commitTransaction(transaction)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not isolate active view layer collection"),
+                            4000);
+                        return;
+                    }
+                    if (changed) pruneOutlinerSelection();
+                    return;
+                }
 
                 QVector<LayerCollectionPath> paths;
                 const DocumentCollection *rootCollection =

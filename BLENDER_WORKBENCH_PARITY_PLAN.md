@@ -10760,10 +10760,19 @@ scene depth.
   links are handled per path; object and collection cycles are guarded. The
   changes use one undoable document transaction per click. The full
   `cmake --build build -j4` passed; no GUI interaction comparison was run.
+- The tenth tree update adds Blender's collection Ctrl-click isolation from
+  [`outliner_collection_isolate_flag()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L423-L597).
+  Ctrl-click on a collection restriction hides unrelated collections while
+  keeping that collection, its nested collections, and its parents visible.
+  Ctrl-clicking the isolated collection again restores the default visible
+  state. The same gesture works on the active view-layer collection columns
+  using their individual collection paths. Shift takes precedence when both
+  modifiers are held, matching Blender's callback. Object rows keep their
+  normal Ctrl-click toggle and only use Shift to affect parented children. The
+  full `cmake --build build -j4` passed; no GUI interaction comparison was run.
 - Remaining Outliner scope includes carrying row state inside the project file,
-  Ctrl-click collection isolation, other Blender datablock rows and restriction
-  controls, scene switching, and a matched Blender/classiCAD interaction
-  comparison. Do not
+  other Blender datablock rows and restriction controls, scene switching, and a
+  matched Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

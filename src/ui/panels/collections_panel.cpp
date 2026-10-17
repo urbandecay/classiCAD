@@ -350,15 +350,15 @@ void CollectionsPanel::createLayout()
                             QStringLiteral("Select"),
                             QStringLiteral("Exclude")});
     tree_->headerItem()->setToolTip(viewportColumn,
-                                    QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants."));
+                                    QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(renderColumn,
-                                    QStringLiteral("Hide globally in renders. Shift-click applies to descendants."));
+                                    QStringLiteral("Hide globally in renders. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(viewLayerViewportColumn,
-                                    QStringLiteral("Hide in the active Blender view layer. Shift-click applies to descendants."));
+                                    QStringLiteral("Hide in the active Blender view layer. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(selectColumn,
-                                    QStringLiteral("Prevent selection. Shift-click applies to descendants."));
+                                    QStringLiteral("Prevent selection. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(excludeColumn,
-                                    QStringLiteral("Exclude this collection path from the active view layer. Shift-click applies to descendants."));
+                                    QStringLiteral("Exclude this collection path from the active view layer. Shift-click applies to descendants; Ctrl-click isolates this path."));
     tree_->setRootIsDecorated(true);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
@@ -438,38 +438,45 @@ void CollectionsPanel::createLayout()
             ? callbacks_.activeViewLayerKey() : QString{};
         const QStringList sourcePath =
             item->data(nameColumn, itemSourcePathRole).toStringList();
-        const bool recursive =
+        const Qt::KeyboardModifiers modifiers =
             static_cast<OutlinerTreeWidget *>(tree_)
-                ->restrictionModifiersFor(item, column)
-                .testFlag(Qt::ShiftModifier);
+                ->restrictionModifiersFor(item, column);
+        const bool recursive = modifiers.testFlag(Qt::ShiftModifier);
+        const bool isolate = kind == OutlinerRowKind::Collection &&
+            !recursive && modifiers.testFlag(Qt::ControlModifier);
         // Applying a transaction notifies MainWindow synchronously, and its
         // observer rebuilds this tree. Defer the write until Qt has finished
         // dispatching itemChanged so the active QTreeWidgetItem is not deleted
         // from inside its own check-state update.
         QTimer::singleShot(0, this, [this, kind, column, hidden, value,
-                                     viewLayerKey, sourcePath, recursive]() {
+                                     viewLayerKey, sourcePath, recursive,
+                                     isolate]() {
             if (kind == OutlinerRowKind::Collection) {
                 const CollectionId id = CollectionId::fromValue(value);
                 if (column == viewportColumn && callbacks_.setViewportVisibility) {
-                    callbacks_.setViewportVisibility(id, hidden, recursive);
+                    callbacks_.setViewportVisibility(id, hidden, recursive,
+                                                     isolate);
                 } else if (column == renderColumn &&
                            callbacks_.setCollectionRenderVisibility) {
                     callbacks_.setCollectionRenderVisibility(id, hidden,
-                                                             recursive);
+                                                             recursive,
+                                                             isolate);
                 } else if (column == viewLayerViewportColumn &&
                            callbacks_.setCollectionViewLayerState) {
                     callbacks_.setCollectionViewLayerState(
                         id, viewLayerKey, sourcePath,
-                        QStringLiteral("hide_viewport"), hidden, recursive);
+                        QStringLiteral("hide_viewport"), hidden, recursive,
+                        isolate);
                 } else if (column == selectColumn &&
                            callbacks_.setCollectionSelectability) {
                     callbacks_.setCollectionSelectability(id, hidden,
-                                                          recursive);
+                                                          recursive, isolate);
                 } else if (column == excludeColumn &&
                            callbacks_.setCollectionViewLayerState) {
                     callbacks_.setCollectionViewLayerState(
                         id, viewLayerKey, sourcePath,
-                        QStringLiteral("exclude"), hidden, recursive);
+                        QStringLiteral("exclude"), hidden, recursive,
+                        isolate);
                 }
             } else if (kind == OutlinerRowKind::Object) {
                 const ObjectId id = ObjectId::fromValue(value);

@@ -69,9 +69,11 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;
     std::function<void(ObjectId, const QString &)> renameObject;
     std::function<void(ObjectId, CollectionId)> unlinkObject;
-    std::function<void(CollectionId, bool, bool)> setViewportVisibility;
-    std::function<void(CollectionId, bool, bool)> setCollectionRenderVisibility;
-    std::function<void(CollectionId, bool, bool)> setCollectionSelectability;
+    std::function<void(CollectionId, bool, bool, bool)> setViewportVisibility;
+    std::function<void(CollectionId, bool, bool, bool)>
+        setCollectionRenderVisibility;
+    std::function<void(CollectionId, bool, bool, bool)>
+        setCollectionSelectability;
     std::function<void(ObjectId, bool, bool)> setObjectViewportVisibility;
     std::function<void(ObjectId, bool, bool)> setObjectRenderVisibility;
     std::function<void(ObjectId, bool, bool)> setObjectSelectability;
@@ -81,6 +83,7 @@ struct CollectionsPanelCallbacks {
                        const QString &,
                        const QStringList &,
                        const QString &,
+                       bool,
                        bool,
                        bool)> setCollectionViewLayerState;
     std::function<void(const QVector<OutlinerRowReference> &,

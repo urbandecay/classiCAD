@@ -33,6 +33,7 @@
 #include <QTreeWidgetItem>
 #include <QVariant>
 #include <QVBoxLayout>
+#include <QRegularExpression>
 
 #include <algorithm>
 
@@ -287,6 +288,12 @@ void CollectionsPanel::createLayout()
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+    filterEdit_ = new QLineEdit(this);
+    filterEdit_->setClearButtonEnabled(true);
+    filterEdit_->setPlaceholderText(QStringLiteral("Filter objects and collections"));
+    filterEdit_->setToolTip(QStringLiteral(
+        "Case-insensitive name filter. Use * and ? as wildcards."));
+    layout->addWidget(filterEdit_);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
     tree_->setColumnCount(5);
@@ -328,6 +335,8 @@ void CollectionsPanel::createLayout()
     tree_->setToolTip(QStringLiteral(
         "Scene objects and collection memberships. Click to select and activate; Ctrl-click toggles selection. The restriction columns control viewport visibility and selection."));
     layout->addWidget(tree_);
+    connect(filterEdit_, &QLineEdit::textChanged, this,
+            [this](const QString &text) { applyNameFilter(text); });
 
     outlinerTree->setActivationHandlers(
         [this](QTreeWidgetItem *item, Qt::KeyboardModifiers modifiers) {
@@ -410,6 +419,86 @@ void CollectionsPanel::createLayout()
         });
     });
 
+}
+
+void CollectionsPanel::applyNameFilter(const QString &text)
+{
+    if (activeFilterText_.isEmpty() && !text.isEmpty()) {
+        expandedBeforeFilter_.clear();
+        QVector<QTreeWidgetItem *> pending;
+        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+            pending.append(tree_->topLevelItem(index));
+        }
+        while (!pending.isEmpty()) {
+            QTreeWidgetItem *item = pending.takeLast();
+            const QString path = item->data(nameColumn, itemPathRole).toString();
+            if (!path.isEmpty()) {
+                expandedBeforeFilter_.insert(path, item->isExpanded());
+            }
+            for (int index = 0; index < item->childCount(); ++index) {
+                pending.append(item->child(index));
+            }
+        }
+    }
+
+    activeFilterText_ = text;
+    QRegularExpression matcher;
+    if (!text.isEmpty()) {
+        QString glob = text;
+        if (!glob.startsWith(QLatin1Char('*'))) glob.prepend(QLatin1Char('*'));
+        if (!glob.endsWith(QLatin1Char('*'))) glob.append(QLatin1Char('*'));
+        QString expression = QStringLiteral("^");
+        for (const QChar character : glob) {
+            if (character == QLatin1Char('*')) {
+                expression.append(QStringLiteral(".*"));
+            } else if (character == QLatin1Char('?')) {
+                expression.append(QLatin1Char('.'));
+            } else {
+                expression.append(QRegularExpression::escape(QString(character)));
+            }
+        }
+        expression.append(QLatin1Char('$'));
+        matcher = QRegularExpression(
+            expression, QRegularExpression::CaseInsensitiveOption);
+    }
+
+    const auto filterSubtree = [&](const auto &self,
+                                   QTreeWidgetItem *item) -> bool {
+        if (item == nullptr) return false;
+        bool childMatches = false;
+        for (int index = 0; index < item->childCount(); ++index) {
+            childMatches = self(self, item->child(index)) || childMatches;
+        }
+        const bool matches = text.isEmpty() ||
+            matcher.match(item->text(nameColumn)).hasMatch();
+        const bool visible = matches || childMatches;
+        item->setHidden(!visible);
+        if (!text.isEmpty() && childMatches) item->setExpanded(true);
+        return visible;
+    };
+
+    for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+        filterSubtree(filterSubtree, tree_->topLevelItem(index));
+    }
+
+    if (text.isEmpty()) {
+        QVector<QTreeWidgetItem *> pending;
+        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+            pending.append(tree_->topLevelItem(index));
+        }
+        while (!pending.isEmpty()) {
+            QTreeWidgetItem *item = pending.takeLast();
+            const QString path = item->data(nameColumn, itemPathRole).toString();
+            const auto saved = expandedBeforeFilter_.constFind(path);
+            if (saved != expandedBeforeFilter_.cend()) {
+                item->setExpanded(saved.value());
+            }
+            for (int index = 0; index < item->childCount(); ++index) {
+                pending.append(item->child(index));
+            }
+        }
+        expandedBeforeFilter_.clear();
+    }
 }
 
 bool CollectionsPanel::activateObjectRow(
@@ -938,6 +1027,9 @@ void CollectionsPanel::refresh()
     refreshing_ = false;
     tree_->verticalScrollBar()->setValue(scrollPosition);
     syncSelection();
+    if (filterEdit_ != nullptr && !filterEdit_->text().isEmpty()) {
+        applyNameFilter(filterEdit_->text());
+    }
 }
 
 void CollectionsPanel::syncSelection()

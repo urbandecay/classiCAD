@@ -10711,8 +10711,17 @@ scene depth.
   Sibling before/after ordering and Blender's full drag-source operator matrix
   remain unported. `git diff --check` and `cmake --build build -j4` passed;
   no GUI interaction comparison was run.
-- Remaining Outliner scope includes row-state
-  persistence/filtering, other Blender datablock rows and restriction
+- The fifth tree update adapts Blender 5.2.2's name-filter traversal and
+  wildcard matching in
+  [`outliner_tree.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tree.cc#L948-L1089).
+  A case-insensitive `*`/`?` field filters objects and collections while
+  retaining each matching row's ancestors and expanding the path to matches.
+  Clearing the filter restores the expansion state from before filtering;
+  normal document refreshes continue to preserve the current tree state.
+  Blender's data-block type/state filter matrix is not present. The full build
+  passed; no GUI interaction comparison was run.
+- Remaining Outliner scope includes persistent row-state
+  storage across panel/app restarts, other Blender datablock rows and restriction
   controls, multiple view-layer switching, and a matched Blender/classiCAD
   interaction comparison. Do not mark this port complete until the remaining
   items have been reviewed against pinned Blender source.

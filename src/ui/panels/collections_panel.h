@@ -17,6 +17,7 @@
 
 class QTreeWidget;
 class QTreeWidgetItem;
+class QLineEdit;
 
 namespace classiCAD {
 
@@ -86,6 +87,7 @@ public:
 
 private:
     void createLayout();
+    void applyNameFilter(const QString &text);
     void showContextMenu(const QPoint &position);
     bool activateObjectRow(QTreeWidgetItem *item,
                            Qt::KeyboardModifiers modifiers);
@@ -108,9 +110,12 @@ private:
 
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
+    QLineEdit *filterEdit_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
+    QHash<QString, bool> expandedBeforeFilter_;
+    QString activeFilterText_;
     bool refreshing_ = false;
     bool hasRefreshed_ = false;
 };

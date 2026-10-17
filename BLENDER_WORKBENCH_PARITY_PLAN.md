@@ -11374,3 +11374,14 @@ scene depth.
   in an undoable transaction. `cmake --build build -j4` and
   `git diff --check` passed; no matched Blender Outliner interaction
   comparison was run.
+- The hundred-third tree update follows Blender 5.2.2's
+  [`BKE_keyingset_find_path()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/anim_sys.cc#L83-L126)
+  and Outliner [`tree_element_to_path()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1780-L1904).
+  Blender identifies a Keying Set path by owning ID, RNA path, and array
+  index; the lookup used by these Outliner operators does not compare the
+  stored grouping fields or whole-array flag. classiCAD now uses those same
+  identity fields when adding/removing paths, including Blender's index-zero
+  overlap between a whole-array path and the first component. This corrects
+  duplicate-add and remove behavior for array paths and grouped imported
+  Keying Sets. `cmake --build build -j4` and `git diff --check` passed; no
+  matched Blender Outliner interaction comparison was run.

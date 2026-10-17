@@ -4203,10 +4203,7 @@ private:
                             QStringLiteral("id_type"),
                             QStringLiteral("id_name"),
                             QStringLiteral("data_path"),
-                            QStringLiteral("array_index"),
-                            QStringLiteral("use_entire_array"),
-                            QStringLiteral("group"),
-                            QStringLiteral("group_method")};
+                            QStringLiteral("array_index")};
                         for (const QString &key : keys) {
                             if (left.value(key) != right.value(key)) return false;
                         }

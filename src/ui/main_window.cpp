@@ -2063,6 +2063,9 @@ private:
                         button->setChecked(true);
                     }
                 }
+                if (collectionsPanel_ != nullptr) {
+                    collectionsPanel_->syncSelection();
+                }
             };
         workspaceSplitter->addWidget(viewport_);
         workspaceSplitter->addWidget(createRightPanel());
@@ -3565,6 +3568,7 @@ private:
                 }
                 entry.collectionIds = object.collectionIds;
                 entry.hideViewport = object.hideViewport;
+                entry.hiddenInViewport = object.hiddenInViewport;
                 entry.hideRender = object.hideRender;
                 entry.hideSelect = object.hideSelect;
                 entry.visible = document.isObjectVisible(object.id);
@@ -4584,6 +4588,25 @@ private:
         collectionCallbacks.activeObjectId = [this]() {
             return session_.selection().activeObjectId();
         };
+        collectionCallbacks.interactionMode = [this]() {
+            return viewport_ != nullptr ? viewport_->interactionMode() : 0;
+        };
+        collectionCallbacks.setObjectInteractionMode =
+            [this](ObjectId id, int mode) {
+                if (viewport_ == nullptr ||
+                    !session_.document().isObjectEditable(id)) {
+                    return;
+                }
+                session_.selection().setObjectIds({id}, id);
+                session_.selection().setActiveObjectId(id);
+                if (mode == 1 && viewport_->interactionMode() == 1) {
+                    viewport_->setInteractionMode(0);
+                }
+                viewport_->setInteractionMode(mode);
+                if (collectionsPanel_ != nullptr) {
+                    collectionsPanel_->syncSelection();
+                }
+            };
         collectionCallbacks.hasOutlinerObjectClipboard = [this]() {
             return !outlinerObjectClipboard_.isEmpty();
         };
@@ -8570,6 +8593,32 @@ private:
                 if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not update object selection lock"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.setObjectHiddenInViewport =
+            [this, objectHierarchyIds](ObjectId id, bool hidden,
+                                       bool recursive) {
+                const QVector<ObjectId> objectIds = recursive
+                    ? objectHierarchyIds(id) : QVector<ObjectId>{id};
+                if (objectIds.isEmpty()) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                for (const ObjectId objectId : objectIds) {
+                    const SceneObject *object =
+                        session_.document().object(objectId);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        object->hiddenInViewport == hidden) {
+                        continue;
+                    }
+                    changed = transaction.setObjectHiddenInViewport(
+                                  objectId, hidden) || changed;
+                }
+                if (!changed || !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update object viewport visibility"),
                         4000);
                     return;
                 }

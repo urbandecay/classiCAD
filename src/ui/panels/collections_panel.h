@@ -23,6 +23,7 @@ class QLineEdit;
 class QComboBox;
 class QToolButton;
 class QCheckBox;
+class QAction;
 
 namespace classiCAD {
 
@@ -102,6 +103,7 @@ struct OutlinerObjectEntry {
     QVector<OutlinerNlaTrackEntry> nlaTracks;
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
+    bool hiddenInViewport = false;
     bool hideRender = false;
     bool hideSelect = false;
     bool visible = true;
@@ -267,6 +269,8 @@ struct CollectionsPanelCallbacks {
         setActiveCollection;
     std::function<QVector<ObjectId>()> selectedObjectIds;
     std::function<ObjectId()> activeObjectId;
+    std::function<int()> interactionMode;
+    std::function<void(ObjectId, int)> setObjectInteractionMode;
     std::function<bool(ObjectId)> canSelectObject;
     std::function<bool(ObjectId, const QString &)> objectVisibleInViewLayer;
     std::function<bool(ObjectId, const QString &)> objectSelectableInViewLayer;
@@ -323,6 +327,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(CollectionId, bool, bool, bool)>
         setCollectionSelectability;
     std::function<void(ObjectId, bool, bool)> setObjectViewportVisibility;
+    std::function<void(ObjectId, bool, bool)> setObjectHiddenInViewport;
     std::function<void(ObjectId, bool, bool)> setObjectRenderVisibility;
     std::function<void(ObjectId, bool, bool)> setObjectSelectability;
     std::function<void(ObjectId, const QString &, bool, bool)>
@@ -405,6 +410,7 @@ private:
     QCheckBox *showSystemOverridesCheck_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
+    QAction *scrollToActiveAction_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
@@ -427,6 +433,9 @@ private:
     bool showObjectChildren_ = true;
     bool showAllViewLayers_ = false;
     bool scrollToActive_ = true;
+    bool sortAlphabetically_ = false;
+    bool syncSelectionEnabled_ = true;
+    bool showModeColumn_ = true;
     bool scenesDisplayMode_ = false;
     bool librariesDisplayMode_ = false;
     bool orphanDataDisplayMode_ = false;

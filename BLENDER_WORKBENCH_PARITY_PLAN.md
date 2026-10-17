@@ -11582,3 +11582,19 @@ scene depth.
   surface object needs a multi-patch geometry representation. `cmake --build
   build -j4` and `git diff --check` passed; no GUI interaction or matched
   Blender comparison was run.
+- The hundred-nineteenth Outliner update follows Blender 5.2.2's [Filter
+  Options](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L380-L533)
+  and [Outliner display defaults](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/space_outliner.cc#L372-L384).
+  Object and collection rows now have type/folder glyphs; restriction columns
+  use icon headers and the Filter popup has Blender-style restriction toggles,
+  alphabetical sorting, independent selection sync, and a mode column for the
+  app's Object/Edit modes. The Hide column remains available when no Blender
+  View Layer is active and then toggles the document's viewport-hidden state.
+  Layer-specific restriction toggles check the active View Layer each time
+  the submenu opens, including after a Blender file is loaded. This is a Qt
+  implementation of the behavior, with hand-drawn icons and only the two
+  interaction modes classiCAD currently supports. Blender's full set of
+  object-mode icons, conditional object-type filter toggles, and exact icon
+  artwork are not represented yet. `cmake --build build -j4` and
+  `git diff --check` passed; no matched Blender Outliner screenshot comparison
+  was run.

@@ -334,6 +334,15 @@ bool DocumentTransaction::setObjectVisibilityFlags(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::setObjectHiddenInViewport(ObjectId objectId,
+                                                    bool hidden)
+{
+    if (!document_.setObjectHiddenInViewport(objectId, hidden)) return false;
+    changes_.addObject(objectId);
+    changes_.visibilityChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectRenderVisibility(ObjectId objectId,
                                                      bool hideRender)
 {

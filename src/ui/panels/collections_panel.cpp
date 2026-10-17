@@ -55,11 +55,15 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
+#include <QPolygonF>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QStyle>
 #include <QStyledItemDelegate>
+#include <QStyleOptionViewItem>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -110,6 +114,260 @@ constexpr int holdoutColumn = 4;
 constexpr int indirectOnlyColumn = 5;
 constexpr int selectColumn = 6;
 constexpr int excludeColumn = 7;
+constexpr int modeColumn = 8;
+constexpr int itemModeValueRole = Qt::UserRole + 27;
+
+QColor collectionColorTagColor(const QString &colorTag);
+
+enum class RestrictionGlyph {
+    Enable,
+    Select,
+    Hide,
+    Viewport,
+    Render,
+    Holdout,
+    IndirectOnly,
+    ObjectMode,
+    EditMode,
+};
+
+QIcon paintedIcon(const std::function<void(QPainter &)> &paint)
+{
+    QPixmap pixmap(16, 16);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor(0xB8, 0xBC, 0xC2), 1.25,
+                        Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    paint(painter);
+    return QIcon(pixmap);
+}
+
+QIcon collectionIcon(const QString &colorTag)
+{
+    QColor color = collectionColorTagColor(colorTag);
+    if (!color.isValid()) color = QColor(0xA9, 0xAF, 0xB8);
+    return paintedIcon([color](QPainter &painter) {
+        QPainterPath folder;
+        folder.moveTo(1.5, 4.5);
+        folder.lineTo(6.0, 4.5);
+        folder.lineTo(7.6, 6.1);
+        folder.lineTo(14.5, 6.1);
+        folder.lineTo(13.6, 13.2);
+        folder.lineTo(1.5, 13.2);
+        folder.closeSubpath();
+        painter.setPen(QPen(color.darker(135), 1.0));
+        painter.setBrush(color);
+        painter.drawPath(folder);
+    });
+}
+
+QIcon objectTypeIcon(QString blenderType)
+{
+    blenderType = blenderType.toUpper();
+    return paintedIcon([blenderType](QPainter &painter) {
+        QColor color(0xB8, 0xBC, 0xC2);
+        if (blenderType == QLatin1String("MESH")) {
+            color = QColor(0xE4, 0x94, 0x4C);
+            QPolygonF mesh;
+            mesh << QPointF(2.0, 12.7) << QPointF(7.6, 2.2)
+                 << QPointF(14.0, 12.7) << QPointF(2.0, 12.7);
+            painter.setPen(QPen(color, 1.4, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.setBrush(QColor(color.red(), color.green(),
+                                    color.blue(), 38));
+            painter.drawPolygon(mesh);
+            painter.setBrush(color);
+            for (const QPointF &point : {QPointF(2.0, 12.7),
+                                         QPointF(7.6, 2.2),
+                                         QPointF(14.0, 12.7)}) {
+                painter.drawEllipse(point, 1.45, 1.45);
+            }
+        } else if (blenderType == QLatin1String("CAMERA")) {
+            color = QColor(0x66, 0xC8, 0xC1);
+            painter.setPen(QPen(color, 1.35, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.drawRoundedRect(QRectF(1.5, 4.2, 9.2, 7.4), 1.0, 1.0);
+            painter.drawPolygon(QPolygonF{QPointF(10.7, 6.0),
+                                           QPointF(14.5, 4.2),
+                                           QPointF(14.5, 11.8),
+                                           QPointF(10.7, 10.0)});
+        } else if (blenderType == QLatin1String("LIGHT")) {
+            color = QColor(0xA8, 0xD3, 0x6F);
+            painter.setPen(QPen(color, 1.25, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.drawEllipse(QRectF(4.0, 3.0, 8.0, 8.0));
+            painter.drawLine(QPointF(6.3, 11.5), QPointF(9.7, 11.5));
+            painter.drawLine(QPointF(6.8, 13.2), QPointF(9.2, 13.2));
+            painter.drawLine(QPointF(8.0, 0.9), QPointF(8.0, 2.0));
+            painter.drawLine(QPointF(1.8, 7.0), QPointF(3.0, 7.0));
+            painter.drawLine(QPointF(13.0, 7.0), QPointF(14.2, 7.0));
+        } else if (blenderType == QLatin1String("ARMATURE")) {
+            color = QColor(0xB1, 0x8B, 0xD3);
+            painter.setPen(QPen(color, 2.0, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.drawLine(QPointF(3.0, 12.8), QPointF(12.7, 3.1));
+            painter.setBrush(color);
+            painter.drawEllipse(QPointF(3.0, 12.8), 2.0, 2.0);
+            painter.drawEllipse(QPointF(12.7, 3.1), 2.0, 2.0);
+        } else if (blenderType == QLatin1String("EMPTY")) {
+            painter.setPen(QPen(color, 1.3));
+            painter.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0));
+            painter.drawLine(QPointF(8.0, 1.0), QPointF(8.0, 15.0));
+            painter.drawLine(QPointF(1.0, 8.0), QPointF(15.0, 8.0));
+        } else if (blenderType == QLatin1String("CURVE") ||
+                   blenderType == QLatin1String("SURFACE") ||
+                   blenderType == QLatin1String("FONT")) {
+            color = QColor(0x78, 0xC6, 0xA1);
+            QPainterPath curve;
+            curve.moveTo(2.0, 12.7);
+            curve.cubicTo(4.0, 1.5, 11.8, 14.5, 14.0, 3.2);
+            painter.setPen(QPen(color, 1.6, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.drawPath(curve);
+            painter.setBrush(color);
+            painter.drawEllipse(QPointF(2.0, 12.7), 1.25, 1.25);
+            painter.drawEllipse(QPointF(14.0, 3.2), 1.25, 1.25);
+        } else if (blenderType == QLatin1String("GREASE_PENCIL") ||
+                   blenderType == QLatin1String("GPENCIL")) {
+            color = QColor(0xD7, 0x83, 0xA6);
+            painter.setPen(QPen(color, 2.0, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            painter.drawLine(QPointF(3.0, 12.7), QPointF(12.7, 3.0));
+            painter.drawLine(QPointF(5.2, 14.0), QPointF(14.0, 5.2));
+        } else {
+            painter.setPen(QPen(color, 1.3));
+            painter.setBrush(QColor(color.red(), color.green(),
+                                    color.blue(), 35));
+            painter.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0));
+            painter.drawEllipse(QPointF(8.0, 8.0), 1.2, 1.2);
+        }
+    });
+}
+
+QIcon restrictionIcon(RestrictionGlyph glyph, bool enabled)
+{
+    const QColor active = enabled ? QColor(0xC3, 0xC8, 0xCF)
+                                  : QColor(0x6C, 0x71, 0x78);
+    return paintedIcon([glyph, active, enabled](QPainter &painter) {
+        painter.setPen(QPen(active, 1.25, Qt::SolidLine,
+                            Qt::RoundCap, Qt::RoundJoin));
+        switch (glyph) {
+        case RestrictionGlyph::Enable:
+            painter.drawRoundedRect(QRectF(2.0, 2.0, 12.0, 12.0), 2.0, 2.0);
+            painter.drawLine(QPointF(5.0, 8.0), QPointF(7.1, 10.0));
+            painter.drawLine(QPointF(7.1, 10.0), QPointF(11.4, 5.8));
+            break;
+        case RestrictionGlyph::Select:
+            painter.drawLine(QPointF(3.0, 1.5), QPointF(3.0, 13.5));
+            painter.drawLine(QPointF(3.0, 1.5), QPointF(12.5, 8.5));
+            painter.drawLine(QPointF(3.0, 7.2), QPointF(7.8, 7.2));
+            painter.drawLine(QPointF(7.8, 7.2), QPointF(10.5, 13.3));
+            break;
+        case RestrictionGlyph::Hide:
+            painter.drawEllipse(QRectF(1.2, 4.0, 13.6, 8.0));
+            painter.drawEllipse(QPointF(8.0, 8.0), 2.0, 2.0);
+            break;
+        case RestrictionGlyph::Viewport:
+            painter.drawRoundedRect(QRectF(1.5, 2.4, 13.0, 9.7), 1.0, 1.0);
+            painter.drawLine(QPointF(5.0, 14.0), QPointF(11.0, 14.0));
+            painter.drawLine(QPointF(8.0, 12.1), QPointF(8.0, 14.0));
+            break;
+        case RestrictionGlyph::Render:
+            painter.drawRoundedRect(QRectF(1.2, 4.0, 9.6, 8.2), 1.0, 1.0);
+            painter.drawPolygon(QPolygonF{QPointF(10.8, 6.0),
+                                           QPointF(14.6, 4.2),
+                                           QPointF(14.6, 12.0),
+                                           QPointF(10.8, 10.2)});
+            break;
+        case RestrictionGlyph::Holdout:
+            painter.drawEllipse(QRectF(2.0, 2.0, 12.0, 12.0));
+            painter.drawLine(QPointF(3.0, 13.0), QPointF(13.0, 3.0));
+            break;
+        case RestrictionGlyph::IndirectOnly:
+            painter.drawEllipse(QPointF(8.0, 8.0), 2.0, 2.0);
+            painter.drawLine(QPointF(8.0, 1.0), QPointF(8.0, 3.2));
+            painter.drawLine(QPointF(8.0, 12.8), QPointF(8.0, 15.0));
+            painter.drawLine(QPointF(1.0, 8.0), QPointF(3.2, 8.0));
+            painter.drawLine(QPointF(12.8, 8.0), QPointF(15.0, 8.0));
+            break;
+        case RestrictionGlyph::ObjectMode:
+            painter.drawRoundedRect(QRectF(2.2, 2.2, 11.6, 11.6), 2.0, 2.0);
+            break;
+        case RestrictionGlyph::EditMode:
+            painter.drawLine(QPointF(2.4, 12.7), QPointF(12.5, 2.5));
+            painter.drawEllipse(QPointF(2.4, 12.7), 1.7, 1.7);
+            painter.drawEllipse(QPointF(12.5, 2.5), 1.7, 1.7);
+            break;
+        }
+        if (!enabled) {
+            painter.drawLine(QPointF(2.0, 14.0), QPointF(14.0, 2.0));
+        }
+    });
+}
+
+class RestrictionIconDelegate final : public QStyledItemDelegate {
+public:
+    RestrictionIconDelegate(int column, RestrictionGlyph glyph,
+                            QObject *parent)
+        : QStyledItemDelegate(parent), column_(column), glyph_(glyph)
+    {
+    }
+
+    void paint(QPainter *painter,
+               const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem background(option);
+        QApplication::style()->drawPrimitive(
+            QStyle::PE_PanelItemViewItem, &background, painter,
+            option.widget);
+        const QVariant state = index.data(Qt::CheckStateRole);
+        if (state.isNull()) return;
+        const bool checked = state.toInt() == Qt::Checked;
+        const QIcon icon = restrictionIcon(glyph_, checked);
+        const QSize size(16, 16);
+        const QRect rect(option.rect.center().x() - size.width() / 2,
+                         option.rect.center().y() - size.height() / 2,
+                         size.width(), size.height());
+        icon.paint(painter, rect);
+    }
+
+    bool editorEvent(QEvent *event,
+                     QAbstractItemModel *model,
+                     const QStyleOptionViewItem &option,
+                     const QModelIndex &index) override
+    {
+        if (index.data(Qt::CheckStateRole).isNull() ||
+            (index.flags() & Qt::ItemIsUserCheckable) == 0) {
+            return false;
+        }
+        if ((column_ == viewLayerViewportColumn || column_ == holdoutColumn ||
+             column_ == indirectOnlyColumn || column_ == excludeColumn) &&
+            !index.data(itemViewLayerEditableRole).toBool()) {
+            return false;
+        }
+        bool activate = false;
+        if (event->type() == QEvent::MouseButtonRelease) {
+            const auto *mouse = static_cast<QMouseEvent *>(event);
+            activate = mouse->button() == Qt::LeftButton &&
+                       option.rect.contains(mouse->position().toPoint());
+        } else if (event->type() == QEvent::KeyPress) {
+            const auto *key = static_cast<QKeyEvent *>(event);
+            activate = key->key() == Qt::Key_Space;
+        }
+        if (!activate) return false;
+        const Qt::CheckState next =
+            index.data(Qt::CheckStateRole).toInt() == Qt::Checked
+                ? Qt::Unchecked : Qt::Checked;
+        return model->setData(index, next, Qt::CheckStateRole);
+    }
+
+private:
+    int column_ = -1;
+    RestrictionGlyph glyph_ = RestrictionGlyph::Hide;
+};
 
 bool isDataApiPointerStruct(const QTreeWidgetItem *item)
 {
@@ -187,20 +445,6 @@ QString collectionColorTagLabel(const QString &colorTag)
     }
     return QStringLiteral("Unknown");
 }
-
-class ViewLayerCheckDelegate final : public QStyledItemDelegate {
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-
-    bool editorEvent(QEvent *event,
-                     QAbstractItemModel *model,
-                     const QStyleOptionViewItem &option,
-                     const QModelIndex &index) override
-    {
-        if (!index.data(itemViewLayerEditableRole).toBool()) return false;
-        return QStyledItemDelegate::editorEvent(event, model, option, index);
-    }
-};
 
 class OutlinerTreeWidget final : public QTreeWidget {
 public:
@@ -735,7 +979,7 @@ void CollectionsPanel::createLayout()
     layout->addLayout(keyingSetRow);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
-    tree_->setColumnCount(8);
+    tree_->setColumnCount(9);
     tree_->setHeaderLabels({QStringLiteral("Name"),
                             QStringLiteral("Viewport"),
                             QStringLiteral("Render"),
@@ -743,13 +987,14 @@ void CollectionsPanel::createLayout()
                             QStringLiteral("Holdout"),
                             QStringLiteral("Indirect Only"),
                             QStringLiteral("Select"),
-                            QStringLiteral("Exclude")});
+                            QStringLiteral("Exclude"),
+                            QStringLiteral("Mode")});
     tree_->headerItem()->setToolTip(viewportColumn,
                                     QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(renderColumn,
                                     QStringLiteral("Hide globally in renders. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(viewLayerViewportColumn,
-                                    QStringLiteral("Hide in the active Blender view layer. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
+                                    QStringLiteral("Hide in the active Blender view layer, or hide the object in the current viewport when no Blender view layer is active. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(holdoutColumn,
                                     QStringLiteral("Make this collection a holdout in the active view layer. Shift-click applies to descendants; Ctrl-click isolates it."));
     tree_->headerItem()->setToolTip(indirectOnlyColumn,
@@ -758,6 +1003,24 @@ void CollectionsPanel::createLayout()
                                     QStringLiteral("Prevent selection. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(excludeColumn,
                                     QStringLiteral("Exclude this collection path from the active view layer. Shift-click applies to descendants; Ctrl-click isolates this path."));
+    tree_->headerItem()->setToolTip(modeColumn,
+                                    QStringLiteral("Switch the active object between Object Mode and Edit Mode."));
+    const QVector<QPair<int, RestrictionGlyph>> restrictionColumns{
+        {viewportColumn, RestrictionGlyph::Viewport},
+        {renderColumn, RestrictionGlyph::Render},
+        {viewLayerViewportColumn, RestrictionGlyph::Hide},
+        {holdoutColumn, RestrictionGlyph::Holdout},
+        {indirectOnlyColumn, RestrictionGlyph::IndirectOnly},
+        {selectColumn, RestrictionGlyph::Select},
+        {excludeColumn, RestrictionGlyph::Enable}};
+    for (const auto &column : restrictionColumns) {
+        tree_->headerItem()->setText(column.first, QString{});
+        tree_->headerItem()->setIcon(
+            column.first, restrictionIcon(column.second, true));
+    }
+    tree_->headerItem()->setText(modeColumn, QString{});
+    tree_->headerItem()->setIcon(
+        modeColumn, restrictionIcon(RestrictionGlyph::ObjectMode, true));
     tree_->setRootIsDecorated(true);
     tree_->setAlternatingRowColors(true);
     tree_->setUniformRowHeights(true);
@@ -782,14 +1045,26 @@ void CollectionsPanel::createLayout()
                                           QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(excludeColumn,
                                           QHeaderView::ResizeToContents);
-    tree_->setItemDelegateForColumn(viewLayerViewportColumn,
-                                    new ViewLayerCheckDelegate(tree_));
-    tree_->setItemDelegateForColumn(holdoutColumn,
-                                    new ViewLayerCheckDelegate(tree_));
-    tree_->setItemDelegateForColumn(indirectOnlyColumn,
-                                    new ViewLayerCheckDelegate(tree_));
-    tree_->setItemDelegateForColumn(excludeColumn,
-                                    new ViewLayerCheckDelegate(tree_));
+    tree_->header()->setSectionResizeMode(modeColumn,
+                                          QHeaderView::ResizeToContents);
+    for (const auto &column : restrictionColumns) {
+        tree_->setItemDelegateForColumn(
+            column.first,
+            new RestrictionIconDelegate(column.first, column.second, tree_));
+    }
+    tree_->header()->setMinimumSectionSize(22);
+    const QVector<int> blenderColumnOrder{
+        nameColumn, modeColumn, excludeColumn, selectColumn,
+        viewLayerViewportColumn, viewportColumn, renderColumn,
+        holdoutColumn, indirectOnlyColumn};
+    for (int visualIndex = 0; visualIndex < blenderColumnOrder.size();
+         ++visualIndex) {
+        const int currentVisualIndex = tree_->header()->visualIndex(
+            blenderColumnOrder[visualIndex]);
+        if (currentVisualIndex != visualIndex) {
+            tree_->header()->moveSection(currentVisualIndex, visualIndex);
+        }
+    }
     QSettings outlinerSettings;
     showEnableColumn_ = outlinerSettings.value(
         QStringLiteral("outliner/showEnableColumn"), true).toBool();
@@ -817,6 +1092,12 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/filterAllViewLayers"), false).toBool();
     scrollToActive_ = outlinerSettings.value(
         QStringLiteral("outliner/scrollToActive"), true).toBool();
+    sortAlphabetically_ = outlinerSettings.value(
+        QStringLiteral("outliner/sortAlphabetically"), false).toBool();
+    syncSelectionEnabled_ = outlinerSettings.value(
+        QStringLiteral("outliner/syncSelection"), true).toBool();
+    showModeColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showModeColumn"), true).toBool();
     scenesDisplayMode_ = outlinerSettings.value(
         QStringLiteral("outliner/displayMode"),
         QStringLiteral("VIEW_LAYER")).toString() ==
@@ -889,6 +1170,162 @@ void CollectionsPanel::createLayout()
 
     auto *filterMenu = new QMenu(filterButton_);
     filterButton_->setMenu(filterMenu);
+    QMenu *restrictionMenu = filterMenu->addMenu(
+        QStringLiteral("Restriction Toggles"));
+    const auto addRestrictionMenuAction =
+        [this, restrictionMenu](
+            const QString &label, const QString &settingsKey, int column,
+            RestrictionGlyph glyph, bool checked, bool viewLayerSpecific) {
+        QAction *action = restrictionMenu->addAction(
+            restrictionIcon(glyph, checked), label);
+        action->setCheckable(true);
+        action->setChecked(checked);
+        action->setProperty("outlinerViewLayerSpecific", viewLayerSpecific);
+        connect(action, &QAction::toggled, this,
+                [this, settingsKey, column, viewLayerSpecific](bool visible) {
+            switch (column) {
+            case viewportColumn: showViewportColumn_ = visible; break;
+            case renderColumn: showRenderColumn_ = visible; break;
+            case viewLayerViewportColumn: showHideColumn_ = visible; break;
+            case holdoutColumn: showHoldoutColumn_ = visible; break;
+            case indirectOnlyColumn:
+                showIndirectOnlyColumn_ = visible;
+                break;
+            case selectColumn: showSelectColumn_ = visible; break;
+            case excludeColumn: showEnableColumn_ = visible; break;
+            default: break;
+            }
+            QSettings settings;
+            settings.setValue(settingsKey, visible);
+            const bool unavailable = viewLayerSpecific &&
+                (!callbacks_.activeViewLayerKey ||
+                 callbacks_.activeViewLayerKey().isEmpty());
+            tree_->setColumnHidden(column, !visible || unavailable);
+        });
+        return action;
+    };
+    connect(restrictionMenu, &QMenu::aboutToShow, this,
+            [this, restrictionMenu]() {
+        const bool hasActiveViewLayer = callbacks_.activeViewLayerKey &&
+            !callbacks_.activeViewLayerKey().isEmpty();
+        for (QAction *action : restrictionMenu->actions()) {
+            if (!action->isCheckable() ||
+                !action->property("outlinerViewLayerSpecific").toBool()) {
+                continue;
+            }
+            action->setEnabled(hasActiveViewLayer);
+        }
+    });
+    addRestrictionMenuAction(QStringLiteral("Enable / Exclude"),
+        QStringLiteral("outliner/showEnableColumn"), excludeColumn,
+        RestrictionGlyph::Enable, showEnableColumn_, true);
+    addRestrictionMenuAction(QStringLiteral("Select"),
+        QStringLiteral("outliner/showSelectColumn"), selectColumn,
+        RestrictionGlyph::Select, showSelectColumn_, false);
+    addRestrictionMenuAction(QStringLiteral("Hide"),
+        QStringLiteral("outliner/showHideColumn"), viewLayerViewportColumn,
+        RestrictionGlyph::Hide, showHideColumn_, false);
+    addRestrictionMenuAction(QStringLiteral("Viewport"),
+        QStringLiteral("outliner/showViewportColumn"), viewportColumn,
+        RestrictionGlyph::Viewport, showViewportColumn_, false);
+    addRestrictionMenuAction(QStringLiteral("Render"),
+        QStringLiteral("outliner/showRenderColumn"), renderColumn,
+        RestrictionGlyph::Render, showRenderColumn_, false);
+    addRestrictionMenuAction(QStringLiteral("Holdout"),
+        QStringLiteral("outliner/showHoldoutColumn"), holdoutColumn,
+        RestrictionGlyph::Holdout, showHoldoutColumn_, true);
+    addRestrictionMenuAction(QStringLiteral("Indirect Only (Cycles)"),
+        QStringLiteral("outliner/showIndirectOnlyColumn"), indirectOnlyColumn,
+        RestrictionGlyph::IndirectOnly, showIndirectOnlyColumn_, true);
+
+    filterMenu->addSeparator();
+    QAction *sortAlphabeticallyAction = filterMenu->addAction(
+        QStringLiteral("Sort Alphabetically"));
+    sortAlphabeticallyAction->setCheckable(true);
+    sortAlphabeticallyAction->setChecked(sortAlphabetically_);
+    sortAlphabeticallyAction->setEnabled(!dataApiDisplayMode_);
+    connect(sortAlphabeticallyAction, &QAction::toggled, this,
+            [this](bool enabled) {
+        sortAlphabetically_ = enabled;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/sortAlphabetically"),
+                          enabled);
+        refresh();
+    });
+    QAction *syncSelectionAction = filterMenu->addAction(
+        QStringLiteral("Sync Selection"));
+    syncSelectionAction->setCheckable(true);
+    syncSelectionAction->setChecked(syncSelectionEnabled_);
+    syncSelectionAction->setEnabled(!libraryOverridesDisplayMode_);
+    QAction *showModeColumnAction = filterMenu->addAction(
+        QStringLiteral("Show Mode Column"));
+    showModeColumnAction->setCheckable(true);
+    showModeColumnAction->setChecked(showModeColumn_);
+    showModeColumnAction->setEnabled(!libraryOverridesDisplayMode_);
+    connect(showModeColumnAction, &QAction::toggled, this, [this](bool show) {
+        showModeColumn_ = show;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/showModeColumn"), show);
+        tree_->setColumnHidden(modeColumn, !show);
+    });
+    connect(syncSelectionAction, &QAction::toggled, this,
+            [this](bool enabled) {
+        syncSelectionEnabled_ = enabled;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/syncSelection"), enabled);
+        if (scrollToActiveAction_ != nullptr) {
+            scrollToActiveAction_->setEnabled(enabled);
+        }
+        if (!enabled) return;
+        if (callbacks_.setObjectSelection && tree_ != nullptr &&
+            !sequencerDisplayMode_ && !dataApiDisplayMode_ &&
+            !librariesDisplayMode_ && !orphanDataDisplayMode_ &&
+            !libraryOverridesDisplayMode_) {
+            QVector<ObjectId> selectedIds;
+            for (QTreeWidgetItem *item : tree_->selectedItems()) {
+                if (item->data(nameColumn, itemKindRole).toInt() !=
+                    static_cast<int>(OutlinerRowKind::Object)) {
+                    continue;
+                }
+                const ObjectId id = ObjectId::fromValue(
+                    item->data(nameColumn, itemIdRole).toULongLong());
+                if (id.isValid() && !selectedIds.contains(id)) {
+                    selectedIds.append(id);
+                }
+            }
+            QTreeWidgetItem *currentItem = tree_->currentItem();
+            ObjectId activeId = currentItem != nullptr &&
+                    currentItem->data(nameColumn, itemKindRole).toInt() ==
+                        static_cast<int>(OutlinerRowKind::Object)
+                ? ObjectId::fromValue(currentItem->data(
+                      nameColumn, itemIdRole).toULongLong())
+                : ObjectId::invalid();
+            if (!selectedIds.contains(activeId)) {
+                activeId = selectedIds.isEmpty() ? ObjectId::invalid()
+                                                 : selectedIds.back();
+            }
+            callbacks_.setObjectSelection(selectedIds, activeId);
+        } else if (sequencerDisplayMode_ &&
+                   callbacks_.setSequencerSelection) {
+            QStringList selectedIds;
+            QString activeId;
+            for (QTreeWidgetItem *item : tree_->selectedItems()) {
+                if (item->data(nameColumn, itemKindRole).toInt() !=
+                    static_cast<int>(OutlinerRowKind::SequencerStrip)) {
+                    continue;
+                }
+                const QString id = item->data(
+                    nameColumn, itemSequencerStripIdRole).toString();
+                if (!id.isEmpty() && !selectedIds.contains(id)) {
+                    selectedIds.append(id);
+                }
+                if (item == tree_->currentItem()) activeId = id;
+            }
+            callbacks_.setSequencerSelection(selectedIds, activeId);
+        }
+        syncSelection();
+    });
+
     QAction *allViewLayersAction = filterMenu->addAction(
         QStringLiteral("All View Layers"));
     allViewLayersAction->setCheckable(true);
@@ -905,8 +1342,10 @@ void CollectionsPanel::createLayout()
                           visible);
         refresh();
     });
+    filterMenu->addSection(QStringLiteral("Filter"));
     connect(displayModeCombo_, &QComboBox::activated, this,
-            [this, allViewLayersAction](int index) {
+            [this, allViewLayersAction, sortAlphabeticallyAction,
+             syncSelectionAction, showModeColumnAction](int index) {
         scenesDisplayMode_ = index == 1;
         sequencerDisplayMode_ = index == 2;
         dataApiDisplayMode_ = index == 3;
@@ -934,6 +1373,9 @@ void CollectionsPanel::createLayout()
             !scenesDisplayMode_ && !librariesDisplayMode_ &&
             !orphanDataDisplayMode_ && !sequencerDisplayMode_ &&
             !dataApiDisplayMode_ && !libraryOverridesDisplayMode_);
+        sortAlphabeticallyAction->setEnabled(!dataApiDisplayMode_);
+        syncSelectionAction->setEnabled(!libraryOverridesDisplayMode_);
+        showModeColumnAction->setEnabled(!libraryOverridesDisplayMode_);
         refresh();
     });
     connect(libraryOverrideViewCombo_, &QComboBox::activated, this,
@@ -1006,11 +1448,12 @@ void CollectionsPanel::createLayout()
         refresh();
     });
     filterMenu->addSeparator();
-    QAction *scrollToActiveAction = filterMenu->addAction(
+    scrollToActiveAction_ = filterMenu->addAction(
         QStringLiteral("Scroll to Active"));
-    scrollToActiveAction->setCheckable(true);
-    scrollToActiveAction->setChecked(scrollToActive_);
-    connect(scrollToActiveAction, &QAction::toggled, this,
+    scrollToActiveAction_->setCheckable(true);
+    scrollToActiveAction_->setChecked(scrollToActive_);
+    scrollToActiveAction_->setEnabled(syncSelectionEnabled_);
+    connect(scrollToActiveAction_, &QAction::toggled, this,
             [this](bool enabled) {
         scrollToActive_ = enabled;
         QSettings settings;
@@ -1074,8 +1517,9 @@ void CollectionsPanel::createLayout()
         });
     }
     filterMenu->addSeparator();
+    filterMenu->addSection(QStringLiteral("Search"));
     QAction *exactMatchAction = filterMenu->addAction(
-        QStringLiteral("Exact Name Match"));
+        QStringLiteral("Exact Match"));
     exactMatchAction->setCheckable(true);
     exactMatchAction->setChecked(exactNameMatch_);
     connect(exactMatchAction, &QAction::toggled, this,
@@ -1148,9 +1592,9 @@ void CollectionsPanel::createLayout()
         addColumnToggle(QStringLiteral("Select"), showSelectColumn_,
                         selectColumn,
                         QStringLiteral("outliner/showSelectColumn"), false);
-        addColumnToggle(QStringLiteral("Hide in View Layer"),
+        addColumnToggle(QStringLiteral("Hide"),
                         showHideColumn_, viewLayerViewportColumn,
-                        QStringLiteral("outliner/showHideColumn"), true);
+                        QStringLiteral("outliner/showHideColumn"), false);
         addColumnToggle(QStringLiteral("Viewport"), showViewportColumn_,
                         viewportColumn,
                         QStringLiteral("outliner/showViewportColumn"), false);
@@ -1202,19 +1646,37 @@ void CollectionsPanel::createLayout()
             });
     connect(tree_, &QTreeWidget::itemCollapsed, this,
             [this](QTreeWidgetItem *) { saveTreeState(); });
+    connect(tree_, &QTreeWidget::itemClicked, this,
+            [this](QTreeWidgetItem *item, int column) {
+        if (column != modeColumn || item == nullptr ||
+            !callbacks_.setObjectInteractionMode ||
+            item->data(nameColumn, itemKindRole).toInt() !=
+                static_cast<int>(OutlinerRowKind::Object)) {
+            return;
+        }
+        const ObjectId id = ObjectId::fromValue(
+            item->data(nameColumn, itemIdRole).toULongLong());
+        if (!id.isValid()) return;
+        const int currentMode = item->data(
+            modeColumn, itemModeValueRole).toInt();
+        callbacks_.setObjectInteractionMode(
+            id, currentMode == 1 ? 0 : 1);
+    });
 
     outlinerTree->setActivationHandlers(
         [this](QTreeWidgetItem *item, Qt::KeyboardModifiers modifiers) {
             return activateObjectRow(item, modifiers);
         },
         [this]() {
-            if (!librariesDisplayMode_ && !orphanDataDisplayMode_ &&
+            if (syncSelectionEnabled_ && !librariesDisplayMode_ &&
+                !orphanDataDisplayMode_ &&
                 !sequencerDisplayMode_ &&
                 !dataApiDisplayMode_ &&
                 callbacks_.setObjectSelection) {
                 callbacks_.setObjectSelection({}, ObjectId::invalid());
             }
-            if (sequencerDisplayMode_ && callbacks_.setSequencerSelection) {
+            if (syncSelectionEnabled_ && sequencerDisplayMode_ &&
+                callbacks_.setSequencerSelection) {
                 QTimer::singleShot(0, this, [this]() {
                     if (callbacks_.setSequencerSelection) {
                         callbacks_.setSequencerSelection({}, {});
@@ -1314,10 +1776,16 @@ void CollectionsPanel::createLayout()
                            callbacks_.setObjectRenderVisibility) {
                     callbacks_.setObjectRenderVisibility(id, hidden,
                                                          recursive);
-                } else if (column == viewLayerViewportColumn &&
-                           callbacks_.setObjectViewLayerHidden) {
-                    callbacks_.setObjectViewLayerHidden(id, viewLayerKey,
-                                                        hidden, recursive);
+                } else if (column == viewLayerViewportColumn) {
+                    if (!viewLayerKey.isEmpty() &&
+                        callbacks_.setObjectViewLayerHidden) {
+                        callbacks_.setObjectViewLayerHidden(
+                            id, viewLayerKey, hidden, recursive);
+                    } else if (viewLayerKey.isEmpty() &&
+                               callbacks_.setObjectHiddenInViewport) {
+                        callbacks_.setObjectHiddenInViewport(
+                            id, hidden, recursive);
+                    }
                 } else if (column == selectColumn &&
                            callbacks_.setObjectSelectability) {
                     callbacks_.setObjectSelectability(id, hidden, recursive);
@@ -1439,8 +1907,12 @@ void CollectionsPanel::applyNameFilter(const QString &text)
                 entry.id, rowViewLayerKey);
         } else if (!rowViewLayerKey.isEmpty() &&
                    rowViewLayerKey != activeViewLayerKey) {
+            const bool hiddenInLayer = entry.viewLayerHidden.contains(
+                rowViewLayerKey)
+                ? entry.viewLayerHidden.value(rowViewLayerKey).toBool()
+                : entry.hiddenInViewport;
             visible = !entry.hideViewport &&
-                !entry.viewLayerHidden.value(rowViewLayerKey).toBool();
+                !hiddenInLayer;
         }
         if (hasLayerSelectableCallback) {
             selectable = callbacks_.objectSelectableInViewLayer(
@@ -2068,6 +2540,11 @@ bool CollectionsPanel::activateObjectRow(
         });
         return true;
     }
+    if (!syncSelectionEnabled_) {
+        tree_->setCurrentItem(item, nameColumn,
+                              QItemSelectionModel::NoUpdate);
+        return true;
+    }
     if (!callbacks_.setObjectSelection) return true;
     if (!clickedId.isValid() ||
         (callbacks_.canSelectObject &&
@@ -2164,7 +2641,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         const OutlinerRowKind contextRowKind =
             static_cast<OutlinerRowKind>(
                 item->data(nameColumn, itemKindRole).toInt());
-        if (contextRowKind == OutlinerRowKind::Object &&
+        if (syncSelectionEnabled_ &&
+            contextRowKind == OutlinerRowKind::Object &&
             callbacks_.setObjectSelection) {
             QVector<ObjectId> selectedObjectIds;
             for (QTreeWidgetItem *selected : tree_->selectedItems()) {
@@ -3278,8 +3756,7 @@ void CollectionsPanel::appendCollection(
         ? new QTreeWidgetItem(tree)
         : new QTreeWidgetItem(parent);
     item->setText(nameColumn, entry.collection.name);
-    item->setIcon(nameColumn,
-                  collectionColorTagIcon(entry.collection.colorTag));
+    item->setIcon(nameColumn, collectionIcon(entry.collection.colorTag));
     if (entry.collection.colorTag != QLatin1String("NONE")) {
         item->setToolTip(nameColumn,
                          QStringLiteral("Color tag: %1")
@@ -3419,6 +3896,9 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     }
     auto *item = new QTreeWidgetItem(parent);
     item->setText(nameColumn, entry.name);
+    item->setIcon(nameColumn, objectTypeIcon(
+        entry.blenderType.isEmpty() ? QStringLiteral("CURVE")
+                                   : entry.blenderType));
     item->setData(nameColumn, itemKindRole,
                   static_cast<int>(entry.outlinerOnly
                       ? OutlinerRowKind::SourceObject
@@ -3464,15 +3944,34 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                                    ? Qt::Unchecked : Qt::Checked);
         item->setCheckState(selectColumn, entry.hideSelect
                                    ? Qt::Unchecked : Qt::Checked);
+        item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
         if (!activeViewLayerKey.isEmpty()) {
-            item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
+            const bool hiddenInLayer = entry.viewLayerHidden.contains(
+                activeViewLayerKey)
+                ? entry.viewLayerHidden.value(activeViewLayerKey).toBool()
+                : entry.hiddenInViewport;
             item->setCheckState(viewLayerViewportColumn,
-                entry.viewLayerHidden.value(activeViewLayerKey).toBool()
-                    ? Qt::Unchecked : Qt::Checked);
+                hiddenInLayer ? Qt::Unchecked : Qt::Checked);
+        } else {
+            item->setCheckState(viewLayerViewportColumn,
+                entry.hiddenInViewport ? Qt::Unchecked : Qt::Checked);
         }
         objectRows_[entry.id.value()].append(item);
         objectEntries_.insert(entry.id.value(), entry);
     }
+    const ObjectId activeObjectId = callbacks_.activeObjectId
+        ? callbacks_.activeObjectId() : ObjectId::invalid();
+    const int interactionMode = callbacks_.interactionMode
+        ? callbacks_.interactionMode() : 0;
+    const bool editMode = entry.id.isValid() && entry.id == activeObjectId &&
+                          interactionMode == 1;
+    item->setData(modeColumn, itemModeValueRole, editMode ? 1 : 0);
+    item->setIcon(modeColumn, restrictionIcon(
+        editMode ? RestrictionGlyph::EditMode : RestrictionGlyph::ObjectMode,
+        true));
+    item->setToolTip(modeColumn,
+        editMode ? QStringLiteral("Edit Mode; click to switch to Object Mode")
+                 : QStringLiteral("Object Mode; click to switch to Edit Mode"));
     if (!entry.hierarchyIdentity.isEmpty()) {
         hierarchyEntries_.insert(entry.hierarchyIdentity, entry);
         hierarchyRows_[entry.hierarchyIdentity].append(item);
@@ -4054,6 +4553,8 @@ void CollectionsPanel::refresh()
         treeStateContextKey != currentTreeStateContextKey_;
     currentTreeStateContextKey_ = treeStateContextKey;
     QHash<QString, bool> expandedPaths;
+    QSet<QString> outlinerSelectedPaths;
+    QString outlinerCurrentPath;
     const int scrollPosition = tree_->verticalScrollBar()->value();
     for (int topLevelIndex = 0;
          topLevelIndex < tree_->topLevelItemCount(); ++topLevelIndex) {
@@ -4062,6 +4563,12 @@ void CollectionsPanel::refresh()
             QTreeWidgetItem *item = pending.takeLast();
             const QString path = item->data(nameColumn, itemPathRole).toString();
             if (!path.isEmpty()) expandedPaths.insert(path, item->isExpanded());
+            if (!syncSelectionEnabled_ && item->isSelected() && !path.isEmpty()) {
+                outlinerSelectedPaths.insert(path);
+            }
+            if (!syncSelectionEnabled_ && item == tree_->currentItem()) {
+                outlinerCurrentPath = path;
+            }
             for (int childIndex = 0; childIndex < item->childCount();
                  ++childIndex) {
                 pending.append(item->child(childIndex));
@@ -4069,6 +4576,7 @@ void CollectionsPanel::refresh()
         }
     }
     refreshing_ = true;
+    tree_->setSortingEnabled(false);
     tree_->clear();
     rangeAnchorItem_ = nullptr;
     objectRows_.clear();
@@ -4297,8 +4805,7 @@ void CollectionsPanel::refresh()
                                !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
-                               dataApiMode || libraryOverridesMode || scenesMode ||
-                               activeViewLayerKey.isEmpty() ||
+                               dataApiMode || libraryOverridesMode ||
                                !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
@@ -4315,6 +4822,10 @@ void CollectionsPanel::refresh()
                                dataApiMode || libraryOverridesMode || scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showEnableColumn_);
+    tree_->setColumnHidden(modeColumn,
+                           libraryOverridesMode || orphanDataMode ||
+                               sequencerMode || dataApiMode ||
+                               !showModeColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
     const auto topLevelCollectionIndices = [](
         const QVector<CollectionPanelEntry> &entries) {
@@ -5856,6 +6367,7 @@ void CollectionsPanel::refresh()
     } else {
         auto *sceneRoot = new QTreeWidgetItem(tree_);
         sceneRoot->setText(nameColumn, QStringLiteral("Scene Collection"));
+        sceneRoot->setIcon(nameColumn, collectionIcon(QStringLiteral("NONE")));
         sceneRoot->setData(nameColumn, itemKindRole,
                            static_cast<int>(OutlinerRowKind::SceneRoot));
         sceneRoot->setData(nameColumn, itemPathRole, QStringLiteral("scene"));
@@ -5869,6 +6381,9 @@ void CollectionsPanel::refresh()
     if (showObjectChildren_ && !librariesMode && !orphanDataMode &&
         !sequencerMode && !dataApiMode && !libraryOverridesMode) {
         buildObjectParentHierarchy(displayObjects);
+    }
+    if (sortAlphabetically_) {
+        tree_->sortItems(nameColumn, Qt::AscendingOrder);
     }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
         if (!dataApiMode) tree_->expandAll();
@@ -5992,6 +6507,28 @@ void CollectionsPanel::refresh()
             }
         }
     }
+    if (!syncSelectionEnabled_ &&
+        (!outlinerSelectedPaths.isEmpty() || !outlinerCurrentPath.isEmpty())) {
+        QVector<QTreeWidgetItem *> pending;
+        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+            pending.append(tree_->topLevelItem(index));
+        }
+        while (!pending.isEmpty()) {
+            QTreeWidgetItem *item = pending.takeLast();
+            const QString path = item->data(nameColumn, itemPathRole).toString();
+            if (!path.isEmpty()) {
+                item->setSelected(outlinerSelectedPaths.contains(path));
+                if (path == outlinerCurrentPath) {
+                    tree_->setCurrentItem(item, nameColumn,
+                                          QItemSelectionModel::NoUpdate);
+                }
+            }
+            for (int childIndex = 0; childIndex < item->childCount();
+                 ++childIndex) {
+                pending.append(item->child(childIndex));
+            }
+        }
+    }
     refreshing_ = false;
     tree_->verticalScrollBar()->setValue(scrollPosition);
     syncSelection();
@@ -6000,6 +6537,30 @@ void CollectionsPanel::refresh()
 void CollectionsPanel::syncSelection()
 {
     if (tree_ == nullptr) return;
+    const ObjectId activeObjectId = callbacks_.activeObjectId
+        ? callbacks_.activeObjectId() : ObjectId::invalid();
+    const int activeInteractionMode = callbacks_.interactionMode
+        ? callbacks_.interactionMode() : 0;
+    for (auto rows = objectRows_.cbegin(); rows != objectRows_.cend(); ++rows) {
+        const bool editMode = activeInteractionMode == 1 &&
+                              activeObjectId.isValid() &&
+                              rows.key() == activeObjectId.value();
+        for (QTreeWidgetItem *item : rows.value()) {
+            if (item == nullptr) continue;
+            item->setData(modeColumn, itemModeValueRole,
+                          editMode ? 1 : 0);
+            item->setIcon(modeColumn, restrictionIcon(
+                editMode ? RestrictionGlyph::EditMode
+                         : RestrictionGlyph::ObjectMode,
+                true));
+            item->setToolTip(
+                modeColumn,
+                editMode
+                    ? QStringLiteral("Edit Mode; click to switch to Object Mode")
+                    : QStringLiteral("Object Mode; click to switch to Edit Mode"));
+        }
+    }
+    if (!syncSelectionEnabled_) return;
     if (sequencerDisplayMode_) {
         QStringList selectedStripIds;
         QString activeStripId;

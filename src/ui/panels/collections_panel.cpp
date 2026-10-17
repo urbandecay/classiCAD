@@ -1913,6 +1913,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             nameColumn, itemViewLayerKeyRole).toString();
         const QStringList sourcePath = item->data(
             nameColumn, itemSourcePathRole).toStringList();
+        const quint64 parentValue = item->data(
+            nameColumn, itemParentCollectionRole).toULongLong();
+        const OutlinerCollectionContext activeCollectionContext{
+            collectionId,
+            parentValue == 0 ? CollectionId::invalid()
+                             : CollectionId::fromValue(parentValue),
+            viewLayerKey,
+            sourcePath};
         QVector<OutlinerCollectionContext> collectionTargets;
         QSet<QString> collectionTargetKeys;
         bool canEnableViewport = false;
@@ -2063,9 +2071,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             });
         }
         if (callbacks_.duplicateCollection) {
-            const CollectionId parentId = CollectionId::fromValue(
-                item->data(nameColumn, itemParentCollectionRole)
-                    .toULongLong());
+            const CollectionId parentId =
+                activeCollectionContext.parentCollectionId;
             QAction *duplicate = menu.addAction(
                 QStringLiteral("Duplicate Collection"));
             connect(duplicate, &QAction::triggered, this,
@@ -2086,8 +2093,10 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 QStringLiteral("Instance to Scene"));
             instance->setEnabled(!topLevelCollectionIds.isEmpty());
             connect(instance, &QAction::triggered, this,
-                    [this, topLevelCollectionIds]() {
-                callbacks_.instanceCollectionsToScene(topLevelCollectionIds);
+                    [this, topLevelCollectionIds,
+                     activeCollectionContext]() {
+                callbacks_.instanceCollectionsToScene(
+                    topLevelCollectionIds, activeCollectionContext);
             });
         }
         if (scenesDisplayMode_ && callbacks_.linkCollectionsToActiveScene) {

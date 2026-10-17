@@ -272,7 +272,8 @@ struct CollectionsPanelCallbacks {
         duplicateCollection;
     std::function<void(const QVector<CollectionId> &)>
         linkCollectionsToActiveScene;
-    std::function<void(const QVector<CollectionId> &)>
+    std::function<void(const QVector<CollectionId> &,
+                       const OutlinerCollectionContext &)>
         instanceCollectionsToScene;
     std::function<void(const QVector<OutlinerCollectionContext> &)>
         unlinkCollections;

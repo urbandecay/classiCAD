@@ -5141,7 +5141,8 @@ private:
             };
         collectionCallbacks.instanceCollectionsToScene =
             [this, activeSceneRecord, collectionBelongsToActiveScene](
-                const QVector<CollectionId> &requestedTargetIds) {
+                const QVector<CollectionId> &requestedTargetIds,
+                const OutlinerCollectionContext &activeCollectionContext) {
                 const Document &document = session_.document();
                 const QVector<DocumentCollection> allCollections =
                     document.collections();
@@ -5179,23 +5180,59 @@ private:
                     QStringLiteral("scene_id")).toString();
                 const QString sceneName = activeScene.value(
                     QStringLiteral("name")).toString();
-                CollectionId destinationId = CollectionId::invalid();
-                int destinationOrder = std::numeric_limits<int>::max();
-                for (const DocumentCollection &candidate : allCollections) {
-                    if (!candidate.parentIds.isEmpty() ||
-                        !candidate.libraryPath.isEmpty() ||
-                        targetHierarchy.contains(candidate.id.value())) {
-                        continue;
+                CollectionId destinationId =
+                    activeCollectionContext.collectionId;
+                CollectionId activeParentId =
+                    activeCollectionContext.parentCollectionId;
+                while (destinationId.isValid() &&
+                       targetHierarchy.contains(destinationId.value())) {
+                    const DocumentCollection *activeCollection =
+                        document.collection(destinationId);
+                    if (activeCollection == nullptr) {
+                        destinationId = CollectionId::invalid();
+                        break;
                     }
-                    const bool belongsToScene = sceneName.isEmpty()
-                        ? candidate.sourceSceneNames.isEmpty()
-                        : collectionBelongsToActiveScene(candidate);
-                    const int order = candidate.rootOrder < 0
-                        ? std::numeric_limits<int>::max() - 1
-                        : candidate.rootOrder;
-                    if (belongsToScene && order < destinationOrder) {
-                        destinationId = candidate.id;
-                        destinationOrder = order;
+                    if (!activeParentId.isValid() ||
+                        !activeCollection->parentIds.contains(activeParentId)) {
+                        activeParentId = activeCollection->parentIds.isEmpty()
+                            ? CollectionId::invalid()
+                            : activeCollection->parentIds.first();
+                    }
+                    destinationId = activeParentId;
+                    const DocumentCollection *parentCollection =
+                        document.collection(destinationId);
+                    activeParentId = parentCollection == nullptr ||
+                            parentCollection->parentIds.isEmpty()
+                        ? CollectionId::invalid()
+                        : parentCollection->parentIds.first();
+                }
+                const DocumentCollection *activeDestination =
+                    destinationId.isValid()
+                        ? document.collection(destinationId)
+                        : nullptr;
+                if (activeDestination == nullptr ||
+                    !activeDestination->libraryPath.isEmpty() ||
+                    !collectionBelongsToActiveScene(*activeDestination)) {
+                    destinationId = CollectionId::invalid();
+                }
+                int destinationOrder = std::numeric_limits<int>::max();
+                if (!destinationId.isValid()) {
+                    for (const DocumentCollection &candidate : allCollections) {
+                        if (!candidate.parentIds.isEmpty() ||
+                            !candidate.libraryPath.isEmpty() ||
+                            targetHierarchy.contains(candidate.id.value())) {
+                            continue;
+                        }
+                        const bool belongsToScene = sceneName.isEmpty()
+                            ? candidate.sourceSceneNames.isEmpty()
+                            : collectionBelongsToActiveScene(candidate);
+                        const int order = candidate.rootOrder < 0
+                            ? std::numeric_limits<int>::max() - 1
+                            : candidate.rootOrder;
+                        if (belongsToScene && order < destinationOrder) {
+                            destinationId = candidate.id;
+                            destinationOrder = order;
+                        }
                     }
                 }
 
@@ -7738,9 +7775,10 @@ private:
                             allPaths.append(entry);
                         }
                     }
-                    QSet<quint64> targetCollectionIds;
+                    QSet<QString> targetCollectionPaths;
                     for (const OutlinerCollectionContext &target : targets) {
-                        targetCollectionIds.insert(target.collectionId.value());
+                        targetCollectionPaths.insert(pathKey(
+                            target.collectionId, target.sourcePath));
                     }
                     const bool isHideState =
                         stateKey == QStringLiteral("exclude") ||
@@ -7752,7 +7790,8 @@ private:
                                 session_.document().collection(path.id);
                             if (collection == nullptr ||
                                 !collection->libraryPath.isEmpty() ||
-                                targetCollectionIds.contains(path.id.value())) {
+                                targetCollectionPaths.contains(pathKey(
+                                    path.id, path.sourcePath))) {
                                 continue;
                             }
                             const QJsonObject current = stateForPath(
@@ -7778,15 +7817,11 @@ private:
                         }
                         const QJsonObject current = stateForPath(
                             *collection, viewLayerKey, path.sourcePath);
-                        if (current.isEmpty()) continue;
                         const bool flagValue = alreadyIsolated
                             ? false
                             : (isInTargetBranch(path.sourcePath)
                                    ? !isHideState : isHideState);
-                        if (current.value(stateKey).isBool() &&
-                            current.value(stateKey).toBool() == flagValue) {
-                            continue;
-                        }
+                        if (current.value(stateKey).toBool() == flagValue) continue;
                         changed = transaction.setCollectionViewLayerState(
                                       path.id, viewLayerKey, path.sourcePath,
                                       stateKey, flagValue) || changed;
@@ -7864,11 +7899,7 @@ private:
                     }
                     const QJsonObject current = stateForPath(
                         *collection, viewLayerKey, path.sourcePath);
-                    if (current.isEmpty() ||
-                        (current.value(stateKey).isBool() &&
-                         current.value(stateKey).toBool() == value)) {
-                        continue;
-                    }
+                    if (current.value(stateKey).toBool() == value) continue;
                     changed = transaction.setCollectionViewLayerState(
                                   path.id, viewLayerKey, path.sourcePath,
                                   stateKey, value) || changed;

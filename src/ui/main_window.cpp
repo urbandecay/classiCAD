@@ -6547,11 +6547,15 @@ private:
             }
             return result;
         };
-        collectionCallbacks.setCollectionObjectSelection =
-            [this, collectionHierarchyIds](CollectionId root, bool select) {
+        const auto setCollectionsObjectSelection =
+            [this, collectionHierarchyIds](
+                const QVector<CollectionId> &roots, bool select) {
                 QSet<quint64> collectionIds;
-                for (const CollectionId id : collectionHierarchyIds(root)) {
-                    collectionIds.insert(id.value());
+                for (const CollectionId root : roots) {
+                    for (const CollectionId id :
+                         collectionHierarchyIds(root)) {
+                        collectionIds.insert(id.value());
+                    }
                 }
                 if (collectionIds.isEmpty()) return;
 
@@ -6596,6 +6600,8 @@ private:
                 selection.setObjectIds(selectedIds, primary);
                 selection.setActiveObjectId(active);
             };
+        collectionCallbacks.setCollectionsObjectSelection =
+            setCollectionsObjectSelection;
         collectionCallbacks.removeCollectionHierarchy =
             [this, collectionHierarchyIds,
              updateAllSceneCollectionIds](CollectionId root) {

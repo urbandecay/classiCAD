@@ -2225,18 +2225,28 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
-        if (callbacks_.setCollectionObjectSelection) {
+        QVector<CollectionId> selectedCollectionIds;
+        for (const OutlinerCollectionContext &target : collectionTargets) {
+            if (target.collectionId.isValid() &&
+                !selectedCollectionIds.contains(target.collectionId)) {
+                selectedCollectionIds.append(target.collectionId);
+            }
+        }
+        if (callbacks_.setCollectionsObjectSelection &&
+            !selectedCollectionIds.isEmpty()) {
             QAction *selectObjects = menu.addAction(
                 QStringLiteral("Select Objects"));
             connect(selectObjects, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.setCollectionObjectSelection(collectionId, true);
+                    [this, selectedCollectionIds]() {
+                callbacks_.setCollectionsObjectSelection(
+                    selectedCollectionIds, true);
             });
             QAction *deselectObjects = menu.addAction(
                 QStringLiteral("Deselect Objects"));
             connect(deselectObjects, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.setCollectionObjectSelection(collectionId, false);
+                    [this, selectedCollectionIds]() {
+                callbacks_.setCollectionsObjectSelection(
+                    selectedCollectionIds, false);
             });
         }
         const QVector<ObjectId> selectedIds = callbacks_.selectedObjectIds

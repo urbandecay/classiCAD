@@ -1869,6 +1869,24 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 createCollection(collectionId);
             });
         }
+        if (callbacks_.duplicateCollection) {
+            const CollectionId parentId = CollectionId::fromValue(
+                item->data(nameColumn, itemParentCollectionRole)
+                    .toULongLong());
+            QAction *duplicate = menu.addAction(
+                QStringLiteral("Duplicate Collection"));
+            connect(duplicate, &QAction::triggered, this,
+                    [this, collectionId, parentId]() {
+                callbacks_.duplicateCollection(collectionId, parentId,
+                                               false);
+            });
+            QAction *duplicateLinked = menu.addAction(
+                QStringLiteral("Duplicate Linked"));
+            connect(duplicateLinked, &QAction::triggered, this,
+                    [this, collectionId, parentId]() {
+                callbacks_.duplicateCollection(collectionId, parentId, true);
+            });
+        }
         if (callbacks_.renameCollection) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, collectionId]() {

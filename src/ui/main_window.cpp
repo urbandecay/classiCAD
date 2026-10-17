@@ -59,6 +59,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace classiCAD {
@@ -3859,6 +3860,358 @@ private:
                     return CollectionId::invalid();
                 }
                 return id;
+            };
+        collectionCallbacks.duplicateCollection =
+            [this, activeSceneRecord](CollectionId rootId,
+                                     CollectionId contextParentId,
+                                     bool linkedData) {
+                const Document &document = session_.document();
+                const QVector<DocumentCollection> sourceCollections =
+                    document.collections();
+                QHash<quint64, DocumentCollection> collectionsById;
+                for (const DocumentCollection &collection : sourceCollections) {
+                    collectionsById.insert(collection.id.value(), collection);
+                }
+                const auto rootIt = collectionsById.constFind(rootId.value());
+                if (rootIt == collectionsById.cend()) return;
+                if (contextParentId.isValid() &&
+                    (!collectionsById.contains(contextParentId.value()) ||
+                     !rootIt->parentIds.contains(contextParentId))) {
+                    contextParentId = CollectionId::invalid();
+                }
+                if (contextParentId.isValid() &&
+                    !collectionsById.value(contextParentId.value())
+                         .libraryPath.isEmpty()) {
+                    contextParentId = CollectionId::invalid();
+                }
+
+                QVector<CollectionId> hierarchy{rootId};
+                QSet<quint64> hierarchyValues{rootId.value()};
+                for (qsizetype index = 0; index < hierarchy.size(); ++index) {
+                    const CollectionId parentId = hierarchy[index];
+                    for (const DocumentCollection &candidate :
+                         sourceCollections) {
+                        if (candidate.parentIds.contains(parentId) &&
+                            !hierarchyValues.contains(candidate.id.value())) {
+                            hierarchyValues.insert(candidate.id.value());
+                            hierarchy.append(candidate.id);
+                        }
+                    }
+                }
+
+                const auto uniqueName = [](
+                    const QString &sourceName,
+                    QSet<QString> &usedNames,
+                    const QString &fallback) {
+                    const QString base = sourceName.trimmed().isEmpty()
+                        ? fallback : sourceName.trimmed();
+                    if (!usedNames.contains(base)) {
+                        usedNames.insert(base);
+                        return base;
+                    }
+                    QString stem = base;
+                    int nextSuffix = 1;
+                    const qsizetype dot = base.lastIndexOf(QLatin1Char('.'));
+                    if (dot >= 0) {
+                        bool parsed = false;
+                        const int existingSuffix =
+                            base.mid(dot + 1).toInt(&parsed);
+                        if (parsed && existingSuffix >= 0) {
+                            stem = base.left(dot);
+                            nextSuffix = existingSuffix + 1;
+                        }
+                    }
+                    for (int suffix = nextSuffix;; ++suffix) {
+                        const QString candidate = QStringLiteral("%1.%2")
+                            .arg(stem)
+                            .arg(suffix, 3, 10, QLatin1Char('0'));
+                        if (usedNames.contains(candidate)) continue;
+                        usedNames.insert(candidate);
+                        return candidate;
+                    }
+                };
+
+                QSet<QString> collectionNames;
+                for (const DocumentCollection &collection : sourceCollections) {
+                    collectionNames.insert(collection.name);
+                }
+                QSet<QString> objectNames;
+                QSet<QString> dataNames;
+                const QVector<SceneObject> sourceObjects = document.objects();
+                const QString activeSceneName = activeSceneRecord().value(
+                    QStringLiteral("name")).toString();
+                for (const SceneObject &object : sourceObjects) {
+                    if (!object.displayName.isEmpty()) {
+                        objectNames.insert(object.displayName);
+                    }
+                    if (!object.blenderSourceDataName.isEmpty()) {
+                        dataNames.insert(object.blenderSourceDataName);
+                    }
+                }
+
+                DocumentTransaction transaction = session_.beginTransaction();
+                QHash<quint64, CollectionId> clonedCollectionIds;
+                CollectionId clonedRootId = CollectionId::invalid();
+                for (const CollectionId sourceId : hierarchy) {
+                    const DocumentCollection source =
+                        collectionsById.value(sourceId.value());
+                    DocumentCollection clone = source;
+                    clone.id = CollectionId::invalid();
+                    clone.name = uniqueName(source.name, collectionNames,
+                                            QStringLiteral("Collection"));
+                    clone.sourceId.clear();
+                    clone.sourceSceneName = activeSceneName;
+                    clone.sourceSceneNames.clear();
+                    if (!activeSceneName.isEmpty()) {
+                        clone.sourceSceneNames.append(activeSceneName);
+                    }
+                    clone.sourceSceneLibraryPath.clear();
+                    clone.libraryPath.clear();
+                    clone.parentIds.clear();
+                    clone.parentOrders.clear();
+                    clone.rootOrder = -1;
+                    clone.viewLayerStates = {};
+                    if (sourceId == rootId) {
+                        if (contextParentId.isValid()) {
+                            clone.parentIds.append(contextParentId);
+                        }
+                    } else {
+                        for (const CollectionId sourceParentId :
+                             source.parentIds) {
+                            const auto clonedParent =
+                                clonedCollectionIds.constFind(
+                                    sourceParentId.value());
+                            if (clonedParent != clonedCollectionIds.cend() &&
+                                !clone.parentIds.contains(clonedParent.value())) {
+                                clone.parentIds.append(clonedParent.value());
+                            }
+                        }
+                    }
+                    const CollectionId cloneId =
+                        transaction.insertCollection(clone);
+                    if (!cloneId.isValid()) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not duplicate collection tree"),
+                            4000);
+                        return;
+                    }
+                    clonedCollectionIds.insert(sourceId.value(), cloneId);
+                    if (sourceId == rootId) clonedRootId = cloneId;
+                }
+                if (clonedRootId.isValid()) {
+                    transaction.moveCollectionRelative(
+                        clonedRootId, rootId, contextParentId, true);
+                }
+
+                struct ObjectCloneSource {
+                    ObjectId sourceId = ObjectId::invalid();
+                    QString sourceIdentity;
+                    QString sourceParentIdentity;
+                    bool companion = false;
+                    QString companionSourceIdentity;
+                };
+                QVector<SceneObject> clones;
+                QVector<ObjectCloneSource> cloneSources;
+                QHash<QString, int> cloneIndexBySourceIdentity;
+                const auto objectIdentity = [](const SceneObject &object) {
+                    return object.blenderSourceObjectId.isEmpty()
+                        ? QStringLiteral("classiCAD-local-object:%1")
+                              .arg(object.id.value())
+                        : object.blenderSourceObjectId;
+                };
+                const auto remappedMemberships =
+                    [&clonedCollectionIds](const SceneObject &object) {
+                        QVector<CollectionId> result;
+                        for (const CollectionId membership :
+                             object.collectionIds) {
+                            const auto mapped = clonedCollectionIds.constFind(
+                                membership.value());
+                            if (mapped != clonedCollectionIds.cend() &&
+                                !result.contains(mapped.value())) {
+                                result.append(mapped.value());
+                            }
+                        }
+                        return result;
+                    };
+                for (const SceneObject &source : sourceObjects) {
+                    if (source.blenderLooseMeshEdgeCompanion) continue;
+                    const QVector<CollectionId> memberships =
+                        remappedMemberships(source);
+                    if (memberships.isEmpty()) continue;
+                    SceneObject clone = source;
+                    clone.id = ObjectId::invalid();
+                    clone.collectionIds = memberships;
+                    clone.libraryPath.clear();
+                    clone.workbenchRandomLibraryPath.clear();
+                    clone.blenderSourceObjectId.clear();
+                    if (!linkedData &&
+                        !clone.blenderSourceDataName.isEmpty()) {
+                        clone.blenderSourceDataName = uniqueName(
+                            clone.blenderSourceDataName, dataNames,
+                            QStringLiteral("Data"));
+                    }
+                    if (!clone.displayName.isEmpty()) {
+                        clone.displayName = uniqueName(
+                            clone.displayName, objectNames,
+                            QStringLiteral("Object"));
+                    }
+                    const int cloneIndex = clones.size();
+                    cloneIndexBySourceIdentity.insert(objectIdentity(source),
+                                                      cloneIndex);
+                    cloneSources.append({source.id, objectIdentity(source),
+                                         source.blenderParentObjectId, false,
+                                         {}});
+                    clones.append(std::move(clone));
+                }
+                for (const SceneObject &source : sourceObjects) {
+                    if (!source.blenderLooseMeshEdgeCompanion) continue;
+                    const auto sourceCloneIndex = cloneIndexBySourceIdentity
+                        .constFind(source.blenderSourceObjectId);
+                    if (sourceCloneIndex == cloneIndexBySourceIdentity.cend()) {
+                        continue;
+                    }
+                    SceneObject clone = source;
+                    clone.id = ObjectId::invalid();
+                    clone.collectionIds =
+                        clones[sourceCloneIndex.value()].collectionIds;
+                    clone.libraryPath.clear();
+                    clone.workbenchRandomLibraryPath.clear();
+                    clone.blenderSourceObjectId.clear();
+                    cloneSources.append({source.id, {},
+                                         source.blenderParentObjectId, true,
+                                         source.blenderSourceObjectId});
+                    clones.append(std::move(clone));
+                }
+
+                quint64 nextWeldGroup = 1;
+                for (const SceneObject &object : sourceObjects) {
+                    for (const quint64 group :
+                         object.geometry.controlPointWeldGroups) {
+                        if (group == std::numeric_limits<quint64>::max()) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not duplicate object geometry"),
+                                4000);
+                            return;
+                        }
+                        nextWeldGroup = qMax(nextWeldGroup, group + 1);
+                    }
+                }
+                QHash<quint64, quint64> clonedWeldGroups;
+                for (SceneObject &clone : clones) {
+                    for (quint64 &group :
+                         clone.geometry.controlPointWeldGroups) {
+                        if (group == 0) continue;
+                        if (!clonedWeldGroups.contains(group)) {
+                            if (nextWeldGroup ==
+                                std::numeric_limits<quint64>::max()) {
+                                statusBar()->showMessage(
+                                    QStringLiteral("Could not duplicate object geometry"),
+                                    4000);
+                                return;
+                            }
+                            clonedWeldGroups.insert(group, nextWeldGroup++);
+                        }
+                        group = clonedWeldGroups.value(group);
+                    }
+                }
+
+                QVector<ObjectId> clonedObjectIds;
+                if (!clones.isEmpty()) {
+                    clonedObjectIds = transaction.insertObjects(
+                        document.size(), clones);
+                    if (clonedObjectIds.size() != clones.size()) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not duplicate collection objects"),
+                            4000);
+                        return;
+                    }
+                }
+                QHash<QString, ObjectId> clonedObjectsByIdentity;
+                QHash<quint64, ObjectId> clonedObjectsBySourceId;
+                for (int index = 0; index < cloneSources.size(); ++index) {
+                    const ObjectCloneSource &source = cloneSources[index];
+                    const ObjectId cloneId = clonedObjectIds[index];
+                    if (!source.companion) {
+                        clonedObjectsByIdentity.insert(source.sourceIdentity,
+                                                       cloneId);
+                        clonedObjectsBySourceId.insert(source.sourceId.value(),
+                                                       cloneId);
+                    }
+                }
+                for (int index = 0; index < cloneSources.size(); ++index) {
+                    const ObjectCloneSource &source = cloneSources[index];
+                    const ObjectId cloneId = clonedObjectIds[index];
+                    if (source.companion) {
+                        const ObjectId sourceCloneId =
+                            clonedObjectsByIdentity.value(
+                                source.companionSourceIdentity,
+                                ObjectId::invalid());
+                        if (sourceCloneId.isValid()) {
+                            const QString sourceCloneIdentity =
+                                QStringLiteral("classiCAD-local-object:%1")
+                                    .arg(sourceCloneId.value());
+                            if (!transaction.setObjectSourceIdentity(
+                                    cloneId, sourceCloneIdentity)) {
+                                statusBar()->showMessage(
+                                    QStringLiteral("Could not link duplicate display geometry"),
+                                    4000);
+                                return;
+                            }
+                        }
+                    }
+                    const ObjectId parentCloneId =
+                        clonedObjectsByIdentity.value(
+                            source.sourceParentIdentity,
+                            ObjectId::invalid());
+                    if (parentCloneId.isValid() &&
+                        !transaction.setObjectParent(cloneId,
+                                                     parentCloneId)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not duplicate object hierarchy"),
+                            4000);
+                        return;
+                    }
+                    const Shape *currentGeometry =
+                        document.shape(cloneId);
+                    const bool hasAnchors = currentGeometry != nullptr &&
+                        !currentGeometry->dimensionAnchors.isEmpty();
+                    if (!hasAnchors) continue;
+                    Shape *geometry = transaction.editGeometry(cloneId);
+                    if (geometry == nullptr) continue;
+                    for (DimensionAnchorReference &anchor :
+                         geometry->dimensionAnchors) {
+                        const auto mapped = clonedObjectsBySourceId.constFind(
+                            anchor.objectId.value());
+                        if (mapped != clonedObjectsBySourceId.cend()) {
+                            anchor.objectId = mapped.value();
+                        } else {
+                            anchor = DimensionAnchorReference{};
+                        }
+                    }
+                }
+
+                if (!session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not duplicate collection"), 4000);
+                    return;
+                }
+                QVector<ObjectId> selectedCloneIds;
+                for (int index = 0; index < cloneSources.size(); ++index) {
+                    if (!cloneSources[index].companion) {
+                        selectedCloneIds.append(clonedObjectIds[index]);
+                    }
+                }
+                if (!selectedCloneIds.isEmpty()) {
+                    const ObjectId active = selectedCloneIds.back();
+                    session_.selection().setObjectIds(selectedCloneIds, active);
+                    session_.selection().setActiveObjectId(active);
+                }
+                pruneOutlinerSelection();
+                if (linkedData) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Duplicate Linked created; shared object-data editing is not represented"),
+                        6000);
+                }
             };
         collectionCallbacks.renameCollection =
             [this](CollectionId id, const QString &name) {

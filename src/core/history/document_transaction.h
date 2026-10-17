@@ -44,6 +44,8 @@ public:
                                   const QString &viewLayerKey,
                                   bool hidden);
     bool setObjectParent(ObjectId objectId, ObjectId parentObjectId);
+    bool setObjectSourceIdentity(ObjectId objectId,
+                                 const QString &sourceObjectId);
     bool moveBlenderSourceDataStackEntry(
         ObjectId objectId,
         BlenderSourceDataStackKind stackKind,

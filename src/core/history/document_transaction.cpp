@@ -290,6 +290,18 @@ bool DocumentTransaction::setObjectParent(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::setObjectSourceIdentity(
+    ObjectId objectId, const QString &sourceObjectId)
+{
+    SceneObject *object = document_.mutableObject(objectId);
+    if (object == nullptr) return false;
+    if (object->blenderSourceObjectId == sourceObjectId) return true;
+    object->blenderSourceObjectId = sourceObjectId;
+    changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::moveBlenderSourceDataStackEntry(
     ObjectId objectId,
     BlenderSourceDataStackKind stackKind,

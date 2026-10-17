@@ -253,6 +253,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId, bool)> deleteObjectSelection;
     std::function<void(CollectionId, bool)> setCollectionObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
+    std::function<void(CollectionId, CollectionId, bool)> duplicateCollection;
     std::function<void(CollectionId, const QString &)> renameCollection;
     std::function<void(CollectionId)> removeCollection;
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;

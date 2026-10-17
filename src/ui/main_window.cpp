@@ -3489,6 +3489,8 @@ private:
             std::function<OutlinerSequenceStrip(const QJsonObject &)> parseStrip;
             parseStrip = [&parseStrip](const QJsonObject &source) {
                 OutlinerSequenceStrip strip;
+                strip.sourceId = source.value(
+                    QStringLiteral("source_id")).toString();
                 strip.kind = source.value(QStringLiteral("kind")).toString();
                 strip.name = source.value(QStringLiteral("name")).toString();
                 strip.type = source.value(QStringLiteral("type")).toString();
@@ -3502,6 +3504,8 @@ private:
                     QStringLiteral("is_effect")).toBool();
                 strip.selected = source.value(
                     QStringLiteral("selected")).toBool();
+                strip.active = source.value(
+                    QStringLiteral("active")).toBool();
                 for (const QJsonValue &childValue : source.value(
                          QStringLiteral("children")).toArray()) {
                     if (childValue.isObject()) {
@@ -3520,6 +3524,65 @@ private:
         };
         collectionCallbacks.dataApi = [this]() {
             return session_.document().settings().importedBlenderDataApi;
+        };
+        collectionCallbacks.setSequencerSelection = [this](
+            const QStringList &selectedStripIds, const QString &activeStripId) {
+            DocumentSettings settings = session_.document().settings();
+            QJsonObject sequencer = settings.importedBlenderSequencer;
+            QSet<QString> selectedIds;
+            for (const QString &sourceId : selectedStripIds) {
+                selectedIds.insert(sourceId);
+            }
+            bool changed = false;
+            const auto updateRows = [&](const auto &self,
+                                        const QJsonArray &rows) -> QJsonArray {
+                QJsonArray updated;
+                for (const QJsonValue &rowValue : rows) {
+                    if (!rowValue.isObject()) {
+                        updated.append(rowValue);
+                        continue;
+                    }
+                    QJsonObject row = rowValue.toObject();
+                    if (row.value(QStringLiteral("kind")).toString() ==
+                        QLatin1String("STRIP")) {
+                        const QString sourceId = row.value(
+                            QStringLiteral("source_id")).toString();
+                        if (!sourceId.isEmpty()) {
+                            const bool selected = selectedIds.contains(sourceId);
+                            const bool active = sourceId == activeStripId;
+                            if (row.value(QStringLiteral("selected")).toBool() !=
+                                    selected ||
+                                row.value(QStringLiteral("active")).toBool() !=
+                                    active) {
+                                row.insert(QStringLiteral("selected"), selected);
+                                row.insert(QStringLiteral("active"), active);
+                                changed = true;
+                            }
+                        }
+                    }
+                    const QJsonArray children = row.value(
+                        QStringLiteral("children")).toArray();
+                    const QJsonArray updatedChildren = self(self, children);
+                    if (updatedChildren != children) {
+                        row.insert(QStringLiteral("children"), updatedChildren);
+                    }
+                    updated.append(row);
+                }
+                return updated;
+            };
+            const QJsonArray strips = sequencer.value(
+                QStringLiteral("strips")).toArray();
+            const QJsonArray updatedStrips = updateRows(updateRows, strips);
+            if (!changed) return;
+            sequencer.insert(QStringLiteral("strips"), updatedStrips);
+            settings.importedBlenderSequencer = sequencer;
+            DocumentTransaction transaction = session_.beginTransaction();
+            if (!transaction.setSettings(settings) ||
+                !session_.commitTransaction(transaction)) {
+                statusBar()->showMessage(
+                    QStringLiteral("Could not update Sequencer Outliner selection"),
+                    4000);
+            }
         };
         collectionCallbacks.libraryOverrides = [this]() {
             return session_.document().settings().importedBlenderLibraryOverrides;

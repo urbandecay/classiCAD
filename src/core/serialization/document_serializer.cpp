@@ -144,6 +144,7 @@ bool isValidImportedBlenderSequencer(const QJsonValue &value)
         return false;
     }
     int nodeCount = 0;
+    QSet<QString> stripIds;
     const auto validateRows = [&](const auto &self, const QJsonArray &rows,
                                   int depth) -> bool {
         if (rows.isEmpty()) return true;
@@ -161,6 +162,8 @@ bool isValidImportedBlenderSequencer(const QJsonValue &value)
             const QJsonValue meta = row.value(QStringLiteral("is_meta"));
             const QJsonValue effect = row.value(QStringLiteral("is_effect"));
             const QJsonValue selected = row.value(QStringLiteral("selected"));
+            const QJsonValue active = row.value(QStringLiteral("active"));
+            const QJsonValue sourceId = row.value(QStringLiteral("source_id"));
             const QJsonValue children = row.value(QStringLiteral("children"));
             if (!kind.isString() ||
                 (kind.toString() != QLatin1String("STRIP") &&
@@ -172,6 +175,17 @@ bool isValidImportedBlenderSequencer(const QJsonValue &value)
                 !meta.isBool() || !effect.isBool() || !selected.isBool() ||
                 !children.isArray()) {
                 return false;
+            }
+            if (kind.toString() == QLatin1String("STRIP") &&
+                (!active.isUndefined() || !sourceId.isUndefined())) {
+                const QString id = sourceId.toString();
+                if (!active.isBool() || !sourceId.isString() || id.isEmpty() ||
+                    id.size() > 4096 || stripIds.contains(id)) return false;
+                stripIds.insert(id);
+            } else if (kind.toString() == QLatin1String("DUPLICATE") &&
+                       (!active.isUndefined() || !sourceId.isUndefined())) {
+                if (!active.isBool() || active.toBool() ||
+                    !sourceId.isUndefined()) return false;
             }
             ++nodeCount;
             if (!self(self, children.toArray(), depth + 1)) return false;
@@ -1145,7 +1159,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 55);
+    serialized.insert(QStringLiteral("version"), 56);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1601,7 +1615,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 55) {
+    if (version < 1 || version > 56) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

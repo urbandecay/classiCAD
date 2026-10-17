@@ -19,6 +19,7 @@
  * tree_display_orphaned.cc and BKE_idtype.hh.
  * Sequencer strip nesting, current meta level, and duplicate-file grouping
  * follow tree_display_sequencer.cc and tree_element_seq.cc.
+ * Sequencer row selection and active-strip state follow outliner_sync.cc.
  * Library Overrides Properties and Hierarchies views follow
  * tree_display_override_library_properties.cc,
  * tree_display_override_library_hierarchies.cc, tree_element_overrides.cc,
@@ -82,6 +83,8 @@ constexpr int itemViewLayerKeyRole = Qt::UserRole + 9;
 constexpr int itemSceneKeyRole = Qt::UserRole + 10;
 constexpr int itemSourceObjectIdRole = Qt::UserRole + 11;
 constexpr int itemLibraryCurrentFileRole = Qt::UserRole + 12;
+constexpr int itemSequencerStripIdRole = Qt::UserRole + 13;
+constexpr int itemSequencerStripActiveRole = Qt::UserRole + 14;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -876,6 +879,13 @@ void CollectionsPanel::createLayout()
                 callbacks_.setObjectSelection) {
                 callbacks_.setObjectSelection({}, ObjectId::invalid());
             }
+            if (sequencerDisplayMode_ && callbacks_.setSequencerSelection) {
+                QTimer::singleShot(0, this, [this]() {
+                    if (callbacks_.setSequencerSelection) {
+                        callbacks_.setSequencerSelection({}, {});
+                    }
+                });
+            }
             rangeAnchorItem_ = nullptr;
         },
         [this]() { syncSelection(); },
@@ -1376,6 +1386,9 @@ bool CollectionsPanel::activateObjectRow(
             });
         }
         return true;
+    }
+    if (kind == OutlinerRowKind::SequencerStrip) {
+        return sequencerDisplayMode_;
     }
     if (kind != OutlinerRowKind::Object) return false;
     const ObjectId clickedId = ObjectId::fromValue(
@@ -3864,6 +3877,15 @@ void CollectionsPanel::refresh()
                 row->setToolTip(nameColumn, description);
                 row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
                 row->setSelected(!duplicateGroup && source.selected);
+                if (!source.sourceId.isEmpty()) {
+                    row->setData(nameColumn, itemSequencerStripIdRole,
+                                 source.sourceId);
+                    row->setData(nameColumn, itemSequencerStripActiveRole,
+                                 source.active);
+                    QFont font = row->font(nameColumn);
+                    font.setBold(source.active);
+                    row->setFont(nameColumn, font);
+                }
                 if (parent == nullptr) sceneRoots.append(row);
 
                 if (duplicateGroup || source.isMeta) {
@@ -4266,6 +4288,44 @@ void CollectionsPanel::refresh()
 void CollectionsPanel::syncSelection()
 {
     if (tree_ == nullptr) return;
+    if (sequencerDisplayMode_) {
+        QStringList selectedStripIds;
+        QString activeStripId;
+        QTreeWidgetItem *currentItem = tree_->currentItem();
+        if (currentItem != nullptr &&
+            currentItem->data(nameColumn, itemKindRole).toInt() !=
+                static_cast<int>(OutlinerRowKind::SequencerStrip)) {
+            return;
+        }
+        QVector<QTreeWidgetItem *> pending;
+        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+            pending.append(tree_->topLevelItem(index));
+        }
+        while (!pending.isEmpty()) {
+            QTreeWidgetItem *item = pending.takeLast();
+            if (item->data(nameColumn, itemKindRole).toInt() ==
+                static_cast<int>(OutlinerRowKind::SequencerStrip)) {
+                const QString stripId = item->data(
+                    nameColumn, itemSequencerStripIdRole).toString();
+                if (!stripId.isEmpty()) {
+                    if (item->isSelected()) selectedStripIds.append(stripId);
+                    if (item == currentItem ||
+                        (activeStripId.isEmpty() && item->data(
+                            nameColumn, itemSequencerStripActiveRole).toBool())) {
+                        activeStripId = stripId;
+                    }
+                }
+            }
+            for (int childIndex = 0; childIndex < item->childCount();
+                 ++childIndex) {
+                pending.append(item->child(childIndex));
+            }
+        }
+        if (callbacks_.setSequencerSelection) {
+            callbacks_.setSequencerSelection(selectedStripIds, activeStripId);
+        }
+        return;
+    }
     const QVector<ObjectId> selectedIds = callbacks_.selectedObjectIds
         ? callbacks_.selectedObjectIds() : QVector<ObjectId>{};
     QSet<quint64> selectedValues;

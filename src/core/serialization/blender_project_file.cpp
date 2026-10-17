@@ -2843,7 +2843,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 58 && bridgeVersion != 59 &&
          bridgeVersion != 60 && bridgeVersion != 61 &&
          bridgeVersion != 62 && bridgeVersion != 63 &&
-         bridgeVersion != 64 && bridgeVersion != 65)) {
+         bridgeVersion != 64 && bridgeVersion != 65 &&
+         bridgeVersion != 66)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4012,6 +4013,7 @@ bool importBlenderScene(const QString &path,
             return false;
         }
         int sequenceNodeCount = 0;
+        QSet<QString> sequenceStripIds;
         const auto validateSequenceRows = [&](const auto &self,
                                                const QJsonArray &rows,
                                                int depth) -> bool {
@@ -4034,6 +4036,10 @@ bool importBlenderScene(const QString &path,
                     QStringLiteral("is_effect"));
                 const QJsonValue selectedValue = row.value(
                     QStringLiteral("selected"));
+                const QJsonValue activeValue = row.value(
+                    QStringLiteral("active"));
+                const QJsonValue sourceIdValue = row.value(
+                    QStringLiteral("source_id"));
                 const QJsonValue childrenValue = row.value(
                     QStringLiteral("children"));
                 if (!kindValue.isString() ||
@@ -4046,6 +4052,20 @@ bool importBlenderScene(const QString &path,
                     directoryValue.toString().size() > 4096 ||
                     !metaValue.isBool() || !effectValue.isBool() ||
                     !selectedValue.isBool() || !childrenValue.isArray()) {
+                    return false;
+                }
+                if (bridgeVersion >= 66 &&
+                    kindValue.toString() == QLatin1String("STRIP")) {
+                    const QString sourceId = sourceIdValue.toString();
+                    if (!sourceIdValue.isString() || sourceId.isEmpty() ||
+                        sourceId.size() > 4096 ||
+                        sequenceStripIds.contains(sourceId) ||
+                        !activeValue.isBool()) return false;
+                    sequenceStripIds.insert(sourceId);
+                } else if (bridgeVersion >= 66 &&
+                           kindValue.toString() == QLatin1String("DUPLICATE") &&
+                           (!activeValue.isBool() || activeValue.toBool() ||
+                            !sourceIdValue.isUndefined())) {
                     return false;
                 }
                 ++sequenceNodeCount;

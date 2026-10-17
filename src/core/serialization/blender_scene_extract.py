@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 65
+BRIDGE_FORMAT_VERSION = 66
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -2035,6 +2035,7 @@ def outliner_sequencer_tree(active_window, fallback_scene):
     meta_stack = list(getattr(sequence_editor, "meta_stack", ()))
     current_strips = (meta_stack[-1].strips if meta_stack
                       else sequence_editor.strips)
+    active_strip = getattr(sequence_editor, "active_strip", None)
     remaining = [MAX_OUTLINER_SEQUENCE_ITEMS]
     truncated = [False]
     effect_types = {
@@ -2068,7 +2069,7 @@ def outliner_sequencer_tree(active_window, fallback_scene):
             filepath = ""
         return filepath
 
-    def strip_record(strip, depth):
+    def strip_record(strip, depth, source_id):
         if remaining[0] <= 0:
             truncated[0] = True
             return None
@@ -2092,6 +2093,8 @@ def outliner_sequencer_tree(active_window, fallback_scene):
             "is_meta": is_meta,
             "is_effect": is_effect,
             "selected": bool(getattr(strip, "select", False)),
+            "active": strip == active_strip,
+            "source_id": source_id,
             "children": [],
         }
         if is_meta:
@@ -2101,7 +2104,9 @@ def outliner_sequencer_tree(active_window, fallback_scene):
             else:
                 children = strip.strips
                 for child_index, child in enumerate(children):
-                    child_record = strip_record(child, depth + 1)
+                    child_record = strip_record(
+                        child, depth + 1,
+                        source_id + "/child:" + str(child_index))
                     if child_record is not None:
                         item["children"].append(child_record)
                     if remaining[0] <= 0 and child_index + 1 < len(children):
@@ -2142,11 +2147,13 @@ def outliner_sequencer_tree(active_window, fallback_scene):
                     "is_meta": False,
                     "is_effect": False,
                     "selected": False,
+                    "active": False,
                     "children": [],
                 }
                 for matching_index in matching_indices:
                     candidate = top_level[matching_index]
-                    child_record = strip_record(candidate, 0)
+                    child_record = strip_record(
+                        candidate, 0, "strip:" + str(matching_index))
                     if child_record is not None:
                         duplicate_row["children"].append(child_record)
                     if (remaining[0] <= 0 and
@@ -2159,7 +2166,7 @@ def outliner_sequencer_tree(active_window, fallback_scene):
                         truncated[0] = True
                     break
                 continue
-        strip_item = strip_record(strip, 0)
+        strip_item = strip_record(strip, 0, "strip:" + str(index))
         if strip_item is not None:
             rows.append(strip_item)
         if remaining[0] <= 0:

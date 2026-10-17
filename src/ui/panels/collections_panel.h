@@ -191,6 +191,7 @@ struct OutlinerOrphanGroup {
 };
 
 struct OutlinerSequenceStrip {
+    QString sourceId;
     QString kind;
     QString name;
     QString type;
@@ -199,6 +200,7 @@ struct OutlinerSequenceStrip {
     bool isMeta = false;
     bool isEffect = false;
     bool selected = false;
+    bool active = false;
     QVector<OutlinerSequenceStrip> children;
 };
 
@@ -216,6 +218,7 @@ struct CollectionsPanelCallbacks {
     std::function<QVector<OutlinerLibraryEntry>()> libraries;
     std::function<QVector<OutlinerOrphanGroup>()> orphanGroups;
     std::function<OutlinerSequenceTree()> sequencer;
+    std::function<void(const QStringList &, const QString &)> setSequencerSelection;
     std::function<QJsonObject()> dataApi;
     std::function<QJsonObject()> libraryOverrides;
     std::function<QString()> activeSceneKey;

@@ -2256,17 +2256,29 @@ def outliner_data_api_tree():
     def animation_path_metadata(owner, prop, identifier, is_array,
                                 array_index=0):
         try:
-            if not bool(getattr(prop, "is_animatable", False)) or bool(
-                    getattr(prop, "is_readonly", False)):
+            if not bool(getattr(prop, "is_animatable", False)):
                 return None
             id_block = owner if isinstance(owner, bpy.types.ID) else getattr(
                 owner, "id_data", None)
             if not isinstance(id_block, bpy.types.ID):
                 return None
-            if (getattr(id_block, "library", None) is not None and
-                    getattr(id_block, "override_library", None) is None and
-                    not bool(getattr(prop, "is_library_editable", False))):
+
+            # Blender's Outliner operators call RNA_property_anim_editable(),
+            # which includes the owner-specific editable callback and library
+            # override checks. Property.is_readonly only describes the static
+            # RNA flag; query the live owner to include those dynamic checks.
+            if bool(owner.is_property_readonly(identifier)):
                 return None
+
+            # RNA_property_anim_editable also rejects a property when its
+            # owning ID already uses a linked or overridden Action.
+            animation_data = id_block.animation_data
+            action = animation_data.action if animation_data is not None else None
+            if action is not None and (
+                    not bool(action.is_editable) or
+                    getattr(action, "override_library", None) is not None):
+                return None
+
             owner_path = "" if owner is id_block else str(
                 owner.path_from_id())
             data_path = ((owner_path + ".") if owner_path else "") + identifier

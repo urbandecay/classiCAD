@@ -11216,10 +11216,14 @@ scene depth.
 - The ninety-eighth tree update follows Blender 5.2.2's [default 3D cursor key binding](https://github.com/blender/blender/blob/v5.2.2/scripts/presets/keyconfig/keymap_data/blender_default.py#L150-L161) and [cursor placement operator](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_view3d/view3d_edit.cc#L799-L839). Shift+right-click now positions the scene cursor on the nearest visible NURBS surface, solid, picture, or imported polygon-mesh face, and falls back to the plane facing the current view when no face is hit. A screen-facing red/white cursor mark is drawn while viewport overlays are enabled and follows Blender's saved per-view `show_cursor` flag. Imported cursor positions remain scene-specific; edits are saved in a separate scene-keyed editor-state map so geometry undo does not move the cursor. Native document version 66 stores that map, and older files default to imported scene metadata or the origin. The cursor's Blender rotation and a matched live-app interaction/visual comparison remain unverified. `cmake --build build -j4` and `git diff --check` passed.
 - The Data API remains an imported snapshot. Its Keying Set and driver-path
   controls edit the retained classiCAD metadata; they cannot edit Blender's
-  in-memory RNA database. Remaining Outliner scope includes live RNA property
-  controls, driver evaluation, and a matched Blender/classiCAD interaction
-  comparison. Those live operations require Blender's RNA and animation
-  runtime, which classiCAD does not own.
+  in-memory RNA database. Blender's Data API tree displays RNA properties as
+  rows; its header adds/removes Keying Set paths and offers keyframe insert and
+  delete when a Keying Set is active. It does not provide value-edit controls
+  in those rows, so live RNA property controls are not a missing Outliner
+  feature. Actual keyframe insertion/deletion still requires animation storage
+  and a current-frame context; useful playback and executable drivers also
+  require animation/dependency evaluation, which classiCAD does not yet have.
+  A matched Blender/classiCAD interaction comparison also remains open.
   Generic ID dispatch was checked against Blender 5.2.2's full
   `TreeElementID::create_from_id()` switch; its remaining ID types use the
   already-ported generic Animation expansion. Do not mark this port complete
@@ -11345,3 +11349,18 @@ scene depth.
   variables or F-Curves, evaluate driver expressions, or update dependency
   graphs. A matched live UI comparison was not run. `cmake --build build -j4`,
   Python syntax parsing, and `git diff --check` passed.
+- The hundred-first tree update tightens the animatable RNA path filter against
+  Blender 5.2.2's [`RNA_property_anim_editable()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_access.cc#L2226-L2258),
+  the selected-property driver operation in
+  [`outliner_edit.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1947-L1954),
+  and Python's [`bpy_struct.is_property_readonly()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/python/intern/bpy_rna.cc#L3672-L3699).
+  Extraction now checks the owning RNA object's dynamic read-only state,
+  including library-override editability, and excludes properties whose
+  existing Action is linked or overridden. This fixes the previous static
+  `Property.is_readonly` check. Blender's internal per-ID
+  `id_can_have_animdata()` capability has no non-mutating Python query, so
+  unsupported ID-type gating remains a documented edge case. This still
+  stores editable paths as snapshot metadata; it does not create F-Curves or
+  evaluate them. `cmake --build build -j4`, Python syntax parsing, and
+  `git diff --check` passed; no matched Blender Outliner interaction
+  comparison was run.

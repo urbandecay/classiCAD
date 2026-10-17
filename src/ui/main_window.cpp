@@ -3878,7 +3878,55 @@ private:
                     4000);
                 return;
             }
+            const QVector<CollectionId> parentIds = collection->parentIds;
+            QVector<CollectionId> childCollectionIds;
+            for (const DocumentCollection &candidate :
+                 session_.document().collections()) {
+                if (candidate.parentIds.contains(id)) {
+                    childCollectionIds.append(candidate.id);
+                }
+            }
+            QVector<ObjectId> linkedObjectIds;
+            for (const SceneObject &object : session_.document().objects()) {
+                if (object.collectionIds.contains(id)) {
+                    linkedObjectIds.append(object.id);
+                }
+            }
             DocumentTransaction transaction = session_.beginTransaction();
+            for (const CollectionId childId : childCollectionIds) {
+                const DocumentCollection *child =
+                    session_.document().collection(childId);
+                if (child == nullptr) continue;
+                QVector<CollectionId> parents = child->parentIds;
+                parents.removeAll(id);
+                for (const CollectionId parentId : parentIds) {
+                    if (!parents.contains(parentId)) parents.append(parentId);
+                }
+                if (!transaction.setCollectionParents(childId, parents)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not preserve child collections"),
+                        4000);
+                    return;
+                }
+            }
+            for (const ObjectId objectId : linkedObjectIds) {
+                const SceneObject *object =
+                    session_.document().object(objectId);
+                if (object == nullptr) continue;
+                QVector<CollectionId> memberships = object->collectionIds;
+                memberships.removeAll(id);
+                for (const CollectionId parentId : parentIds) {
+                    if (!memberships.contains(parentId)) {
+                        memberships.append(parentId);
+                    }
+                }
+                if (!transaction.setObjectCollections(objectId, memberships)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not preserve collection objects"),
+                        4000);
+                    return;
+                }
+            }
             if (!transaction.removeCollection(id) ||
                 !session_.commitTransaction(transaction)) {
                 statusBar()->showMessage(
@@ -4480,9 +4528,73 @@ private:
                         4000);
                     return;
                 }
-                const QVector<CollectionId> hierarchy =
-                    collectionHierarchyIds(root);
-                if (hierarchy.isEmpty()) return;
+                QVector<CollectionId> hierarchy{root};
+                QSet<quint64> collectionIds{root.value()};
+                const QVector<DocumentCollection> allCollections =
+                    session_.document().collections();
+                for (qsizetype index = 0; index < hierarchy.size(); ++index) {
+                    const CollectionId parentId = hierarchy[index];
+                    for (const DocumentCollection &candidate : allCollections) {
+                        if (candidate.parentIds.contains(parentId) &&
+                            !collectionIds.contains(candidate.id.value())) {
+                            collectionIds.insert(candidate.id.value());
+                            hierarchy.append(candidate.id);
+                        }
+                    }
+                }
+                QSet<quint64> localCollectionIds;
+                for (const CollectionId id : hierarchy) {
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection != nullptr &&
+                        collection->libraryPath.isEmpty()) {
+                        localCollectionIds.insert(id.value());
+                    }
+                }
+                QVector<ObjectId> affectedObjects;
+                for (const SceneObject &object :
+                     session_.document().objects()) {
+                    const bool linkedToHierarchy = std::any_of(
+                        object.collectionIds.cbegin(),
+                        object.collectionIds.cend(),
+                        [&localCollectionIds](CollectionId id) {
+                            return localCollectionIds.contains(id.value());
+                        });
+                    if (linkedToHierarchy) affectedObjects.append(object.id);
+                }
+
+                const auto identityFor = [](const SceneObject &object) {
+                    return object.blenderSourceObjectId.isEmpty()
+                        ? QStringLiteral("classiCAD-local-object:%1")
+                              .arg(object.id.value())
+                        : object.blenderSourceObjectId;
+                };
+                QHash<QString, const SceneObject *> objectsByIdentity;
+                for (const SceneObject &object :
+                     session_.document().objects()) {
+                    if (!object.blenderLooseMeshEdgeCompanion) {
+                        objectsByIdentity.insert(identityFor(object), &object);
+                    }
+                }
+                QSet<QString> protectedParentIdentities;
+                for (const SceneObject &object :
+                     session_.document().objects()) {
+                    if (object.libraryPath.isEmpty() ||
+                        object.blenderLooseMeshEdgeCompanion) {
+                        continue;
+                    }
+                    QString parentIdentity = object.blenderParentObjectId;
+                    QSet<QString> visited;
+                    while (!parentIdentity.isEmpty() &&
+                           !visited.contains(parentIdentity)) {
+                        visited.insert(parentIdentity);
+                        protectedParentIdentities.insert(parentIdentity);
+                        const SceneObject *parent =
+                            objectsByIdentity.value(parentIdentity, nullptr);
+                        if (parent == nullptr) break;
+                        parentIdentity = parent->blenderParentObjectId;
+                    }
+                }
 
                 DocumentTransaction transaction = session_.beginTransaction();
                 bool changed = false;
@@ -4495,6 +4607,42 @@ private:
                     }
                     changed = transaction.removeCollection(id) || changed;
                 }
+                QVector<ObjectId> unlinkedObjectIds;
+                QSet<QString> unlinkedObjectIdentities;
+                for (const ObjectId id : affectedObjects) {
+                    const SceneObject *object =
+                        session_.document().object(id);
+                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                        !object->collectionIds.isEmpty()) {
+                        continue;
+                    }
+                    const QString identity = identityFor(*object);
+                    if (protectedParentIdentities.contains(identity)) continue;
+                    unlinkedObjectIds.append(id);
+                    unlinkedObjectIdentities.insert(identity);
+                }
+                for (const SceneObject &object :
+                     session_.document().objects()) {
+                    if (!object.blenderLooseMeshEdgeCompanion ||
+                        !unlinkedObjectIdentities.contains(
+                            object.blenderSourceObjectId)) {
+                        continue;
+                    }
+                    unlinkedObjectIds.append(object.id);
+                }
+                for (const SceneObject &object :
+                     session_.document().objects()) {
+                    if (object.blenderLooseMeshEdgeCompanion ||
+                        !object.libraryPath.isEmpty() ||
+                        !unlinkedObjectIdentities.contains(
+                            object.blenderParentObjectId)) {
+                        continue;
+                    }
+                    changed = transaction.setObjectParent(
+                                  object.id, ObjectId::invalid()) || changed;
+                }
+                changed = !transaction.removeObjects(unlinkedObjectIds)
+                              .isEmpty() || changed;
                 if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not delete collection hierarchy"),

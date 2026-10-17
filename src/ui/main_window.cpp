@@ -4257,6 +4257,22 @@ private:
             }
             return result;
         };
+        collectionCallbacks.selectObjectHierarchy =
+            [this, objectHierarchyIds](ObjectId root) {
+                if (!session_.document().isObjectEditable(root)) return;
+                QVector<ObjectId> selectableIds;
+                for (const ObjectId id : objectHierarchyIds(root)) {
+                    const SceneObject *object = session_.document().object(id);
+                    if (object != nullptr &&
+                        !object->blenderLooseMeshEdgeCompanion &&
+                        session_.document().isObjectEditable(id)) {
+                        selectableIds.append(id);
+                    }
+                }
+                if (!selectableIds.contains(root)) return;
+                session_.selection().setObjectIds(selectableIds, root);
+                session_.selection().setActiveObjectId(root);
+            };
         const auto collectionHierarchyIds =
             [this, collectionBelongsToActiveScene](CollectionId root) {
             QVector<CollectionId> result;

@@ -248,6 +248,7 @@ struct CollectionsPanelCallbacks {
     std::function<bool(ObjectId, const QString &)> objectVisibleInViewLayer;
     std::function<bool(ObjectId, const QString &)> objectSelectableInViewLayer;
     std::function<void(const QVector<ObjectId> &, ObjectId)> setObjectSelection;
+    std::function<void(ObjectId)> selectObjectHierarchy;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
     std::function<void(CollectionId, const QString &)> renameCollection;
     std::function<void(CollectionId)> removeCollection;

@@ -1944,6 +1944,16 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.setObjectSelection({objectId}, objectId);
             });
         }
+        if (callbacks_.selectObjectHierarchy) {
+            QAction *selectHierarchy = menu.addAction(
+                QStringLiteral("Select Hierarchy"));
+            connect(selectHierarchy, &QAction::triggered, this,
+                    [this, objectId]() {
+                if (callbacks_.canSelectObject &&
+                    !callbacks_.canSelectObject(objectId)) return;
+                callbacks_.selectObjectHierarchy(objectId);
+            });
+        }
         if (callbacks_.renameObject) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, objectId]() {

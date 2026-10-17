@@ -3978,7 +3978,10 @@ private:
                          collectionRelationIds(id)) {
                         relatedCollections.insert(relatedId.value());
                     }
-                    bool alreadyIsolated = value;
+                    const bool isHideState =
+                        stateKey == QStringLiteral("exclude") ||
+                        stateKey.startsWith(QStringLiteral("hide_"));
+                    bool alreadyIsolated = value == isHideState;
                     if (alreadyIsolated) {
                         for (const LayerCollectionPath &path : allPaths) {
                             const DocumentCollection *collection =
@@ -3992,9 +3995,10 @@ private:
                                 *collection, viewLayerKey, path.sourcePath);
                             const bool related = relatedCollections.contains(
                                 path.id.value());
-                            const bool expectedHidden = !related;
+                            const bool expectedValue = related
+                                ? !isHideState : isHideState;
                             if (current.value(stateKey).toBool() !=
-                                expectedHidden) {
+                                expectedValue) {
                                 alreadyIsolated = false;
                                 break;
                             }
@@ -4016,15 +4020,17 @@ private:
                         const bool visibleInTargetBranch =
                             isPrefix(sourcePath, path.sourcePath) ||
                             isPrefix(path.sourcePath, sourcePath);
-                        const bool hidden = alreadyIsolated
-                            ? false : !visibleInTargetBranch;
+                        const bool flagValue = alreadyIsolated
+                            ? false
+                            : (visibleInTargetBranch ? !isHideState
+                                                     : isHideState);
                         if (current.value(stateKey).isBool() &&
-                            current.value(stateKey).toBool() == hidden) {
+                            current.value(stateKey).toBool() == flagValue) {
                             continue;
                         }
                         changed = transaction.setCollectionViewLayerState(
                                       path.id, viewLayerKey, path.sourcePath,
-                                      stateKey, hidden) || changed;
+                                      stateKey, flagValue) || changed;
                     }
                     if (changed && !session_.commitTransaction(transaction)) {
                         statusBar()->showMessage(

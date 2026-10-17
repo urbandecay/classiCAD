@@ -150,6 +150,8 @@ private:
     QString activeFilterText_;
     QString currentStateScopeKey_;
     QString currentTreeStateContextKey_;
+    bool showHoldoutColumn_ = false;
+    bool showIndirectOnlyColumn_ = false;
     bool refreshing_ = false;
     bool restoringTreeState_ = false;
     bool hasRefreshed_ = false;

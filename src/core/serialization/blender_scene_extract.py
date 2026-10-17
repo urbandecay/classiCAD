@@ -1481,6 +1481,8 @@ def layer_collection_records(scene, view_layer):
             "exclude": bool(node.exclude),
             "hide_viewport": bool(node.hide_viewport),
             "hide_render": bool(node.hide_render),
+            "holdout": bool(node.holdout),
+            "indirect_only": bool(node.indirect_only),
         })
         for child in node.children:
             visit(child, current_path)

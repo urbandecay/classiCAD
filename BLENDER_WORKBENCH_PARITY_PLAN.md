@@ -10729,8 +10729,8 @@ scene depth.
   and [the object/collection row controls](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1182-L1282).
   The control writes object or collection `hide_render` through a document
   transaction, separate from viewport visibility and active view-layer
-  restrictions. The remaining Blender hierarchy, recursive Shift behavior,
-  and drag-toggle gestures are not implemented by this checkbox. The full
+  restrictions. The recursive Shift and Ctrl-isolation behavior is covered by
+  the ninth and tenth updates below. The full
   `cmake --build build -j4` passed; no GUI comparison was run.
 - The eighth tree update initially added a selector for the imported active
   scene's view layers. The eleventh update below supersedes its original
@@ -10785,6 +10785,19 @@ scene depth.
   data; this implementation stores equivalent visible-row paths because
   classiCAD has no workspace model. The full `cmake --build build -j4` passed;
   no GUI interaction comparison was run.
+- The thirteenth tree update imports Blender's per-view-layer collection
+  `holdout` and `indirect_only` flags and adds optional Holdout and Indirect
+  Only restriction columns, enabled from the tree header menu. Click, Shift
+  recursive, and Ctrl isolate operations update the exact collection path and
+  are stored in the imported view-layer metadata. Blender 5.2.2's
+  [`outliner_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1560-L1612)
+  defines these controls; the Blender
+  [Outliner manual](https://docs.blender.org/manual/en/5.2/editors/outliner/interface.html)
+  marks Indirect Only as Cycles-only.
+  The flags are retained and editable, but classiCAD's Workbench Solid preview
+  does not yet apply either flag to rendered pixels; Indirect Only is a
+  Cycles-only behavior in Blender. Build passed; no GUI interaction comparison
+  was run.
 - Remaining Outliner scope includes other Blender datablock rows and
   restriction controls, and a matched
   Blender/classiCAD interaction comparison. Do not

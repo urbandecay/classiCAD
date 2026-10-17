@@ -59,8 +59,10 @@ constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
 constexpr int viewLayerViewportColumn = 3;
-constexpr int selectColumn = 4;
-constexpr int excludeColumn = 5;
+constexpr int holdoutColumn = 4;
+constexpr int indirectOnlyColumn = 5;
+constexpr int selectColumn = 6;
+constexpr int excludeColumn = 7;
 
 QJsonObject viewLayerState(const DocumentCollection &collection,
                            const QString &viewLayerKey,
@@ -345,11 +347,13 @@ void CollectionsPanel::createLayout()
     layout->addLayout(filterRow);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
-    tree_->setColumnCount(6);
+    tree_->setColumnCount(8);
     tree_->setHeaderLabels({QStringLiteral("Name"),
                             QStringLiteral("Viewport"),
                             QStringLiteral("Render"),
                             QStringLiteral("Layer View"),
+                            QStringLiteral("Holdout"),
+                            QStringLiteral("Indirect Only"),
                             QStringLiteral("Select"),
                             QStringLiteral("Exclude")});
     tree_->headerItem()->setToolTip(viewportColumn,
@@ -358,6 +362,10 @@ void CollectionsPanel::createLayout()
                                     QStringLiteral("Hide globally in renders. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(viewLayerViewportColumn,
                                     QStringLiteral("Hide in the active Blender view layer. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
+    tree_->headerItem()->setToolTip(holdoutColumn,
+                                    QStringLiteral("Make this collection a holdout in the active view layer. Shift-click applies to descendants; Ctrl-click isolates it."));
+    tree_->headerItem()->setToolTip(indirectOnlyColumn,
+                                    QStringLiteral("Cycles only: make this collection contribute indirectly. Shift-click applies to descendants; Ctrl-click isolates it."));
     tree_->headerItem()->setToolTip(selectColumn,
                                     QStringLiteral("Prevent selection. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->headerItem()->setToolTip(excludeColumn,
@@ -380,12 +388,56 @@ void CollectionsPanel::createLayout()
                                           QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(viewLayerViewportColumn,
                                           QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(holdoutColumn,
+                                          QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(indirectOnlyColumn,
+                                          QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(excludeColumn,
                                           QHeaderView::ResizeToContents);
     tree_->setItemDelegateForColumn(viewLayerViewportColumn,
                                     new ViewLayerCheckDelegate(tree_));
+    tree_->setItemDelegateForColumn(holdoutColumn,
+                                    new ViewLayerCheckDelegate(tree_));
+    tree_->setItemDelegateForColumn(indirectOnlyColumn,
+                                    new ViewLayerCheckDelegate(tree_));
     tree_->setItemDelegateForColumn(excludeColumn,
                                     new ViewLayerCheckDelegate(tree_));
+    QSettings outlinerSettings;
+    showHoldoutColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showHoldoutColumn"), false).toBool();
+    showIndirectOnlyColumn_ = outlinerSettings.value(
+        QStringLiteral("outliner/showIndirectOnlyColumn"), false).toBool();
+    tree_->header()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tree_->header(), &QHeaderView::customContextMenuRequested,
+            this, [this](const QPoint &position) {
+        QMenu menu(this);
+        QAction *holdout = menu.addAction(QStringLiteral("Show Holdout Column"));
+        holdout->setCheckable(true);
+        holdout->setChecked(showHoldoutColumn_);
+        QAction *indirect = menu.addAction(
+            QStringLiteral("Show Indirect Only Column (Cycles)"));
+        indirect->setCheckable(true);
+        indirect->setChecked(showIndirectOnlyColumn_);
+        connect(holdout, &QAction::toggled, this, [this](bool visible) {
+            showHoldoutColumn_ = visible;
+            QSettings settings;
+            settings.setValue(QStringLiteral("outliner/showHoldoutColumn"),
+                              visible);
+            tree_->setColumnHidden(
+                holdoutColumn,
+                !visible || tree_->isColumnHidden(viewLayerViewportColumn));
+        });
+        connect(indirect, &QAction::toggled, this, [this](bool visible) {
+            showIndirectOnlyColumn_ = visible;
+            QSettings settings;
+            settings.setValue(
+                QStringLiteral("outliner/showIndirectOnlyColumn"), visible);
+            tree_->setColumnHidden(
+                indirectOnlyColumn,
+                !visible || tree_->isColumnHidden(viewLayerViewportColumn));
+        });
+        menu.exec(tree_->header()->mapToGlobal(position));
+    });
     tree_->setToolTip(QStringLiteral(
         "Scene objects and collection memberships. Click to select and activate; Ctrl-click toggles selection. The restriction columns control viewport visibility and selection."));
     layout->addWidget(tree_);
@@ -434,12 +486,23 @@ void CollectionsPanel::createLayout()
         if (refreshing_ || item == nullptr ||
             (column != viewportColumn && column != renderColumn &&
              column != viewLayerViewportColumn &&
+             column != holdoutColumn && column != indirectOnlyColumn &&
              column != selectColumn && column != excludeColumn)) {
             return;
         }
         const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
             item->data(nameColumn, itemKindRole).toInt());
         const bool hidden = item->checkState(column) != Qt::Checked;
+        const QString stateKey = column == viewLayerViewportColumn
+            ? QStringLiteral("hide_viewport")
+            : column == excludeColumn
+                ? QStringLiteral("exclude")
+                : column == holdoutColumn
+                    ? QStringLiteral("holdout")
+                    : QStringLiteral("indirect_only");
+        const bool stateValue =
+            column == holdoutColumn || column == indirectOnlyColumn
+                ? !hidden : hidden;
         const quint64 value =
             item->data(nameColumn, itemIdRole).toULongLong();
         const QString viewLayerKey = callbacks_.activeViewLayerKey
@@ -457,8 +520,8 @@ void CollectionsPanel::createLayout()
         // dispatching itemChanged so the active QTreeWidgetItem is not deleted
         // from inside its own check-state update.
         QTimer::singleShot(0, this, [this, kind, column, hidden, value,
-                                     viewLayerKey, sourcePath, recursive,
-                                     isolate]() {
+                                     stateKey, stateValue, viewLayerKey,
+                                     sourcePath, recursive, isolate]() {
             if (kind == OutlinerRowKind::Collection) {
                 const CollectionId id = CollectionId::fromValue(value);
                 if (column == viewportColumn && callbacks_.setViewportVisibility) {
@@ -469,22 +532,18 @@ void CollectionsPanel::createLayout()
                     callbacks_.setCollectionRenderVisibility(id, hidden,
                                                              recursive,
                                                              isolate);
-                } else if (column == viewLayerViewportColumn &&
+                } else if ((column == viewLayerViewportColumn ||
+                            column == excludeColumn ||
+                            column == holdoutColumn ||
+                            column == indirectOnlyColumn) &&
                            callbacks_.setCollectionViewLayerState) {
                     callbacks_.setCollectionViewLayerState(
-                        id, viewLayerKey, sourcePath,
-                        QStringLiteral("hide_viewport"), hidden, recursive,
-                        isolate);
+                        id, viewLayerKey, sourcePath, stateKey, stateValue,
+                        recursive, isolate);
                 } else if (column == selectColumn &&
                            callbacks_.setCollectionSelectability) {
                     callbacks_.setCollectionSelectability(id, hidden,
                                                           recursive, isolate);
-                } else if (column == excludeColumn &&
-                           callbacks_.setCollectionViewLayerState) {
-                    callbacks_.setCollectionViewLayerState(
-                        id, viewLayerKey, sourcePath,
-                        QStringLiteral("exclude"), hidden, recursive,
-                        isolate);
                 }
             } else if (kind == OutlinerRowKind::Object) {
                 const ObjectId id = ObjectId::fromValue(value);
@@ -957,10 +1016,18 @@ void CollectionsPanel::appendCollection(
         entry.collection, activeViewLayerKey, sourcePath);
     if (!layerState.isEmpty()) {
         item->setData(viewLayerViewportColumn, itemViewLayerEditableRole, true);
+        item->setData(holdoutColumn, itemViewLayerEditableRole, true);
+        item->setData(indirectOnlyColumn, itemViewLayerEditableRole, true);
         item->setData(excludeColumn, itemViewLayerEditableRole, true);
         item->setCheckState(viewLayerViewportColumn,
             layerState.value(QStringLiteral("hide_viewport")).toBool()
                 ? Qt::Unchecked : Qt::Checked);
+        item->setCheckState(holdoutColumn,
+            layerState.value(QStringLiteral("holdout")).toBool()
+                ? Qt::Checked : Qt::Unchecked);
+        item->setCheckState(indirectOnlyColumn,
+            layerState.value(QStringLiteral("indirect_only")).toBool()
+                ? Qt::Checked : Qt::Unchecked);
         item->setCheckState(excludeColumn,
             layerState.value(QStringLiteral("exclude")).toBool()
                 ? Qt::Unchecked : Qt::Checked);
@@ -1185,6 +1252,12 @@ void CollectionsPanel::refresh()
     }
     tree_->setColumnHidden(viewLayerViewportColumn,
                            activeViewLayerKey.isEmpty());
+    tree_->setColumnHidden(holdoutColumn,
+                           activeViewLayerKey.isEmpty() ||
+                               !showHoldoutColumn_);
+    tree_->setColumnHidden(indirectOnlyColumn,
+                           activeViewLayerKey.isEmpty() ||
+                               !showIndirectOnlyColumn_);
     tree_->setColumnHidden(excludeColumn, activeViewLayerKey.isEmpty());
     auto *sceneRoot = new QTreeWidgetItem(tree_);
     sceneRoot->setText(nameColumn, QStringLiteral("Scene Collection"));

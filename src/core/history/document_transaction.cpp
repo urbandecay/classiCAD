@@ -646,6 +646,7 @@ bool DocumentTransaction::ensureCollectionViewLayerState(
         {QStringLiteral("view_layer_key"), viewLayerKey},
         {QStringLiteral("path"), storedPath},
         {QStringLiteral("exclude"), false},
+        {QStringLiteral("previously_excluded"), false},
         {QStringLiteral("hide_viewport"), false},
         {QStringLiteral("hide_render"), false},
         {QStringLiteral("holdout"), false},

@@ -1045,6 +1045,7 @@ CollectionId Document::insertCollection(DocumentCollection value)
                 {QStringLiteral("view_layer_key"), settings_.activeViewLayerKey},
                 {QStringLiteral("path"), storedPath},
                 {QStringLiteral("exclude"), false},
+                {QStringLiteral("previously_excluded"), false},
                 {QStringLiteral("hide_viewport"), false},
                 {QStringLiteral("hide_render"), false},
                 {QStringLiteral("holdout"), false},
@@ -1569,6 +1570,7 @@ bool Document::setCollectionViewLayerState(CollectionId collectionId,
     DocumentCollection *candidate = mutableCollection(collectionId);
     if (candidate == nullptr || viewLayerKey.isEmpty() || sourcePath.isEmpty() ||
         (stateKey != QStringLiteral("exclude") &&
+         stateKey != QStringLiteral("previously_excluded") &&
          stateKey != QStringLiteral("hide_viewport") &&
          stateKey != QStringLiteral("holdout") &&
          stateKey != QStringLiteral("indirect_only"))) {
@@ -1614,6 +1616,7 @@ bool Document::setCollectionViewLayerState(CollectionId collectionId,
         {QStringLiteral("view_layer_key"), viewLayerKey},
         {QStringLiteral("path"), storedPath},
         {QStringLiteral("exclude"), false},
+        {QStringLiteral("previously_excluded"), false},
         {QStringLiteral("hide_viewport"), false},
         {QStringLiteral("hide_render"), false},
         {QStringLiteral("holdout"), false},

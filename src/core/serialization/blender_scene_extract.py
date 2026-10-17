@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 80
+BRIDGE_FORMAT_VERSION = 81
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -3689,22 +3689,99 @@ def view_layer_key(scene, view_layer):
 def layer_collection_records(scene, view_layer):
     records = []
     active_layer_collection = view_layer.active_layer_collection
-    def visit(node, path):
+    nodes = []
+    def visit(node, path, has_excluded_ancestor=False):
         collection_id = stable_id(node.collection)
         current_path = path + [collection_id]
+        excluded = bool(node.exclude)
         records.append({
             "collection_id": collection_id,
             "path": current_path,
             "active": node == active_layer_collection,
-            "exclude": bool(node.exclude),
+            "exclude": excluded,
             "hide_viewport": bool(node.hide_viewport),
             "hide_render": bool(node.hide_render),
             "holdout": bool(node.holdout),
             "indirect_only": bool(node.indirect_only),
         })
+        nodes.append((node, current_path, has_excluded_ancestor))
         for child in node.children:
-            visit(child, current_path)
+            visit(child, current_path,
+                  has_excluded_ancestor or excluded)
     visit(view_layer.layer_collection, [])
+
+    excluded_roots = [
+        (node, path) for node, path, has_excluded_ancestor in nodes
+        if bool(node.exclude) and not has_excluded_ancestor
+    ]
+    previously_excluded_by_path = {}
+    if excluded_roots:
+        try:
+            active_object = view_layer.objects.active
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            active_object = None
+        selected_object_pointers = set()
+        try:
+            for obj in view_layer.objects:
+                try:
+                    if obj.select_get(view_layer=view_layer):
+                        selected_object_pointers.add(obj.as_pointer())
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    continue
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            pass
+
+        try:
+            for root, root_path in excluded_roots:
+                try:
+                    root.exclude = False
+                    pending = [
+                        (child, root_path) for child in root.children
+                    ]
+                    while pending:
+                        node, parent_path = pending.pop()
+                        current_path = parent_path + [
+                            stable_id(node.collection)
+                        ]
+                        previously_excluded_by_path[tuple(current_path)] = (
+                            bool(node.exclude)
+                        )
+                        pending.extend(
+                            (child, current_path) for child in node.children
+                        )
+                finally:
+                    # Blender's recursive update saves the just-restored
+                    # descendant flags back into PREVIOUSLY_EXCLUDED while
+                    # leaving the source view layer's visible state intact.
+                    root.exclude = True
+        finally:
+            try:
+                if active_layer_collection is not None:
+                    view_layer.active_layer_collection = active_layer_collection
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                pass
+            try:
+                for obj in view_layer.objects:
+                    try:
+                        obj.select_set(
+                            obj.as_pointer() in selected_object_pointers,
+                            view_layer=view_layer,
+                        )
+                    except (AttributeError, ReferenceError, RuntimeError,
+                            TypeError):
+                        continue
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                pass
+            if active_object is not None:
+                try:
+                    view_layer.objects.active = active_object
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    pass
+
+    for record in records:
+        record["previously_excluded"] = previously_excluded_by_path.get(
+            tuple(record["path"]), False
+        )
     return records
 
 
@@ -4985,6 +5062,7 @@ def extract_scene(input_path, mode):
                     "view_layer_name": view_layer.name,
                     "path": state["path"],
                     "exclude": state["exclude"],
+                    "previously_excluded": state["previously_excluded"],
                     "hide_viewport": state["hide_viewport"],
                     "hide_render": state["hide_render"],
                     "holdout": state["holdout"],

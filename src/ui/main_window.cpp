@@ -5997,6 +5997,7 @@ private:
                             {QStringLiteral("view_layer_key"), viewLayerKey},
                             {QStringLiteral("path"), QJsonArray{root.sourceId}},
                             {QStringLiteral("exclude"), false},
+                            {QStringLiteral("previously_excluded"), false},
                             {QStringLiteral("hide_viewport"), false},
                             {QStringLiteral("hide_render"), false},
                             {QStringLiteral("holdout"), false},
@@ -8778,12 +8779,13 @@ private:
             [this, objectsInCollections, collectionBelongsToActiveScene](
                 const QVector<OutlinerCollectionContext> &requestedTargets,
                 const QString &stateKey, bool value, bool recursive,
-                bool isolate) {
+                bool isolate, bool directRootClick) {
                 struct LayerCollectionPath {
                     CollectionId id = CollectionId::invalid();
                     QStringList sourcePath;
                     QSet<quint64> ancestors;
                     bool excluded = false;
+                    bool targetRoot = false;
                 };
                 const auto stateForPath = [](
                     const DocumentCollection &collection,
@@ -8854,8 +8856,10 @@ private:
                         }
                         return false;
                     };
+                const bool cascadeExclude =
+                    stateKey == QStringLiteral("exclude");
 
-                if (isolate) {
+                if (isolate && !cascadeExclude) {
                     QVector<LayerCollectionPath> allPaths;
                     QSet<QString> allPathKeys;
                     const QVector<DocumentCollection> collections =
@@ -8962,11 +8966,12 @@ private:
                     rootPath.id = target.collectionId;
                     rootPath.sourcePath = target.sourcePath;
                     rootPath.ancestors.insert(target.collectionId.value());
+                    rootPath.targetRoot = true;
                     rootPath.excluded = stateForPath(
                         *rootCollection, viewLayerKey, target.sourcePath)
                         .value(QStringLiteral("exclude")).toBool();
                     branchPaths.append(rootPath);
-                    if (recursive) {
+                    if (recursive || cascadeExclude) {
                         for (qsizetype index = 0; index < branchPaths.size();
                              ++index) {
                             const LayerCollectionPath parent = branchPaths[index];
@@ -8994,7 +8999,9 @@ private:
                     }
                     for (const LayerCollectionPath &path : branchPaths) {
                         const QString key = pathKey(path.id, path.sourcePath);
-                        if (visitedPaths.contains(key)) continue;
+                        if (!cascadeExclude && visitedPaths.contains(key)) {
+                            continue;
+                        }
                         visitedPaths.insert(key);
                         paths.append(path);
                     }
@@ -9007,15 +9014,47 @@ private:
                     const DocumentCollection *collection =
                         session_.document().collection(path.id);
                     if (collection == nullptr ||
-                        !collection->libraryPath.isEmpty()) {
+                        (!cascadeExclude &&
+                         !collection->libraryPath.isEmpty())) {
                         continue;
                     }
                     const QJsonObject current = stateForPath(
                         *collection, viewLayerKey, path.sourcePath);
-                    if (current.value(stateKey).toBool() == value) continue;
+                    const bool targetRoot = path.targetRoot;
+                    bool nextValue = value;
+                    if (cascadeExclude) {
+                        if (value) {
+                            const bool previouslyExcluded = targetRoot
+                                ? false
+                                : current.value(
+                                      QStringLiteral("exclude")).toBool();
+                            if (!current.value(QStringLiteral(
+                                    "previously_excluded")).isBool() ||
+                                current.value(QStringLiteral(
+                                    "previously_excluded")).toBool() !=
+                                    previouslyExcluded) {
+                                changed = transaction.setCollectionViewLayerState(
+                                              path.id, viewLayerKey,
+                                              path.sourcePath,
+                                              QStringLiteral(
+                                                  "previously_excluded"),
+                                              previouslyExcluded) || changed;
+                            }
+                            nextValue = true;
+                        } else {
+                            nextValue = targetRoot && directRootClick
+                                ? false
+                                : current.value(QStringLiteral(
+                                      "previously_excluded")).toBool();
+                        }
+                    }
+                    if (current.value(stateKey).toBool() == nextValue &&
+                        current.value(stateKey).isBool()) {
+                        continue;
+                    }
                     changed = transaction.setCollectionViewLayerState(
                                   path.id, viewLayerKey, path.sourcePath,
-                                  stateKey, value) || changed;
+                                  stateKey, nextValue) || changed;
                 }
 
                 if (recursive && stateKey == QStringLiteral("hide_viewport")) {
@@ -9055,7 +9094,13 @@ private:
                 pruneOutlinerSelection();
             };
         collectionCallbacks.setCollectionsViewLayerState =
-            setCollectionViewLayerStates;
+            [setCollectionViewLayerStates](
+                const QVector<OutlinerCollectionContext> &targets,
+                const QString &stateKey, bool value, bool recursive,
+                bool isolate) {
+                setCollectionViewLayerStates(
+                    targets, stateKey, value, recursive, isolate, false);
+            };
         collectionCallbacks.setCollectionViewLayerState =
             [setCollectionViewLayerStates](
                 CollectionId id, const QString &viewLayerKey,
@@ -9065,7 +9110,7 @@ private:
                     id, CollectionId::invalid(), viewLayerKey, sourcePath};
                 setCollectionViewLayerStates(
                     QVector<OutlinerCollectionContext>{target}, stateKey,
-                    value, recursive, isolate);
+                    value, recursive, isolate, true);
             };
         collectionsPanel_ = new CollectionsPanel(collectionCallbacks);
 

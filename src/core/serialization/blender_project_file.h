@@ -79,6 +79,7 @@ struct BlenderSceneImportReport {
     ProjectViewportViewState initialViewportView;
     QJsonArray scenes;
     QJsonArray outlinerLibraries;
+    QJsonArray outlinerOrphans;
     QJsonArray outlinerOnlyObjects;
     // Indices refer to the imported-object array produced by
     // importBlenderScene(); ordinary .blend open also resolves these to the

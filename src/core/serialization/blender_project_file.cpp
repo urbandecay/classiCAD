@@ -2699,6 +2699,8 @@ bool loadVignolaDocument(const QString &path,
         snapshot.settings.importedBlenderScenes = importReport.scenes;
         snapshot.settings.importedBlenderLibraries =
             importReport.outlinerLibraries;
+        snapshot.settings.importedBlenderOrphans =
+            importReport.outlinerOrphans;
         snapshot.settings.importedBlenderOutlinerOnlyObjects =
             importReport.outlinerOnlyObjects;
         snapshot.settings.importedBlenderColorLuts =
@@ -2828,7 +2830,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 44 && bridgeVersion != 45 &&
          bridgeVersion != 46 && bridgeVersion != 47 &&
          bridgeVersion != 48 && bridgeVersion != 49 &&
-         bridgeVersion != 50)) {
+         bridgeVersion != 50 && bridgeVersion != 51)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3071,6 +3073,7 @@ bool importBlenderScene(const QString &path,
     QHash<QString, CollectionId> collectionIdsBySource;
     QHash<QString, QString> sceneLibraryPaths;
     QJsonArray outlinerLibraries;
+    QJsonArray outlinerOrphans;
     if (bridgeVersion >= 50) {
         const QJsonValue librariesValue = root.value(
             QStringLiteral("outliner_libraries"));
@@ -3163,6 +3166,47 @@ bool importBlenderScene(const QString &path,
             return false;
         }
         outlinerLibraries = libraryRecords;
+    }
+    if (bridgeVersion >= 51) {
+        const QJsonValue orphanGroupsValue = root.value(
+            QStringLiteral("outliner_orphans"));
+        if (!orphanGroupsValue.isArray() ||
+            orphanGroupsValue.toArray().size() > 1024) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Orphan Data tree is invalid"));
+            return false;
+        }
+        int totalOrphanRows = 0;
+        for (const QJsonValue &groupValue : orphanGroupsValue.toArray()) {
+            if (!groupValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender Orphan Data group is invalid"));
+                return false;
+            }
+            const QJsonObject group = groupValue.toObject();
+            const QJsonValue nameValue = group.value(QStringLiteral("name"));
+            const QJsonValue namesValue = group.value(QStringLiteral("names"));
+            const QJsonValue truncatedValue = group.value(
+                QStringLiteral("truncated"));
+            if (!nameValue.isString() || nameValue.toString().size() > 256 ||
+                !namesValue.isArray() || namesValue.toArray().size() > 20000 ||
+                totalOrphanRows + namesValue.toArray().size() > 20000 ||
+                !truncatedValue.isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender Orphan Data group is invalid"));
+                return false;
+            }
+            totalOrphanRows += namesValue.toArray().size();
+            for (const QJsonValue &dataNameValue : namesValue.toArray()) {
+                if (!dataNameValue.isString() ||
+                    dataNameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender orphan data-block name is invalid"));
+                    return false;
+                }
+            }
+        }
+        outlinerOrphans = orphanGroupsValue.toArray();
     }
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
@@ -4158,6 +4202,7 @@ bool importBlenderScene(const QString &path,
             warnings, skippedCount, unsupportedFeatureCount);
         report->scenes = importedSceneRecords;
         report->outlinerLibraries = outlinerLibraries;
+        report->outlinerOrphans = outlinerOrphans;
         report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;

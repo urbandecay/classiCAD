@@ -11065,6 +11065,19 @@ scene depth.
   block rows at 20,000, and import validates those bounds. `cmake --build
   build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
   Blender Outliner UI comparison was run.
+- The thirty-seventh tree update follows Blender 5.2.2's Orphan Data view in
+  [`tree_display_orphaned.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_orphaned.cc)
+  and its `IDTYPE_FLAGS_NEVER_UNUSED` checks in
+  [`BKE_idtype.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/BKE_idtype.hh),
+  with the flags set for Library, Scene, and WorkSpace in their Blender ID
+  definitions. The import bridge now captures IDs whose Blender user count is
+  zero, grouped by type, and omits those never-unused types. The type filter
+  shows matching IDs directly at the tree root, matching Blender's filtered
+  tree. Bridge version 51 and native document version 41 preserve the
+  read-only metadata, capped at 20,000 IDs. Blender's Purge operator is not
+  ported because classiCAD does not own or edit the original Blender ID
+  database. `cmake --build build -j4`, Python syntax parsing, and `git diff
+  --check` passed; no matched Blender Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, additional
   specialized ID branches still under source review, and a matched
   Blender/classiCAD interaction comparison. Do not mark this port complete

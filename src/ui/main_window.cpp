@@ -3335,6 +3335,27 @@ private:
             }
             return libraries;
         };
+        collectionCallbacks.orphanGroups = [this]() {
+            QVector<OutlinerOrphanGroup> groups;
+            for (const QJsonValue &groupValue :
+                 session_.document().settings().importedBlenderOrphans) {
+                const QJsonObject record = groupValue.toObject();
+                OutlinerOrphanGroup group;
+                group.displayName = record.value(
+                    QStringLiteral("name")).toString();
+                group.truncated = record.value(
+                    QStringLiteral("truncated")).toBool();
+                for (const QJsonValue &nameValue : record.value(
+                         QStringLiteral("names")).toArray()) {
+                    const QString name = nameValue.toString();
+                    if (!name.isEmpty()) group.dataBlockNames.append(name);
+                }
+                if (!group.displayName.isEmpty()) {
+                    groups.append(std::move(group));
+                }
+            }
+            return groups;
+        };
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

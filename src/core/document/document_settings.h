@@ -39,6 +39,8 @@ struct DocumentSettings {
     QJsonArray importedBlenderScenes;
     // Blender Outliner Libraries-mode data, grouped by owning .blend and ID type.
     QJsonArray importedBlenderLibraries;
+    // Blender Outliner Orphan Data rows, grouped by Blender ID type.
+    QJsonArray importedBlenderOrphans;
     // Blender objects with no classiCAD geometry representation still belong
     // in the Outliner. These source records preserve their tree rows only.
     QJsonArray importedBlenderOutlinerOnlyObjects;

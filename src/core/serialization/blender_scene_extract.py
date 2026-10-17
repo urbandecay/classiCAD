@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 50
+BRIDGE_FORMAT_VERSION = 51
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -37,6 +37,7 @@ MAX_COLOR_LUTS = 8
 MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
 MAX_OUTLINER_HIERARCHY_ITEMS = 1024
 MAX_OUTLINER_LIBRARY_ITEMS = 20000
+MAX_OUTLINER_ORPHAN_ITEMS = 20000
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -820,6 +821,44 @@ def outliner_library_tree():
             group["names"].append(str(id_block.name_full))
 
     return libraries
+
+
+def outliner_orphan_groups():
+    """Capture Blender's zero-user ID rows for Orphan Data mode."""
+    groups = []
+    groups_by_name = {}
+    seen_ids = set()
+    row_count = 0
+    never_unused_types = {"Library", "Scene", "WorkSpace"}
+    for property_rna in bpy.data.bl_rna.properties:
+        if getattr(property_rna, "type", "") != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, property_rna.identifier)
+        except (AttributeError, RuntimeError, TypeError):
+            continue
+        for id_block in collection:
+            if not isinstance(id_block, bpy.types.ID):
+                continue
+            id_key = stable_id(id_block)
+            if id_key in seen_ids:
+                continue
+            seen_ids.add(id_key)
+            if (id_block.bl_rna.identifier in never_unused_types or
+                    int(id_block.users) > 0):
+                continue
+            group_name = str(property_rna.name)
+            group = groups_by_name.get(group_name)
+            if group is None:
+                group = {"name": group_name, "names": [], "truncated": False}
+                groups_by_name[group_name] = group
+                groups.append(group)
+            if row_count >= MAX_OUTLINER_ORPHAN_ITEMS:
+                group["truncated"] = True
+                continue
+            row_count += 1
+            group["names"].append(str(id_block.name_full))
+    return groups
 
 
 def object_metadata(obj, scene, depsgraph=None):
@@ -3020,6 +3059,7 @@ def extract_scene(input_path, mode):
         ),
         "saved_viewport_view": saved_viewport_view_record(active_scene),
         "outliner_libraries": outliner_library_tree(),
+        "outliner_orphans": outliner_orphan_groups(),
         "scenes": [],
         "collections": [],
         "items": [],

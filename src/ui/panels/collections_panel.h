@@ -160,11 +160,18 @@ struct OutlinerLibraryEntry {
     QVector<OutlinerLibraryDataGroup> dataGroups;
 };
 
+struct OutlinerOrphanGroup {
+    QString displayName;
+    QStringList dataBlockNames;
+    bool truncated = false;
+};
+
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
     std::function<QVector<OutlinerSceneEntry>()> scenes;
     std::function<QVector<OutlinerLibraryEntry>()> libraries;
+    std::function<QVector<OutlinerOrphanGroup>()> orphanGroups;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
@@ -250,7 +257,7 @@ private:
     QLineEdit *filterEdit_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
-    QComboBox *libraryTypeCombo_ = nullptr;
+    QComboBox *idTypeCombo_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
@@ -261,7 +268,7 @@ private:
     QHash<QString, OutlinerObjectEntry> sourceOnlyEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
     QString activeFilterText_;
-    QString libraryIdTypeFilter_;
+    QString idTypeFilter_;
     QHash<QString, bool> objectTypeFilters_;
     QString currentStateScopeKey_;
     QString currentTreeStateContextKey_;
@@ -275,6 +282,7 @@ private:
     bool scrollToActive_ = true;
     bool scenesDisplayMode_ = false;
     bool librariesDisplayMode_ = false;
+    bool orphanDataDisplayMode_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

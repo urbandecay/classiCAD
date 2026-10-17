@@ -15,6 +15,8 @@
  * tree_element_scene_objects.cc.
  * The Libraries tree and its ID-type filtering follow
  * tree_display_libraries.cc and the RNA labels from common.cc.
+ * Orphan Data grouping and its zero-user/type-filter rules follow
+ * tree_display_orphaned.cc and BKE_idtype.hh.
  * Generic object contents follow tree_element_id_object.cc, with Animation
  * rows following tree_element_anim_data.cc, tree_element_driver.cc, and
  * tree_element_nla.cc.
@@ -354,7 +356,7 @@ void CollectionsPanel::createLayout()
     layout->setContentsMargins(4, 4, 4, 4);
     filterEdit_ = new QLineEdit(this);
     filterEdit_->setClearButtonEnabled(true);
-    filterEdit_->setPlaceholderText(QStringLiteral("Filter objects and collections"));
+    filterEdit_->setPlaceholderText(QStringLiteral("Filter Outliner names"));
     filterEdit_->setToolTip(QStringLiteral(
         "Filter Outliner names with * and ? wildcards. Exact and case-sensitive matching are in Filter."));
     auto *filterRow = new QHBoxLayout;
@@ -370,15 +372,16 @@ void CollectionsPanel::createLayout()
     displayModeCombo_->addItem(QStringLiteral("View Layer"));
     displayModeCombo_->addItem(QStringLiteral("Scenes"));
     displayModeCombo_->addItem(QStringLiteral("Libraries"));
+    displayModeCombo_->addItem(QStringLiteral("Orphan Data"));
     displayModeCombo_->setToolTip(QStringLiteral(
         "Choose the Blender Outliner tree display."));
     filterRow->addWidget(displayModeCombo_);
-    libraryTypeCombo_ = new QComboBox(this);
-    libraryTypeCombo_->setToolTip(QStringLiteral(
-        "Filter Blender Library rows by data-block type."));
-    libraryTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
-    libraryTypeCombo_->setVisible(false);
-    filterRow->addWidget(libraryTypeCombo_);
+    idTypeCombo_ = new QComboBox(this);
+    idTypeCombo_->setToolTip(QStringLiteral(
+        "Filter Blender data-block rows by ID type."));
+    idTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
+    idTypeCombo_->setVisible(false);
+    filterRow->addWidget(idTypeCombo_);
     sceneCombo_ = new QComboBox(this);
     sceneCombo_->setToolTip(QStringLiteral("Active Blender scene"));
     filterRow->addWidget(sceneCombo_);
@@ -478,10 +481,17 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/displayMode"),
         QStringLiteral("VIEW_LAYER")).toString() ==
         QLatin1String("LIBRARIES");
-    libraryIdTypeFilter_ = outlinerSettings.value(
-        QStringLiteral("outliner/libraries/typeFilter")).toString();
+    orphanDataDisplayMode_ = outlinerSettings.value(
+        QStringLiteral("outliner/displayMode"),
+        QStringLiteral("VIEW_LAYER")).toString() ==
+        QLatin1String("ORPHAN_DATA");
+    idTypeFilter_ = outlinerSettings.value(
+        QStringLiteral("outliner/idTypeFilter"),
+        outlinerSettings.value(
+            QStringLiteral("outliner/libraries/typeFilter"))).toString();
     displayModeCombo_->setCurrentIndex(
-        librariesDisplayMode_ ? 2 : (scenesDisplayMode_ ? 1 : 0));
+        orphanDataDisplayMode_ ? 3
+            : (librariesDisplayMode_ ? 2 : (scenesDisplayMode_ ? 1 : 0)));
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -515,7 +525,8 @@ void CollectionsPanel::createLayout()
     allViewLayersAction->setCheckable(true);
     allViewLayersAction->setChecked(showAllViewLayers_);
     allViewLayersAction->setEnabled(
-        !scenesDisplayMode_ && !librariesDisplayMode_);
+        !scenesDisplayMode_ && !librariesDisplayMode_ &&
+        !orphanDataDisplayMode_);
     connect(allViewLayersAction, &QAction::toggled, this,
             [this](bool visible) {
         showAllViewLayers_ = visible;
@@ -528,23 +539,27 @@ void CollectionsPanel::createLayout()
             [this, allViewLayersAction](int index) {
         scenesDisplayMode_ = index == 1;
         librariesDisplayMode_ = index == 2;
+        orphanDataDisplayMode_ = index == 3;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/displayMode"),
-                          librariesDisplayMode_
-                              ? QStringLiteral("LIBRARIES")
-                              : (scenesDisplayMode_
-                                     ? QStringLiteral("SCENES")
-                                     : QStringLiteral("VIEW_LAYER")));
+                          orphanDataDisplayMode_
+                              ? QStringLiteral("ORPHAN_DATA")
+                              : (librariesDisplayMode_
+                                     ? QStringLiteral("LIBRARIES")
+                                     : (scenesDisplayMode_
+                                            ? QStringLiteral("SCENES")
+                                            : QStringLiteral("VIEW_LAYER"))));
         allViewLayersAction->setEnabled(
-            !scenesDisplayMode_ && !librariesDisplayMode_);
+            !scenesDisplayMode_ && !librariesDisplayMode_ &&
+            !orphanDataDisplayMode_);
         refresh();
     });
-    connect(libraryTypeCombo_, &QComboBox::activated, this,
+    connect(idTypeCombo_, &QComboBox::activated, this,
             [this](int index) {
-        libraryIdTypeFilter_ = libraryTypeCombo_->itemData(index).toString();
+        idTypeFilter_ = idTypeCombo_->itemData(index).toString();
         QSettings settings;
-        settings.setValue(QStringLiteral("outliner/libraries/typeFilter"),
-                          libraryIdTypeFilter_);
+        settings.setValue(QStringLiteral("outliner/idTypeFilter"),
+                          idTypeFilter_);
         refresh();
     });
     QAction *collectionsAction = filterMenu->addAction(
@@ -776,7 +791,8 @@ void CollectionsPanel::createLayout()
             return activateObjectRow(item, modifiers);
         },
         [this]() {
-            if (callbacks_.setObjectSelection) {
+            if (!librariesDisplayMode_ && !orphanDataDisplayMode_ &&
+                callbacks_.setObjectSelection) {
                 callbacks_.setObjectSelection({}, ObjectId::invalid());
             }
             rangeAnchorItem_ = nullptr;
@@ -1127,9 +1143,14 @@ void CollectionsPanel::restoreTreeState()
         ? QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash)
         : (librariesDisplayMode_
                ? QStringLiteral("outliner/%1/librariesExpandedPaths").arg(scopeHash)
-               : QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash));
+               : (orphanDataDisplayMode_
+                      ? QStringLiteral("outliner/%1/orphanDataExpandedPaths")
+                            .arg(scopeHash)
+                      : QStringLiteral("outliner/%1/expandedPaths")
+                            .arg(scopeHash)));
     bool hasSavedState = false;
-    if (scenesDisplayMode_ || librariesDisplayMode_) {
+    if (scenesDisplayMode_ || librariesDisplayMode_ ||
+        orphanDataDisplayMode_) {
         QSettings settings;
         if (!scope.isEmpty() && settings.contains(settingsKey)) {
             expandedPaths = settings.value(settingsKey).toStringList();
@@ -1188,7 +1209,8 @@ void CollectionsPanel::saveTreeState()
     }
     expandedPaths.sort(Qt::CaseSensitive);
     expandedPaths.removeDuplicates();
-    if (scenesDisplayMode_ || librariesDisplayMode_) {
+    if (scenesDisplayMode_ || librariesDisplayMode_ ||
+        orphanDataDisplayMode_) {
         const QString scope = callbacks_.stateScopeKey
             ? callbacks_.stateScopeKey() : QString{};
         if (scope.isEmpty()) return;
@@ -1201,7 +1223,9 @@ void CollectionsPanel::saveTreeState()
             QStringLiteral("outliner/%1/%2ExpandedPaths")
                 .arg(scopeHash,
                      scenesDisplayMode_ ? QStringLiteral("scenes")
-                                        : QStringLiteral("libraries")),
+                         : (librariesDisplayMode_
+                                ? QStringLiteral("libraries")
+                                : QStringLiteral("orphanData"))),
             expandedPaths);
     } else if (callbacks_.saveExpandedTreePaths) {
         callbacks_.saveExpandedTreePaths(expandedPaths);
@@ -2165,8 +2189,10 @@ void CollectionsPanel::refresh()
              ? callbacks_.treeStateContextKey() : QString{}) +
         (scenesDisplayMode_ ? QStringLiteral("/Scenes")
              : (librariesDisplayMode_
-                    ? QStringLiteral("/Libraries/%1").arg(libraryIdTypeFilter_)
-                                      : QStringLiteral("/ViewLayer")));
+                    ? QStringLiteral("/Libraries/%1").arg(idTypeFilter_)
+                    : (orphanDataDisplayMode_
+                           ? QStringLiteral("/OrphanData/%1").arg(idTypeFilter_)
+                           : QStringLiteral("/ViewLayer"))));
     const bool treeStateContextChanged =
         treeStateContextKey != currentTreeStateContextKey_;
     currentTreeStateContextKey_ = treeStateContextKey;
@@ -2200,13 +2226,18 @@ void CollectionsPanel::refresh()
         ? callbacks_.scenes() : QVector<OutlinerSceneEntry>{};
     const QVector<OutlinerLibraryEntry> libraries = callbacks_.libraries
         ? callbacks_.libraries() : QVector<OutlinerLibraryEntry>{};
+    const QVector<OutlinerOrphanGroup> orphanGroups = callbacks_.orphanGroups
+        ? callbacks_.orphanGroups() : QVector<OutlinerOrphanGroup>{};
     const bool librariesMode = librariesDisplayMode_;
+    const bool orphanDataMode = orphanDataDisplayMode_;
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
-    displayModeCombo_->setEnabled(!scenes.isEmpty() || !libraries.isEmpty());
+    displayModeCombo_->setEnabled(!scenes.isEmpty() || !libraries.isEmpty() ||
+                                  !orphanGroups.isEmpty());
+    filterButton_->setVisible(!librariesMode && !orphanDataMode);
     {
-        const QSignalBlocker blocker(libraryTypeCombo_);
-        libraryTypeCombo_->clear();
-        libraryTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
+        const QSignalBlocker blocker(idTypeCombo_);
+        idTypeCombo_->clear();
+        idTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
         QSet<QString> addedTypes;
         for (const OutlinerLibraryEntry &library : libraries) {
             for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
@@ -2215,22 +2246,29 @@ void CollectionsPanel::refresh()
                     continue;
                 }
                 addedTypes.insert(group.displayName);
-                libraryTypeCombo_->addItem(group.displayName,
-                                           group.displayName);
+                idTypeCombo_->addItem(group.displayName, group.displayName);
             }
         }
-        int typeIndex = libraryTypeCombo_->findData(libraryIdTypeFilter_);
+        for (const OutlinerOrphanGroup &group : orphanGroups) {
+            if (group.displayName.isEmpty() ||
+                addedTypes.contains(group.displayName)) {
+                continue;
+            }
+            addedTypes.insert(group.displayName);
+            idTypeCombo_->addItem(group.displayName, group.displayName);
+        }
+        int typeIndex = idTypeCombo_->findData(idTypeFilter_);
         if (typeIndex < 0) {
-            libraryIdTypeFilter_.clear();
+            idTypeFilter_.clear();
             typeIndex = 0;
             QSettings settings;
-            settings.setValue(
-                QStringLiteral("outliner/libraries/typeFilter"), QString{});
+            settings.setValue(QStringLiteral("outliner/idTypeFilter"),
+                              QString{});
         }
-        libraryTypeCombo_->setCurrentIndex(typeIndex);
-        libraryTypeCombo_->setVisible(librariesMode);
-        libraryTypeCombo_->setEnabled(librariesMode &&
-                                      libraryTypeCombo_->count() > 1);
+        idTypeCombo_->setCurrentIndex(typeIndex);
+        idTypeCombo_->setVisible(librariesMode || orphanDataMode);
+        idTypeCombo_->setEnabled((librariesMode || orphanDataMode) &&
+                                 idTypeCombo_->count() > 1);
     }
     QVector<OutlinerObjectEntry> displayObjects;
     if (showObjects_) displayObjects = allObjects;
@@ -2299,7 +2337,8 @@ void CollectionsPanel::refresh()
         }
         sceneCombo_->setCurrentIndex(activeIndex);
         sceneCombo_->setVisible(
-            !scenesMode && !librariesMode && scenes.size() > 1);
+            !scenesMode && !librariesMode && !orphanDataMode &&
+            scenes.size() > 1);
     }
     {
         const QSignalBlocker blocker(viewLayerCombo_);
@@ -2313,25 +2352,31 @@ void CollectionsPanel::refresh()
         }
         viewLayerCombo_->setCurrentIndex(activeIndex);
         viewLayerCombo_->setVisible(
-            !scenesMode && !librariesMode && viewLayers.size() > 1);
+            !scenesMode && !librariesMode && !orphanDataMode &&
+            viewLayers.size() > 1);
     }
     tree_->setColumnHidden(viewportColumn,
-                           librariesMode || !showViewportColumn_);
+                           librariesMode || orphanDataMode ||
+                               !showViewportColumn_);
     tree_->setColumnHidden(renderColumn,
-                           librariesMode || !showRenderColumn_);
+                           librariesMode || orphanDataMode || !showRenderColumn_);
     tree_->setColumnHidden(selectColumn,
-                           librariesMode || !showSelectColumn_);
+                           librariesMode || orphanDataMode || !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
-                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || orphanDataMode || scenesMode ||
+                               activeViewLayerKey.isEmpty() ||
                                !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
-                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || orphanDataMode || scenesMode ||
+                               activeViewLayerKey.isEmpty() ||
                                !showHoldoutColumn_);
     tree_->setColumnHidden(indirectOnlyColumn,
-                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || orphanDataMode || scenesMode ||
+                               activeViewLayerKey.isEmpty() ||
                                !showIndirectOnlyColumn_);
     tree_->setColumnHidden(excludeColumn,
-                           librariesMode || scenesMode || activeViewLayerKey.isEmpty() ||
+                           librariesMode || orphanDataMode || scenesMode ||
+                               activeViewLayerKey.isEmpty() ||
                                !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
     const auto populateSceneRoot = [this](
@@ -2409,13 +2454,13 @@ void CollectionsPanel::refresh()
                 const OutlinerLibraryDataGroup &sourceGroup =
                     library.dataGroups[groupIndex];
                 if (sourceGroup.dataBlockNames.isEmpty()) continue;
-                if (!libraryIdTypeFilter_.isEmpty() &&
-                    sourceGroup.displayName != libraryIdTypeFilter_) {
+                if (!idTypeFilter_.isEmpty() &&
+                    sourceGroup.displayName != idTypeFilter_) {
                     continue;
                 }
                 QTreeWidgetItem *dataParent = row;
                 QString dataPath = libraryPath;
-                if (libraryIdTypeFilter_.isEmpty()) {
+                if (idTypeFilter_.isEmpty()) {
                     auto *groupRow = new QTreeWidgetItem(row);
                     groupRow->setText(nameColumn, sourceGroup.displayName);
                     groupRow->setData(nameColumn, itemKindRole,
@@ -2444,7 +2489,8 @@ void CollectionsPanel::refresh()
                     dataRow->setToolTip(
                         nameColumn,
                         QStringLiteral("Blender data block"));
-                    dataRow->setFlags(Qt::ItemIsEnabled);
+                    dataRow->setFlags(Qt::ItemIsEnabled |
+                                      Qt::ItemIsSelectable);
                 }
             }
             if (library.truncated) {
@@ -2467,6 +2513,66 @@ void CollectionsPanel::refresh()
             if (!library.currentFile) continue;
             QTreeWidgetItem *currentFileRow = libraryRows.value(library.id);
             if (currentFileRow != nullptr) currentFileRow->setExpanded(true);
+        }
+    } else if (orphanDataMode) {
+        for (qsizetype groupIndex = 0;
+             groupIndex < orphanGroups.size(); ++groupIndex) {
+            const OutlinerOrphanGroup &sourceGroup = orphanGroups[groupIndex];
+            if (!idTypeFilter_.isEmpty() &&
+                sourceGroup.displayName != idTypeFilter_) {
+                continue;
+            }
+            const QString groupPath = QStringLiteral("orphans/type-%1")
+                                          .arg(groupIndex);
+            QTreeWidgetItem *dataParent = nullptr;
+            QString dataPath = groupPath;
+            if (idTypeFilter_.isEmpty()) {
+                auto *groupRow = new QTreeWidgetItem(tree_);
+                groupRow->setText(nameColumn, sourceGroup.displayName);
+                groupRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::SceneGroup));
+                groupRow->setData(nameColumn, itemPathRole, groupPath);
+                groupRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("Blender data blocks with no users"));
+                groupRow->setFlags(Qt::ItemIsEnabled);
+                sceneRoots.append(groupRow);
+                dataParent = groupRow;
+            }
+            for (qsizetype dataIndex = 0;
+                 dataIndex < sourceGroup.dataBlockNames.size(); ++dataIndex) {
+                auto *dataRow = dataParent != nullptr
+                    ? new QTreeWidgetItem(dataParent)
+                    : new QTreeWidgetItem(tree_);
+                dataRow->setText(nameColumn,
+                                 sourceGroup.dataBlockNames[dataIndex]);
+                dataRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                dataRow->setData(
+                    nameColumn, itemPathRole,
+                    dataPath + QStringLiteral("/item-%1").arg(dataIndex));
+                dataRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("Blender orphan data block (zero users)"));
+                dataRow->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            }
+            if (sourceGroup.truncated) {
+                auto *truncatedRow = dataParent != nullptr
+                    ? new QTreeWidgetItem(dataParent)
+                    : new QTreeWidgetItem(tree_);
+                truncatedRow->setText(
+                    nameColumn,
+                    QStringLiteral("Additional orphan data blocks omitted"));
+                truncatedRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                truncatedRow->setData(
+                    nameColumn, itemPathRole,
+                    dataPath + QStringLiteral("/truncated"));
+                truncatedRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("The 20,000-row extraction limit was reached"));
+                truncatedRow->setFlags(Qt::ItemIsEnabled);
+            }
         }
     } else if (scenesMode) {
         const auto appendSceneContentRow = [this](
@@ -2694,7 +2800,7 @@ void CollectionsPanel::refresh()
                           activeViewLayerKey,
                           QStringLiteral("scene"));
     }
-    if (showObjectChildren_ && !librariesMode) {
+    if (showObjectChildren_ && !librariesMode && !orphanDataMode) {
         buildObjectParentHierarchy(displayObjects);
     }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {

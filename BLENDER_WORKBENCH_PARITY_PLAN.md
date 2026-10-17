@@ -11484,3 +11484,14 @@ scene depth.
   rebuild the tree. No document-format changes are needed. `cmake --build
   build -j4` and `git diff --check` passed; no matched Blender Outliner
   interaction comparison was run.
+- The hundred-twelfth tree update follows Blender 5.2.2's [nested New
+  Collection operator](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_collections.cc#L246-L291)
+  and its [Outliner collection menus](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L258-L314).
+  New Collection now uses the single selected Collection row as its parent in
+  collection, object, Scene-root, and empty-area context menus. With no
+  selected Collection row it creates at the scene root. Selection is scoped to
+  the relevant View Layer so a row from another scene cannot become the
+  parent. If multiple Collection rows are selected, the action is disabled
+  with an explanatory tooltip; Blender cancels the operator and reports that
+  condition. `cmake --build build -j4` and `git diff --check` passed; no
+  matched Blender Outliner interaction comparison was run.

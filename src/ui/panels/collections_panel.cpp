@@ -2187,9 +2187,71 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             activateObjectRow(item, Qt::NoModifier);
         }
     }
+    const auto createCollection = [this](CollectionId parentId) {
+        if (!callbacks_.createCollection) return;
+        QSet<QString> existingNames;
+        if (callbacks_.entries) {
+            for (const CollectionPanelEntry &entry : callbacks_.entries()) {
+                existingNames.insert(entry.collection.name);
+            }
+        }
+        QString name = QStringLiteral("Collection");
+        for (int suffix = 1; existingNames.contains(name); ++suffix) {
+            name = QStringLiteral("Collection.%1")
+                       .arg(suffix, 3, 10, QLatin1Char('0'));
+        }
+        callbacks_.createCollection(name, parentId);
+    };
+    const auto collectionParentFromSelection = [this](
+        const QString &viewLayerKey) {
+        CollectionId parentId = CollectionId::invalid();
+        int selectedCollectionCount = 0;
+        if (tree_ != nullptr) {
+            for (QTreeWidgetItem *selected : tree_->selectedItems()) {
+                if (selected->data(nameColumn, itemKindRole).toInt() !=
+                    static_cast<int>(OutlinerRowKind::Collection)) {
+                    continue;
+                }
+                const QString selectedViewLayerKey = selected->data(
+                    nameColumn, itemViewLayerKeyRole).toString();
+                if (!viewLayerKey.isEmpty() &&
+                    selectedViewLayerKey != viewLayerKey) {
+                    continue;
+                }
+                ++selectedCollectionCount;
+                if (selectedCollectionCount > 1) {
+                    return qMakePair(false, CollectionId::invalid());
+                }
+                parentId = CollectionId::fromValue(selected->data(
+                    nameColumn, itemIdRole).toULongLong());
+            }
+        }
+        return qMakePair(true, parentId);
+    };
+    const auto addNewCollectionAction = [this, &createCollection,
+                                         &collectionParentFromSelection](
+        QMenu &menu, const QString &viewLayerKey) {
+        if (!callbacks_.createCollection) return;
+        QAction *create = menu.addAction(QStringLiteral("New Collection"));
+        const auto selection = collectionParentFromSelection(viewLayerKey);
+        create->setEnabled(selection.first);
+        if (!selection.first) {
+            create->setToolTip(QStringLiteral(
+                "Select no more than one collection to create a nested collection"));
+            return;
+        }
+        connect(create, &QAction::triggered, this,
+                [createCollection, parentId = selection.second]() {
+            createCollection(parentId);
+        });
+    };
     if (item == nullptr) {
         if (tree_ == nullptr) return;
         QMenu menu(this);
+        const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+            ? callbacks_.activeViewLayerKey() : QString{};
+        addNewCollectionAction(menu, activeViewLayerKey);
+        menu.addSeparator();
         QMenu *viewMenu = menu.addMenu(QStringLiteral("View"));
         const auto treeRows = [this]() {
             QVector<QPair<QTreeWidgetItem *, int>> rows;
@@ -2388,30 +2450,12 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         kind == OutlinerRowKind::SequencerStrip ||
         kind == OutlinerRowKind::DataApi) return;
     QMenu menu(this);
-    const auto createCollection = [this](CollectionId parentId) {
-        if (!callbacks_.createCollection) return;
-        QSet<QString> existingNames;
-        if (callbacks_.entries) {
-            for (const CollectionPanelEntry &entry : callbacks_.entries()) {
-                existingNames.insert(entry.collection.name);
-            }
-        }
-        QString name = QStringLiteral("Collection");
-        for (int suffix = 1; existingNames.contains(name); ++suffix) {
-            name = QStringLiteral("Collection.%1")
-                       .arg(suffix, 3, 10, QLatin1Char('0'));
-        }
-        callbacks_.createCollection(name, parentId);
-    };
-
     if (kind == OutlinerRowKind::SceneRoot &&
         item->data(nameColumn, itemViewLayerKeyRole).toString().isEmpty() &&
         callbacks_.createCollection) {
-        QAction *create = menu.addAction(QStringLiteral("New Collection"));
-        connect(create, &QAction::triggered, this,
-                [createCollection]() {
-            createCollection(CollectionId::invalid());
-        });
+        const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+            ? callbacks_.activeViewLayerKey() : QString{};
+        addNewCollectionAction(menu, activeViewLayerKey);
     } else if (kind == OutlinerRowKind::Collection) {
         const CollectionId collectionId = CollectionId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());
@@ -2590,11 +2634,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             }
         }
         if (callbacks_.createCollection) {
-            QAction *create = menu.addAction(QStringLiteral("New Collection"));
-            connect(create, &QAction::triggered, this,
-                    [createCollection, collectionId]() {
-                createCollection(collectionId);
-            });
+            addNewCollectionAction(menu, viewLayerKey);
         }
         if (callbacks_.copyOutlinerCollection) {
             QAction *copy = menu.addAction(QStringLiteral("Copy"));
@@ -3091,12 +3131,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             });
         }
         if (callbacks_.createCollection) {
-            QAction *createCollectionAction = menu.addAction(
-                QStringLiteral("New Collection"));
-            connect(createCollectionAction, &QAction::triggered, this,
-                    [createCollection]() {
-                createCollection(CollectionId::invalid());
-            });
+            addNewCollectionAction(menu, clickedViewLayerKey);
         }
         const bool hasLinkedObjectDataTarget =
             callbacks_.hasLinkedObjectData &&

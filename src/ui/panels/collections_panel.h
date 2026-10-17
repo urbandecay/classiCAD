@@ -6,6 +6,7 @@
 #include "core/document/object_id.h"
 
 #include <QFrame>
+#include <QHash>
 #include <QJsonObject>
 #include <QPoint>
 #include <QSet>
@@ -30,6 +31,7 @@ struct OutlinerObjectEntry {
     bool hideViewport = false;
     bool hideSelect = false;
     QJsonObject viewLayerHidden;
+    ObjectId parentObjectId = ObjectId::invalid();
 };
 
 struct CollectionsPanelCallbacks {
@@ -86,11 +88,16 @@ private:
     QTreeWidgetItem *appendObject(QTreeWidgetItem *parent,
                                   const OutlinerObjectEntry &entry,
                                   const QStringList &path,
+                                  CollectionId linkedCollectionId,
                                   const QString &activeViewLayerKey);
+    void buildObjectParentHierarchy(
+        const QVector<OutlinerObjectEntry> &objects);
 
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
+    QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
+    QHash<quint64, OutlinerObjectEntry> objectEntries_;
     bool refreshing_ = false;
     bool hasRefreshed_ = false;
 };

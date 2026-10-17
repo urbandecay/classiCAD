@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 25);
+    serialized.insert(QStringLiteral("version"), 26);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -485,6 +485,8 @@ QJsonObject documentToJson(const Document &document)
             looseEdgeSourceIndices);
         serializedObject.insert(QStringLiteral("blenderSourceObjectId"),
                                 sceneObject.blenderSourceObjectId);
+        serializedObject.insert(QStringLiteral("blenderParentObjectId"),
+                                sceneObject.blenderParentObjectId);
         serializedObject.insert(QStringLiteral("displayBoundsType"),
                                 sceneObject.displayBoundsType);
         serializedObject.insert(QStringLiteral("hasDisplayBoundsData"),
@@ -628,7 +630,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 25) {
+    if (version < 1 || version > 26) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1336,6 +1338,16 @@ bool documentFromJson(const QJsonValue &value,
         }
         sceneObject.blenderSourceObjectId = serializedObject.value(
             QStringLiteral("blenderSourceObjectId")).toString();
+        if (version >= 26) {
+            const QJsonValue parentObjectId = serializedObject.value(
+                QStringLiteral("blenderParentObjectId"));
+            if (!parentObjectId.isString()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender object parent identity"));
+                return false;
+            }
+            sceneObject.blenderParentObjectId = parentObjectId.toString();
+        }
         sceneObject.displayBoundsType = serializedObject.value(
             QStringLiteral("displayBoundsType")).toString();
         const QJsonValue hasDisplayBoundsData = serializedObject.value(

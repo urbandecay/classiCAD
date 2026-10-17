@@ -2773,14 +2773,25 @@ private:
             QVector<OutlinerObjectEntry> objects;
             const Document &document = session_.document();
             objects.reserve(document.objects().size());
+            QHash<QString, ObjectId> objectIdsBySourceId;
             for (const SceneObject &object : document.objects()) {
+                if (!object.blenderLooseMeshEdgeCompanion &&
+                    !object.blenderSourceObjectId.isEmpty()) {
+                    objectIdsBySourceId.insert(object.blenderSourceObjectId,
+                                               object.id);
+                }
+            }
+            for (const SceneObject &object : document.objects()) {
+                if (object.blenderLooseMeshEdgeCompanion) continue;
                 QString name = object.displayName.trimmed();
                 if (name.isEmpty()) {
                     name = QStringLiteral("Object %1").arg(object.id.value());
                 }
+                const ObjectId parentObjectId = objectIdsBySourceId.value(
+                    object.blenderParentObjectId, ObjectId::invalid());
                 objects.append({object.id, name, object.collectionIds,
                                 object.hideViewport, object.hideSelect,
-                                object.viewLayerHidden});
+                                object.viewLayerHidden, parentObjectId});
             }
             return objects;
         };

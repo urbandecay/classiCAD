@@ -3357,6 +3357,11 @@ bool importBlenderScene(const QString &path,
                     item.value(QStringLiteral("view_layer_hidden")).toObject();
                 for (auto it = hidden.begin(); it != hidden.end(); ++it)
                     existing.viewLayerHidden.insert(it.key(), it.value());
+                const QString parentId =
+                    item.value(QStringLiteral("parent_id")).toString();
+                if (!parentId.isEmpty()) {
+                    existing.blenderParentObjectId = parentId;
+                }
             }
             warnings.append(QStringLiteral("%1: linked into more than one Blender scene; shared memberships and view-layer states were combined")
                                 .arg(blenderItemLabel(item)));
@@ -3426,6 +3431,8 @@ bool importBlenderScene(const QString &path,
             QStringLiteral("source_object_id")).toString();
         sceneObject.blenderSourceObjectId =
             sourceObjectId.isEmpty() ? objectId : sourceObjectId;
+        sceneObject.blenderParentObjectId =
+            item.value(QStringLiteral("parent_id")).toString();
         sourceObjectIdsByImportedIndex.append(
             sceneObject.blenderSourceObjectId);
         imported.append(std::move(sceneObject));

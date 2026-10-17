@@ -10681,11 +10681,23 @@ scene depth.
   and [restriction-column state rules](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1025-L1130).
   `git diff --check` and `cmake --build build -j4` passed; no GUI comparison
   was run.
-- Remaining Outliner scope includes Blender object-parent nesting, drag/drop
-  and reparenting, row-state persistence/filtering, other Blender datablock
-  rows and restriction controls, multiple view-layer switching, and a matched
-  Blender/classiCAD interaction comparison. Do not mark this port complete
-  until the remaining items have been reviewed against pinned Blender source.
+- The third tree update ports Blender's parent-before-child `ObjectsChildrenBuilder`
+  behavior from
+  [`tree_display_view_layer.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L208-L306).
+  Blender's extractor already emitted `parent_id`, but import discarded it;
+  classiCAD now retains that ID in native document version 26. The Outliner
+  moves linked child rows below parent rows, creates a marked child row when
+  that parent collection does not contain the child, preserves repeated
+  collection paths, and omits derived loose-edge companions as separate
+  Outliner objects. Parent rows start collapsed when they have children, as
+  Blender's stored tree state does for new rows. `git diff --check` and the
+  full `cmake --build build -j4` passed after this change; no GUI comparison
+  was run.
+- Remaining Outliner scope includes drag/drop and reparenting, row-state
+  persistence/filtering, other Blender datablock rows and restriction
+  controls, multiple view-layer switching, and a matched Blender/classiCAD
+  interaction comparison. Do not mark this port complete until the remaining
+  items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

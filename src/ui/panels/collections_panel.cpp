@@ -41,6 +41,8 @@ constexpr int itemIdRole = Qt::UserRole + 2;
 constexpr int itemPathRole = Qt::UserRole + 3;
 constexpr int itemViewLayerEditableRole = Qt::UserRole + 4;
 constexpr int itemSourcePathRole = Qt::UserRole + 5;
+constexpr int itemLinkedCollectionRole = Qt::UserRole + 6;
+constexpr int itemNotInCollectionRole = Qt::UserRole + 7;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int viewLayerViewportColumn = 2;
@@ -482,16 +484,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
-        if (callbacks_.unlinkObject && item->parent() != nullptr &&
-            item->parent()->data(nameColumn, itemKindRole).toInt() ==
-                static_cast<int>(ItemKind::Collection)) {
-            const CollectionId collectionId = CollectionId::fromValue(
-                item->parent()->data(nameColumn, itemIdRole).toULongLong());
+        const CollectionId linkedCollectionId = CollectionId::fromValue(
+            item->data(nameColumn, itemLinkedCollectionRole).toULongLong());
+        if (callbacks_.unlinkObject && linkedCollectionId.isValid()) {
             QAction *unlink = menu.addAction(
                 QStringLiteral("Unlink from Collection"));
             connect(unlink, &QAction::triggered, this,
-                    [this, objectId, collectionId]() {
-                callbacks_.unlinkObject(objectId, collectionId);
+                    [this, objectId, linkedCollectionId]() {
+                callbacks_.unlinkObject(objectId, linkedCollectionId);
             });
         }
     }
@@ -557,7 +557,8 @@ void CollectionsPanel::appendCollection(
     }
     for (const OutlinerObjectEntry &object : objects) {
         if (object.collectionIds.contains(entry.collection.id)) {
-            appendObject(item, object, path, activeViewLayerKey);
+            appendObject(item, object, path, entry.collection.id,
+                         activeViewLayerKey);
         }
     }
 }
@@ -566,6 +567,7 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     QTreeWidgetItem *parent,
     const OutlinerObjectEntry &entry,
     const QStringList &path,
+    CollectionId linkedCollectionId,
     const QString &activeViewLayerKey)
 {
     if (parent == nullptr || !entry.id.isValid()) return nullptr;
@@ -575,6 +577,10 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                   static_cast<int>(ItemKind::Object));
     item->setData(nameColumn, itemIdRole,
                   QVariant::fromValue<qulonglong>(entry.id.value()));
+    item->setData(nameColumn, itemLinkedCollectionRole,
+                  QVariant::fromValue<qulonglong>(
+                      linkedCollectionId.isValid()
+                          ? linkedCollectionId.value() : 0));
     QStringList objectPath = path;
     objectPath.append(QStringLiteral("o%1").arg(entry.id.value()));
     item->setData(nameColumn, itemPathRole,
@@ -591,7 +597,100 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             entry.viewLayerHidden.value(activeViewLayerKey).toBool()
                 ? Qt::Unchecked : Qt::Checked);
     }
+    objectRows_[entry.id.value()].append(item);
+    objectEntries_.insert(entry.id.value(), entry);
     return item;
+}
+
+void CollectionsPanel::buildObjectParentHierarchy(
+    const QVector<OutlinerObjectEntry> &objects)
+{
+    QSet<quint64> visited;
+    QSet<quint64> visiting;
+    QSet<quint64> cyclicParentLinks;
+    QVector<ObjectId> parentBeforeChild;
+    const auto appendWithParents = [&](const auto &self,
+                                       ObjectId objectId) -> void {
+        if (!objectId.isValid() || visited.contains(objectId.value())) return;
+        const OutlinerObjectEntry entry =
+            objectEntries_.value(objectId.value());
+        if (!entry.id.isValid()) return;
+        visiting.insert(objectId.value());
+        const ObjectId parentId = entry.parentObjectId;
+        if (parentId.isValid() && objectEntries_.contains(parentId.value())) {
+            if (visiting.contains(parentId.value())) {
+                cyclicParentLinks.insert(objectId.value());
+            } else {
+                self(self, parentId);
+            }
+        }
+        visiting.remove(objectId.value());
+        visited.insert(objectId.value());
+        parentBeforeChild.append(objectId);
+    };
+    for (const OutlinerObjectEntry &entry : objects) {
+        appendWithParents(appendWithParents, entry.id);
+    }
+
+    const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+        ? callbacks_.activeViewLayerKey() : QString{};
+    for (const ObjectId childId : parentBeforeChild) {
+        const OutlinerObjectEntry childEntry =
+            objectEntries_.value(childId.value());
+        const ObjectId parentId = cyclicParentLinks.contains(childId.value())
+            ? ObjectId::invalid() : childEntry.parentObjectId;
+        if (!parentId.isValid()) continue;
+
+        const QVector<QTreeWidgetItem *> parentRows =
+            objectRows_.value(parentId.value());
+        const QVector<QTreeWidgetItem *> childRows =
+            objectRows_.value(childId.value());
+        for (QTreeWidgetItem *parentRow : parentRows) {
+            if (parentRow == nullptr) continue;
+            QTreeWidgetItem *collectionRow = parentRow->parent();
+            while (collectionRow != nullptr &&
+                   collectionRow->data(nameColumn, itemKindRole).toInt() ==
+                       static_cast<int>(ItemKind::Object)) {
+                collectionRow = collectionRow->parent();
+            }
+            if (collectionRow == nullptr) continue;
+
+            QTreeWidgetItem *matchingChildRow = nullptr;
+            for (QTreeWidgetItem *childRow : childRows) {
+                if (childRow != nullptr && childRow != parentRow &&
+                    childRow->parent() == collectionRow) {
+                    matchingChildRow = childRow;
+                    break;
+                }
+            }
+            if (matchingChildRow != nullptr) {
+                const int childIndex =
+                    collectionRow->indexOfChild(matchingChildRow);
+                if (childIndex >= 0) {
+                    collectionRow->takeChild(childIndex);
+                    parentRow->addChild(matchingChildRow);
+                }
+                continue;
+            }
+
+            const QStringList parentPath = parentRow
+                ->data(nameColumn, itemPathRole).toString()
+                .split(QLatin1Char('/'), Qt::SkipEmptyParts);
+            QTreeWidgetItem *notInCollectionRow = appendObject(
+                parentRow, childEntry, parentPath,
+                CollectionId::invalid(), activeViewLayerKey);
+            if (notInCollectionRow != nullptr) {
+                notInCollectionRow->setData(nameColumn,
+                                            itemNotInCollectionRole, true);
+                notInCollectionRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("Parented object; not linked to this collection"));
+                QFont font = notInCollectionRow->font(nameColumn);
+                font.setItalic(true);
+                notInCollectionRow->setFont(nameColumn, font);
+            }
+        }
+    }
 }
 
 void CollectionsPanel::refresh()
@@ -615,6 +714,8 @@ void CollectionsPanel::refresh()
     refreshing_ = true;
     tree_->clear();
     rangeAnchorItem_ = nullptr;
+    objectRows_.clear();
+    objectEntries_.clear();
     const QVector<CollectionPanelEntry> entries = callbacks_.entries();
     const QVector<OutlinerObjectEntry> objects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
@@ -648,11 +749,19 @@ void CollectionsPanel::refresh()
         if (object.collectionIds.isEmpty()) {
             appendObject(sceneRoot, object,
                          {QStringLiteral("scene"), QStringLiteral("root")},
-                         activeViewLayerKey);
+                         CollectionId::invalid(), activeViewLayerKey);
         }
     }
+    buildObjectParentHierarchy(objects);
     if (!hasRefreshed_) {
         tree_->expandAll();
+        for (const QVector<QTreeWidgetItem *> &rows : objectRows_) {
+            for (QTreeWidgetItem *row : rows) {
+                if (row != nullptr && row->childCount() > 0) {
+                    row->setExpanded(false);
+                }
+            }
+        }
         hasRefreshed_ = true;
     } else {
         QVector<QTreeWidgetItem *> pending{sceneRoot};

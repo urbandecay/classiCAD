@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 37
+BRIDGE_FORMAT_VERSION = 38
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -616,6 +616,30 @@ def visibility_metadata(obj):
 def object_metadata(obj, scene, depsgraph=None):
     parent = obj.parent
     library_path = source_library_path(obj)
+    animation_data = getattr(obj, "animation_data", None)
+    driver_target_names = []
+    if animation_data is not None:
+        last_added_target = None
+        for fcurve in animation_data.drivers:
+            driver = fcurve.driver
+            if driver is None or not driver.variables:
+                continue
+            for variable in driver.variables:
+                for target in variable.targets:
+                    target_id = target.id
+                    if target_id is not None and target_id != last_added_target:
+                        driver_target_names.append(target_id.name)
+                        last_added_target = target_id
+    nla_tracks = []
+    if animation_data is not None:
+        for track in list(animation_data.nla_tracks)[:1024]:
+            nla_tracks.append({
+                "name": track.name,
+                "action_names": [
+                    strip.action.name for strip in track.strips
+                    if strip.action is not None
+                ][:1024],
+            })
     record = {
         "object_id": stable_id(obj),
         # Workbench Random hashes ID.name, which is obj.name in Blender's
@@ -627,11 +651,29 @@ def object_metadata(obj, scene, depsgraph=None):
             slot.material.name_full for slot in obj.material_slots
             if slot.material is not None
         ],
-        "modifier_names": [modifier.name for modifier in obj.modifiers],
-        "constraint_names": [constraint.name for constraint in obj.constraints],
+        "modifier_names": [modifier.name for modifier in obj.modifiers][:1024],
+        "constraint_names": [
+            constraint.name for constraint in obj.constraints
+        ][:1024],
         "vertex_group_names": [
             group.name for group in getattr(obj, "vertex_groups", ())
-        ] if obj.type in ("MESH", "LATTICE", "GREASE_PENCIL") else [],
+        ][:1024] if obj.type in ("MESH", "LATTICE", "GREASE_PENCIL") else [],
+        "has_animation_data": bool(
+            animation_data is not None and (
+                animation_data.action is not None or animation_data.drivers or
+                animation_data.nla_tracks
+            )
+        ),
+        "animation_action_name": (
+            animation_data.action.name
+            if animation_data is not None and animation_data.action is not None
+            else ""
+        ),
+        "has_drivers": bool(
+            animation_data is not None and animation_data.drivers
+        ),
+        "driver_target_names": driver_target_names[:1024],
+        "nla_tracks": nla_tracks,
         "library_path": library_path,
         # Blender resolves a linked ID's relative filepath before Workbench
         # hashes it; preserve that render identity beside the source path.

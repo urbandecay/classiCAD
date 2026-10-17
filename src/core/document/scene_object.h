@@ -108,6 +108,11 @@ struct DocumentMaterial {
 
 bool isValidDocumentMaterial(const DocumentMaterial &material);
 
+struct BlenderSourceNlaTrack {
+    QString name;
+    QStringList actionNames;
+};
+
 struct SceneObject {
     ObjectId id = ObjectId::invalid();
     QVector<CollectionId> collectionIds;
@@ -142,6 +147,11 @@ struct SceneObject {
     QStringList blenderSourceModifierNames;
     QStringList blenderSourceConstraintNames;
     QStringList blenderSourceVertexGroupNames;
+    bool blenderSourceHasAnimationData = false;
+    QString blenderSourceAnimationActionName;
+    bool blenderSourceHasDrivers = false;
+    QStringList blenderSourceDriverTargetNames;
+    QVector<BlenderSourceNlaTrack> blenderSourceNlaTracks;
     // Blender Object display bounds shape (BOX/SPHERE/CYLINDER/CONE/CAPSULE).
     // Empty means the object's imported geometry is drawn normally.
     QString displayBoundsType;

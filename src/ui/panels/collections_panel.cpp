@@ -13,7 +13,9 @@
  * The Scenes tree mode is adapted from tree_display_scenes.cc and the
  * scene/object tree elements in tree_element_id_scene.cc and
  * tree_element_scene_objects.cc.
- * Generic object contents follow tree_element_id_object.cc.
+ * Generic object contents follow tree_element_id_object.cc, with Animation
+ * rows following tree_element_anim_data.cc, tree_element_driver.cc, and
+ * tree_element_nla.cc.
  */
 #include "collections_panel.h"
 
@@ -1621,6 +1623,51 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             content->setFlags(Qt::ItemIsEnabled);
             return content;
         };
+        if (entry.hasAnimationData) {
+            QTreeWidgetItem *animation = appendContentRow(
+                item, QStringLiteral("Animation"), QStringLiteral("/animation"),
+                QStringLiteral("Blender object animation data"));
+            appendContentRow(animation, entry.animationActionName,
+                             QStringLiteral("/animation/action"),
+                             QStringLiteral("Blender active action data block"));
+            if (entry.hasDrivers) {
+                QTreeWidgetItem *drivers = appendContentRow(
+                    animation, QStringLiteral("Drivers"),
+                    QStringLiteral("/animation/drivers"),
+                    QStringLiteral("Blender animation drivers"));
+                for (qsizetype index = 0;
+                     index < entry.driverTargetNames.size(); ++index) {
+                    appendContentRow(
+                        drivers, entry.driverTargetNames[index],
+                        QStringLiteral("/animation/driver-target-%1").arg(index),
+                        QStringLiteral("Blender driver target data block"));
+                }
+            }
+            if (!entry.nlaTracks.isEmpty()) {
+                QTreeWidgetItem *tracks = appendContentRow(
+                    animation, QStringLiteral("NLA Tracks"),
+                    QStringLiteral("/animation/nla-tracks"),
+                    QStringLiteral("Blender non-linear animation tracks"));
+                for (qsizetype trackIndex = 0;
+                     trackIndex < entry.nlaTracks.size(); ++trackIndex) {
+                    const OutlinerNlaTrackEntry &sourceTrack =
+                        entry.nlaTracks[trackIndex];
+                    QTreeWidgetItem *track = appendContentRow(
+                        tracks, sourceTrack.name,
+                        QStringLiteral("/animation/nla-track-%1").arg(trackIndex),
+                        QStringLiteral("Blender NLA track"));
+                    for (qsizetype actionIndex = 0;
+                         actionIndex < sourceTrack.actionNames.size();
+                         ++actionIndex) {
+                        appendContentRow(
+                            track, sourceTrack.actionNames[actionIndex],
+                            QStringLiteral("/animation/nla-track-%1/action-%2")
+                                .arg(trackIndex).arg(actionIndex),
+                            QStringLiteral("Blender NLA action data block"));
+                    }
+                }
+            }
+        }
         appendContentRow(item, entry.dataBlockName, QStringLiteral("/data"),
                          QStringLiteral("Blender object data block"));
         for (qsizetype index = 0; index < entry.materialNames.size(); ++index) {

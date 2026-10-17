@@ -2818,7 +2818,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 28 && bridgeVersion != 29 &&
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
-         bridgeVersion != 36 && bridgeVersion != 37)) {
+         bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3374,6 +3374,58 @@ bool importBlenderScene(const QString &path,
                 return false;
             }
         }
+        if (bridgeVersion >= 38) {
+            if (!item.value(QStringLiteral("has_animation_data")).isBool() ||
+                !item.value(QStringLiteral("animation_action_name")).isString() ||
+                item.value(QStringLiteral("animation_action_name")).toString().size() > 4096 ||
+                !item.value(QStringLiteral("has_drivers")).isBool()) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender object animation record is invalid"));
+                return false;
+            }
+            const QJsonValue driverNamesValue = item.value(
+                QStringLiteral("driver_target_names"));
+            const QJsonValue nlaTracksValue = item.value(
+                QStringLiteral("nla_tracks"));
+            if (!driverNamesValue.isArray() ||
+                driverNamesValue.toArray().size() > 1024 ||
+                !nlaTracksValue.isArray() || nlaTracksValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender object animation list is invalid"));
+                return false;
+            }
+            for (const QJsonValue &nameValue : driverNamesValue.toArray()) {
+                if (!nameValue.isString() || nameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender driver target name is invalid"));
+                    return false;
+                }
+            }
+            for (const QJsonValue &trackValue : nlaTracksValue.toArray()) {
+                if (!trackValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender NLA track is invalid"));
+                    return false;
+                }
+                const QJsonObject track = trackValue.toObject();
+                const QJsonValue trackName = track.value(QStringLiteral("name"));
+                const QJsonValue actionsValue = track.value(
+                    QStringLiteral("action_names"));
+                if (!trackName.isString() || trackName.toString().size() > 4096 ||
+                    !actionsValue.isArray() || actionsValue.toArray().size() > 1024) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender NLA track is invalid"));
+                    return false;
+                }
+                for (const QJsonValue &actionValue : actionsValue.toArray()) {
+                    if (!actionValue.isString() || actionValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender NLA action name is invalid"));
+                        return false;
+                    }
+                }
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3484,6 +3536,29 @@ bool importBlenderScene(const QString &path,
             for (const QJsonValue &nameValue : item.value(
                      QStringLiteral("vertex_group_names")).toArray()) {
                 sceneObject.blenderSourceVertexGroupNames.append(nameValue.toString());
+            }
+        }
+        if (bridgeVersion >= 38) {
+            sceneObject.blenderSourceHasAnimationData = item.value(
+                QStringLiteral("has_animation_data")).toBool();
+            sceneObject.blenderSourceAnimationActionName = item.value(
+                QStringLiteral("animation_action_name")).toString();
+            sceneObject.blenderSourceHasDrivers = item.value(
+                QStringLiteral("has_drivers")).toBool();
+            for (const QJsonValue &nameValue : item.value(
+                     QStringLiteral("driver_target_names")).toArray()) {
+                sceneObject.blenderSourceDriverTargetNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &trackValue : item.value(
+                     QStringLiteral("nla_tracks")).toArray()) {
+                const QJsonObject sourceTrack = trackValue.toObject();
+                BlenderSourceNlaTrack track;
+                track.name = sourceTrack.value(QStringLiteral("name")).toString();
+                for (const QJsonValue &actionValue : sourceTrack.value(
+                         QStringLiteral("action_names")).toArray()) {
+                    track.actionNames.append(actionValue.toString());
+                }
+                sceneObject.blenderSourceNlaTracks.append(std::move(track));
             }
         }
         sceneObject.defaultViewLayerKey =

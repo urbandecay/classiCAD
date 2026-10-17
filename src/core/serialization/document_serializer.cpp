@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 30);
+    serialized.insert(QStringLiteral("version"), 31);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -553,6 +553,29 @@ QJsonObject documentToJson(const Document &document)
                               sceneObject.blenderSourceConstraintNames);
         insertBlenderNameList(QStringLiteral("blenderSourceVertexGroupNames"),
                               sceneObject.blenderSourceVertexGroupNames);
+        serializedObject.insert(QStringLiteral("blenderSourceHasAnimationData"),
+                                sceneObject.blenderSourceHasAnimationData);
+        serializedObject.insert(QStringLiteral("blenderSourceAnimationActionName"),
+                                sceneObject.blenderSourceAnimationActionName);
+        serializedObject.insert(QStringLiteral("blenderSourceHasDrivers"),
+                                sceneObject.blenderSourceHasDrivers);
+        QJsonArray driverTargetNames;
+        for (const QString &name : sceneObject.blenderSourceDriverTargetNames) {
+            driverTargetNames.append(name);
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceDriverTargetNames"),
+                                driverTargetNames);
+        QJsonArray nlaTracks;
+        for (const BlenderSourceNlaTrack &track :
+             sceneObject.blenderSourceNlaTracks) {
+            QJsonArray actionNames;
+            for (const QString &name : track.actionNames) actionNames.append(name);
+            nlaTracks.append(QJsonObject{
+                {QStringLiteral("name"), track.name},
+                {QStringLiteral("actionNames"), actionNames}});
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceNlaTracks"),
+                                nlaTracks);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         if (!sceneObject.blenderSurfaceWireVerticesWorld.isEmpty()) {
             QJsonArray wireVertices;
@@ -659,7 +682,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 30) {
+    if (version < 1 || version > 31) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1574,6 +1597,66 @@ bool documentFromJson(const QJsonValue &value,
                     QStringLiteral("vertex-group"),
                     &sceneObject.blenderSourceVertexGroupNames)) {
                 return false;
+            }
+        }
+        if (version >= 31) {
+            const QJsonValue hasAnimationValue = serializedObject.value(
+                QStringLiteral("blenderSourceHasAnimationData"));
+            const QJsonValue actionNameValue = serializedObject.value(
+                QStringLiteral("blenderSourceAnimationActionName"));
+            const QJsonValue hasDriversValue = serializedObject.value(
+                QStringLiteral("blenderSourceHasDrivers"));
+            const QJsonValue driverNamesValue = serializedObject.value(
+                QStringLiteral("blenderSourceDriverTargetNames"));
+            const QJsonValue nlaTracksValue = serializedObject.value(
+                QStringLiteral("blenderSourceNlaTracks"));
+            if (!hasAnimationValue.isBool() || !actionNameValue.isString() ||
+                actionNameValue.toString().size() > 4096 ||
+                !hasDriversValue.isBool() || !driverNamesValue.isArray() ||
+                driverNamesValue.toArray().size() > 1024 ||
+                !nlaTracksValue.isArray() || nlaTracksValue.toArray().size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender animation data"));
+                return false;
+            }
+            sceneObject.blenderSourceHasAnimationData = hasAnimationValue.toBool();
+            sceneObject.blenderSourceAnimationActionName = actionNameValue.toString();
+            sceneObject.blenderSourceHasDrivers = hasDriversValue.toBool();
+            for (const QJsonValue &nameValue : driverNamesValue.toArray()) {
+                if (!nameValue.isString() || nameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender driver target name"));
+                    return false;
+                }
+                sceneObject.blenderSourceDriverTargetNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &trackValue : nlaTracksValue.toArray()) {
+                if (!trackValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender NLA track"));
+                    return false;
+                }
+                const QJsonObject trackObject = trackValue.toObject();
+                const QJsonValue nameValue = trackObject.value(QStringLiteral("name"));
+                const QJsonValue actionsValue = trackObject.value(
+                    QStringLiteral("actionNames"));
+                if (!nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !actionsValue.isArray() || actionsValue.toArray().size() > 1024) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender NLA track contents"));
+                    return false;
+                }
+                BlenderSourceNlaTrack track;
+                track.name = nameValue.toString();
+                for (const QJsonValue &actionValue : actionsValue.toArray()) {
+                    if (!actionValue.isString() || actionValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid Blender NLA action name"));
+                        return false;
+                    }
+                    track.actionNames.append(actionValue.toString());
+                }
+                sceneObject.blenderSourceNlaTracks.append(std::move(track));
             }
         }
         const QJsonValue surfaceWireValue = serializedObject.value(

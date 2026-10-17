@@ -10835,12 +10835,13 @@ scene depth.
   The extractor now retains each object's data-block name; expanded object
   rows can show that data block and the material slots retained for polygon
   meshes. The native document format advances to version 28 and the Blender
-  scene extraction bridge to version 35. This is a supported subset: animation
-  data, poses, constraints, modifiers, vertex groups, grease-pencil effects,
-  and instanced-collection rows are not retained by classiCAD yet, and these
-  child rows do not have Blender's separate data-block selection or context
-  actions. The preference is installation-local. `cmake --build build -j4`
-  passed; no GUI interaction comparison was run.
+  scene extraction bridge to version 35. This was initially a supported
+  subset: later tree updates below add object material slots, animation data,
+  constraints, modifiers, and mesh vertex groups. Pose data, grease-pencil
+  effects, and instanced-collection rows are still not retained; child rows
+  also lack Blender's separate data-block selection and context actions. The
+  preference is installation-local. `cmake --build build -j4` passed; no GUI
+  interaction comparison was run.
 - The seventeenth tree update ports Blender 5.2.2's seven View Layer
   restriction-column visibility controls from
   [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L390-L399).
@@ -10899,9 +10900,20 @@ scene depth.
   Blender modifier and constraint names now appear under their own expandable
   object groups, and mesh vertex-group names appear under Vertex Groups. The
   extraction bridge advances to version 37 and native documents to version
-  30; older formats still load. Modifier target links, animation and pose
-  subtrees, grease-pencil effects, and matched UI interaction remain
+  30; older formats still load. Modifier target links, pose subtrees,
+  grease-pencil effects, and matched UI interaction remain
   unported. Build passed; no matched Outliner UI comparison was run.
+- The twenty-second tree update follows Blender 5.2.2's object animation rows
+  in [`tree_element_id_object.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_object.cc#L35-L43),
+  [`tree_element_anim_data.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_anim_data.cc#L20-L63),
+  [`tree_element_driver.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_driver.cc#L23-L48),
+  and [`tree_element_nla.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_nla.cc#L20-L55).
+  Object Contents now shows Animation when an object has an action, drivers,
+  or NLA tracks; it lists the active action, driver target IDs, NLA tracks,
+  and actions on NLA strips. The extraction bridge advances to version 38
+  and native documents to version 31; older formats still load. The data is
+  display-only, and linked-ID selection/context actions are not ported. Build
+  passed; no matched Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

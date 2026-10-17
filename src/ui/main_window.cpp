@@ -2881,6 +2881,16 @@ private:
                 entry.modifierNames = object.blenderSourceModifierNames;
                 entry.constraintNames = object.blenderSourceConstraintNames;
                 entry.vertexGroupNames = object.blenderSourceVertexGroupNames;
+                entry.hasAnimationData = object.blenderSourceHasAnimationData;
+                entry.animationActionName =
+                    object.blenderSourceAnimationActionName;
+                entry.hasDrivers = object.blenderSourceHasDrivers;
+                entry.driverTargetNames =
+                    object.blenderSourceDriverTargetNames;
+                for (const BlenderSourceNlaTrack &track :
+                     object.blenderSourceNlaTracks) {
+                    entry.nlaTracks.append({track.name, track.actionNames});
+                }
                 entry.sceneKeys = sceneKeysBySourceObjectId.value(
                     object.blenderSourceObjectId);
                 for (const CollectionId collectionId : object.collectionIds) {

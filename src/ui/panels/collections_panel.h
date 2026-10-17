@@ -27,6 +27,11 @@ struct CollectionPanelEntry {
     DocumentCollection collection;
 };
 
+struct OutlinerNlaTrackEntry {
+    QString name;
+    QStringList actionNames;
+};
+
 struct OutlinerObjectEntry {
     ObjectId id = ObjectId::invalid();
     QString name;
@@ -36,6 +41,11 @@ struct OutlinerObjectEntry {
     QStringList modifierNames;
     QStringList constraintNames;
     QStringList vertexGroupNames;
+    bool hasAnimationData = false;
+    QString animationActionName;
+    bool hasDrivers = false;
+    QStringList driverTargetNames;
+    QVector<OutlinerNlaTrackEntry> nlaTracks;
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
     bool hideRender = false;

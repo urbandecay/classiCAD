@@ -2803,67 +2803,59 @@ private:
                     collection.sourceSceneNames.isEmpty() ||
                     collection.sourceSceneNames.contains(sceneName);
             };
-        collectionCallbacks.entries =
-            [this, collectionBelongsToActiveScene]() {
+        collectionCallbacks.entries = [this]() {
             QVector<CollectionPanelEntry> entries;
             const Document &document = session_.document();
-            QSet<quint64> activeCollectionIds;
-            for (const DocumentCollection &collection : document.collections()) {
-                if (collectionBelongsToActiveScene(collection)) {
-                    activeCollectionIds.insert(collection.id.value());
-                }
-            }
             entries.reserve(document.collections().size());
             for (const DocumentCollection &collection : document.collections()) {
-                if (!activeCollectionIds.contains(collection.id.value())) continue;
-                DocumentCollection visibleCollection = collection;
-                visibleCollection.parentIds.erase(
-                    std::remove_if(visibleCollection.parentIds.begin(),
-                                   visibleCollection.parentIds.end(),
-                                   [&activeCollectionIds](CollectionId parentId) {
-                                       return !activeCollectionIds.contains(
-                                           parentId.value());
-                                   }),
-                    visibleCollection.parentIds.end());
-                entries.append({std::move(visibleCollection)});
+                entries.append({collection});
             }
             return entries;
         };
-        collectionCallbacks.objects =
-            [this, activeSceneRecord, collectionBelongsToActiveScene]() {
+        collectionCallbacks.objects = [this]() {
             QVector<OutlinerObjectEntry> objects;
             const Document &document = session_.document();
             objects.reserve(document.objects().size());
-            const QJsonObject activeScene = activeSceneRecord();
-            const QString activeSceneId = activeScene.value(
-                QStringLiteral("scene_id")).toString();
-            QSet<quint64> activeCollectionIds;
-            for (const DocumentCollection &collection : document.collections()) {
-                if (collectionBelongsToActiveScene(collection)) {
-                    activeCollectionIds.insert(collection.id.value());
-                }
-            }
             QHash<QString, QString> materialNamesById;
             for (const DocumentMaterial &material : document.materials()) {
                 materialNamesById.insert(material.id, material.name);
             }
-            const auto sceneForViewLayer =
-                [&document](const QString &viewLayerKey) {
-                    for (const QJsonValue &sceneValue :
-                         document.settings().importedBlenderScenes) {
-                        const QJsonObject scene = sceneValue.toObject();
-                        for (const QJsonValue &layerValue : scene.value(
-                                 QStringLiteral("view_layers")).toArray()) {
-                            if (layerValue.toObject().value(
-                                    QStringLiteral("key")).toString() ==
-                                viewLayerKey) {
-                                return scene.value(
-                                    QStringLiteral("scene_id")).toString();
-                            }
-                        }
+            QHash<QString, QStringList> sceneKeysBySourceObjectId;
+            QHash<QString, QString> sceneKeyByViewLayer;
+            QHash<QString, QString> sceneKeyByName;
+            for (const QJsonValue &sceneValue :
+                 document.settings().importedBlenderScenes) {
+                const QJsonObject scene = sceneValue.toObject();
+                const QString sceneKey = scene.value(
+                    QStringLiteral("scene_id")).toString();
+                const QString sceneName = scene.value(
+                    QStringLiteral("name")).toString();
+                if (sceneKey.isEmpty()) continue;
+                sceneKeyByName.insert(sceneName, sceneKey);
+                for (const QJsonValue &objectIdValue : scene.value(
+                         QStringLiteral("object_ids")).toArray()) {
+                    if (objectIdValue.isString()) {
+                        sceneKeysBySourceObjectId[
+                            objectIdValue.toString()].append(sceneKey);
                     }
-                    return QString{};
-                };
+                }
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    const QString key = layerValue.toObject().value(
+                        QStringLiteral("key")).toString();
+                    if (!key.isEmpty()) sceneKeyByViewLayer.insert(key, sceneKey);
+                }
+            }
+            QHash<quint64, QStringList> sceneKeysByCollectionId;
+            for (const DocumentCollection &collection : document.collections()) {
+                for (const QString &sceneName : collection.sourceSceneNames) {
+                    const QString sceneKey = sceneKeyByName.value(sceneName);
+                    if (!sceneKey.isEmpty()) {
+                        sceneKeysByCollectionId[collection.id.value()]
+                            .append(sceneKey);
+                    }
+                }
+            }
             QHash<QString, ObjectId> objectIdsByIdentity;
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
@@ -2875,19 +2867,6 @@ private:
             }
             for (const SceneObject &object : document.objects()) {
                 if (object.blenderLooseMeshEdgeCompanion) continue;
-                QVector<CollectionId> sceneMemberships;
-                for (const CollectionId collectionId : object.collectionIds) {
-                    if (activeCollectionIds.contains(collectionId.value())) {
-                        sceneMemberships.append(collectionId);
-                    }
-                }
-                const bool belongsToActiveScene =
-                    !object.collectionIds.isEmpty()
-                        ? !sceneMemberships.isEmpty()
-                        : (object.defaultViewLayerKey.isEmpty() ||
-                           sceneForViewLayer(object.defaultViewLayerKey) ==
-                               activeSceneId);
-                if (!belongsToActiveScene) continue;
                 QString name = object.displayName.trimmed();
                 if (name.isEmpty()) {
                     name = QStringLiteral("Object %1").arg(object.id.value());
@@ -2899,6 +2878,23 @@ private:
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
                 entry.dataBlockName = object.blenderSourceDataName;
+                entry.sceneKeys = sceneKeysBySourceObjectId.value(
+                    object.blenderSourceObjectId);
+                for (const CollectionId collectionId : object.collectionIds) {
+                    const QStringList sceneKeys =
+                        sceneKeysByCollectionId.value(collectionId.value());
+                    for (const QString &sceneKey : sceneKeys) {
+                        if (!entry.sceneKeys.contains(sceneKey)) {
+                            entry.sceneKeys.append(sceneKey);
+                        }
+                    }
+                }
+                const QString defaultSceneKey = sceneKeyByViewLayer.value(
+                    object.defaultViewLayerKey);
+                if (!defaultSceneKey.isEmpty() &&
+                    !entry.sceneKeys.contains(defaultSceneKey)) {
+                    entry.sceneKeys.append(defaultSceneKey);
+                }
                 if (object.geometry.geometryType == GeometryType::PolygonMesh) {
                     const PolygonMesh3D &mesh = object.geometry.polygonMesh;
                     if (!mesh.materialSlotIds.isEmpty()) {
@@ -2918,7 +2914,7 @@ private:
                         }
                     }
                 }
-                entry.collectionIds = sceneMemberships;
+                entry.collectionIds = object.collectionIds;
                 entry.hideViewport = object.hideViewport;
                 entry.hideRender = object.hideRender;
                 entry.hideSelect = object.hideSelect;
@@ -2940,7 +2936,38 @@ private:
                 const QString name = scene.value(
                     QStringLiteral("name")).toString();
                 if (!key.isEmpty() && !name.isEmpty()) {
-                    scenes.append({key, name});
+                    OutlinerSceneEntry entry;
+                    entry.key = key;
+                    entry.displayName = name;
+                    for (const QJsonValue &layerValue : scene.value(
+                             QStringLiteral("view_layers")).toArray()) {
+                        const QJsonObject layer = layerValue.toObject();
+                        const QString layerKey = layer.value(
+                            QStringLiteral("key")).toString();
+                        const QString layerName = layer.value(
+                            QStringLiteral("name")).toString();
+                        if (layerKey.isEmpty() || layerName.isEmpty()) continue;
+                        entry.viewLayers.append({layerKey, layerName});
+                        if (layer.value(
+                                QStringLiteral("is_active_view_layer")).toBool()) {
+                            entry.activeViewLayerKey = layerKey;
+                        }
+                    }
+                    if (entry.activeViewLayerKey.isEmpty() &&
+                        !entry.viewLayers.isEmpty()) {
+                        entry.activeViewLayerKey = entry.viewLayers.first().key;
+                    }
+                    const QString savedLayerKey =
+                        activeViewLayerByScene_.value(key);
+                    const auto savedLayer = std::find_if(
+                        entry.viewLayers.cbegin(), entry.viewLayers.cend(),
+                        [&savedLayerKey](const OutlinerViewLayerEntry &layer) {
+                            return layer.key == savedLayerKey;
+                        });
+                    if (savedLayer != entry.viewLayers.cend()) {
+                        entry.activeViewLayerKey = savedLayer->key;
+                    }
+                    scenes.append(std::move(entry));
                 }
             }
             return scenes;

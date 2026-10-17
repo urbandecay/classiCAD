@@ -10864,8 +10864,25 @@ scene depth.
   and centers the row; the Filter menu toggle defaults on and persists in
   QSettings. This behavior has not had a matched Blender UI comparison.
   `cmake --build build -j4` passed.
-- Remaining Outliner scope includes Blender's additional display modes and
-  data-block subtrees beyond the supported Object Contents rows, and a matched
+- The nineteenth tree update adds Blender 5.2.2's Scenes display mode, based on
+  [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L28-L36),
+  [`tree_display_scenes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_scenes.cc#L34-L54),
+  [`tree_element_id_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_scene.cc#L23-L31),
+  and [`tree_element_scene_objects.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_scene_objects.cc#L22-L37).
+  The display-mode selector now switches between View Layer and Scenes. The
+  Scenes tree shows every imported scene with View Layers, Collections, and
+  Objects groups; activating a scene or view-layer row switches classiCAD's
+  active Blender context. Scene membership is resolved from the imported
+  scene object IDs, collection memberships, and each object's default view
+  layer. The global Viewport, Render, and Select restrictions remain available;
+  per-view-layer restriction columns are hidden in this mode. Scene-tree
+  expansion is stored separately in project-scoped QSettings because this app
+  has no Blender workspace model. World and scene animation data-block rows,
+  and the Blender data-browser/sequence/override display modes, remain outside
+  the currently imported tree data. No matched Blender UI comparison was run;
+  `cmake --build build -j4` passed.
+- Remaining Outliner scope includes unsupported display modes, data-block
+  subtrees beyond the supported Object Contents rows, and a matched
   Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.

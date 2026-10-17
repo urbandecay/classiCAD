@@ -10,6 +10,9 @@
  * Name, type, and state filtering is adapted from outliner_tree.cc and
  * space_outliner.py.
  * Active-row scrolling is adapted from outliner_draw.cc and outliner_edit.cc.
+ * The Scenes tree mode is adapted from tree_display_scenes.cc and the
+ * scene/object tree elements in tree_element_id_scene.cc and
+ * tree_element_scene_objects.cc.
  */
 #include "collections_panel.h"
 
@@ -61,6 +64,7 @@ constexpr int itemLinkedCollectionRole = Qt::UserRole + 6;
 constexpr int itemNotInCollectionRole = Qt::UserRole + 7;
 constexpr int itemParentCollectionRole = Qt::UserRole + 8;
 constexpr int itemViewLayerKeyRole = Qt::UserRole + 9;
+constexpr int itemSceneKeyRole = Qt::UserRole + 10;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
 constexpr int renderColumn = 2;
@@ -355,6 +359,12 @@ void CollectionsPanel::createLayout()
         "Filter collections and objects by name, type, and state."));
     filterButton_->setPopupMode(QToolButton::InstantPopup);
     filterRow->addWidget(filterButton_);
+    displayModeCombo_ = new QComboBox(this);
+    displayModeCombo_->addItem(QStringLiteral("View Layer"));
+    displayModeCombo_->addItem(QStringLiteral("Scenes"));
+    displayModeCombo_->setToolTip(QStringLiteral(
+        "Choose the Blender Outliner tree display."));
+    filterRow->addWidget(displayModeCombo_);
     sceneCombo_ = new QComboBox(this);
     sceneCombo_->setToolTip(QStringLiteral("Active Blender scene"));
     filterRow->addWidget(sceneCombo_);
@@ -446,6 +456,11 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/filterAllViewLayers"), false).toBool();
     scrollToActive_ = outlinerSettings.value(
         QStringLiteral("outliner/scrollToActive"), true).toBool();
+    scenesDisplayMode_ = outlinerSettings.value(
+        QStringLiteral("outliner/displayMode"),
+        QStringLiteral("VIEW_LAYER")).toString() ==
+        QLatin1String("SCENES");
+    displayModeCombo_->setCurrentIndex(scenesDisplayMode_ ? 1 : 0);
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -478,12 +493,23 @@ void CollectionsPanel::createLayout()
         QStringLiteral("All View Layers"));
     allViewLayersAction->setCheckable(true);
     allViewLayersAction->setChecked(showAllViewLayers_);
+    allViewLayersAction->setEnabled(!scenesDisplayMode_);
     connect(allViewLayersAction, &QAction::toggled, this,
             [this](bool visible) {
         showAllViewLayers_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterAllViewLayers"),
                           visible);
+        refresh();
+    });
+    connect(displayModeCombo_, &QComboBox::activated, this,
+            [this, allViewLayersAction](int index) {
+        scenesDisplayMode_ = index == 1;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/displayMode"),
+                          scenesDisplayMode_ ? QStringLiteral("SCENES")
+                                             : QStringLiteral("VIEW_LAYER"));
+        allViewLayersAction->setEnabled(!scenesDisplayMode_);
         refresh();
     });
     QAction *collectionsAction = filterMenu->addAction(
@@ -1041,18 +1067,26 @@ void CollectionsPanel::restoreTreeState()
 {
     if (tree_ == nullptr) return;
     QStringList expandedPaths;
-    bool hasSavedState = callbacks_.loadExpandedTreePaths &&
+    const QString scope = callbacks_.stateScopeKey
+        ? callbacks_.stateScopeKey() : QString{};
+    const QString scopeHash = QString::fromLatin1(
+        QCryptographicHash::hash(scope.toUtf8(),
+                                 QCryptographicHash::Sha256)
+            .toHex());
+    const QString settingsKey = scenesDisplayMode_
+        ? QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash)
+        : QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash);
+    bool hasSavedState = false;
+    if (scenesDisplayMode_) {
+        QSettings settings;
+        if (!scope.isEmpty() && settings.contains(settingsKey)) {
+            expandedPaths = settings.value(settingsKey).toStringList();
+            hasSavedState = true;
+        }
+    } else {
+        hasSavedState = callbacks_.loadExpandedTreePaths &&
         callbacks_.loadExpandedTreePaths(&expandedPaths);
-    if (!hasSavedState) {
-        const QString scope = callbacks_.stateScopeKey
-            ? callbacks_.stateScopeKey() : QString{};
-        if (!scope.isEmpty()) {
-            const QString scopeHash = QString::fromLatin1(
-                QCryptographicHash::hash(scope.toUtf8(),
-                                         QCryptographicHash::Sha256)
-                    .toHex());
-            const QString settingsKey =
-                QStringLiteral("outliner/%1/expandedPaths").arg(scopeHash);
+        if (!hasSavedState && !scope.isEmpty()) {
             QSettings settings;
             if (settings.contains(settingsKey)) {
                 expandedPaths = settings.value(settingsKey).toStringList();
@@ -1102,7 +1136,19 @@ void CollectionsPanel::saveTreeState()
     }
     expandedPaths.sort(Qt::CaseSensitive);
     expandedPaths.removeDuplicates();
-    if (callbacks_.saveExpandedTreePaths) {
+    if (scenesDisplayMode_) {
+        const QString scope = callbacks_.stateScopeKey
+            ? callbacks_.stateScopeKey() : QString{};
+        if (scope.isEmpty()) return;
+        const QString scopeHash = QString::fromLatin1(
+            QCryptographicHash::hash(scope.toUtf8(),
+                                     QCryptographicHash::Sha256)
+                .toHex());
+        QSettings settings;
+        settings.setValue(
+            QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash),
+            expandedPaths);
+    } else if (callbacks_.saveExpandedTreePaths) {
         callbacks_.saveExpandedTreePaths(expandedPaths);
     } else {
         const QString scope = callbacks_.stateScopeKey
@@ -1126,6 +1172,16 @@ bool CollectionsPanel::activateObjectRow(
     const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
         item->data(nameColumn, itemKindRole).toInt());
     if (kind == OutlinerRowKind::SceneRoot) {
+        const QString sceneKey = item->data(
+            nameColumn, itemSceneKeyRole).toString();
+        if (!sceneKey.isEmpty() && callbacks_.setActiveScene) {
+            QTimer::singleShot(0, this, [this, sceneKey]() {
+                if (callbacks_.setActiveScene) {
+                    callbacks_.setActiveScene(sceneKey);
+                }
+            });
+            return true;
+        }
         const QString viewLayerKey = item->data(
             nameColumn, itemViewLayerKeyRole).toString();
         if (viewLayerKey.isEmpty()) return false;
@@ -1410,7 +1466,8 @@ void CollectionsPanel::appendCollection(
     QSet<quint64> ancestors,
     QStringList path,
     QStringList sourcePath,
-    const QString &activeViewLayerKey)
+    const QString &activeViewLayerKey,
+    const QString &rowViewLayerKey)
 {
     if (!entry.collection.id.isValid() ||
         ancestors.contains(entry.collection.id.value())) {
@@ -1440,7 +1497,7 @@ void CollectionsPanel::appendCollection(
     item->setData(nameColumn, itemPathRole, path.join(QLatin1Char('/')));
     item->setData(nameColumn, itemSourcePathRole,
                   QVariant::fromValue(sourcePath));
-    item->setData(nameColumn, itemViewLayerKeyRole, activeViewLayerKey);
+    item->setData(nameColumn, itemViewLayerKeyRole, rowViewLayerKey);
     item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
                    Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
                    Qt::ItemIsDropEnabled);
@@ -1491,14 +1548,15 @@ void CollectionsPanel::appendCollection(
     for (const CollectionPanelEntry &candidate : entries) {
         if (candidate.collection.parentIds.contains(entry.collection.id)) {
             appendCollection(tree, candidate, entries, objects, item, ancestors,
-                             path, sourcePath, activeViewLayerKey);
+                             path, sourcePath, activeViewLayerKey,
+                             rowViewLayerKey);
         }
     }
     if (!excludedFromViewLayer) {
         for (const OutlinerObjectEntry &object : objects) {
             if (!object.collectionIds.contains(entry.collection.id)) continue;
             appendObject(item, object, path, entry.collection.id,
-                         activeViewLayerKey);
+                         rowViewLayerKey);
         }
     }
 }
@@ -1675,8 +1733,11 @@ void CollectionsPanel::refresh()
         ? callbacks_.stateScopeKey() : QString{};
     const bool stateScopeChanged = stateScopeKey != currentStateScopeKey_;
     currentStateScopeKey_ = stateScopeKey;
-    const QString treeStateContextKey = callbacks_.treeStateContextKey
-        ? callbacks_.treeStateContextKey() : QString{};
+    const QString treeStateContextKey =
+        (callbacks_.treeStateContextKey
+             ? callbacks_.treeStateContextKey() : QString{}) +
+        (scenesDisplayMode_ ? QStringLiteral("/Scenes")
+                            : QStringLiteral("/ViewLayer"));
     const bool treeStateContextChanged =
         treeStateContextKey != currentTreeStateContextKey_;
     currentTreeStateContextKey_ = treeStateContextKey;
@@ -1700,19 +1761,68 @@ void CollectionsPanel::refresh()
     rangeAnchorItem_ = nullptr;
     objectRows_.clear();
     objectEntries_.clear();
-    const QVector<CollectionPanelEntry> entries = callbacks_.entries();
-    const QVector<OutlinerObjectEntry> objects = callbacks_.objects
+    const QVector<CollectionPanelEntry> allEntries = callbacks_.entries();
+    const QVector<OutlinerObjectEntry> allObjects = callbacks_.objects
         ? callbacks_.objects() : QVector<OutlinerObjectEntry>{};
-    QVector<OutlinerObjectEntry> displayObjects;
-    if (showObjects_) displayObjects = objects;
     const QVector<OutlinerSceneEntry> scenes = callbacks_.scenes
         ? callbacks_.scenes() : QVector<OutlinerSceneEntry>{};
+    const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
+    displayModeCombo_->setEnabled(!scenes.isEmpty());
+    QVector<OutlinerObjectEntry> displayObjects;
+    if (showObjects_) displayObjects = allObjects;
     const QVector<OutlinerViewLayerEntry> viewLayers = callbacks_.viewLayers
         ? callbacks_.viewLayers() : QVector<OutlinerViewLayerEntry>{};
     const QString activeSceneKey = callbacks_.activeSceneKey
         ? callbacks_.activeSceneKey() : QString{};
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
+    OutlinerSceneEntry activeScene;
+    activeScene.key = activeSceneKey;
+    for (const OutlinerSceneEntry &scene : scenes) {
+        if (scene.key == activeSceneKey) {
+            activeScene = scene;
+            break;
+        }
+    }
+    const auto entriesForScene = [&allEntries, activeSceneKey](
+                                    const OutlinerSceneEntry &scene) {
+        QVector<CollectionPanelEntry> entries;
+        QSet<quint64> includedIds;
+        for (const CollectionPanelEntry &entry : allEntries) {
+            const bool belongs = entry.collection.sourceSceneNames.isEmpty()
+                ? scene.key == activeSceneKey
+                : entry.collection.sourceSceneNames.contains(scene.displayName);
+            if (belongs) includedIds.insert(entry.collection.id.value());
+        }
+        for (const CollectionPanelEntry &entry : allEntries) {
+            if (!includedIds.contains(entry.collection.id.value())) continue;
+            DocumentCollection collection = entry.collection;
+            collection.parentIds.erase(
+                std::remove_if(collection.parentIds.begin(),
+                               collection.parentIds.end(),
+                               [&includedIds](CollectionId parentId) {
+                                   return !includedIds.contains(parentId.value());
+                               }),
+                collection.parentIds.end());
+            entries.append({std::move(collection)});
+        }
+        return entries;
+    };
+    const auto objectsForScene = [&allObjects, activeSceneKey](
+                                    const OutlinerSceneEntry &scene) {
+        QVector<OutlinerObjectEntry> objects;
+        for (const OutlinerObjectEntry &object : allObjects) {
+            if (object.sceneKeys.contains(scene.key) ||
+                (scene.key == activeSceneKey && object.sceneKeys.isEmpty())) {
+                objects.append(object);
+            }
+        }
+        return objects;
+    };
+    const QVector<CollectionPanelEntry> entries = entriesForScene(activeScene);
+    const QVector<OutlinerObjectEntry> activeSceneObjects =
+        objectsForScene(activeScene);
+    if (!scenesMode && showObjects_) displayObjects = activeSceneObjects;
     {
         const QSignalBlocker blocker(sceneCombo_);
         sceneCombo_->clear();
@@ -1724,7 +1834,7 @@ void CollectionsPanel::refresh()
             }
         }
         sceneCombo_->setCurrentIndex(activeIndex);
-        sceneCombo_->setVisible(scenes.size() > 1);
+        sceneCombo_->setVisible(!scenesMode && scenes.size() > 1);
     }
     {
         const QSignalBlocker blocker(viewLayerCombo_);
@@ -1737,24 +1847,28 @@ void CollectionsPanel::refresh()
             }
         }
         viewLayerCombo_->setCurrentIndex(activeIndex);
-        viewLayerCombo_->setVisible(viewLayers.size() > 1);
+        viewLayerCombo_->setVisible(!scenesMode && viewLayers.size() > 1);
     }
     tree_->setColumnHidden(viewportColumn, !showViewportColumn_);
     tree_->setColumnHidden(renderColumn, !showRenderColumn_);
     tree_->setColumnHidden(selectColumn, !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
-                           activeViewLayerKey.isEmpty() || !showHideColumn_);
+                           scenesMode || activeViewLayerKey.isEmpty() ||
+                               !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
-                           activeViewLayerKey.isEmpty() ||
+                           scenesMode || activeViewLayerKey.isEmpty() ||
                                !showHoldoutColumn_);
     tree_->setColumnHidden(indirectOnlyColumn,
-                           activeViewLayerKey.isEmpty() ||
+                           scenesMode || activeViewLayerKey.isEmpty() ||
                                !showIndirectOnlyColumn_);
     tree_->setColumnHidden(excludeColumn,
-                           activeViewLayerKey.isEmpty() || !showEnableColumn_);
+                           scenesMode || activeViewLayerKey.isEmpty() ||
+                               !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
-    const auto populateSceneRoot = [this, &entries, &displayObjects](
+    const auto populateSceneRoot = [this](
                                        QTreeWidgetItem *root,
+                                       const QVector<CollectionPanelEntry> &entries,
+                                       const QVector<OutlinerObjectEntry> &objects,
                                        const QString &viewLayerKey,
                                        const QString &rootPath) {
         if (showCollections_) {
@@ -1770,11 +1884,12 @@ void CollectionsPanel::refresh()
                                      parent != entries.cend();
                 }
                 if (!hasKnownParent) {
-                    appendCollection(tree_, entry, entries, displayObjects,
-                                     root, {}, {rootPath}, {}, viewLayerKey);
+                    appendCollection(tree_, entry, entries, objects, root, {},
+                                     {rootPath}, {}, viewLayerKey,
+                                     viewLayerKey);
                 }
             }
-            for (const OutlinerObjectEntry &object : displayObjects) {
+            for (const OutlinerObjectEntry &object : objects) {
                 if (object.collectionIds.isEmpty()) {
                     appendObject(root, object, {rootPath,
                                                 QStringLiteral("root")},
@@ -1782,14 +1897,115 @@ void CollectionsPanel::refresh()
                 }
             }
         } else {
-            for (const OutlinerObjectEntry &object : displayObjects) {
+            for (const OutlinerObjectEntry &object : objects) {
                 appendObject(root, object, {rootPath,
                                             QStringLiteral("root")},
                              CollectionId::invalid(), viewLayerKey);
             }
         }
     };
-    if (showAllViewLayers_ && !viewLayers.isEmpty()) {
+    if (scenesMode) {
+        for (const OutlinerSceneEntry &scene : scenes) {
+            const QVector<CollectionPanelEntry> sceneEntries =
+                entriesForScene(scene);
+            const QVector<OutlinerObjectEntry> sceneObjects = showObjects_
+                ? objectsForScene(scene) : QVector<OutlinerObjectEntry>{};
+            const QString rootPath = QStringLiteral("scenes/%1").arg(scene.key);
+            auto *sceneRoot = new QTreeWidgetItem(tree_);
+            sceneRoot->setText(nameColumn, scene.displayName);
+            sceneRoot->setData(nameColumn, itemKindRole,
+                               static_cast<int>(OutlinerRowKind::SceneRoot));
+            sceneRoot->setData(nameColumn, itemSceneKeyRole, scene.key);
+            sceneRoot->setData(nameColumn, itemViewLayerKeyRole,
+                               scene.activeViewLayerKey);
+            sceneRoot->setData(nameColumn, itemPathRole, rootPath);
+            sceneRoot->setToolTip(nameColumn,
+                                  QStringLiteral("Click to activate this scene"));
+            sceneRoot->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            QFont sceneFont = sceneRoot->font(nameColumn);
+            sceneFont.setBold(scene.key == activeSceneKey);
+            sceneRoot->setFont(nameColumn, sceneFont);
+            sceneRoots.append(sceneRoot);
+
+            if (!scene.viewLayers.isEmpty()) {
+                auto *layersGroup = new QTreeWidgetItem(sceneRoot);
+                layersGroup->setText(nameColumn,
+                                     QStringLiteral("View Layers"));
+                layersGroup->setData(nameColumn, itemKindRole,
+                                     static_cast<int>(OutlinerRowKind::SceneGroup));
+                layersGroup->setData(nameColumn, itemPathRole,
+                                     rootPath + QStringLiteral("/view-layers"));
+                layersGroup->setFlags(Qt::ItemIsEnabled);
+                for (const OutlinerViewLayerEntry &viewLayer :
+                     scene.viewLayers) {
+                    auto *layerRow = new QTreeWidgetItem(layersGroup);
+                    layerRow->setText(nameColumn, viewLayer.displayName);
+                    layerRow->setData(nameColumn, itemKindRole,
+                                      static_cast<int>(OutlinerRowKind::SceneRoot));
+                    layerRow->setData(nameColumn, itemViewLayerKeyRole,
+                                      viewLayer.key);
+                    layerRow->setData(nameColumn, itemPathRole,
+                        rootPath + QStringLiteral("/view-layers/%1")
+                                       .arg(viewLayer.key));
+                    layerRow->setToolTip(
+                        nameColumn,
+                        QStringLiteral("Click to activate this view layer"));
+                    layerRow->setFlags(Qt::ItemIsEnabled |
+                                       Qt::ItemIsSelectable);
+                    QFont layerFont = layerRow->font(nameColumn);
+                    layerFont.setBold(viewLayer.key == activeViewLayerKey);
+                    layerRow->setFont(nameColumn, layerFont);
+                }
+            }
+
+            if (showCollections_) {
+                auto *collectionsGroup = new QTreeWidgetItem(sceneRoot);
+                collectionsGroup->setText(nameColumn,
+                                          QStringLiteral("Collections"));
+                collectionsGroup->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::SceneGroup));
+                collectionsGroup->setData(nameColumn, itemPathRole,
+                    rootPath + QStringLiteral("/collections"));
+                collectionsGroup->setFlags(Qt::ItemIsEnabled);
+                for (const CollectionPanelEntry &entry : sceneEntries) {
+                    bool hasKnownParent = false;
+                    for (const CollectionId parentId :
+                         entry.collection.parentIds) {
+                        const auto parent = std::find_if(
+                            sceneEntries.cbegin(), sceneEntries.cend(),
+                            [parentId](const CollectionPanelEntry &candidate) {
+                                return candidate.collection.id == parentId;
+                            });
+                        hasKnownParent = hasKnownParent ||
+                                         parent != sceneEntries.cend();
+                    }
+                    if (!hasKnownParent) {
+                        appendCollection(
+                            tree_, entry, sceneEntries, sceneObjects,
+                            collectionsGroup, {},
+                            {rootPath, QStringLiteral("collections")}, {},
+                            {}, scene.activeViewLayerKey);
+                    }
+                }
+            }
+
+            if (showObjects_) {
+                auto *objectsGroup = new QTreeWidgetItem(sceneRoot);
+                objectsGroup->setText(nameColumn, QStringLiteral("Objects"));
+                objectsGroup->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::SceneGroup));
+                objectsGroup->setData(nameColumn, itemPathRole,
+                    rootPath + QStringLiteral("/objects"));
+                objectsGroup->setFlags(Qt::ItemIsEnabled);
+                for (const OutlinerObjectEntry &object : sceneObjects) {
+                    appendObject(objectsGroup, object,
+                                 {rootPath, QStringLiteral("objects")},
+                                 CollectionId::invalid(),
+                                 scene.activeViewLayerKey);
+                }
+            }
+        }
+    } else if (showAllViewLayers_ && !viewLayers.isEmpty()) {
         for (const OutlinerViewLayerEntry &viewLayer : viewLayers) {
             auto *viewLayerRoot = new QTreeWidgetItem(tree_);
             viewLayerRoot->setText(nameColumn, viewLayer.displayName);
@@ -1809,7 +2025,8 @@ void CollectionsPanel::refresh()
             rootFont.setBold(viewLayer.key == activeViewLayerKey);
             viewLayerRoot->setFont(nameColumn, rootFont);
             sceneRoots.append(viewLayerRoot);
-            populateSceneRoot(viewLayerRoot, viewLayer.key, rootPath);
+            populateSceneRoot(viewLayerRoot, entries, displayObjects,
+                              viewLayer.key, rootPath);
         }
     } else {
         auto *sceneRoot = new QTreeWidgetItem(tree_);
@@ -1820,7 +2037,8 @@ void CollectionsPanel::refresh()
         sceneRoot->setFlags((sceneRoot->flags() & ~Qt::ItemIsSelectable) |
                             Qt::ItemIsDropEnabled);
         sceneRoots.append(sceneRoot);
-        populateSceneRoot(sceneRoot, activeViewLayerKey,
+        populateSceneRoot(sceneRoot, entries, displayObjects,
+                          activeViewLayerKey,
                           QStringLiteral("scene"));
     }
     if (showObjectChildren_) {
@@ -1846,7 +2064,12 @@ void CollectionsPanel::refresh()
             if (saved != expandedPaths.cend()) {
                 item->setExpanded(saved.value());
             } else if (item->data(nameColumn, itemKindRole).toInt() ==
-                       static_cast<int>(OutlinerRowKind::Collection)) {
+                           static_cast<int>(OutlinerRowKind::Collection) ||
+                       item->data(nameColumn, itemKindRole).toInt() ==
+                           static_cast<int>(OutlinerRowKind::SceneGroup)) {
+                item->setExpanded(true);
+            } else if (scenesMode &&
+                       item->data(nameColumn, itemSceneKeyRole).isValid()) {
                 item->setExpanded(true);
             }
             for (int childIndex = 0; childIndex < item->childCount();

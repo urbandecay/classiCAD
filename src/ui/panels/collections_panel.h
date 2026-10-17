@@ -41,9 +41,16 @@ struct OutlinerObjectEntry {
     bool selectable = true;
     QJsonObject viewLayerHidden;
     ObjectId parentObjectId = ObjectId::invalid();
+    QStringList sceneKeys;
 };
 
-enum class OutlinerRowKind { Collection, Object, SceneRoot, ObjectContent };
+enum class OutlinerRowKind {
+    Collection,
+    Object,
+    SceneRoot,
+    SceneGroup,
+    ObjectContent
+};
 enum class OutlinerObjectStateFilter {
     All,
     Visible,
@@ -70,6 +77,8 @@ struct OutlinerViewLayerEntry {
 struct OutlinerSceneEntry {
     QString key;
     QString displayName;
+    QVector<OutlinerViewLayerEntry> viewLayers;
+    QString activeViewLayerKey;
 };
 
 struct CollectionsPanelCallbacks {
@@ -145,7 +154,8 @@ private:
                          QSet<quint64> ancestors,
                          QStringList path,
                          QStringList sourcePath,
-                         const QString &activeViewLayerKey);
+                         const QString &activeViewLayerKey,
+                         const QString &rowViewLayerKey);
     QTreeWidgetItem *appendObject(QTreeWidgetItem *parent,
                                   const OutlinerObjectEntry &entry,
                                   const QStringList &path,
@@ -158,6 +168,7 @@ private:
     QTreeWidget *tree_ = nullptr;
     QLineEdit *filterEdit_ = nullptr;
     QToolButton *filterButton_ = nullptr;
+    QComboBox *displayModeCombo_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
@@ -176,6 +187,7 @@ private:
     bool showObjectChildren_ = true;
     bool showAllViewLayers_ = false;
     bool scrollToActive_ = true;
+    bool scenesDisplayMode_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

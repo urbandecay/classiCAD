@@ -16,6 +16,9 @@ struct CollectionParentOrder {
 struct DocumentCollection {
     CollectionId id = CollectionId::invalid();
     QString name;
+    QString colorTag = QStringLiteral("NONE");
+    // Blender's per-scene master collection cannot be deleted or color-tagged.
+    bool isSceneMaster = false;
     QString sourceId;
     QString sourceSceneName;
     QStringList sourceSceneNames;
@@ -36,4 +39,18 @@ struct DocumentCollection {
     bool hideSelect = false;
     QJsonArray viewLayerStates;
 };
+
+inline bool isValidDocumentCollectionColorTag(const QString &colorTag)
+{
+    return colorTag == QLatin1String("NONE") ||
+           colorTag == QLatin1String("COLOR_01") ||
+           colorTag == QLatin1String("COLOR_02") ||
+           colorTag == QLatin1String("COLOR_03") ||
+           colorTag == QLatin1String("COLOR_04") ||
+           colorTag == QLatin1String("COLOR_05") ||
+           colorTag == QLatin1String("COLOR_06") ||
+           colorTag == QLatin1String("COLOR_07") ||
+           colorTag == QLatin1String("COLOR_08");
+}
+
 } // namespace classiCAD

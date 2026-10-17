@@ -265,6 +265,8 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QVector<CollectionId> &)> copyOutlinerCollection;
     std::function<void(CollectionId)> pasteOutlinerCollection;
     std::function<void(ObjectId, bool)> deleteObjectSelection;
+    std::function<void(const QVector<CollectionId> &, const QString &)>
+        setCollectionColorTag;
     std::function<void(const QVector<CollectionId> &, bool)>
         setCollectionsObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;

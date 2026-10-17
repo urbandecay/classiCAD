@@ -37,6 +37,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QCheckBox>
+#include <QColor>
 #include <QCryptographicHash>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
@@ -46,12 +47,15 @@
 #include <QFont>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -143,6 +147,42 @@ QJsonObject viewLayerState(const DocumentCollection &collection,
         if (matches) return state;
     }
     return {};
+}
+
+QColor collectionColorTagColor(const QString &colorTag)
+{
+    if (colorTag == QLatin1String("COLOR_01")) return QColor(0xE9, 0x78, 0x53);
+    if (colorTag == QLatin1String("COLOR_02")) return QColor(0xD9, 0xA8, 0x38);
+    if (colorTag == QLatin1String("COLOR_03")) return QColor(0x9B, 0xB7, 0x42);
+    if (colorTag == QLatin1String("COLOR_04")) return QColor(0x45, 0xA8, 0x78);
+    if (colorTag == QLatin1String("COLOR_05")) return QColor(0x43, 0xA8, 0xB5);
+    if (colorTag == QLatin1String("COLOR_06")) return QColor(0x55, 0x83, 0xD5);
+    if (colorTag == QLatin1String("COLOR_07")) return QColor(0x9A, 0x70, 0xC8);
+    if (colorTag == QLatin1String("COLOR_08")) return QColor(0xD5, 0x68, 0x92);
+    return {};
+}
+
+QIcon collectionColorTagIcon(const QString &colorTag)
+{
+    const QColor color = collectionColorTagColor(colorTag);
+    if (!color.isValid()) return {};
+    QPixmap pixmap(12, 12);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(color.darker(140), 1.0));
+    painter.setBrush(color);
+    painter.drawRoundedRect(QRectF(1.0, 1.0, 10.0, 10.0), 2.0, 2.0);
+    return QIcon(pixmap);
+}
+
+QString collectionColorTagLabel(const QString &colorTag)
+{
+    if (colorTag == QLatin1String("NONE")) return QStringLiteral("None");
+    if (colorTag.startsWith(QLatin1String("COLOR_"))) {
+        return QStringLiteral("Color %1").arg(colorTag.mid(6));
+    }
+    return QStringLiteral("Unknown");
 }
 
 class ViewLayerCheckDelegate final : public QStyledItemDelegate {
@@ -2265,6 +2305,30 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                                      canClearIndirectOnly);
             menu.addSeparator();
         }
+        if (callbacks_.setCollectionColorTag &&
+            !selectedCollectionIds.isEmpty()) {
+            QMenu *colorTagMenu = menu.addMenu(
+                QStringLiteral("Color Tag"));
+            const QVector<QPair<QString, QString>> colorTags{
+                {QStringLiteral("NONE"), QStringLiteral("None")},
+                {QStringLiteral("COLOR_01"), QStringLiteral("Color 01")},
+                {QStringLiteral("COLOR_02"), QStringLiteral("Color 02")},
+                {QStringLiteral("COLOR_03"), QStringLiteral("Color 03")},
+                {QStringLiteral("COLOR_04"), QStringLiteral("Color 04")},
+                {QStringLiteral("COLOR_05"), QStringLiteral("Color 05")},
+                {QStringLiteral("COLOR_06"), QStringLiteral("Color 06")},
+                {QStringLiteral("COLOR_07"), QStringLiteral("Color 07")},
+                {QStringLiteral("COLOR_08"), QStringLiteral("Color 08")}};
+            for (const auto &[colorTag, label] : colorTags) {
+                QAction *action = colorTagMenu->addAction(
+                    collectionColorTagIcon(colorTag), label);
+                connect(action, &QAction::triggered, this,
+                        [this, selectedCollectionIds, colorTag]() {
+                    callbacks_.setCollectionColorTag(
+                        selectedCollectionIds, colorTag);
+                });
+            }
+        }
         if (callbacks_.renameCollection) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, collectionId]() {
@@ -2450,6 +2514,14 @@ void CollectionsPanel::appendCollection(
         ? new QTreeWidgetItem(tree)
         : new QTreeWidgetItem(parent);
     item->setText(nameColumn, entry.collection.name);
+    item->setIcon(nameColumn,
+                  collectionColorTagIcon(entry.collection.colorTag));
+    if (entry.collection.colorTag != QLatin1String("NONE")) {
+        item->setToolTip(nameColumn,
+                         QStringLiteral("Color tag: %1")
+                             .arg(collectionColorTagLabel(
+                                 entry.collection.colorTag)));
+    }
     item->setData(nameColumn, itemKindRole,
                   static_cast<int>(OutlinerRowKind::Collection));
     item->setData(nameColumn, itemIdRole,

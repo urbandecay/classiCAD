@@ -1185,7 +1185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 62);
+    serialized.insert(QStringLiteral("version"), 63);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1237,6 +1237,9 @@ QJsonObject documentToJson(const Document &document)
         QJsonObject record;
         record.insert(QStringLiteral("id"), idToJson(collection.id.value()));
         record.insert(QStringLiteral("name"), collection.name);
+        record.insert(QStringLiteral("colorTag"), collection.colorTag);
+        record.insert(QStringLiteral("isSceneMaster"),
+                      collection.isSceneMaster);
         record.insert(QStringLiteral("sourceId"), collection.sourceId);
         record.insert(QStringLiteral("sourceSceneName"), collection.sourceSceneName);
         QJsonArray sourceSceneNames;
@@ -1660,7 +1663,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 62) {
+    if (version < 1 || version > 63) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1747,6 +1750,11 @@ bool documentFromJson(const QJsonValue &value,
                  !record.value(QStringLiteral("sceneMembershipExplicit")).isBool()) ||
                 (version >= 62 &&
                  !record.value(QStringLiteral("instanceOffset")).isArray()) ||
+                (version >= 63 &&
+                 (!record.value(QStringLiteral("colorTag")).isString() ||
+                  !isValidDocumentCollectionColorTag(
+                      record.value(QStringLiteral("colorTag")).toString()) ||
+                  !record.value(QStringLiteral("isSceneMaster")).isBool())) ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
                 !record.value(QStringLiteral("hideRender")).isBool() ||
@@ -1758,6 +1766,12 @@ bool documentFromJson(const QJsonValue &value,
             DocumentCollection collection;
             collection.id = CollectionId::fromValue(collectionValueId);
             collection.name = name;
+            if (version >= 63) {
+                collection.colorTag = record.value(
+                    QStringLiteral("colorTag")).toString();
+                collection.isSceneMaster = record.value(
+                    QStringLiteral("isSceneMaster")).toBool();
+            }
             collection.sourceId = sourceId.toString();
             collection.sourceSceneName = sourceSceneName.toString();
             collection.sceneMembershipExplicit = version >= 61

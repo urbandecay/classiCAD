@@ -607,6 +607,9 @@ CollectionId Document::createCollection(const QString &name)
 
 CollectionId Document::insertCollection(DocumentCollection value)
 {
+    if (!isValidDocumentCollectionColorTag(value.colorTag)) {
+        return CollectionId::invalid();
+    }
     if (!value.id.isValid()) value.id = allocateCollectionId();
     if (!value.sourceId.isEmpty()) {
         for (DocumentCollection &existing : collections_) {
@@ -772,7 +775,7 @@ bool Document::removeCollection(CollectionId id)
             if (collections_[i].id == id) return i;
         return -1;
     }();
-    if (index < 0) return false;
+    if (index < 0 || collections_[index].isSceneMaster) return false;
     const DocumentCollection removed = collections_[index];
     collections_.removeAt(index);
     for (DocumentCollection &candidate : collections_) {
@@ -836,6 +839,22 @@ bool Document::renameCollection(CollectionId id, const QString &name)
     if (candidate == nullptr || trimmed.isEmpty()) return false;
     if (candidate->name == trimmed) return true;
     candidate->name = trimmed;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setCollectionColorTag(CollectionId id, const QString &colorTag)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    if (candidate == nullptr || candidate->isSceneMaster ||
+        !isValidDocumentCollectionColorTag(colorTag)) {
+        return false;
+    }
+    if (candidate->colorTag == colorTag) return true;
+    candidate->colorTag = colorTag;
     DocumentChangeSet changes;
     changes.addCollection(id);
     changes.collectionsChanged = true;

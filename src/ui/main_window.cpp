@@ -4748,7 +4748,14 @@ private:
                                       CollectionId parentId) {
                 DocumentCollection collection;
                 collection.name = name;
-                if (parentId.isValid()) collection.parentIds = {parentId};
+                if (parentId.isValid()) {
+                    collection.parentIds = {parentId};
+                    const DocumentCollection *parentCollection =
+                        session_.document().collection(parentId);
+                    if (parentCollection != nullptr) {
+                        collection.colorTag = parentCollection->colorTag;
+                    }
+                }
                 const QJsonObject activeScene = activeSceneRecord();
                 const QString sceneId = activeScene.value(
                     QStringLiteral("scene_id")).toString();
@@ -5743,6 +5750,7 @@ private:
                         collectionsById.value(sourceId.value());
                     DocumentCollection clone = source;
                     clone.id = CollectionId::invalid();
+                    clone.isSceneMaster = false;
                     clone.name = uniqueName(source.name, collectionNames,
                                             QStringLiteral("Collection"));
                     clone.sourceId.clear();
@@ -6165,6 +6173,51 @@ private:
                         QStringLiteral("Could not rename collection"), 4000);
                 }
             };
+        collectionCallbacks.setCollectionColorTag =
+            [this](const QVector<CollectionId> &collectionIds,
+                   const QString &colorTag) {
+                if (!isValidDocumentCollectionColorTag(colorTag)) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                int skipped = 0;
+                QSet<quint64> seen;
+                for (const CollectionId id : collectionIds) {
+                    if (!id.isValid() || seen.contains(id.value())) continue;
+                    seen.insert(id.value());
+                    const DocumentCollection *collection =
+                        session_.document().collection(id);
+                    if (collection == nullptr) continue;
+                    if (collection->isSceneMaster ||
+                        !collection->libraryPath.isEmpty()) {
+                        ++skipped;
+                        continue;
+                    }
+                    if (collection->colorTag == colorTag) continue;
+                    if (transaction.setCollectionColorTag(id, colorTag)) {
+                        changed = true;
+                    }
+                }
+                if (!changed) {
+                    if (skipped > 0) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Cannot set color tags on linked or master collections"),
+                            4000);
+                    }
+                    return;
+                }
+                if (!session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not set collection color tags"),
+                        4000);
+                    return;
+                }
+                if (skipped > 0) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Updated collection color tags; skipped %1 linked or master collection(s)")
+                            .arg(skipped),
+                        4000);
+                }
+            };
         collectionCallbacks.removeCollection =
             [this, updateAllSceneCollectionIds](
                 const QVector<CollectionId> &requestedIds) {
@@ -6178,7 +6231,8 @@ private:
                         continue;
                     }
                     seenIds.insert(id.value());
-                    if (!collection->libraryPath.isEmpty()) {
+                    if (collection->isSceneMaster ||
+                        !collection->libraryPath.isEmpty()) {
                         ++skippedLinked;
                         continue;
                     }
@@ -6187,7 +6241,7 @@ private:
                 if (collectionIds.isEmpty()) {
                     statusBar()->showMessage(
                         skippedLinked > 0
-                            ? QStringLiteral("Cannot delete linked collections")
+                            ? QStringLiteral("Cannot delete linked or master collections")
                             : QStringLiteral("No collections to delete"),
                         4000);
                     return;
@@ -6916,7 +6970,8 @@ private:
                         continue;
                     }
                     collectionIds.insert(root.value());
-                    if (!rootCollection->libraryPath.isEmpty()) {
+                    if (rootCollection->isSceneMaster ||
+                        !rootCollection->libraryPath.isEmpty()) {
                         ++skippedLinkedRoots;
                         collectionIds.remove(root.value());
                         continue;
@@ -6927,7 +6982,7 @@ private:
                 if (hierarchy.isEmpty()) {
                     statusBar()->showMessage(
                         skippedLinkedRoots > 0
-                            ? QStringLiteral("Cannot delete linked collections")
+                            ? QStringLiteral("Cannot delete linked or master collections")
                             : QStringLiteral("No collection hierarchies to delete"),
                         4000);
                     return;

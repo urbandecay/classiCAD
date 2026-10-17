@@ -93,6 +93,7 @@ public:
     CollectionId insertCollection(DocumentCollection collection);
     bool removeCollection(CollectionId id);
     bool renameCollection(CollectionId id, const QString &name);
+    bool setCollectionColorTag(CollectionId id, const QString &colorTag);
     bool setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds);
     bool moveCollectionRelative(CollectionId id,
                                 CollectionId targetId,

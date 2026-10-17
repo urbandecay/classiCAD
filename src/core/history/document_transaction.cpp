@@ -709,6 +709,15 @@ bool DocumentTransaction::renameCollection(CollectionId collectionId,
     return true;
 }
 
+bool DocumentTransaction::setCollectionColorTag(CollectionId collectionId,
+                                                const QString &colorTag)
+{
+    if (!document_.setCollectionColorTag(collectionId, colorTag)) return false;
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setCollectionParents(
     CollectionId collectionId, const QVector<CollectionId> &parentIds)
 {

@@ -2846,7 +2846,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 64 && bridgeVersion != 65 &&
          bridgeVersion != 66 && bridgeVersion != 67 &&
          bridgeVersion != 68 && bridgeVersion != 69 && bridgeVersion != 70 &&
-         bridgeVersion != 71)) {
+         bridgeVersion != 71 && bridgeVersion != 72)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4570,6 +4570,25 @@ bool importBlenderScene(const QString &path,
         collection.sourceId = sourceId;
         collection.name = record.value(QStringLiteral("name")).toString();
         collection.libraryPath = record.value(QStringLiteral("library_path")).toString();
+        if (bridgeVersion >= 72) {
+            const QJsonValue colorTagValue = record.value(
+                QStringLiteral("color_tag"));
+            const QJsonValue isMasterValue = record.value(
+                QStringLiteral("is_master"));
+            if (!colorTagValue.isString() || !isMasterValue.isBool() ||
+                !isValidDocumentCollectionColorTag(colorTagValue.toString())) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender collection color-tag record is invalid"));
+                return false;
+            }
+            collection.colorTag = colorTagValue.toString();
+            collection.isSceneMaster = isMasterValue.toBool();
+        } else {
+            const QJsonValue parentIdsValue = record.value(
+                QStringLiteral("parent_ids"));
+            collection.isSceneMaster = parentIdsValue.isArray() &&
+                parentIdsValue.toArray().isEmpty();
+        }
         collection.hideViewport = record.value(QStringLiteral("hide_viewport")).toBool();
         collection.hideRender = record.value(QStringLiteral("hide_render")).toBool();
         if (bridgeVersion >= 32 &&

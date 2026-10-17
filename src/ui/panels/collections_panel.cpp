@@ -64,6 +64,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <functional>
 
 namespace classiCAD {
 
@@ -3001,7 +3002,14 @@ void CollectionsPanel::refresh()
         };
         const auto appendLibraryObjectTree = [&appendLibraryContentRow](
             const auto &self, QTreeWidgetItem *parent,
-            const QJsonArray &nodes, const QString &path) -> void {
+            const QJsonArray &nodes, const QString &path,
+            const auto &appendReferencedIdChildren) -> void {
+            const bool parentObjectIsPoseMode = std::any_of(
+                nodes.cbegin(), nodes.cend(), [](const QJsonValue &value) {
+                    return value.toObject().value(
+                        QStringLiteral("kind")).toString() ==
+                        QLatin1String("POSE");
+                });
             for (qsizetype index = 0; index < nodes.size(); ++index) {
                 const QJsonObject node = nodes[index].toObject();
                 const QString nodePath = path + QStringLiteral("/item-%1")
@@ -3039,14 +3047,21 @@ void CollectionsPanel::refresh()
                 QTreeWidgetItem *row = appendLibraryContentRow(
                     parent, node.value(QStringLiteral("name")).toString(),
                     nodePath, description);
+                if (kind == QLatin1String("DATA_BLOCK") ||
+                    kind == QLatin1String("MATERIAL")) {
+                    appendReferencedIdChildren(
+                        row, node, nodePath, parentObjectIsPoseMode);
+                }
                 self(self, row, node.value(
-                    QStringLiteral("children")).toArray(), nodePath);
+                    QStringLiteral("children")).toArray(), nodePath,
+                    appendReferencedIdChildren);
             }
         };
         const auto appendLibraryCollectionTree = [
             &appendLibraryContentRow, &appendLibraryObjectTree](
             const auto &self, QTreeWidgetItem *parent,
-            const QJsonArray &nodes, const QString &path) -> void {
+            const QJsonArray &nodes, const QString &path,
+            const auto &appendReferencedIdChildren) -> void {
             for (qsizetype index = 0; index < nodes.size(); ++index) {
                 const QJsonObject node = nodes[index].toObject();
                 const QString nodePath = path + QStringLiteral("/item-%1")
@@ -3061,12 +3076,15 @@ void CollectionsPanel::refresh()
                                  : QStringLiteral("Object in Blender collection"));
                 if (isCollection) {
                     self(self, row, node.value(
-                        QStringLiteral("children")).toArray(), nodePath);
+                        QStringLiteral("children")).toArray(), nodePath,
+                        appendReferencedIdChildren);
                 } else {
+                    appendReferencedIdChildren(row, node, nodePath, false);
                     appendLibraryObjectTree(
                         appendLibraryObjectTree, row,
                         node.value(QStringLiteral("children")).toArray(),
-                        nodePath + QStringLiteral("/object-contents"));
+                        nodePath + QStringLiteral("/object-contents"),
+                        appendReferencedIdChildren);
                 }
             }
         };
@@ -3090,6 +3108,10 @@ void CollectionsPanel::refresh()
             libraryRows.insert(library.id, row);
         }
         for (const OutlinerLibraryEntry &library : libraries) {
+            qsizetype linkedAnimationRowsRemaining = 20000;
+            bool linkedAnimationRowsTruncated = false;
+            qsizetype linkedDataRowsRemaining = 20000;
+            bool linkedDataRowsTruncated = false;
             const auto findLibraryDataGroup = [&library](
                 const QString &displayName) -> const OutlinerLibraryDataGroup * {
                 for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
@@ -3097,8 +3119,106 @@ void CollectionsPanel::refresh()
                 }
                 return nullptr;
             };
+            const auto resolveLibraryDataGroupName = [&library](
+                const QString &dataBlockName, const QString &preferredName) {
+                if (!preferredName.isEmpty()) return preferredName;
+                QString resolvedName;
+                for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
+                    if (!group.dataBlockNames.contains(dataBlockName)) continue;
+                    if (!resolvedName.isEmpty()) return QString();
+                    resolvedName = group.displayName;
+                }
+                return resolvedName;
+            };
+            const auto countLibraryAnimationRows = [](
+                const OutlinerAnimationEntry &animation) {
+                if (!animation.hasAnimationData) return qsizetype{0};
+                qsizetype count = 1;
+                if (!animation.actionName.isEmpty()) {
+                    count += 1 + (animation.actionSlotName.isEmpty() ? 0 : 1);
+                }
+                if (animation.hasDrivers) {
+                    count += 1 + animation.driverTargetNames.size();
+                }
+                if (!animation.nlaTracks.isEmpty()) {
+                    ++count;
+                    for (const OutlinerNlaTrackEntry &track : animation.nlaTracks) {
+                        count += 1 + track.actionNames.size();
+                    }
+                }
+                return count;
+            };
+            const auto countLibraryTreeRows = [](const auto &self,
+                                                  const QJsonArray &nodes)
+                    -> qsizetype {
+                qsizetype count = 0;
+                for (const QJsonValue &value : nodes) {
+                    const QJsonObject node = value.toObject();
+                    ++count;
+                    count += self(self, node.value(
+                        QStringLiteral("children")).toArray());
+                }
+                return count;
+            };
+            const auto countLibraryCollectionRows = [
+                &countLibraryTreeRows](const auto &self,
+                    const QJsonArray &nodes) -> qsizetype {
+                qsizetype count = 0;
+                for (const QJsonValue &value : nodes) {
+                    const QJsonObject node = value.toObject();
+                    ++count;
+                    const QJsonArray children = node.value(
+                        QStringLiteral("children")).toArray();
+                    if (node.value(QStringLiteral("kind")).toString() ==
+                        QLatin1String("COLLECTION")) {
+                        count += self(self, children);
+                    } else {
+                        count += countLibraryTreeRows(
+                            countLibraryTreeRows, children);
+                    }
+                }
+                return count;
+            };
+            const auto countLibraryDataBlockRows = [
+                &findLibraryDataGroup, &countLibraryTreeRows,
+                &countLibraryCollectionRows](
+                const OutlinerLibraryDataGroup::DataBlockTree &tree) {
+                qsizetype count = countLibraryTreeRows(
+                    countLibraryTreeRows, tree.objectTree);
+                count += countLibraryCollectionRows(
+                    countLibraryCollectionRows, tree.collectionTree);
+                count += countLibraryTreeRows(
+                    countLibraryTreeRows, tree.armatureBoneTree);
+                count += countLibraryTreeRows(
+                    countLibraryTreeRows, tree.greasePencilLayerTree);
+                if (!tree.boneCollectionTree.isEmpty()) {
+                    ++count;
+                    count += countLibraryTreeRows(
+                        countLibraryTreeRows, tree.boneCollectionTree);
+                }
+                if (!tree.shapeKeyDataName.isEmpty()) {
+                    count += 1 + tree.shapeKeyNames.size();
+                }
+                count += tree.materialNames.size();
+                if (!tree.textureImageName.isEmpty()) ++count;
+                const OutlinerLibraryDataGroup *textures =
+                    findLibraryDataGroup(QStringLiteral("Textures"));
+                for (const QString &textureName : tree.lineStyleTextureNames) {
+                    ++count;
+                    if (textures == nullptr) continue;
+                    const auto textureTree =
+                        textures->dataBlockTreesByName.constFind(textureName);
+                    if (textureTree != textures->dataBlockTreesByName.cend() &&
+                        !textureTree->textureImageName.isEmpty()) {
+                        ++count;
+                    }
+                }
+                return count;
+            };
             const auto appendLibraryAnimationByGroup = [
-                &findLibraryDataGroup, &appendLibraryAnimation](
+                &findLibraryDataGroup, &appendLibraryAnimation,
+                &countLibraryAnimationRows, &linkedAnimationRowsRemaining,
+                &linkedAnimationRowsTruncated](
                 QTreeWidgetItem *parent, const QString &groupName,
                 const QString &dataBlockName, const QString &path) {
                 const OutlinerLibraryDataGroup *group =
@@ -3107,6 +3227,13 @@ void CollectionsPanel::refresh()
                 const auto animation =
                     group->animationsByDataBlockName.constFind(dataBlockName);
                 if (animation != group->animationsByDataBlockName.cend()) {
+                    const qsizetype rowCount =
+                        countLibraryAnimationRows(animation.value());
+                    if (rowCount > linkedAnimationRowsRemaining) {
+                        linkedAnimationRowsTruncated = true;
+                        return;
+                    }
+                    linkedAnimationRowsRemaining -= rowCount;
                     appendLibraryAnimation(parent, animation.value(), path);
                 }
             };
@@ -3141,6 +3268,127 @@ void CollectionsPanel::refresh()
                     textureRow, QStringLiteral("Textures"), textureName,
                     path + QStringLiteral("/animation"));
                 appendLibraryTextureImage(textureRow, textureName, path);
+            };
+            std::function<void(QTreeWidgetItem *, const QJsonObject &,
+                               const QString &, bool)>
+                appendReferencedIdChildren;
+            appendReferencedIdChildren = [
+                &findLibraryDataGroup, &resolveLibraryDataGroupName,
+                &appendLibraryAnimationByGroup,
+                &countLibraryDataBlockRows, &linkedDataRowsRemaining,
+                &linkedDataRowsTruncated,
+                &appendLibraryObjectTree, &appendLibraryCollectionTree,
+                &appendLibraryNameTree, &appendLibraryContentRow,
+                &appendLibraryTextureImage, &appendLibraryTextureId,
+                &appendReferencedIdChildren](QTreeWidgetItem *parent,
+                    const QJsonObject &node, const QString &path,
+                    bool parentObjectIsPoseMode) {
+                const QString kind = node.value(
+                    QStringLiteral("kind")).toString();
+                const QString name = node.value(
+                    QStringLiteral("name")).toString();
+                QString groupName = node.value(
+                    QStringLiteral("id_group_name")).toString();
+                if (groupName.isEmpty() && kind == QLatin1String("OBJECT")) {
+                    groupName = QStringLiteral("Objects");
+                } else {
+                    groupName = resolveLibraryDataGroupName(name, groupName);
+                }
+                appendLibraryAnimationByGroup(
+                    parent, groupName, name, path + QStringLiteral("/animation"));
+                if (kind != QLatin1String("DATA_BLOCK")) return;
+
+                const OutlinerLibraryDataGroup *group =
+                    findLibraryDataGroup(groupName);
+                if (group == nullptr) return;
+                const auto dataBlockTree =
+                    group->dataBlockTreesByName.constFind(name);
+                if (dataBlockTree == group->dataBlockTreesByName.cend()) return;
+                const qsizetype dataRows =
+                    countLibraryDataBlockRows(dataBlockTree.value());
+                if (dataRows > linkedDataRowsRemaining) {
+                    linkedDataRowsTruncated = true;
+                    return;
+                }
+                linkedDataRowsRemaining -= dataRows;
+
+                appendLibraryObjectTree(
+                    appendLibraryObjectTree, parent,
+                    dataBlockTree->objectTree,
+                    path + QStringLiteral("/object-tree"),
+                    appendReferencedIdChildren);
+                if (groupName == QLatin1String("Textures")) {
+                    appendLibraryTextureImage(parent, name, path);
+                }
+                for (qsizetype textureIndex = 0;
+                     textureIndex < dataBlockTree->lineStyleTextureNames.size();
+                     ++textureIndex) {
+                    appendLibraryTextureId(
+                        parent,
+                        dataBlockTree->lineStyleTextureNames[textureIndex],
+                        path + QStringLiteral("/line-style-texture-%1")
+                            .arg(textureIndex));
+                }
+                appendLibraryCollectionTree(
+                    appendLibraryCollectionTree, parent,
+                    dataBlockTree->collectionTree,
+                    path + QStringLiteral("/collection-tree"),
+                    appendReferencedIdChildren);
+                if (!parentObjectIsPoseMode) {
+                    appendLibraryNameTree(
+                        appendLibraryNameTree, parent,
+                        dataBlockTree->armatureBoneTree,
+                        path + QStringLiteral("/bones"),
+                        QStringLiteral("Blender armature bone"));
+                }
+                appendLibraryNameTree(
+                    appendLibraryNameTree, parent,
+                    dataBlockTree->greasePencilLayerTree,
+                    path + QStringLiteral("/grease-pencil"),
+                    QStringLiteral("Blender Grease Pencil layer or group"));
+                if (!dataBlockTree->boneCollectionTree.isEmpty()) {
+                    const QString boneCollectionPath = path +
+                        QStringLiteral("/bone-collections");
+                    QTreeWidgetItem *boneCollectionsRow =
+                        appendLibraryContentRow(
+                            parent, QStringLiteral("Bone Collections"),
+                            boneCollectionPath,
+                            QStringLiteral("Blender armature bone collections"));
+                    appendLibraryNameTree(
+                        appendLibraryNameTree, boneCollectionsRow,
+                        dataBlockTree->boneCollectionTree,
+                        boneCollectionPath + QStringLiteral("/items"),
+                        QStringLiteral("Blender bone collection"));
+                }
+                if (!dataBlockTree->shapeKeyDataName.isEmpty()) {
+                    const QString shapeKeyPath = path +
+                        QStringLiteral("/shape-keys");
+                    QTreeWidgetItem *shapeKeysRow = appendLibraryContentRow(
+                        parent, dataBlockTree->shapeKeyDataName, shapeKeyPath,
+                        QStringLiteral("Blender shape-key data block"));
+                    for (qsizetype keyIndex = 0;
+                         keyIndex < dataBlockTree->shapeKeyNames.size();
+                         ++keyIndex) {
+                        appendLibraryContentRow(
+                            shapeKeysRow, dataBlockTree->shapeKeyNames[keyIndex],
+                            shapeKeyPath + QStringLiteral("/key-%1").arg(keyIndex),
+                            QStringLiteral("Blender shape key"));
+                    }
+                }
+                for (qsizetype materialIndex = 0;
+                     materialIndex < dataBlockTree->materialNames.size();
+                     ++materialIndex) {
+                    const QString &materialName =
+                        dataBlockTree->materialNames[materialIndex];
+                    const QString materialPath = path +
+                        QStringLiteral("/material-%1").arg(materialIndex);
+                    QTreeWidgetItem *materialRow = appendLibraryContentRow(
+                        parent, materialName, materialPath,
+                        QStringLiteral("Blender data-block material ID"));
+                    appendLibraryAnimationByGroup(
+                        materialRow, QStringLiteral("Materials"), materialName,
+                        materialPath + QStringLiteral("/animation"));
+                }
             };
             QTreeWidgetItem *row = libraryRows.value(library.id);
             QTreeWidgetItem *parent = libraryRows.value(library.parentId);
@@ -3238,9 +3486,13 @@ void CollectionsPanel::refresh()
                             appendLibraryObjectTree(
                                 appendLibraryObjectTree, dataRow,
                                 dataBlockTree->objectTree,
-                                treePath + QStringLiteral("/object-tree"));
-                            appendLibraryTextureImage(
-                                dataRow, dataBlockName, treePath);
+                                treePath + QStringLiteral("/object-tree"),
+                                appendReferencedIdChildren);
+                            if (sourceGroup.displayName ==
+                                QLatin1String("Textures")) {
+                                appendLibraryTextureImage(
+                                    dataRow, dataBlockName, treePath);
+                            }
                             for (qsizetype textureIndex = 0;
                                  textureIndex < dataBlockTree->lineStyleTextureNames.size();
                                  ++textureIndex) {
@@ -3253,7 +3505,8 @@ void CollectionsPanel::refresh()
                             appendLibraryCollectionTree(
                                 appendLibraryCollectionTree, dataRow,
                                 dataBlockTree->collectionTree,
-                                treePath + QStringLiteral("/collection-tree"));
+                                treePath + QStringLiteral("/collection-tree"),
+                                appendReferencedIdChildren);
                             appendLibraryNameTree(
                                 appendLibraryNameTree, dataRow,
                                 dataBlockTree->armatureBoneTree,
@@ -3303,16 +3556,54 @@ void CollectionsPanel::refresh()
                             for (qsizetype materialIndex = 0;
                                  materialIndex < dataBlockTree->materialNames.size();
                                  ++materialIndex) {
-                                appendLibraryContentRow(
+                                const QString &materialName =
+                                    dataBlockTree->materialNames[materialIndex];
+                                const QString materialPath = treePath +
+                                    QStringLiteral("/material-%1")
+                                        .arg(materialIndex);
+                                QTreeWidgetItem *materialRow =
+                                    appendLibraryContentRow(
                                     dataRow,
-                                    dataBlockTree->materialNames[materialIndex],
-                                    treePath + QStringLiteral("/material-%1")
-                                        .arg(materialIndex),
-                                    QStringLiteral("Blender data-block material"));
+                                    materialName, materialPath,
+                                    QStringLiteral("Blender data-block material ID"));
+                                appendLibraryAnimationByGroup(
+                                    materialRow, QStringLiteral("Materials"),
+                                    materialName,
+                                    materialPath + QStringLiteral("/animation"));
                             }
                         }
                     }
                 }
+            }
+            if (linkedAnimationRowsTruncated) {
+                auto *truncatedRow = new QTreeWidgetItem(row);
+                truncatedRow->setText(
+                    nameColumn,
+                    QStringLiteral("Additional linked Animation rows omitted"));
+                truncatedRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                truncatedRow->setData(
+                    nameColumn, itemPathRole,
+                    libraryPath + QStringLiteral("/linked-animation-truncated"));
+                truncatedRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("The 20,000-row linked Animation expansion limit was reached"));
+                truncatedRow->setFlags(Qt::ItemIsEnabled);
+            }
+            if (linkedDataRowsTruncated) {
+                auto *truncatedRow = new QTreeWidgetItem(row);
+                truncatedRow->setText(
+                    nameColumn,
+                    QStringLiteral("Additional linked ID rows omitted"));
+                truncatedRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::ObjectContent));
+                truncatedRow->setData(
+                    nameColumn, itemPathRole,
+                    libraryPath + QStringLiteral("/linked-data-truncated"));
+                truncatedRow->setToolTip(
+                    nameColumn,
+                    QStringLiteral("The 20,000-row linked ID expansion limit was reached"));
+                truncatedRow->setFlags(Qt::ItemIsEnabled);
             }
             if (library.truncated) {
                 auto *truncatedRow = new QTreeWidgetItem(row);

@@ -658,9 +658,14 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                             const QJsonValue children = node.value(
                                 QStringLiteral("children"));
                             const QString nodeKind = kind.toString();
+                            const QJsonValue idGroupName = node.value(
+                                QStringLiteral("id_group_name"));
                             if (!name.isString() || name.toString().size() > 4096 ||
                                 !kind.isString() || !allowedKinds.contains(nodeKind) ||
                                 !children.isArray()) return false;
+                            if (!idGroupName.isUndefined() &&
+                                (!idGroupName.isString() ||
+                                 idGroupName.toString().size() > 256)) return false;
                             if (!parentKind.isEmpty()) {
                                 const bool parentMatches =
                                     (parentKind == QLatin1String("POSE") &&
@@ -717,11 +722,16 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                                 const QJsonValue children = node.value(
                                     QStringLiteral("children"));
                                 const QString nodeKind = kind.toString();
+                                const QJsonValue idGroupName = node.value(
+                                    QStringLiteral("id_group_name"));
                                 if (!name.isString() || name.toString().size() > 4096 ||
                                     !kind.isString() ||
                                     (nodeKind != QLatin1String("COLLECTION") &&
                                      nodeKind != QLatin1String("OBJECT")) ||
                                     !children.isArray()) return false;
+                                if (!idGroupName.isUndefined() &&
+                                    (!idGroupName.isString() ||
+                                     idGroupName.toString().size() > 256)) return false;
                                 ++(*nodeCount);
                                 if (nodeKind == QLatin1String("COLLECTION") &&
                                     !self(self, children.toArray(), depth + 1,
@@ -995,7 +1005,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 53);
+    serialized.insert(QStringLiteral("version"), 54);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1451,7 +1461,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 53) {
+    if (version < 1 || version > 54) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

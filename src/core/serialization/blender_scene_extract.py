@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 63
+BRIDGE_FORMAT_VERSION = 64
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -886,7 +886,8 @@ def outliner_grease_pencil_layer_tree(obj):
     return []
 
 
-def outliner_library_object_tree(obj, parent_budgets=None, truncated=None):
+def outliner_library_object_tree(obj, parent_budgets=None, truncated=None,
+                                 id_group_names_by_type=None):
     """Capture Blender Object ID's direct children in source order."""
     local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
     budgets = list(parent_budgets or []) + [local_remaining]
@@ -902,10 +903,19 @@ def outliner_library_object_tree(obj, parent_budgets=None, truncated=None):
             budget[0] -= 1
         return True
 
-    def add_leaf(name, kind):
+    def id_group_name_for_id(id_block):
+        if id_group_names_by_type is None or id_block is None:
+            return ""
+        id_type = getattr(getattr(id_block, "bl_rna", None), "identifier", "")
+        return str(id_group_names_by_type.get(id_type, ""))
+
+    def add_leaf(name, kind, id_group_name=""):
         if not name or not reserve_row():
             return False
-        rows.append({"name": str(name), "kind": kind, "children": []})
+        node = {"name": str(name), "kind": kind, "children": []}
+        if kind in {"DATA_BLOCK", "MATERIAL"}:
+            node["id_group_name"] = str(id_group_name)
+        rows.append(node)
         return True
 
     def add_group_to(parent_rows, name, kind, entries, child_kind):
@@ -987,13 +997,15 @@ def outliner_library_object_tree(obj, parent_budgets=None, truncated=None):
                         parent_record["node"]["children"].append(record["node"])
         data = getattr(obj, "data", None)
         if data is not None:
-            add_leaf(getattr(data, "name", ""), "DATA_BLOCK")
+            add_leaf(getattr(data, "name", ""), "DATA_BLOCK",
+                     id_group_name_for_id(data))
 
         try:
             for slot in getattr(obj, "material_slots", ()):
                 material = getattr(slot, "material", None)
                 if material is not None and not add_leaf(
-                        getattr(material, "name", ""), "MATERIAL"):
+                        getattr(material, "name", ""), "MATERIAL",
+                        id_group_name_for_id(material)):
                     break
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             truncated[0] = True
@@ -1032,13 +1044,20 @@ def outliner_library_object_tree(obj, parent_budgets=None, truncated=None):
 
 
 def outliner_library_collection_children(collection, remaining_rows,
-                                         truncated_out=None):
+                                         truncated_out=None,
+                                         id_group_names_by_type=None):
     """Capture Collection ID children in Blender's collection-then-object order."""
     local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
     budgets = [local_remaining]
     if remaining_rows is not None:
         budgets.append(remaining_rows)
     truncated = [False]
+
+    def id_group_name_for_id(id_block):
+        if id_group_names_by_type is None or id_block is None:
+            return ""
+        id_type = getattr(getattr(id_block, "bl_rna", None), "identifier", "")
+        return str(id_group_names_by_type.get(id_type, ""))
 
     def reserve_row():
         if any(budget[0] <= 0 for budget in budgets):
@@ -1078,8 +1097,10 @@ def outliner_library_collection_children(collection, remaining_rows,
                 object_truncated = [False]
                 object_node = {
                     "name": str(obj.name), "kind": "OBJECT",
+                    "id_group_name": id_group_name_for_id(obj),
                     "children": outliner_library_object_tree(
-                        obj, budgets, object_truncated),
+                        obj, budgets, object_truncated,
+                        id_group_names_by_type),
                 }
                 node["children"].append(object_node)
                 if object_truncated[0]:
@@ -1105,8 +1126,10 @@ def outliner_library_collection_children(collection, remaining_rows,
                 object_truncated = [False]
                 object_node = {
                     "name": str(obj.name), "kind": "OBJECT",
+                    "id_group_name": id_group_name_for_id(obj),
                     "children": outliner_library_object_tree(
-                        obj, budgets, object_truncated),
+                        obj, budgets, object_truncated,
+                        id_group_names_by_type),
                 }
                 children.append(object_node)
                 if object_truncated[0]:
@@ -1153,6 +1176,15 @@ def outliner_library_tree():
     action_slot_count = 0
     library_animation_rows_remaining = [MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS]
     library_specialized_rows_remaining = [MAX_OUTLINER_LIBRARY_SPECIALIZED_ITEMS]
+    id_group_names_by_type = {}
+    for property_rna in bpy.data.bl_rna.properties:
+        if getattr(property_rna, "type", "") != "COLLECTION":
+            continue
+        fixed_type = getattr(property_rna, "fixed_type", None)
+        id_type = str(getattr(fixed_type, "identifier", ""))
+        group_name = str(getattr(property_rna, "name", ""))
+        if id_type and group_name:
+            id_group_names_by_type.setdefault(id_type, group_name)
     for property_rna in bpy.data.bl_rna.properties:
         if getattr(property_rna, "type", "") != "COLLECTION":
             continue
@@ -1296,7 +1328,8 @@ def outliner_library_tree():
                     subtree["collection_tree"] = (
                         outliner_library_collection_children(
                             id_block, library_specialized_rows_remaining,
-                            collection_tree_truncated))
+                            collection_tree_truncated,
+                            id_group_names_by_type))
                     if collection_tree_truncated == [True]:
                         subtree_truncated[0] = True
 
@@ -1305,7 +1338,8 @@ def outliner_library_tree():
                     subtree["object_tree"] = outliner_library_object_tree(
                         id_block,
                         [library_specialized_rows_remaining],
-                        object_tree_truncated)
+                        object_tree_truncated,
+                        id_group_names_by_type)
                     if object_tree_truncated == [True]:
                         subtree_truncated[0] = True
 

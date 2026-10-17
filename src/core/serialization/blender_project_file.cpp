@@ -2842,7 +2842,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 56 && bridgeVersion != 57 &&
          bridgeVersion != 58 && bridgeVersion != 59 &&
          bridgeVersion != 60 && bridgeVersion != 61 &&
-         bridgeVersion != 62 && bridgeVersion != 63)) {
+         bridgeVersion != 62 && bridgeVersion != 63 &&
+         bridgeVersion != 64)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3478,9 +3479,16 @@ bool importBlenderScene(const QString &path,
                                 const QJsonValue children = node.value(
                                     QStringLiteral("children"));
                                 const QString nodeKind = kind.toString();
+                                const QJsonValue idGroupName = node.value(
+                                    QStringLiteral("id_group_name"));
                                 if (!name.isString() || name.toString().size() > 4096 ||
                                     !kind.isString() || !allowedKinds.contains(nodeKind) ||
                                     !children.isArray()) return false;
+                                if (bridgeVersion >= 64 &&
+                                    (nodeKind == QLatin1String("DATA_BLOCK") ||
+                                     nodeKind == QLatin1String("MATERIAL")) &&
+                                    (!idGroupName.isString() ||
+                                     idGroupName.toString().size() > 256)) return false;
                                 if (!parentKind.isEmpty()) {
                                     const bool parentMatches =
                                         (parentKind == QLatin1String("POSE") &&
@@ -3537,6 +3545,8 @@ bool importBlenderScene(const QString &path,
                                     const QJsonValue children = node.value(
                                         QStringLiteral("children"));
                                     const QString nodeKind = kind.toString();
+                                    const QJsonValue idGroupName = node.value(
+                                        QStringLiteral("id_group_name"));
                                     if (!name.isString() || name.toString().size() > 4096 ||
                                         !kind.isString() ||
                                         (nodeKind != QLatin1String("COLLECTION") &&
@@ -3545,6 +3555,12 @@ bool importBlenderScene(const QString &path,
                                         (nodeKind == QLatin1String("OBJECT") &&
                                          bridgeVersion < 61 &&
                                          !children.toArray().isEmpty())) {
+                                        return false;
+                                    }
+                                    if (bridgeVersion >= 64 &&
+                                        nodeKind == QLatin1String("OBJECT") &&
+                                        (!idGroupName.isString() ||
+                                         idGroupName.toString().size() > 256)) {
                                         return false;
                                     }
                                     ++(*nodeCount);

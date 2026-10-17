@@ -2829,9 +2829,94 @@ private:
             [activeSceneRecord](const DocumentCollection &collection) {
                 const QString sceneName = activeSceneRecord().value(
                     QStringLiteral("name")).toString();
-                return sceneName.isEmpty() ||
-                    collection.sourceSceneNames.isEmpty() ||
-                    collection.sourceSceneNames.contains(sceneName);
+                return sceneName.isEmpty()
+                    ? !collection.sceneMembershipExplicit
+                    : (collection.sceneMembershipExplicit
+                           ? collection.sourceSceneNames.contains(sceneName)
+                           : (collection.sourceSceneNames.isEmpty() ||
+                              collection.sourceSceneNames.contains(sceneName)));
+            };
+        const auto collectionBelongsToScene = [](
+            const DocumentCollection &collection, const QString &sceneName) {
+            return collection.sceneMembershipExplicit
+                ? collection.sourceSceneNames.contains(sceneName)
+                : (collection.sourceSceneNames.isEmpty() ||
+                   collection.sourceSceneNames.contains(sceneName));
+        };
+        const auto updateSceneCollectionIds = [this](
+            DocumentTransaction &transaction,
+            const QString &sceneId,
+            const QStringList &sourceCollectionIds) {
+            if (sceneId.isEmpty()) return false;
+            DocumentSettings settings = session_.document().settings();
+            QJsonArray scenes = settings.importedBlenderScenes;
+            bool found = false;
+            bool changed = false;
+            for (qsizetype index = 0; index < scenes.size(); ++index) {
+                QJsonObject scene = scenes[index].toObject();
+                if (scene.value(QStringLiteral("scene_id")).toString() !=
+                    sceneId) {
+                    continue;
+                }
+                found = true;
+                QJsonArray ids;
+                for (const QString &sourceId : sourceCollectionIds) {
+                    ids.append(sourceId);
+                }
+                if (scene.value(QStringLiteral("collection_ids")).toArray() !=
+                    ids) {
+                    scene.insert(QStringLiteral("collection_ids"), ids);
+                    scenes[index] = scene;
+                    changed = true;
+                }
+                break;
+            }
+            if (!found) return false;
+            if (!changed) return true;
+            settings.importedBlenderScenes = scenes;
+            return transaction.setSettings(settings);
+        };
+        const auto updateAllSceneCollectionIds =
+            [this, activeSceneRecord](DocumentTransaction &transaction) {
+                DocumentSettings settings = session_.document().settings();
+                QJsonArray scenes = settings.importedBlenderScenes;
+                const QString activeSceneId = activeSceneRecord().value(
+                    QStringLiteral("scene_id")).toString();
+                bool changed = false;
+                for (qsizetype sceneIndex = 0; sceneIndex < scenes.size();
+                     ++sceneIndex) {
+                    QJsonObject scene = scenes[sceneIndex].toObject();
+                    const QString sceneId = scene.value(
+                        QStringLiteral("scene_id")).toString();
+                    const QString sceneName = scene.value(
+                        QStringLiteral("name")).toString();
+                    if (sceneId.isEmpty() || sceneName.isEmpty()) continue;
+                    QJsonArray collectionIds;
+                    for (const DocumentCollection &collection :
+                         session_.document().collections()) {
+                        const bool belongs =
+                            collection.sceneMembershipExplicit
+                                ? collection.sourceSceneNames.contains(sceneName)
+                                : (collection.sourceSceneNames.isEmpty()
+                                       ? sceneId == activeSceneId
+                                       : collection.sourceSceneNames.contains(
+                                             sceneName));
+                        if (belongs && !collection.sourceId.isEmpty()) {
+                            collectionIds.append(collection.sourceId);
+                        }
+                    }
+                    if (scene.value(QStringLiteral("collection_ids")).toArray() ==
+                        collectionIds) {
+                        continue;
+                    }
+                    scene.insert(QStringLiteral("collection_ids"),
+                                 collectionIds);
+                    scenes[sceneIndex] = scene;
+                    changed = true;
+                }
+                if (!changed) return true;
+                settings.importedBlenderScenes = scenes;
+                return transaction.setSettings(settings);
             };
         collectionCallbacks.entries = [this]() {
             QVector<CollectionPanelEntry> entries;
@@ -3861,10 +3946,331 @@ private:
                 }
                 return id;
             };
+        collectionCallbacks.linkCollectionToActiveScene =
+            [this, activeSceneRecord, collectionBelongsToScene,
+             updateSceneCollectionIds](CollectionId rootId) {
+                const Document &document = session_.document();
+                const QJsonObject scene = activeSceneRecord();
+                const QString sceneId = scene.value(
+                    QStringLiteral("scene_id")).toString();
+                const QString sceneName = scene.value(
+                    QStringLiteral("name")).toString();
+                if (sceneId.isEmpty() || sceneName.isEmpty()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("No active Blender scene to link into"),
+                        4000);
+                    return;
+                }
+                const QVector<DocumentCollection> sourceCollections =
+                    document.collections();
+                QHash<quint64, DocumentCollection> collectionsById;
+                for (const DocumentCollection &collection : sourceCollections) {
+                    collectionsById.insert(collection.id.value(), collection);
+                }
+                if (!collectionsById.contains(rootId.value())) return;
+                QVector<CollectionId> hierarchy{rootId};
+                QSet<quint64> hierarchyValues{rootId.value()};
+                for (qsizetype index = 0; index < hierarchy.size(); ++index) {
+                    const CollectionId parentId = hierarchy[index];
+                    for (const DocumentCollection &candidate :
+                         sourceCollections) {
+                        if (candidate.parentIds.contains(parentId) &&
+                            !hierarchyValues.contains(candidate.id.value())) {
+                            hierarchyValues.insert(candidate.id.value());
+                            hierarchy.append(candidate.id);
+                        }
+                    }
+                    if (hierarchy.size() > 20000) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Collection hierarchy is too large to link"),
+                            4000);
+                        return;
+                    }
+                }
+
+                struct SceneCollectionPath {
+                    CollectionId collectionId = CollectionId::invalid();
+                    QStringList sourcePath;
+                    QSet<quint64> ancestors;
+                };
+                const DocumentCollection root =
+                    collectionsById.value(rootId.value());
+                if (root.sourceId.isEmpty()) return;
+                QVector<SceneCollectionPath> paths{
+                    {rootId, {root.sourceId}, {rootId.value()}}};
+                QHash<quint64, QSet<QString>> visitedPaths;
+                visitedPaths[rootId.value()].insert(root.sourceId);
+                for (qsizetype index = 0; index < paths.size(); ++index) {
+                    const SceneCollectionPath current = paths[index];
+                    for (const DocumentCollection &candidate :
+                         sourceCollections) {
+                        if (!hierarchyValues.contains(candidate.id.value()) ||
+                            !candidate.parentIds.contains(
+                                current.collectionId) ||
+                            current.ancestors.contains(candidate.id.value()) ||
+                            candidate.sourceId.isEmpty()) {
+                            continue;
+                        }
+                        QStringList childPath = current.sourcePath;
+                        childPath.append(candidate.sourceId);
+                        const QString pathKey = childPath.join(
+                            QLatin1Char('\x1f'));
+                        if (visitedPaths[candidate.id.value()].contains(
+                                pathKey)) {
+                            continue;
+                        }
+                        visitedPaths[candidate.id.value()].insert(pathKey);
+                        SceneCollectionPath child{
+                            candidate.id, childPath, current.ancestors};
+                        child.ancestors.insert(candidate.id.value());
+                        paths.append(std::move(child));
+                        if (paths.size() > 20000) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Collection has too many scene paths to link"),
+                                4000);
+                            return;
+                        }
+                    }
+                }
+
+                QStringList layerKeys;
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    const QString key = layerValue.toObject().value(
+                        QStringLiteral("key")).toString();
+                    if (!key.isEmpty() && !layerKeys.contains(key)) {
+                        layerKeys.append(key);
+                    }
+                }
+                DocumentTransaction transaction = session_.beginTransaction();
+                for (const CollectionId id : hierarchy) {
+                    const DocumentCollection source =
+                        collectionsById.value(id.value());
+                    QStringList sceneNames = source.sourceSceneNames;
+                    if (!sceneNames.contains(sceneName) ||
+                        !source.sceneMembershipExplicit) {
+                        if (!sceneNames.contains(sceneName)) {
+                            sceneNames.append(sceneName);
+                        }
+                        if (!transaction.setCollectionSceneNames(id,
+                                                                 sceneNames)) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not link collection to scene"),
+                                4000);
+                            return;
+                        }
+                    }
+                }
+                for (const SceneCollectionPath &path : paths) {
+                    for (const QString &layerKey : layerKeys) {
+                        if (!transaction.ensureCollectionViewLayerState(
+                                path.collectionId, layerKey,
+                                path.sourcePath)) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not create scene collection state"),
+                                4000);
+                            return;
+                        }
+                    }
+                }
+                QStringList linkedSourceIds;
+                for (const DocumentCollection &collection :
+                     document.collections()) {
+                    if (collectionBelongsToScene(collection, sceneName) &&
+                        !collection.sourceId.isEmpty()) {
+                        linkedSourceIds.append(collection.sourceId);
+                    }
+                }
+                if (!updateSceneCollectionIds(transaction, sceneId,
+                                              linkedSourceIds)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update scene collection links"),
+                        4000);
+                    return;
+                }
+                if (transaction.changes().isEmpty()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Collection is already linked to the active scene"),
+                        4000);
+                    return;
+                }
+                if (!session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not link collection to scene"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.unlinkCollection =
+            [this, activeSceneRecord, collectionBelongsToScene,
+             updateSceneCollectionIds](CollectionId collectionId,
+                                       CollectionId parentId) {
+                const Document &document = session_.document();
+                const QJsonObject scene = activeSceneRecord();
+                const QString sceneId = scene.value(
+                    QStringLiteral("scene_id")).toString();
+                const QString sceneName = scene.value(
+                    QStringLiteral("name")).toString();
+                if (sceneId.isEmpty() || sceneName.isEmpty()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("No active Blender scene to unlink from"),
+                        4000);
+                    return;
+                }
+                const QVector<DocumentCollection> sourceCollections =
+                    document.collections();
+                QHash<quint64, DocumentCollection> collectionsById;
+                for (const DocumentCollection &collection : sourceCollections) {
+                    collectionsById.insert(collection.id.value(), collection);
+                }
+                const auto selected =
+                    collectionsById.constFind(collectionId.value());
+                if (selected == collectionsById.cend()) return;
+                QVector<CollectionId> sceneRoots;
+                for (const DocumentCollection &collection : sourceCollections) {
+                    if (!collectionBelongsToScene(collection, sceneName)) {
+                        continue;
+                    }
+                    bool hasSceneParent = false;
+                    for (const CollectionId candidateParentId :
+                         collection.parentIds) {
+                        const auto candidateParent =
+                            collectionsById.constFind(
+                                candidateParentId.value());
+                        if (candidateParent != collectionsById.cend() &&
+                            collectionBelongsToScene(candidateParent.value(),
+                                                     sceneName)) {
+                            hasSceneParent = true;
+                            break;
+                        }
+                    }
+                    if (!hasSceneParent) sceneRoots.append(collection.id);
+                }
+
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (parentId.isValid()) {
+                    if (!selected->parentIds.contains(parentId)) return;
+                    QVector<CollectionId> parents = selected->parentIds;
+                    parents.removeAll(parentId);
+                    if (!transaction.setCollectionParents(collectionId,
+                                                          parents)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not unlink collection from parent"),
+                            4000);
+                        return;
+                    }
+                } else {
+                    if (!sceneRoots.contains(collectionId)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Collection is not linked to the active scene root"),
+                            4000);
+                        return;
+                    }
+                    sceneRoots.removeAll(collectionId);
+                }
+
+                QSet<quint64> reachable;
+                QVector<CollectionId> pending = sceneRoots;
+                for (const CollectionId rootId : sceneRoots) {
+                    reachable.insert(rootId.value());
+                }
+                const QVector<DocumentCollection> updatedCollections =
+                    document.collections();
+                for (qsizetype index = 0; index < pending.size(); ++index) {
+                    const CollectionId parentCollectionId = pending[index];
+                    for (const DocumentCollection &candidate :
+                         updatedCollections) {
+                        if (candidate.parentIds.contains(
+                                parentCollectionId) &&
+                            !reachable.contains(candidate.id.value())) {
+                            reachable.insert(candidate.id.value());
+                            pending.append(candidate.id);
+                        }
+                    }
+                    if (pending.size() > 20000) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Collection hierarchy is too large to unlink"),
+                            4000);
+                        return;
+                    }
+                }
+
+                QStringList layerKeys;
+                for (const QJsonValue &layerValue : scene.value(
+                         QStringLiteral("view_layers")).toArray()) {
+                    const QString key = layerValue.toObject().value(
+                        QStringLiteral("key")).toString();
+                    if (!key.isEmpty() && !layerKeys.contains(key)) {
+                        layerKeys.append(key);
+                    }
+                }
+                QStringList linkedSourceIds;
+                for (const DocumentCollection &snapshot : sourceCollections) {
+                    const DocumentCollection *collection =
+                        document.collection(snapshot.id);
+                    if (collection == nullptr) continue;
+                    const bool remainsLinked =
+                        reachable.contains(collection->id.value());
+                    QStringList sceneNames = collection->sourceSceneNames;
+                    const bool hasSceneName = sceneNames.contains(sceneName);
+                    if (remainsLinked) {
+                        if (!hasSceneName ||
+                            !collection->sceneMembershipExplicit) {
+                            if (!hasSceneName) sceneNames.append(sceneName);
+                            if (!transaction.setCollectionSceneNames(
+                                    collection->id, sceneNames)) {
+                                statusBar()->showMessage(
+                                    QStringLiteral("Could not preserve scene collection membership"),
+                                    4000);
+                                return;
+                            }
+                        }
+                        if (!collection->sourceId.isEmpty()) {
+                            linkedSourceIds.append(collection->sourceId);
+                        }
+                        continue;
+                    }
+                    if (hasSceneName ||
+                        (!collection->sceneMembershipExplicit &&
+                         collection->sourceSceneNames.isEmpty())) {
+                        sceneNames.removeAll(sceneName);
+                        if (!transaction.setCollectionSceneNames(
+                                collection->id, sceneNames) ||
+                            !transaction.removeCollectionViewLayerStates(
+                                collection->id, layerKeys)) {
+                            statusBar()->showMessage(
+                                QStringLiteral("Could not remove scene collection membership"),
+                                4000);
+                            return;
+                        }
+                    }
+                }
+                if (!updateSceneCollectionIds(transaction, sceneId,
+                                              linkedSourceIds)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update scene collection links"),
+                        4000);
+                    return;
+                }
+                if (transaction.changes().isEmpty()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Collection is not linked to the active scene"),
+                        4000);
+                    return;
+                }
+                if (!session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not unlink collection"), 4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
         collectionCallbacks.duplicateCollection =
-            [this, activeSceneRecord](CollectionId rootId,
-                                     CollectionId contextParentId,
-                                     bool linkedData) {
+            [this, activeSceneRecord, collectionBelongsToScene,
+             updateSceneCollectionIds](CollectionId rootId,
+                                      CollectionId contextParentId,
+                                      bool linkedData) {
                 const Document &document = session_.document();
                 const QVector<DocumentCollection> sourceCollections =
                     document.collections();
@@ -4190,6 +4596,29 @@ private:
                     }
                 }
 
+                const QJsonObject activeSceneForCopy = activeSceneRecord();
+                const QString activeSceneIdForCopy = activeSceneForCopy.value(
+                    QStringLiteral("scene_id")).toString();
+                if (!activeSceneIdForCopy.isEmpty() &&
+                    !activeSceneName.isEmpty()) {
+                    QStringList sourceCollectionIds;
+                    for (const DocumentCollection &collection :
+                         document.collections()) {
+                        if (collectionBelongsToScene(collection,
+                                                     activeSceneName) &&
+                            !collection.sourceId.isEmpty()) {
+                            sourceCollectionIds.append(collection.sourceId);
+                        }
+                    }
+                    if (!updateSceneCollectionIds(transaction,
+                                                  activeSceneIdForCopy,
+                                                  sourceCollectionIds)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not update duplicated scene collections"),
+                            4000);
+                        return;
+                    }
+                }
                 if (!session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not duplicate collection"), 4000);
@@ -4222,7 +4651,8 @@ private:
                         QStringLiteral("Could not rename collection"), 4000);
                 }
             };
-        collectionCallbacks.removeCollection = [this](CollectionId id) {
+        collectionCallbacks.removeCollection =
+            [this, updateAllSceneCollectionIds](CollectionId id) {
             const DocumentCollection *collection =
                 session_.document().collection(id);
             if (collection == nullptr || !collection->libraryPath.isEmpty()) {
@@ -4281,6 +4711,7 @@ private:
                 }
             }
             if (!transaction.removeCollection(id) ||
+                !updateAllSceneCollectionIds(transaction) ||
                 !session_.commitTransaction(transaction)) {
                 statusBar()->showMessage(
                     QStringLiteral("Could not remove collection"), 4000);
@@ -4871,7 +5302,8 @@ private:
                 selection.setActiveObjectId(active);
             };
         collectionCallbacks.removeCollectionHierarchy =
-            [this, collectionHierarchyIds](CollectionId root) {
+            [this, collectionHierarchyIds,
+             updateAllSceneCollectionIds](CollectionId root) {
                 const DocumentCollection *rootCollection =
                     session_.document().collection(root);
                 if (rootCollection == nullptr ||
@@ -4996,6 +5428,13 @@ private:
                 }
                 changed = !transaction.removeObjects(unlinkedObjectIds)
                               .isEmpty() || changed;
+                if (!updateAllSceneCollectionIds(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update scene collection links"),
+                        4000);
+                    return;
+                }
+                changed = !transaction.changes().isEmpty();
                 if (!changed || !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
                         QStringLiteral("Could not delete collection hierarchy"),

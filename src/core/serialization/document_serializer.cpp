@@ -1185,7 +1185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 60);
+    serialized.insert(QStringLiteral("version"), 61);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1244,6 +1244,8 @@ QJsonObject documentToJson(const Document &document)
             sourceSceneNames.append(sceneName);
         }
         record.insert(QStringLiteral("sourceSceneNames"), sourceSceneNames);
+        record.insert(QStringLiteral("sceneMembershipExplicit"),
+                      collection.sceneMembershipExplicit);
         record.insert(QStringLiteral("sourceSceneLibraryPath"),
                       collection.sourceSceneLibraryPath);
         record.insert(QStringLiteral("libraryPath"), collection.libraryPath);
@@ -1649,7 +1651,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 60) {
+    if (version < 1 || version > 61) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1732,6 +1734,8 @@ bool documentFromJson(const QJsonValue &value,
                 (version >= 59 && !parentOrdersValue.isArray()) ||
                 (version >= 60 && !rootOrderValue.isDouble()) ||
                 !sourceSceneNamesValue.isArray() || !sourceSceneName.isString() ||
+                (version >= 61 &&
+                 !record.value(QStringLiteral("sceneMembershipExplicit")).isBool()) ||
                 !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
                 !record.value(QStringLiteral("hideViewport")).isBool() ||
                 !record.value(QStringLiteral("hideRender")).isBool() ||
@@ -1745,6 +1749,9 @@ bool documentFromJson(const QJsonValue &value,
             collection.name = name;
             collection.sourceId = sourceId.toString();
             collection.sourceSceneName = sourceSceneName.toString();
+            collection.sceneMembershipExplicit = version >= 61
+                ? record.value(QStringLiteral("sceneMembershipExplicit")).toBool()
+                : false;
             for (const QJsonValue &sceneNameValue : sourceSceneNamesValue.toArray()) {
                 if (!sceneNameValue.isString() || sceneNameValue.toString().isEmpty()) {
                     setError(errorMessage, QStringLiteral("invalid collection scene name"));

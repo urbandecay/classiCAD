@@ -1887,6 +1887,24 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.duplicateCollection(collectionId, parentId, true);
             });
         }
+        if (scenesDisplayMode_ && callbacks_.linkCollectionToActiveScene) {
+            QAction *linkToScene = menu.addAction(
+                QStringLiteral("Link to Scene"));
+            connect(linkToScene, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.linkCollectionToActiveScene(collectionId);
+            });
+        }
+        if (callbacks_.unlinkCollection) {
+            const CollectionId parentId = CollectionId::fromValue(
+                item->data(nameColumn, itemParentCollectionRole)
+                    .toULongLong());
+            QAction *unlink = menu.addAction(QStringLiteral("Unlink"));
+            connect(unlink, &QAction::triggered, this,
+                    [this, collectionId, parentId]() {
+                callbacks_.unlinkCollection(collectionId, parentId);
+            });
+        }
         if (callbacks_.renameCollection) {
             QAction *rename = menu.addAction(QStringLiteral("Rename"));
             connect(rename, &QAction::triggered, this, [this, item, collectionId]() {
@@ -2912,9 +2930,12 @@ void CollectionsPanel::refresh()
         QVector<CollectionPanelEntry> entries;
         QSet<quint64> includedIds;
         for (const CollectionPanelEntry &entry : allEntries) {
-            const bool belongs = entry.collection.sourceSceneNames.isEmpty()
-                ? scene.key == activeSceneKey
-                : entry.collection.sourceSceneNames.contains(scene.displayName);
+            const bool belongs = entry.collection.sceneMembershipExplicit
+                ? entry.collection.sourceSceneNames.contains(scene.displayName)
+                : (entry.collection.sourceSceneNames.isEmpty()
+                       ? scene.key == activeSceneKey
+                       : entry.collection.sourceSceneNames.contains(
+                             scene.displayName));
             if (belongs) includedIds.insert(entry.collection.id.value());
         }
         for (const CollectionPanelEntry &entry : allEntries) {

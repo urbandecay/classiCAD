@@ -616,6 +616,9 @@ CollectionId Document::insertCollection(DocumentCollection value)
                     if (!existing.sourceSceneNames.contains(scene)) existing.sourceSceneNames.append(scene);
                 if (!value.sourceSceneName.isEmpty() && !existing.sourceSceneNames.contains(value.sourceSceneName))
                     existing.sourceSceneNames.append(value.sourceSceneName);
+                existing.sceneMembershipExplicit =
+                    existing.sceneMembershipExplicit ||
+                    value.sceneMembershipExplicit;
                 return existing.id;
             }
         }
@@ -683,6 +686,7 @@ CollectionId Document::insertCollection(DocumentCollection value)
         value.sourceId = QStringLiteral("classiCAD-local-collection:%1")
                             .arg(QUuid::createUuid().toString(
                                 QUuid::WithoutBraces));
+        value.sceneMembershipExplicit = true;
     }
     if (value.sourceSceneNames.isEmpty() &&
         !settings_.activeViewLayerKey.isEmpty()) {
@@ -1207,7 +1211,26 @@ bool Document::setCollectionViewLayerState(CollectionId collectionId,
         applyChanges(changes);
         return true;
     }
-    return false;
+    QJsonArray storedPath;
+    for (const QString &part : sourcePath) storedPath.append(part);
+    QJsonObject state{
+        {QStringLiteral("view_layer_key"), viewLayerKey},
+        {QStringLiteral("path"), storedPath},
+        {QStringLiteral("exclude"), false},
+        {QStringLiteral("hide_viewport"), false},
+        {QStringLiteral("hide_render"), false},
+        {QStringLiteral("holdout"), false},
+        {QStringLiteral("indirect_only"), false}};
+    state.insert(stateKey, value);
+    states.append(state);
+    candidate->viewLayerStates = states;
+    DocumentChangeSet changes;
+    changes.addCollection(collectionId);
+    changes.collectionsChanged = true;
+    changes.visibilityChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
 }
 
 bool Document::setObjectDisplayName(ObjectId objectId, const QString &name)

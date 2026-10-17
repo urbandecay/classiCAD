@@ -18,6 +18,10 @@ struct DocumentCollection {
     QString sourceId;
     QString sourceSceneName;
     QStringList sourceSceneNames;
+    // True means sourceSceneNames is an exact scene-membership list, including
+    // an empty list for an unlinked/orphan collection. False keeps the legacy
+    // active-scene fallback for older native documents.
+    bool sceneMembershipExplicit = false;
     QString sourceSceneLibraryPath;
     QString libraryPath;
     QVector<CollectionId> parentIds;

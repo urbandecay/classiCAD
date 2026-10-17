@@ -4580,6 +4580,8 @@ bool importBlenderScene(const QString &path,
         collection.hideSelect = record.value(QStringLiteral("hide_select")).toBool();
         collection.viewLayerStates = record.value(QStringLiteral("view_layer_states")).toArray();
         const QJsonArray sourceSceneNames = record.value(QStringLiteral("source_scene_names")).toArray();
+        collection.sceneMembershipExplicit =
+            record.value(QStringLiteral("source_scene_names")).isArray();
         if (!sourceSceneNames.isEmpty()) {
             for (const QJsonValue &sceneNameValue : sourceSceneNames) {
                 collection.sourceSceneNames.append(sceneNameValue.toString());

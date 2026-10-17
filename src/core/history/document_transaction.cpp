@@ -359,6 +359,111 @@ bool DocumentTransaction::setCollectionViewLayerState(
     return true;
 }
 
+bool DocumentTransaction::ensureCollectionViewLayerState(
+    CollectionId collectionId,
+    const QString &viewLayerKey,
+    const QStringList &sourcePath)
+{
+    DocumentCollection *collection =
+        document_.mutableCollection(collectionId);
+    if (collection == nullptr || viewLayerKey.isEmpty() || sourcePath.isEmpty() ||
+        collection->sourceId.isEmpty() ||
+        sourcePath.back() != collection->sourceId) {
+        return false;
+    }
+    for (const QJsonValue &value : collection->viewLayerStates) {
+        const QJsonObject state = value.toObject();
+        if (state.value(QStringLiteral("view_layer_key")).toString() !=
+            viewLayerKey) {
+            continue;
+        }
+        const QJsonArray storedPath = state.value(
+            QStringLiteral("path")).toArray();
+        if (storedPath.size() != sourcePath.size()) continue;
+        bool matches = true;
+        for (int index = 0; index < sourcePath.size(); ++index) {
+            if (!storedPath[index].isString() ||
+                storedPath[index].toString() != sourcePath[index]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return true;
+    }
+    QJsonArray storedPath;
+    for (const QString &part : sourcePath) storedPath.append(part);
+    collection->viewLayerStates.append(QJsonObject{
+        {QStringLiteral("view_layer_key"), viewLayerKey},
+        {QStringLiteral("path"), storedPath},
+        {QStringLiteral("exclude"), false},
+        {QStringLiteral("hide_viewport"), false},
+        {QStringLiteral("hide_render"), false},
+        {QStringLiteral("holdout"), false},
+        {QStringLiteral("indirect_only"), false}});
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setCollectionSceneNames(
+    CollectionId collectionId, const QStringList &sceneNames)
+{
+    DocumentCollection *collection =
+        document_.mutableCollection(collectionId);
+    if (collection == nullptr) return false;
+    QStringList uniqueNames;
+    for (const QString &name : sceneNames) {
+        const QString trimmed = name.trimmed();
+        if (!trimmed.isEmpty() && !uniqueNames.contains(trimmed)) {
+            uniqueNames.append(trimmed);
+        }
+    }
+    if (collection->sceneMembershipExplicit &&
+        collection->sourceSceneNames == uniqueNames) {
+        return true;
+    }
+    collection->sourceSceneNames = uniqueNames;
+    collection->sourceSceneName = uniqueNames.isEmpty()
+        ? QString{} : uniqueNames.first();
+    collection->sceneMembershipExplicit = true;
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::removeCollectionViewLayerStates(
+    CollectionId collectionId, const QStringList &viewLayerKeys)
+{
+    DocumentCollection *collection =
+        document_.mutableCollection(collectionId);
+    if (collection == nullptr) return false;
+    if (viewLayerKeys.isEmpty() || collection->viewLayerStates.isEmpty()) {
+        return true;
+    }
+    QJsonArray retained;
+    bool removed = false;
+    for (const QJsonValue &value : collection->viewLayerStates) {
+        const QString key = value.toObject().value(
+            QStringLiteral("view_layer_key")).toString();
+        if (viewLayerKeys.contains(key)) {
+            removed = true;
+        } else {
+            retained.append(value);
+        }
+    }
+    if (!removed) return true;
+    collection->viewLayerStates = retained;
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectDisplayName(ObjectId objectId,
                                                 const QString &name)
 {

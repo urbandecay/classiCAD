@@ -56,6 +56,13 @@ public:
                                      const QStringList &sourcePath,
                                      const QString &stateKey,
                                      bool value);
+    bool ensureCollectionViewLayerState(CollectionId collectionId,
+                                        const QString &viewLayerKey,
+                                        const QStringList &sourcePath);
+    bool setCollectionSceneNames(CollectionId collectionId,
+                                 const QStringList &sceneNames);
+    bool removeCollectionViewLayerStates(
+        CollectionId collectionId, const QStringList &viewLayerKeys);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
     bool renameCollection(CollectionId collectionId, const QString &name);
     bool setCollectionParents(CollectionId collectionId,

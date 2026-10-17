@@ -407,10 +407,20 @@ private:
     QToolButton *removeDataApiDriverButton_ = nullptr;
     QComboBox *libraryOverrideViewCombo_ = nullptr;
     QComboBox *idTypeCombo_ = nullptr;
-    QCheckBox *showSystemOverridesCheck_ = nullptr;
     QComboBox *sceneCombo_ = nullptr;
     QComboBox *viewLayerCombo_ = nullptr;
+    QAction *restrictionToggleMenuAction_ = nullptr;
+    QAction *restrictionToggleSeparatorAction_ = nullptr;
+    QAction *sortAlphabeticallyAction_ = nullptr;
+    QAction *syncSelectionAction_ = nullptr;
+    QAction *showModeColumnAction_ = nullptr;
+    QAction *systemOverridesAction_ = nullptr;
     QAction *scrollToActiveAction_ = nullptr;
+    QAction *objectTypeFilterSection_ = nullptr;
+    QAction *objectChildrenAction_ = nullptr;
+    QVector<QAction *> viewLayerOnlyRestrictionActions_;
+    QVector<QAction *> searchFilterActions_;
+    QVector<QAction *> viewLayerFilterActions_;
     QTreeWidgetItem *rangeAnchorItem_ = nullptr;
     QHash<quint64, QVector<QTreeWidgetItem *>> objectRows_;
     QHash<quint64, OutlinerObjectEntry> objectEntries_;
@@ -423,6 +433,7 @@ private:
     QString activeFilterText_;
     QString idTypeFilter_;
     QHash<QString, bool> objectTypeFilters_;
+    QHash<QString, QAction *> objectTypeFilterActions_;
     QString currentStateScopeKey_;
     QString currentTreeStateContextKey_;
     OutlinerObjectStateFilter objectStateFilter_ =

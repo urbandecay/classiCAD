@@ -2503,12 +2503,33 @@ def outliner_data_api_tree():
         pending_index += 1
         populate_struct(node, value, depth, ancestry)
 
+    def has_data_collection(name):
+        try:
+            return len(getattr(bpy.data, name)) > 0
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return False
+
+    others_collections = (
+        "curves", "metaballs", "hair_curves", "pointclouds", "volumes",
+        "lightprobes", "lattices", "fonts", "speakers",
+    )
+
     return {
         "root": root,
         "truncated": truncated[0],
         "driver_paths": driver_paths,
         "driver_paths_truncated": (
             driver_paths_truncated[0] or truncated[0]),
+        "object_type_filter_availability": {
+            "MESH": has_data_collection("meshes"),
+            "ARMATURE": has_data_collection("armatures"),
+            "LIGHT": has_data_collection("lights"),
+            "CAMERA": has_data_collection("cameras"),
+            "GREASE_PENCIL": has_data_collection("grease_pencils"),
+            "EMPTY": True,
+            "OTHERS": any(has_data_collection(name)
+                          for name in others_collections),
+        },
     }
 
 

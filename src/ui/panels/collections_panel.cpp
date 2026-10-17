@@ -131,6 +131,32 @@ enum class RestrictionGlyph {
     EditMode,
 };
 
+QString outlinerObjectTypeFilterKey(QString blenderType)
+{
+    blenderType = blenderType.trimmed().toUpper();
+    if (blenderType == QLatin1String("MESH")) {
+        return QStringLiteral("MESH");
+    }
+    if (blenderType == QLatin1String("ARMATURE")) {
+        return QStringLiteral("ARMATURE");
+    }
+    if (blenderType == QLatin1String("LIGHT")) {
+        return QStringLiteral("LIGHT");
+    }
+    if (blenderType == QLatin1String("CAMERA")) {
+        return QStringLiteral("CAMERA");
+    }
+    if (blenderType == QLatin1String("EMPTY")) {
+        return QStringLiteral("EMPTY");
+    }
+    if (blenderType == QLatin1String("GREASE_PENCIL") ||
+        blenderType == QLatin1String("GREASEPENCIL") ||
+        blenderType == QLatin1String("GPENCIL")) {
+        return QStringLiteral("GREASE_PENCIL");
+    }
+    return QStringLiteral("OTHERS");
+}
+
 QIcon paintedIcon(const std::function<void(QPainter &)> &paint)
 {
     QPixmap pixmap(16, 16);
@@ -932,11 +958,6 @@ void CollectionsPanel::createLayout()
     libraryOverrideViewCombo_->setToolTip(QStringLiteral(
         "Choose the Blender Library Overrides view."));
     filterRow->addWidget(libraryOverrideViewCombo_);
-    showSystemOverridesCheck_ = new QCheckBox(
-        QStringLiteral("System Overrides"), this);
-    showSystemOverridesCheck_->setToolTip(QStringLiteral(
-        "Show Blender's system-generated library override properties."));
-    filterRow->addWidget(showSystemOverridesCheck_);
     idTypeCombo_ = new QComboBox(this);
     idTypeCombo_->setToolTip(QStringLiteral(
         "Filter Blender data-block rows by ID type."));
@@ -1093,7 +1114,7 @@ void CollectionsPanel::createLayout()
     scrollToActive_ = outlinerSettings.value(
         QStringLiteral("outliner/scrollToActive"), true).toBool();
     sortAlphabetically_ = outlinerSettings.value(
-        QStringLiteral("outliner/sortAlphabetically"), false).toBool();
+        QStringLiteral("outliner/sortAlphabetically"), true).toBool();
     syncSelectionEnabled_ = outlinerSettings.value(
         QStringLiteral("outliner/syncSelection"), true).toBool();
     showModeColumn_ = outlinerSettings.value(
@@ -1141,7 +1162,6 @@ void CollectionsPanel::createLayout()
                         : (scenesDisplayMode_ ? 1 : 0))))));
     libraryOverrideViewCombo_->setCurrentIndex(
         overrideHierarchiesView_ ? 1 : 0);
-    showSystemOverridesCheck_->setChecked(showSystemOverrides_);
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -1159,19 +1179,25 @@ void CollectionsPanel::createLayout()
         {QStringLiteral("CAMERA"), QStringLiteral("Cameras")},
         {QStringLiteral("GREASE_PENCIL"), QStringLiteral("Grease Pencil")},
         {QStringLiteral("EMPTY"), QStringLiteral("Empties")},
-        {QStringLiteral("OTHER"), QStringLiteral("Others")}};
+        {QStringLiteral("OTHERS"), QStringLiteral("Others")}};
     for (const auto &type : objectTypes) {
+        const QString oldOthersKey = QStringLiteral(
+            "outliner/filterObjectType/OTHER");
+        const QVariant defaultValue = type.first == QLatin1String("OTHERS")
+            ? outlinerSettings.value(oldOthersKey, true)
+            : QVariant(true);
         objectTypeFilters_.insert(
             type.first,
             outlinerSettings.value(
                 QStringLiteral("outliner/filterObjectType/%1").arg(type.first),
-                true).toBool());
+                defaultValue).toBool());
     }
 
     auto *filterMenu = new QMenu(filterButton_);
     filterButton_->setMenu(filterMenu);
     QMenu *restrictionMenu = filterMenu->addMenu(
         QStringLiteral("Restriction Toggles"));
+    restrictionToggleMenuAction_ = restrictionMenu->menuAction();
     const auto addRestrictionMenuAction =
         [this, restrictionMenu](
             const QString &label, const QString &settingsKey, int column,
@@ -1216,9 +1242,10 @@ void CollectionsPanel::createLayout()
             action->setEnabled(hasActiveViewLayer);
         }
     });
-    addRestrictionMenuAction(QStringLiteral("Enable / Exclude"),
+    viewLayerOnlyRestrictionActions_.append(addRestrictionMenuAction(
+        QStringLiteral("Enable / Exclude"),
         QStringLiteral("outliner/showEnableColumn"), excludeColumn,
-        RestrictionGlyph::Enable, showEnableColumn_, true);
+        RestrictionGlyph::Enable, showEnableColumn_, true));
     addRestrictionMenuAction(QStringLiteral("Select"),
         QStringLiteral("outliner/showSelectColumn"), selectColumn,
         RestrictionGlyph::Select, showSelectColumn_, false);
@@ -1231,20 +1258,22 @@ void CollectionsPanel::createLayout()
     addRestrictionMenuAction(QStringLiteral("Render"),
         QStringLiteral("outliner/showRenderColumn"), renderColumn,
         RestrictionGlyph::Render, showRenderColumn_, false);
-    addRestrictionMenuAction(QStringLiteral("Holdout"),
+    viewLayerOnlyRestrictionActions_.append(addRestrictionMenuAction(
+        QStringLiteral("Holdout"),
         QStringLiteral("outliner/showHoldoutColumn"), holdoutColumn,
-        RestrictionGlyph::Holdout, showHoldoutColumn_, true);
-    addRestrictionMenuAction(QStringLiteral("Indirect Only (Cycles)"),
+        RestrictionGlyph::Holdout, showHoldoutColumn_, true));
+    viewLayerOnlyRestrictionActions_.append(addRestrictionMenuAction(
+        QStringLiteral("Indirect Only (Cycles)"),
         QStringLiteral("outliner/showIndirectOnlyColumn"), indirectOnlyColumn,
-        RestrictionGlyph::IndirectOnly, showIndirectOnlyColumn_, true);
+        RestrictionGlyph::IndirectOnly, showIndirectOnlyColumn_, true));
 
-    filterMenu->addSeparator();
-    QAction *sortAlphabeticallyAction = filterMenu->addAction(
+    restrictionToggleSeparatorAction_ = filterMenu->addSeparator();
+    sortAlphabeticallyAction_ = filterMenu->addAction(
         QStringLiteral("Sort Alphabetically"));
-    sortAlphabeticallyAction->setCheckable(true);
-    sortAlphabeticallyAction->setChecked(sortAlphabetically_);
-    sortAlphabeticallyAction->setEnabled(!dataApiDisplayMode_);
-    connect(sortAlphabeticallyAction, &QAction::toggled, this,
+    sortAlphabeticallyAction_->setCheckable(true);
+    sortAlphabeticallyAction_->setChecked(sortAlphabetically_);
+    sortAlphabeticallyAction_->setEnabled(!dataApiDisplayMode_);
+    connect(sortAlphabeticallyAction_, &QAction::toggled, this,
             [this](bool enabled) {
         sortAlphabetically_ = enabled;
         QSettings settings;
@@ -1252,23 +1281,23 @@ void CollectionsPanel::createLayout()
                           enabled);
         refresh();
     });
-    QAction *syncSelectionAction = filterMenu->addAction(
+    syncSelectionAction_ = filterMenu->addAction(
         QStringLiteral("Sync Selection"));
-    syncSelectionAction->setCheckable(true);
-    syncSelectionAction->setChecked(syncSelectionEnabled_);
-    syncSelectionAction->setEnabled(!libraryOverridesDisplayMode_);
-    QAction *showModeColumnAction = filterMenu->addAction(
+    syncSelectionAction_->setCheckable(true);
+    syncSelectionAction_->setChecked(syncSelectionEnabled_);
+    syncSelectionAction_->setEnabled(!libraryOverridesDisplayMode_);
+    showModeColumnAction_ = filterMenu->addAction(
         QStringLiteral("Show Mode Column"));
-    showModeColumnAction->setCheckable(true);
-    showModeColumnAction->setChecked(showModeColumn_);
-    showModeColumnAction->setEnabled(!libraryOverridesDisplayMode_);
-    connect(showModeColumnAction, &QAction::toggled, this, [this](bool show) {
+    showModeColumnAction_->setCheckable(true);
+    showModeColumnAction_->setChecked(showModeColumn_);
+    showModeColumnAction_->setEnabled(!libraryOverridesDisplayMode_);
+    connect(showModeColumnAction_, &QAction::toggled, this, [this](bool show) {
         showModeColumn_ = show;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/showModeColumn"), show);
         tree_->setColumnHidden(modeColumn, !show);
     });
-    connect(syncSelectionAction, &QAction::toggled, this,
+    connect(syncSelectionAction_, &QAction::toggled, this,
             [this](bool enabled) {
         syncSelectionEnabled_ = enabled;
         QSettings settings;
@@ -1326,8 +1355,10 @@ void CollectionsPanel::createLayout()
         syncSelection();
     });
 
+    viewLayerFilterActions_.append(filterMenu->addSeparator());
     QAction *allViewLayersAction = filterMenu->addAction(
         QStringLiteral("All View Layers"));
+    viewLayerFilterActions_.append(allViewLayersAction);
     allViewLayersAction->setCheckable(true);
     allViewLayersAction->setChecked(showAllViewLayers_);
     allViewLayersAction->setEnabled(
@@ -1342,10 +1373,10 @@ void CollectionsPanel::createLayout()
                           visible);
         refresh();
     });
-    filterMenu->addSection(QStringLiteral("Filter"));
+    viewLayerFilterActions_.append(
+        filterMenu->addSection(QStringLiteral("Filter")));
     connect(displayModeCombo_, &QComboBox::activated, this,
-            [this, allViewLayersAction, sortAlphabeticallyAction,
-             syncSelectionAction, showModeColumnAction](int index) {
+            [this, allViewLayersAction](int index) {
         scenesDisplayMode_ = index == 1;
         sequencerDisplayMode_ = index == 2;
         dataApiDisplayMode_ = index == 3;
@@ -1373,9 +1404,9 @@ void CollectionsPanel::createLayout()
             !scenesDisplayMode_ && !librariesDisplayMode_ &&
             !orphanDataDisplayMode_ && !sequencerDisplayMode_ &&
             !dataApiDisplayMode_ && !libraryOverridesDisplayMode_);
-        sortAlphabeticallyAction->setEnabled(!dataApiDisplayMode_);
-        syncSelectionAction->setEnabled(!libraryOverridesDisplayMode_);
-        showModeColumnAction->setEnabled(!libraryOverridesDisplayMode_);
+        sortAlphabeticallyAction_->setEnabled(!dataApiDisplayMode_);
+        syncSelectionAction_->setEnabled(!libraryOverridesDisplayMode_);
+        showModeColumnAction_->setEnabled(!libraryOverridesDisplayMode_);
         refresh();
     });
     connect(libraryOverrideViewCombo_, &QComboBox::activated, this,
@@ -1388,7 +1419,13 @@ void CollectionsPanel::createLayout()
                               : QStringLiteral("PROPERTIES"));
         refresh();
     });
-    connect(showSystemOverridesCheck_, &QCheckBox::toggled, this,
+    systemOverridesAction_ = filterMenu->addAction(
+        QStringLiteral("System Overrides"));
+    systemOverridesAction_->setCheckable(true);
+    systemOverridesAction_->setChecked(showSystemOverrides_);
+    systemOverridesAction_->setToolTip(QStringLiteral(
+        "Show Blender's system-generated library override properties."));
+    connect(systemOverridesAction_, &QAction::toggled, this,
             [this](bool visible) {
         showSystemOverrides_ = visible;
         QSettings settings;
@@ -1405,6 +1442,7 @@ void CollectionsPanel::createLayout()
     });
     QAction *collectionsAction = filterMenu->addAction(
         QStringLiteral("Collections"));
+    viewLayerFilterActions_.append(collectionsAction);
     collectionsAction->setCheckable(true);
     collectionsAction->setChecked(showCollections_);
     connect(collectionsAction, &QAction::toggled, this, [this](bool visible) {
@@ -1414,10 +1452,12 @@ void CollectionsPanel::createLayout()
         refresh();
     });
     QAction *objectsAction = filterMenu->addAction(QStringLiteral("Objects"));
+    viewLayerFilterActions_.append(objectsAction);
     objectsAction->setCheckable(true);
     objectsAction->setChecked(showObjects_);
     QAction *contentsAction = filterMenu->addAction(
         QStringLiteral("Object Contents"));
+    viewLayerFilterActions_.append(contentsAction);
     contentsAction->setCheckable(true);
     contentsAction->setChecked(showObjectContents_);
     contentsAction->setEnabled(showObjects_);
@@ -1432,22 +1472,30 @@ void CollectionsPanel::createLayout()
             [this, contentsAction](bool visible) {
         showObjects_ = visible;
         contentsAction->setEnabled(visible);
+        if (objectChildrenAction_ != nullptr) {
+            objectChildrenAction_->setEnabled(visible);
+        }
+        for (QAction *action : objectTypeFilterActions_) {
+            if (action != nullptr) action->setEnabled(visible);
+        }
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjects"), visible);
         refresh();
     });
-    QAction *childrenAction = filterMenu->addAction(
+    objectChildrenAction_ = filterMenu->addAction(
         QStringLiteral("Object Children"));
-    childrenAction->setCheckable(true);
-    childrenAction->setChecked(showObjectChildren_);
-    connect(childrenAction, &QAction::toggled, this, [this](bool visible) {
+    viewLayerFilterActions_.append(objectChildrenAction_);
+    objectChildrenAction_->setCheckable(true);
+    objectChildrenAction_->setChecked(showObjectChildren_);
+    objectChildrenAction_->setEnabled(showObjects_);
+    connect(objectChildrenAction_, &QAction::toggled, this, [this](bool visible) {
         showObjectChildren_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjectChildren"),
                           visible);
         refresh();
     });
-    filterMenu->addSeparator();
+    viewLayerFilterActions_.append(filterMenu->addSeparator());
     scrollToActiveAction_ = filterMenu->addAction(
         QStringLiteral("Scroll to Active"));
     scrollToActiveAction_->setCheckable(true);
@@ -1460,8 +1508,9 @@ void CollectionsPanel::createLayout()
         settings.setValue(QStringLiteral("outliner/scrollToActive"), enabled);
         syncSelection();
     });
-    filterMenu->addSeparator();
-    filterMenu->addSection(QStringLiteral("Object State"));
+    viewLayerFilterActions_.append(filterMenu->addSeparator());
+    viewLayerFilterActions_.append(
+        filterMenu->addSection(QStringLiteral("Object State")));
     auto *stateGroup = new QActionGroup(filterMenu);
     stateGroup->setExclusive(true);
     const QVector<QPair<OutlinerObjectStateFilter, QString>> states{
@@ -1477,6 +1526,7 @@ void CollectionsPanel::createLayout()
         action->setData(static_cast<int>(state.first));
         action->setChecked(objectStateFilter_ == state.first);
         stateGroup->addAction(action);
+        viewLayerFilterActions_.append(action);
     }
     connect(stateGroup, &QActionGroup::triggered, this,
             [this](QAction *action) {
@@ -1489,6 +1539,7 @@ void CollectionsPanel::createLayout()
     });
     QAction *invertStateAction = filterMenu->addAction(
         QStringLiteral("Invert State Filter"));
+    viewLayerFilterActions_.append(invertStateAction);
     invertStateAction->setCheckable(true);
     invertStateAction->setChecked(invertObjectStateFilter_);
     invertStateAction->setEnabled(
@@ -1500,12 +1551,15 @@ void CollectionsPanel::createLayout()
                           invert);
         applyNameFilter(filterEdit_->text());
     });
-    filterMenu->addSeparator();
-    filterMenu->addSection(QStringLiteral("Object Types"));
+    viewLayerFilterActions_.append(filterMenu->addSeparator());
+    objectTypeFilterSection_ = filterMenu->addSection(
+        QStringLiteral("Object Types"));
+    viewLayerFilterActions_.append(objectTypeFilterSection_);
     for (const auto &type : objectTypes) {
         QAction *action = filterMenu->addAction(type.second);
         action->setCheckable(true);
         action->setChecked(objectTypeFilters_.value(type.first, true));
+        objectTypeFilterActions_.insert(type.first, action);
         connect(action, &QAction::toggled, this,
                 [this, key = type.first](bool enabled) {
             objectTypeFilters_.insert(key, enabled);
@@ -1516,10 +1570,12 @@ void CollectionsPanel::createLayout()
             applyNameFilter(filterEdit_->text());
         });
     }
-    filterMenu->addSeparator();
-    filterMenu->addSection(QStringLiteral("Search"));
+    viewLayerFilterActions_.append(filterMenu->addSeparator());
+    searchFilterActions_.append(
+        filterMenu->addSection(QStringLiteral("Search")));
     QAction *exactMatchAction = filterMenu->addAction(
         QStringLiteral("Exact Match"));
+    searchFilterActions_.append(exactMatchAction);
     exactMatchAction->setCheckable(true);
     exactMatchAction->setChecked(exactNameMatch_);
     connect(exactMatchAction, &QAction::toggled, this,
@@ -1531,6 +1587,7 @@ void CollectionsPanel::createLayout()
     });
     QAction *caseSensitiveAction = filterMenu->addAction(
         QStringLiteral("Case Sensitive"));
+    searchFilterActions_.append(caseSensitiveAction);
     caseSensitiveAction->setCheckable(true);
     caseSensitiveAction->setChecked(caseSensitiveNameFilter_);
     connect(caseSensitiveAction, &QAction::toggled, this,
@@ -1799,6 +1856,9 @@ void CollectionsPanel::createLayout()
 
 void CollectionsPanel::applyNameFilter(const QString &text)
 {
+    const bool viewLayerMode = !scenesDisplayMode_ && !sequencerDisplayMode_ &&
+        !dataApiDisplayMode_ && !librariesDisplayMode_ &&
+        !orphanDataDisplayMode_ && !libraryOverridesDisplayMode_;
     if (activeFilterText_.isEmpty() && !text.isEmpty()) {
         expandedBeforeFilter_.clear();
         QVector<QTreeWidgetItem *> pending;
@@ -1856,7 +1916,7 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
     const auto objectMatchesFilter = [this, &selectedValues, activeId,
-                                      activeViewLayerKey](
+                                      activeViewLayerKey, viewLayerMode](
                                          const QTreeWidgetItem *item) {
         if (item == nullptr) return false;
         const quint64 objectValue = item->data(
@@ -1874,22 +1934,9 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         } else if (!entry.id.isValid()) {
             return false;
         }
-        const QString sourceType = entry.blenderType.toUpper();
-        QString typeKey = QStringLiteral("OTHER");
-        if (sourceType == QLatin1String("MESH")) {
-            typeKey = QStringLiteral("MESH");
-        } else if (sourceType == QLatin1String("ARMATURE")) {
-            typeKey = QStringLiteral("ARMATURE");
-        } else if (sourceType == QLatin1String("LIGHT")) {
-            typeKey = QStringLiteral("LIGHT");
-        } else if (sourceType == QLatin1String("CAMERA")) {
-            typeKey = QStringLiteral("CAMERA");
-        } else if (sourceType == QLatin1String("GREASE_PENCIL") ||
-                   sourceType == QLatin1String("GPENCIL")) {
-            typeKey = QStringLiteral("GREASE_PENCIL");
-        } else if (sourceType == QLatin1String("EMPTY")) {
-            typeKey = QStringLiteral("EMPTY");
-        }
+        if (!viewLayerMode) return true;
+        const QString typeKey =
+            outlinerObjectTypeFilterKey(entry.blenderType);
         if (!objectTypeFilters_.value(typeKey, true)) return false;
 
         const QString rowViewLayerKey = item->data(
@@ -1989,10 +2036,11 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         bool eligible = true;
         const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
             item->data(nameColumn, itemKindRole).toInt());
-        if (kind == OutlinerRowKind::Collection) {
+        if (viewLayerMode && kind == OutlinerRowKind::Collection) {
             eligible = showCollections_;
-        } else if (kind == OutlinerRowKind::Object ||
-                   kind == OutlinerRowKind::SourceObject) {
+        } else if (viewLayerMode &&
+                   (kind == OutlinerRowKind::Object ||
+                    kind == OutlinerRowKind::SourceObject)) {
             eligible = showObjects_ && objectMatchesFilter(item);
         }
         const bool visible = (eligible && nameMatches) || childMatches;
@@ -3976,7 +4024,7 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
         hierarchyEntries_.insert(entry.hierarchyIdentity, entry);
         hierarchyRows_[entry.hierarchyIdentity].append(item);
     }
-    if (showObjectContents_ && includeContents) {
+    if ((showObjectContents_ || scenesDisplayMode_) && includeContents) {
         const auto appendContentRow =
             [&objectPath, &activeViewLayerKey, &entry](
                 QTreeWidgetItem *contentParent,
@@ -4608,6 +4656,40 @@ void CollectionsPanel::refresh()
                                           overrideHierarchiesView_;
     const bool overridePropertiesMode = libraryOverridesMode &&
                                          !overrideHierarchiesView_;
+    const bool viewLayerMode = !scenesDisplayMode_ && !sequencerMode &&
+        !dataApiMode && !librariesMode && !orphanDataMode &&
+        !libraryOverridesMode;
+    for (QAction *action : viewLayerFilterActions_) {
+        if (action != nullptr) action->setVisible(viewLayerMode);
+    }
+    const QJsonObject objectTypeAvailability = dataApi.value(
+        QStringLiteral("object_type_filter_availability")).toObject();
+    QSet<QString> availableObjectTypeFilters;
+    if (!objectTypeAvailability.isEmpty()) {
+        for (auto it = objectTypeAvailability.constBegin();
+             it != objectTypeAvailability.constEnd(); ++it) {
+            if (it.value().toBool()) availableObjectTypeFilters.insert(it.key());
+        }
+    } else {
+        for (const OutlinerObjectEntry &object : allObjects) {
+            availableObjectTypeFilters.insert(
+                outlinerObjectTypeFilterKey(object.blenderType));
+        }
+    }
+    // Blender always provides the Empty filter, even when the file has no
+    // Empty objects or Empty data blocks.
+    availableObjectTypeFilters.insert(QStringLiteral("EMPTY"));
+    for (auto action = objectTypeFilterActions_.cbegin();
+         action != objectTypeFilterActions_.cend(); ++action) {
+        if (action.value() == nullptr) continue;
+        action.value()->setVisible(
+            viewLayerMode &&
+            availableObjectTypeFilters.contains(action.key()));
+        action.value()->setEnabled(showObjects_ && viewLayerMode);
+    }
+    if (objectTypeFilterSection_ != nullptr) {
+        objectTypeFilterSection_->setVisible(viewLayerMode);
+    }
     updateDataApiAnimationControls();
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
     static_cast<OutlinerTreeWidget *>(tree_)->setAllowParentingWithoutModifier(
@@ -4636,12 +4718,13 @@ void CollectionsPanel::refresh()
     }
     libraryOverrideViewCombo_->setVisible(libraryOverridesMode);
     libraryOverrideViewCombo_->setEnabled(libraryOverridesMode);
-    showSystemOverridesCheck_->setVisible(
-        overridePropertiesMode && libraryOverrides.value(
-            QStringLiteral("has_libraries")).toBool());
-    showSystemOverridesCheck_->setEnabled(
-        overridePropertiesMode && libraryOverrides.value(
-            QStringLiteral("has_libraries")).toBool());
+    const bool hasOverrideLibraries = libraryOverrides.value(
+        QStringLiteral("has_libraries")).toBool();
+    systemOverridesAction_->setVisible(
+        overridePropertiesMode && hasOverrideLibraries);
+    systemOverridesAction_->setEnabled(
+        overridePropertiesMode && hasOverrideLibraries);
+    systemOverridesAction_->setChecked(showSystemOverrides_);
     filterEdit_->setVisible(!overrideHierarchiesMode);
     filterEdit_->setEnabled(!overrideHierarchiesMode);
     if (overrideHierarchiesMode && !filterEdit_->text().isEmpty()) {
@@ -4650,9 +4733,41 @@ void CollectionsPanel::refresh()
         activeFilterText_.clear();
         expandedBeforeFilter_.clear();
     }
-    filterButton_->setVisible(!librariesMode && !orphanDataMode &&
-                              !sequencerMode && !dataApiMode &&
-                              !libraryOverridesMode);
+    filterButton_->setVisible(viewLayerMode || scenesDisplayMode_ ||
+                              libraryOverridesMode);
+    if (restrictionToggleMenuAction_ != nullptr) {
+        restrictionToggleMenuAction_->setVisible(
+            viewLayerMode || scenesDisplayMode_);
+    }
+    if (restrictionToggleSeparatorAction_ != nullptr) {
+        restrictionToggleSeparatorAction_->setVisible(
+            viewLayerMode || scenesDisplayMode_);
+    }
+    for (QAction *action : viewLayerOnlyRestrictionActions_) {
+        if (action != nullptr) action->setVisible(viewLayerMode);
+    }
+    for (QAction *action : searchFilterActions_) {
+        if (action != nullptr) {
+            action->setVisible(!overrideHierarchiesMode);
+        }
+    }
+    if (sortAlphabeticallyAction_ != nullptr) {
+        sortAlphabeticallyAction_->setVisible(!dataApiMode);
+        sortAlphabeticallyAction_->setEnabled(!dataApiMode);
+    }
+    if (syncSelectionAction_ != nullptr) {
+        syncSelectionAction_->setVisible(!libraryOverridesMode);
+        syncSelectionAction_->setEnabled(!libraryOverridesMode);
+    }
+    if (showModeColumnAction_ != nullptr) {
+        showModeColumnAction_->setVisible(!libraryOverridesMode);
+        showModeColumnAction_->setEnabled(!libraryOverridesMode);
+    }
+    if (scrollToActiveAction_ != nullptr) {
+        scrollToActiveAction_->setVisible(!libraryOverridesMode);
+        scrollToActiveAction_->setEnabled(
+            syncSelectionEnabled_ && !libraryOverridesMode);
+    }
     {
         const QSignalBlocker blocker(idTypeCombo_);
         idTypeCombo_->clear();
@@ -6237,8 +6352,8 @@ void CollectionsPanel::refresh()
         for (const OutlinerSceneEntry &scene : scenes) {
             const QVector<CollectionPanelEntry> sceneEntries =
                 entriesForScene(scene);
-            const QVector<OutlinerObjectEntry> sceneObjects = showObjects_
-                ? objectsForScene(scene) : QVector<OutlinerObjectEntry>{};
+            const QVector<OutlinerObjectEntry> sceneObjects =
+                objectsForScene(scene);
             const QString rootPath = QStringLiteral("scenes/%1").arg(scene.key);
             auto *sceneRoot = new QTreeWidgetItem(tree_);
             sceneRoot->setText(nameColumn, scene.displayName);
@@ -6301,39 +6416,35 @@ void CollectionsPanel::refresh()
                     QStringLiteral("Blender World animation data"));
             }
 
-            if (showCollections_) {
-                auto *collectionsGroup = new QTreeWidgetItem(sceneRoot);
-                collectionsGroup->setText(nameColumn,
-                                          QStringLiteral("Collections"));
-                collectionsGroup->setData(nameColumn, itemKindRole,
-                    static_cast<int>(OutlinerRowKind::SceneGroup));
-                collectionsGroup->setData(nameColumn, itemPathRole,
-                    rootPath + QStringLiteral("/collections"));
-                collectionsGroup->setFlags(Qt::ItemIsEnabled);
-                for (const int rootIndex :
-                     topLevelCollectionIndices(sceneEntries)) {
-                    appendCollection(
-                        tree_, sceneEntries[rootIndex], sceneEntries,
-                        sceneObjects, collectionsGroup, {},
-                        {rootPath, QStringLiteral("collections")}, {},
-                        {}, scene.activeViewLayerKey);
-                }
+            auto *collectionsGroup = new QTreeWidgetItem(sceneRoot);
+            collectionsGroup->setText(nameColumn,
+                                      QStringLiteral("Collections"));
+            collectionsGroup->setData(nameColumn, itemKindRole,
+                static_cast<int>(OutlinerRowKind::SceneGroup));
+            collectionsGroup->setData(nameColumn, itemPathRole,
+                rootPath + QStringLiteral("/collections"));
+            collectionsGroup->setFlags(Qt::ItemIsEnabled);
+            for (const int rootIndex :
+                 topLevelCollectionIndices(sceneEntries)) {
+                appendCollection(
+                    tree_, sceneEntries[rootIndex], sceneEntries,
+                    sceneObjects, collectionsGroup, {},
+                    {rootPath, QStringLiteral("collections")}, {},
+                    {}, scene.activeViewLayerKey);
             }
 
-            if (showObjects_) {
-                auto *objectsGroup = new QTreeWidgetItem(sceneRoot);
-                objectsGroup->setText(nameColumn, QStringLiteral("Objects"));
-                objectsGroup->setData(nameColumn, itemKindRole,
-                    static_cast<int>(OutlinerRowKind::SceneGroup));
-                objectsGroup->setData(nameColumn, itemPathRole,
-                    rootPath + QStringLiteral("/objects"));
-                objectsGroup->setFlags(Qt::ItemIsEnabled);
-                for (const OutlinerObjectEntry &object : sceneObjects) {
-                    appendObject(objectsGroup, object,
-                                 {rootPath, QStringLiteral("objects")},
-                                 CollectionId::invalid(),
-                                 scene.activeViewLayerKey);
-                }
+            auto *objectsGroup = new QTreeWidgetItem(sceneRoot);
+            objectsGroup->setText(nameColumn, QStringLiteral("Objects"));
+            objectsGroup->setData(nameColumn, itemKindRole,
+                static_cast<int>(OutlinerRowKind::SceneGroup));
+            objectsGroup->setData(nameColumn, itemPathRole,
+                rootPath + QStringLiteral("/objects"));
+            objectsGroup->setFlags(Qt::ItemIsEnabled);
+            for (const OutlinerObjectEntry &object : sceneObjects) {
+                appendObject(objectsGroup, object,
+                             {rootPath, QStringLiteral("objects")},
+                             CollectionId::invalid(),
+                             scene.activeViewLayerKey);
             }
             appendAnimationData(
                 sceneRoot, scene.animationData,

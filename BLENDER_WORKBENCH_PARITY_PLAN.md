@@ -11594,7 +11594,30 @@ scene depth.
   the submenu opens, including after a Blender file is loaded. This is a Qt
   implementation of the behavior, with hand-drawn icons and only the two
   interaction modes classiCAD currently supports. Blender's full set of
-  object-mode icons, conditional object-type filter toggles, and exact icon
-  artwork are not represented yet. `cmake --build build -j4` and
+  object-mode icons and exact icon artwork are not represented yet; conditional
+  type filter toggles are covered by the following entry. `cmake --build
+  build -j4` and
   `git diff --check` passed; no matched Blender Outliner screenshot comparison
   was run.
+- The hundred-twentieth Outliner filter update follows Blender 5.2.2's
+  [object-type filter panel](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L456-L533).
+  The Blender extractor now records whether the file contains mesh, armature,
+  light, camera, Grease Pencil, or other supported data-blocks; the panel uses
+  that file-wide inventory to show the matching type filters and always offers
+  Empties. Older imports fall back to their recorded object types. These
+  object filters are now limited to View Layer mode, and their controls are
+  disabled when Objects is off. The `OTHERS` preference reads the previous
+  `OTHER` key for existing settings. Alphabetical sorting now defaults on,
+  matching Blender's default Outliner tree order. The Filter popover now
+  appears only in Scenes, View Layer, and Library Overrides; Scenes gets its
+  four restriction toggles, View Layer gets all seven, and Library Overrides
+  gets its Search and conditional System Overrides controls. Search options
+  are hidden in Library Overrides Hierarchies. Scenes mode no longer applies
+  stored View Layer object, collection, or type filters to its rows. Native
+  classiCAD documents and older Blender imports do not retain a full
+  unused-data-block inventory, so their category availability falls back to
+  known objects. Remaining differences: filter settings still persist in
+  global QSettings instead of document workspace state, and Library Override
+  hierarchy rows lack Blender object identity/state metadata for carried object
+  filters. `cmake --build build -j4` and `git diff --check` passed; no matched
+  Blender Outliner comparison was run.

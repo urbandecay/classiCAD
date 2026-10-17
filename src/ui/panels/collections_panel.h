@@ -452,6 +452,7 @@ private:
     QSet<QString> dataApiCollapsedPaths_;
     QString activeFilterText_;
     QString idTypeFilter_;
+    bool dataApiFilterRefreshPending_ = false;
     QHash<QString, bool> objectTypeFilters_;
     QHash<QString, QAction *> objectTypeFilterActions_;
     QHash<QString, QAction *> workspaceBooleanActions_;

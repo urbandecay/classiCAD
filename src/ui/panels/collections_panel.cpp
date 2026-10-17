@@ -1997,6 +1997,16 @@ void CollectionsPanel::createLayout()
     connect(tree_, &QTreeWidget::itemExpanded, this,
             [this](QTreeWidgetItem *item) {
                 populateDataApiChildren(item);
+                if (dataApiDisplayMode_ && !activeFilterText_.isEmpty() &&
+                    !dataApiFilterRefreshPending_) {
+                    dataApiFilterRefreshPending_ = true;
+                    QTimer::singleShot(0, this, [this]() {
+                        dataApiFilterRefreshPending_ = false;
+                        if (!activeFilterText_.isEmpty()) {
+                            applyNameFilter(activeFilterText_);
+                        }
+                    });
+                }
                 saveTreeState();
             });
     connect(tree_, &QTreeWidget::itemCollapsed, this,
@@ -2167,7 +2177,8 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         !orphanDataDisplayMode_ && !libraryOverridesDisplayMode_;
     const bool overrideHierarchyFilterMode =
         libraryOverridesDisplayMode_ && overrideHierarchiesView_;
-    if (activeFilterText_.isEmpty() && !text.isEmpty()) {
+    if (activeFilterText_.isEmpty() && !text.isEmpty() &&
+        !dataApiDisplayMode_) {
         expandedBeforeFilter_.clear();
         QVector<QTreeWidgetItem *> pending;
         for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
@@ -2445,9 +2456,10 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         }
         const bool visible = (eligible && nameMatches) || childMatches;
         item->setHidden(!visible);
-        if ((!text.isEmpty() || objectStateFilter_ !=
-                                    OutlinerObjectStateFilter::All) &&
-            childMatches) {
+        const bool expandForFilterMatches = !dataApiDisplayMode_ &&
+            (!text.isEmpty() || objectStateFilter_ !=
+                                    OutlinerObjectStateFilter::All);
+        if (expandForFilterMatches && childMatches) {
             item->setExpanded(true);
         }
         return visible;
@@ -2458,23 +2470,26 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     }
 
     if (text.isEmpty()) {
-        restoringTreeState_ = true;
-        QVector<QTreeWidgetItem *> pending;
-        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-            pending.append(tree_->topLevelItem(index));
-        }
-        while (!pending.isEmpty()) {
-            QTreeWidgetItem *item = pending.takeLast();
-            const QString path = item->data(nameColumn, itemPathRole).toString();
-            const auto saved = expandedBeforeFilter_.constFind(path);
-            if (saved != expandedBeforeFilter_.cend()) {
-                item->setExpanded(saved.value());
+        if (!dataApiDisplayMode_) {
+            restoringTreeState_ = true;
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
             }
-            for (int index = 0; index < item->childCount(); ++index) {
-                pending.append(item->child(index));
+            while (!pending.isEmpty()) {
+                QTreeWidgetItem *item = pending.takeLast();
+                const QString path = item->data(
+                    nameColumn, itemPathRole).toString();
+                const auto saved = expandedBeforeFilter_.constFind(path);
+                if (saved != expandedBeforeFilter_.cend()) {
+                    item->setExpanded(saved.value());
+                }
+                for (int index = 0; index < item->childCount(); ++index) {
+                    pending.append(item->child(index));
+                }
             }
+            restoringTreeState_ = false;
         }
-        restoringTreeState_ = false;
         expandedBeforeFilter_.clear();
         saveTreeState();
     }

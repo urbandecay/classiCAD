@@ -11616,8 +11616,8 @@ scene depth.
   stored View Layer object, collection, or type filters to its rows. Native
   classiCAD documents and older Blender imports do not retain a full
   unused-data-block inventory, so their category availability falls back to
-  known objects. Remaining differences: filter settings still persist in
-  global QSettings instead of document workspace state, and Library Override
+  known objects. Remaining differences: expansion paths in display modes other
+  than View Layer still use path-hashed QSettings, and Library Override
   hierarchy rows lack Blender object identity/state metadata for carried object
   filters. `cmake --build build -j4` and `git diff --check` passed; no matched
   Blender Outliner comparison was run.
@@ -11629,4 +11629,16 @@ scene depth.
   view-layer key and collection path, so flattened All View Layers rows can
   show the imported restriction values. Collection ID alone is not a safe
   match because the same Blender collection can occur at multiple paths.
-  Build and Blender comparison are pending.
+  `cmake --build build -j4` and `git diff --check` passed; no matched Blender
+  comparison was run.
+- The hundred-twenty-second Outliner workspace update stores display mode,
+  Library Overrides submode, search text, and the current filter and column
+  options on the document. The state is validated, excluded from geometry undo,
+  copied when a document is replaced, and serialized in native document version
+  69. Switching documents reloads that document's controls; missing state
+  resets to Blender-style defaults. `QSettings` remains as the initial UI
+  preference source for the first Outliner session. View Layer expansion paths
+  already use document state; expansion paths for other display modes remain
+  path-scoped `QSettings` and are still a follow-up. `cmake --build build -j4`
+  and `git diff --check` passed; no GUI or matched Blender Outliner comparison
+  was run.

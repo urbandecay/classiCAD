@@ -4386,6 +4386,17 @@ private:
         collectionCallbacks.stateScopeKey = [this]() {
             return currentProjectPath_;
         };
+        collectionCallbacks.loadOutlinerWorkspaceState = [this]() {
+            return session_.document().outlinerWorkspaceState();
+        };
+        collectionCallbacks.saveOutlinerWorkspaceState =
+            [this](const QJsonObject &state) {
+                Document &document = session_.document();
+                if (document.outlinerWorkspaceState() == state) return;
+                if (document.setOutlinerWorkspaceState(state)) {
+                    markDocumentModified();
+                }
+            };
         const auto outlinerStateSceneKey = [activeSceneRecord]() {
             const QString sceneId = activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

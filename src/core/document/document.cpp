@@ -223,6 +223,110 @@ bool Document::setOutlinerExpandedPathsByScene(
     return true;
 }
 
+const QJsonObject &Document::outlinerWorkspaceState() const
+{
+    return outlinerWorkspaceState_;
+}
+
+bool Document::setOutlinerWorkspaceState(const QJsonObject &state)
+{
+    constexpr qsizetype maxSettingCount = 40;
+    constexpr qsizetype maxTotalCharacters = 16 * 1024;
+    const QSet<QString> booleanKeys{
+        QStringLiteral("showEnableColumn"),
+        QStringLiteral("showSelectColumn"),
+        QStringLiteral("showHideColumn"),
+        QStringLiteral("showViewportColumn"),
+        QStringLiteral("showRenderColumn"),
+        QStringLiteral("showHoldoutColumn"),
+        QStringLiteral("showIndirectOnlyColumn"),
+        QStringLiteral("filterCollections"),
+        QStringLiteral("filterObjects"),
+        QStringLiteral("filterObjectContents"),
+        QStringLiteral("filterObjectChildren"),
+        QStringLiteral("filterAllViewLayers"),
+        QStringLiteral("scrollToActive"),
+        QStringLiteral("sortAlphabetically"),
+        QStringLiteral("syncSelection"),
+        QStringLiteral("showModeColumn"),
+        QStringLiteral("showSystemOverrides"),
+        QStringLiteral("filterInvertState"),
+        QStringLiteral("filterExactName"),
+        QStringLiteral("filterCaseSensitive")};
+    const QSet<QString> objectTypes{
+        QStringLiteral("MESH"), QStringLiteral("ARMATURE"),
+        QStringLiteral("LIGHT"), QStringLiteral("CAMERA"),
+        QStringLiteral("GREASE_PENCIL"), QStringLiteral("EMPTY"),
+        QStringLiteral("OTHERS")};
+    if (state.size() > maxSettingCount) return false;
+
+    qsizetype totalCharacters = 0;
+    for (auto it = state.constBegin(); it != state.constEnd(); ++it) {
+        const QString &key = it.key();
+        const QJsonValue &value = it.value();
+        totalCharacters += key.size();
+        if (totalCharacters > maxTotalCharacters) return false;
+        if (booleanKeys.contains(key)) {
+            if (!value.isBool()) return false;
+            continue;
+        }
+        if (key.startsWith(QStringLiteral("filterObjectType/"))) {
+            const QString objectType = key.mid(
+                QStringLiteral("filterObjectType/").size());
+            if (!objectTypes.contains(objectType) || !value.isBool()) {
+                return false;
+            }
+            continue;
+        }
+        if (key == QLatin1String("displayMode")) {
+            const QString mode = value.toString();
+            if (!value.isString() ||
+                (mode != QLatin1String("VIEW_LAYER") &&
+                 mode != QLatin1String("SCENES") &&
+                 mode != QLatin1String("SEQUENCE") &&
+                 mode != QLatin1String("DATA_API") &&
+                 mode != QLatin1String("LIBRARIES") &&
+                 mode != QLatin1String("ORPHAN_DATA") &&
+                 mode != QLatin1String("LIBRARY_OVERRIDES"))) {
+                return false;
+            }
+            continue;
+        }
+        if (key == QLatin1String("libraryOverrideViewMode")) {
+            const QString mode = value.toString();
+            if (!value.isString() ||
+                (mode != QLatin1String("PROPERTIES") &&
+                 mode != QLatin1String("HIERARCHIES"))) {
+                return false;
+            }
+            continue;
+        }
+        if (key == QLatin1String("filterObjectState")) {
+            if (!value.isDouble() || value.toDouble() < 0.0 ||
+                value.toDouble() > 5.0 ||
+                std::floor(value.toDouble()) != value.toDouble()) {
+                return false;
+            }
+            continue;
+        }
+        if (key == QLatin1String("idTypeFilter") ||
+            key == QLatin1String("filterText")) {
+            const qsizetype maxLength = key == QLatin1String("filterText")
+                ? 256 : 128;
+            if (!value.isString() || value.toString().size() > maxLength) {
+                return false;
+            }
+            totalCharacters += value.toString().size();
+            if (totalCharacters > maxTotalCharacters) return false;
+            continue;
+        }
+        return false;
+    }
+    if (outlinerWorkspaceState_ == state) return true;
+    outlinerWorkspaceState_ = state;
+    return true;
+}
+
 const QHash<QString, Point3D> &Document::sceneCursorLocationsByScene() const
 {
     return sceneCursorLocationsByScene_;
@@ -337,6 +441,7 @@ void Document::replaceWith(const Document &document)
 {
     restoreSnapshot(document.snapshot());
     setOutlinerExpandedPathsByScene(document.outlinerExpandedPathsByScene());
+    setOutlinerWorkspaceState(document.outlinerWorkspaceState());
     setSceneCursorLocationsByScene(document.sceneCursorLocationsByScene());
 }
 

@@ -6,6 +6,7 @@
 #include "scene_object.h"
 
 #include <QHash>
+#include <QJsonObject>
 #include <QStringList>
 #include <QVector>
 
@@ -52,6 +53,8 @@ public:
     const QHash<QString, QStringList> &outlinerExpandedPathsByScene() const;
     bool setOutlinerExpandedPathsByScene(
         const QHash<QString, QStringList> &expandedPathsByScene);
+    const QJsonObject &outlinerWorkspaceState() const;
+    bool setOutlinerWorkspaceState(const QJsonObject &state);
     const QHash<QString, Point3D> &sceneCursorLocationsByScene() const;
     bool setSceneCursorLocationsByScene(
         const QHash<QString, Point3D> &locationsByScene);
@@ -196,6 +199,7 @@ private:
     QVector<SceneObject> objects_;
     QVector<DocumentMaterial> materials_;
     QHash<QString, QStringList> outlinerExpandedPathsByScene_;
+    QJsonObject outlinerWorkspaceState_;
     // Blender's scene cursor is persistent editor state and is not part of
     // geometry undo snapshots, matching the 3D cursor operator behavior.
     QHash<QString, Point3D> sceneCursorLocationsByScene_;

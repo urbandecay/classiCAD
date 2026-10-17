@@ -353,6 +353,8 @@ struct CollectionsPanelCallbacks {
     std::function<QString()> treeStateContextKey;
     std::function<bool(QStringList *)> loadExpandedTreePaths;
     std::function<void(const QStringList &)> saveExpandedTreePaths;
+    std::function<QJsonObject()> loadOutlinerWorkspaceState;
+    std::function<void(const QJsonObject &)> saveOutlinerWorkspaceState;
 };
 
 // Displays linked collections and scene objects with Blender-style selection
@@ -366,6 +368,10 @@ public:
 
 private:
     void createLayout();
+    QJsonObject currentOutlinerWorkspaceState() const;
+    void persistOutlinerWorkspaceState();
+    void applyOutlinerWorkspaceState(const QJsonObject &state);
+    void resetOutlinerWorkspaceState();
     void applyNameFilter(const QString &text);
     void restoreTreeState();
     void saveTreeState();
@@ -434,6 +440,9 @@ private:
     QString idTypeFilter_;
     QHash<QString, bool> objectTypeFilters_;
     QHash<QString, QAction *> objectTypeFilterActions_;
+    QHash<QString, QAction *> workspaceBooleanActions_;
+    QVector<QAction *> workspaceObjectStateActions_;
+    QJsonObject outlinerWorkspaceState_;
     QString currentStateScopeKey_;
     QString currentTreeStateContextKey_;
     OutlinerObjectStateFilter objectStateFilter_ =

@@ -921,12 +921,236 @@ CollectionsPanel::CollectionsPanel(CollectionsPanelCallbacks callbacks,
     refresh();
 }
 
+QJsonObject CollectionsPanel::currentOutlinerWorkspaceState() const
+{
+    QJsonObject state;
+    QString displayMode = QStringLiteral("VIEW_LAYER");
+    if (scenesDisplayMode_) {
+        displayMode = QStringLiteral("SCENES");
+    } else if (sequencerDisplayMode_) {
+        displayMode = QStringLiteral("SEQUENCE");
+    } else if (dataApiDisplayMode_) {
+        displayMode = QStringLiteral("DATA_API");
+    } else if (librariesDisplayMode_) {
+        displayMode = QStringLiteral("LIBRARIES");
+    } else if (orphanDataDisplayMode_) {
+        displayMode = QStringLiteral("ORPHAN_DATA");
+    } else if (libraryOverridesDisplayMode_) {
+        displayMode = QStringLiteral("LIBRARY_OVERRIDES");
+    }
+    state.insert(QStringLiteral("displayMode"), displayMode);
+    state.insert(QStringLiteral("libraryOverrideViewMode"),
+                 overrideHierarchiesView_
+                     ? QStringLiteral("HIERARCHIES")
+                     : QStringLiteral("PROPERTIES"));
+    state.insert(QStringLiteral("filterText"),
+                 filterEdit_ == nullptr ? QString{} : filterEdit_->text());
+    state.insert(QStringLiteral("idTypeFilter"), idTypeFilter_);
+    state.insert(QStringLiteral("filterObjectState"),
+                 static_cast<int>(objectStateFilter_));
+    state.insert(QStringLiteral("showEnableColumn"), showEnableColumn_);
+    state.insert(QStringLiteral("showSelectColumn"), showSelectColumn_);
+    state.insert(QStringLiteral("showHideColumn"), showHideColumn_);
+    state.insert(QStringLiteral("showViewportColumn"), showViewportColumn_);
+    state.insert(QStringLiteral("showRenderColumn"), showRenderColumn_);
+    state.insert(QStringLiteral("showHoldoutColumn"), showHoldoutColumn_);
+    state.insert(QStringLiteral("showIndirectOnlyColumn"),
+                 showIndirectOnlyColumn_);
+    state.insert(QStringLiteral("filterCollections"), showCollections_);
+    state.insert(QStringLiteral("filterObjects"), showObjects_);
+    state.insert(QStringLiteral("filterObjectContents"), showObjectContents_);
+    state.insert(QStringLiteral("filterObjectChildren"), showObjectChildren_);
+    state.insert(QStringLiteral("filterAllViewLayers"), showAllViewLayers_);
+    state.insert(QStringLiteral("scrollToActive"), scrollToActive_);
+    state.insert(QStringLiteral("sortAlphabetically"), sortAlphabetically_);
+    state.insert(QStringLiteral("syncSelection"), syncSelectionEnabled_);
+    state.insert(QStringLiteral("showModeColumn"), showModeColumn_);
+    state.insert(QStringLiteral("showSystemOverrides"), showSystemOverrides_);
+    state.insert(QStringLiteral("filterInvertState"),
+                 invertObjectStateFilter_);
+    state.insert(QStringLiteral("filterExactName"), exactNameMatch_);
+    state.insert(QStringLiteral("filterCaseSensitive"),
+                 caseSensitiveNameFilter_);
+    for (auto it = objectTypeFilters_.cbegin();
+         it != objectTypeFilters_.cend(); ++it) {
+        state.insert(QStringLiteral("filterObjectType/%1").arg(it.key()),
+                     it.value());
+    }
+    return state;
+}
+
+void CollectionsPanel::persistOutlinerWorkspaceState()
+{
+    const QJsonObject state = currentOutlinerWorkspaceState();
+    outlinerWorkspaceState_ = state;
+    if (callbacks_.saveOutlinerWorkspaceState) {
+        callbacks_.saveOutlinerWorkspaceState(state);
+    }
+}
+
+void CollectionsPanel::applyOutlinerWorkspaceState(const QJsonObject &state)
+{
+    const QString displayMode = state.value(
+        QStringLiteral("displayMode")).toString(QStringLiteral("VIEW_LAYER"));
+    scenesDisplayMode_ = displayMode == QLatin1String("SCENES");
+    sequencerDisplayMode_ = displayMode == QLatin1String("SEQUENCE");
+    dataApiDisplayMode_ = displayMode == QLatin1String("DATA_API");
+    librariesDisplayMode_ = displayMode == QLatin1String("LIBRARIES");
+    orphanDataDisplayMode_ = displayMode == QLatin1String("ORPHAN_DATA");
+    libraryOverridesDisplayMode_ =
+        displayMode == QLatin1String("LIBRARY_OVERRIDES");
+    const auto boolValue = [&state](const QString &key, bool defaultValue) {
+        const QJsonValue value = state.value(key);
+        return value.isBool() ? value.toBool() : defaultValue;
+    };
+    showEnableColumn_ = boolValue(QStringLiteral("showEnableColumn"), true);
+    showSelectColumn_ = boolValue(QStringLiteral("showSelectColumn"), false);
+    showHideColumn_ = boolValue(QStringLiteral("showHideColumn"), true);
+    showViewportColumn_ = boolValue(QStringLiteral("showViewportColumn"), false);
+    showRenderColumn_ = boolValue(QStringLiteral("showRenderColumn"), true);
+    showHoldoutColumn_ = boolValue(QStringLiteral("showHoldoutColumn"), false);
+    showIndirectOnlyColumn_ = boolValue(
+        QStringLiteral("showIndirectOnlyColumn"), false);
+    showCollections_ = boolValue(QStringLiteral("filterCollections"), true);
+    showObjects_ = boolValue(QStringLiteral("filterObjects"), true);
+    showObjectContents_ = boolValue(
+        QStringLiteral("filterObjectContents"), true);
+    showObjectChildren_ = boolValue(
+        QStringLiteral("filterObjectChildren"), true);
+    showAllViewLayers_ = boolValue(
+        QStringLiteral("filterAllViewLayers"), false);
+    scrollToActive_ = boolValue(QStringLiteral("scrollToActive"), true);
+    sortAlphabetically_ = boolValue(
+        QStringLiteral("sortAlphabetically"), true);
+    syncSelectionEnabled_ = boolValue(QStringLiteral("syncSelection"), true);
+    showModeColumn_ = boolValue(QStringLiteral("showModeColumn"), true);
+    showSystemOverrides_ = boolValue(
+        QStringLiteral("showSystemOverrides"), false);
+    invertObjectStateFilter_ = boolValue(
+        QStringLiteral("filterInvertState"), false);
+    exactNameMatch_ = boolValue(QStringLiteral("filterExactName"), false);
+    caseSensitiveNameFilter_ = boolValue(
+        QStringLiteral("filterCaseSensitive"), false);
+    const int objectState = state.value(
+        QStringLiteral("filterObjectState")).toInt(
+            static_cast<int>(OutlinerObjectStateFilter::All));
+    objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
+        qBound(0, objectState,
+               static_cast<int>(OutlinerObjectStateFilter::Selectable)));
+    const QString overrideView = state.value(
+        QStringLiteral("libraryOverrideViewMode")).toString(
+            QStringLiteral("PROPERTIES"));
+    overrideHierarchiesView_ = overrideView == QLatin1String("HIERARCHIES");
+    idTypeFilter_ = state.value(QStringLiteral("idTypeFilter")).toString();
+    const QString filterText = state.value(
+        QStringLiteral("filterText")).toString();
+
+    const QStringList objectTypes{
+        QStringLiteral("MESH"), QStringLiteral("ARMATURE"),
+        QStringLiteral("LIGHT"), QStringLiteral("CAMERA"),
+        QStringLiteral("GREASE_PENCIL"), QStringLiteral("EMPTY"),
+        QStringLiteral("OTHERS")};
+    objectTypeFilters_.clear();
+    for (const QString &type : objectTypes) {
+        objectTypeFilters_.insert(
+            type, boolValue(QStringLiteral("filterObjectType/%1").arg(type),
+                            true));
+    }
+
+    const auto setComboIndex = [](QComboBox *combo, int index) {
+        if (combo == nullptr) return;
+        const QSignalBlocker blocker(combo);
+        combo->setCurrentIndex(index);
+    };
+    const int modeIndex = scenesDisplayMode_ ? 1
+        : (sequencerDisplayMode_ ? 2
+        : (dataApiDisplayMode_ ? 3
+        : (librariesDisplayMode_ ? 4
+        : (orphanDataDisplayMode_ ? 5
+        : (libraryOverridesDisplayMode_ ? 6 : 0)))));
+    setComboIndex(displayModeCombo_, modeIndex);
+    setComboIndex(libraryOverrideViewCombo_, overrideHierarchiesView_ ? 1 : 0);
+    {
+        const QSignalBlocker blocker(filterEdit_);
+        filterEdit_->setText(filterText);
+    }
+    activeFilterText_ = filterText;
+    setComboIndex(idTypeCombo_, idTypeCombo_->findData(idTypeFilter_));
+
+    const QJsonObject appliedState = currentOutlinerWorkspaceState();
+    for (auto it = workspaceBooleanActions_.begin();
+         it != workspaceBooleanActions_.end(); ++it) {
+        if (it.value() == nullptr) continue;
+        const QJsonValue value = appliedState.value(it.key());
+        if (!value.isBool()) continue;
+        const QSignalBlocker blocker(it.value());
+        it.value()->setChecked(value.toBool());
+    }
+    for (QAction *action : workspaceObjectStateActions_) {
+        if (action == nullptr) continue;
+        const QSignalBlocker blocker(action);
+        action->setChecked(action->data().toInt() == objectState);
+    }
+    for (auto it = objectTypeFilterActions_.cbegin();
+         it != objectTypeFilterActions_.cend(); ++it) {
+        if (it.value() == nullptr) continue;
+        const QSignalBlocker blocker(it.value());
+        it.value()->setChecked(objectTypeFilters_.value(it.key(), true));
+    }
+    if (sortAlphabeticallyAction_ != nullptr) {
+        sortAlphabeticallyAction_->setEnabled(!dataApiDisplayMode_);
+    }
+    if (syncSelectionAction_ != nullptr) {
+        syncSelectionAction_->setEnabled(!libraryOverridesDisplayMode_);
+    }
+    if (showModeColumnAction_ != nullptr) {
+        showModeColumnAction_->setEnabled(!libraryOverridesDisplayMode_);
+    }
+    if (workspaceBooleanActions_.contains(
+            QStringLiteral("filterAllViewLayers"))) {
+        workspaceBooleanActions_.value(
+            QStringLiteral("filterAllViewLayers"))->setEnabled(
+                !scenesDisplayMode_ && !sequencerDisplayMode_ &&
+                !dataApiDisplayMode_ && !librariesDisplayMode_ &&
+                !orphanDataDisplayMode_ && !libraryOverridesDisplayMode_);
+    }
+    if (workspaceBooleanActions_.contains(
+            QStringLiteral("filterObjectContents"))) {
+        workspaceBooleanActions_.value(
+            QStringLiteral("filterObjectContents"))->setEnabled(showObjects_);
+    }
+    if (workspaceBooleanActions_.contains(
+            QStringLiteral("filterObjectChildren"))) {
+        workspaceBooleanActions_.value(
+            QStringLiteral("filterObjectChildren"))->setEnabled(showObjects_);
+    }
+    if (workspaceBooleanActions_.contains(
+            QStringLiteral("filterInvertState"))) {
+        workspaceBooleanActions_.value(
+            QStringLiteral("filterInvertState"))->setEnabled(
+                objectStateFilter_ != OutlinerObjectStateFilter::All);
+    }
+    for (QAction *action : objectTypeFilterActions_) {
+        if (action != nullptr) action->setEnabled(showObjects_);
+    }
+    if (scrollToActiveAction_ != nullptr) {
+        scrollToActiveAction_->setEnabled(
+            syncSelectionEnabled_ && !libraryOverridesDisplayMode_);
+    }
+}
+
+void CollectionsPanel::resetOutlinerWorkspaceState()
+{
+    applyOutlinerWorkspaceState(QJsonObject{});
+}
+
 void CollectionsPanel::createLayout()
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     filterEdit_ = new QLineEdit(this);
     filterEdit_->setClearButtonEnabled(true);
+    filterEdit_->setMaxLength(256);
     filterEdit_->setPlaceholderText(QStringLiteral("Filter Outliner names"));
     filterEdit_->setToolTip(QStringLiteral(
         "Filter Outliner names with * and ? wildcards. Exact and case-sensitive matching are in Filter."));
@@ -1206,6 +1430,8 @@ void CollectionsPanel::createLayout()
             restrictionIcon(glyph, checked), label);
         action->setCheckable(true);
         action->setChecked(checked);
+        workspaceBooleanActions_.insert(
+            settingsKey.mid(QStringLiteral("outliner/").size()), action);
         action->setProperty("outlinerViewLayerSpecific", viewLayerSpecific);
         connect(action, &QAction::toggled, this,
                 [this, settingsKey, column, viewLayerSpecific](bool visible) {
@@ -1223,6 +1449,7 @@ void CollectionsPanel::createLayout()
             }
             QSettings settings;
             settings.setValue(settingsKey, visible);
+            persistOutlinerWorkspaceState();
             const bool unavailable = viewLayerSpecific &&
                 (!callbacks_.activeViewLayerKey ||
                  callbacks_.activeViewLayerKey().isEmpty());
@@ -1270,6 +1497,8 @@ void CollectionsPanel::createLayout()
     restrictionToggleSeparatorAction_ = filterMenu->addSeparator();
     sortAlphabeticallyAction_ = filterMenu->addAction(
         QStringLiteral("Sort Alphabetically"));
+    workspaceBooleanActions_.insert(QStringLiteral("sortAlphabetically"),
+                                    sortAlphabeticallyAction_);
     sortAlphabeticallyAction_->setCheckable(true);
     sortAlphabeticallyAction_->setChecked(sortAlphabetically_);
     sortAlphabeticallyAction_->setEnabled(!dataApiDisplayMode_);
@@ -1279,15 +1508,20 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/sortAlphabetically"),
                           enabled);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     syncSelectionAction_ = filterMenu->addAction(
         QStringLiteral("Sync Selection"));
+    workspaceBooleanActions_.insert(QStringLiteral("syncSelection"),
+                                    syncSelectionAction_);
     syncSelectionAction_->setCheckable(true);
     syncSelectionAction_->setChecked(syncSelectionEnabled_);
     syncSelectionAction_->setEnabled(!libraryOverridesDisplayMode_);
     showModeColumnAction_ = filterMenu->addAction(
         QStringLiteral("Show Mode Column"));
+    workspaceBooleanActions_.insert(QStringLiteral("showModeColumn"),
+                                    showModeColumnAction_);
     showModeColumnAction_->setCheckable(true);
     showModeColumnAction_->setChecked(showModeColumn_);
     showModeColumnAction_->setEnabled(!libraryOverridesDisplayMode_);
@@ -1295,6 +1529,7 @@ void CollectionsPanel::createLayout()
         showModeColumn_ = show;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/showModeColumn"), show);
+        persistOutlinerWorkspaceState();
         tree_->setColumnHidden(modeColumn, !show);
     });
     connect(syncSelectionAction_, &QAction::toggled, this,
@@ -1302,6 +1537,7 @@ void CollectionsPanel::createLayout()
         syncSelectionEnabled_ = enabled;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/syncSelection"), enabled);
+        persistOutlinerWorkspaceState();
         if (scrollToActiveAction_ != nullptr) {
             scrollToActiveAction_->setEnabled(enabled);
         }
@@ -1361,6 +1597,8 @@ void CollectionsPanel::createLayout()
     viewLayerFilterActions_.append(allViewLayersAction);
     allViewLayersAction->setCheckable(true);
     allViewLayersAction->setChecked(showAllViewLayers_);
+    workspaceBooleanActions_.insert(QStringLiteral("filterAllViewLayers"),
+                                    allViewLayersAction);
     allViewLayersAction->setEnabled(
         !scenesDisplayMode_ && !librariesDisplayMode_ &&
         !orphanDataDisplayMode_ && !sequencerDisplayMode_ &&
@@ -1371,6 +1609,7 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterAllViewLayers"),
                           visible);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     viewLayerFilterActions_.append(
@@ -1400,6 +1639,7 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/displayMode"),
                           displayModeKey);
+        persistOutlinerWorkspaceState();
         allViewLayersAction->setEnabled(
             !scenesDisplayMode_ && !librariesDisplayMode_ &&
             !orphanDataDisplayMode_ && !sequencerDisplayMode_ &&
@@ -1417,10 +1657,13 @@ void CollectionsPanel::createLayout()
                           overrideHierarchiesView_
                               ? QStringLiteral("HIERARCHIES")
                               : QStringLiteral("PROPERTIES"));
+        persistOutlinerWorkspaceState();
         refresh();
     });
     systemOverridesAction_ = filterMenu->addAction(
         QStringLiteral("System Overrides"));
+    workspaceBooleanActions_.insert(QStringLiteral("showSystemOverrides"),
+                                    systemOverridesAction_);
     systemOverridesAction_->setCheckable(true);
     systemOverridesAction_->setChecked(showSystemOverrides_);
     systemOverridesAction_->setToolTip(QStringLiteral(
@@ -1430,6 +1673,7 @@ void CollectionsPanel::createLayout()
         showSystemOverrides_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/showSystemOverrides"), visible);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     connect(idTypeCombo_, &QComboBox::activated, this,
@@ -1438,6 +1682,7 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/idTypeFilter"),
                           idTypeFilter_);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     QAction *collectionsAction = filterMenu->addAction(
@@ -1445,27 +1690,35 @@ void CollectionsPanel::createLayout()
     viewLayerFilterActions_.append(collectionsAction);
     collectionsAction->setCheckable(true);
     collectionsAction->setChecked(showCollections_);
+    workspaceBooleanActions_.insert(QStringLiteral("filterCollections"),
+                                    collectionsAction);
     connect(collectionsAction, &QAction::toggled, this, [this](bool visible) {
         showCollections_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterCollections"), visible);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     QAction *objectsAction = filterMenu->addAction(QStringLiteral("Objects"));
     viewLayerFilterActions_.append(objectsAction);
     objectsAction->setCheckable(true);
     objectsAction->setChecked(showObjects_);
+    workspaceBooleanActions_.insert(QStringLiteral("filterObjects"),
+                                    objectsAction);
     QAction *contentsAction = filterMenu->addAction(
         QStringLiteral("Object Contents"));
     viewLayerFilterActions_.append(contentsAction);
     contentsAction->setCheckable(true);
     contentsAction->setChecked(showObjectContents_);
+    workspaceBooleanActions_.insert(QStringLiteral("filterObjectContents"),
+                                    contentsAction);
     contentsAction->setEnabled(showObjects_);
     connect(contentsAction, &QAction::toggled, this, [this](bool visible) {
         showObjectContents_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjectContents"),
                           visible);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     connect(objectsAction, &QAction::toggled, this,
@@ -1480,6 +1733,7 @@ void CollectionsPanel::createLayout()
         }
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjects"), visible);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     objectChildrenAction_ = filterMenu->addAction(
@@ -1487,17 +1741,22 @@ void CollectionsPanel::createLayout()
     viewLayerFilterActions_.append(objectChildrenAction_);
     objectChildrenAction_->setCheckable(true);
     objectChildrenAction_->setChecked(showObjectChildren_);
+    workspaceBooleanActions_.insert(QStringLiteral("filterObjectChildren"),
+                                    objectChildrenAction_);
     objectChildrenAction_->setEnabled(showObjects_);
     connect(objectChildrenAction_, &QAction::toggled, this, [this](bool visible) {
         showObjectChildren_ = visible;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjectChildren"),
                           visible);
+        persistOutlinerWorkspaceState();
         refresh();
     });
     viewLayerFilterActions_.append(filterMenu->addSeparator());
     scrollToActiveAction_ = filterMenu->addAction(
         QStringLiteral("Scroll to Active"));
+    workspaceBooleanActions_.insert(QStringLiteral("scrollToActive"),
+                                    scrollToActiveAction_);
     scrollToActiveAction_->setCheckable(true);
     scrollToActiveAction_->setChecked(scrollToActive_);
     scrollToActiveAction_->setEnabled(syncSelectionEnabled_);
@@ -1506,6 +1765,7 @@ void CollectionsPanel::createLayout()
         scrollToActive_ = enabled;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/scrollToActive"), enabled);
+        persistOutlinerWorkspaceState();
         syncSelection();
     });
     viewLayerFilterActions_.append(filterMenu->addSeparator());
@@ -1525,6 +1785,7 @@ void CollectionsPanel::createLayout()
         action->setCheckable(true);
         action->setData(static_cast<int>(state.first));
         action->setChecked(objectStateFilter_ == state.first);
+        workspaceObjectStateActions_.append(action);
         stateGroup->addAction(action);
         viewLayerFilterActions_.append(action);
     }
@@ -1535,10 +1796,13 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterObjectState"),
                           static_cast<int>(objectStateFilter_));
+        persistOutlinerWorkspaceState();
         applyNameFilter(filterEdit_->text());
     });
     QAction *invertStateAction = filterMenu->addAction(
         QStringLiteral("Invert State Filter"));
+    workspaceBooleanActions_.insert(QStringLiteral("filterInvertState"),
+                                    invertStateAction);
     viewLayerFilterActions_.append(invertStateAction);
     invertStateAction->setCheckable(true);
     invertStateAction->setChecked(invertObjectStateFilter_);
@@ -1549,6 +1813,7 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterInvertState"),
                           invert);
+        persistOutlinerWorkspaceState();
         applyNameFilter(filterEdit_->text());
     });
     viewLayerFilterActions_.append(filterMenu->addSeparator());
@@ -1560,6 +1825,8 @@ void CollectionsPanel::createLayout()
         action->setCheckable(true);
         action->setChecked(objectTypeFilters_.value(type.first, true));
         objectTypeFilterActions_.insert(type.first, action);
+        workspaceBooleanActions_.insert(
+            QStringLiteral("filterObjectType/%1").arg(type.first), action);
         connect(action, &QAction::toggled, this,
                 [this, key = type.first](bool enabled) {
             objectTypeFilters_.insert(key, enabled);
@@ -1567,6 +1834,7 @@ void CollectionsPanel::createLayout()
             settings.setValue(
                 QStringLiteral("outliner/filterObjectType/%1").arg(key),
                 enabled);
+            persistOutlinerWorkspaceState();
             applyNameFilter(filterEdit_->text());
         });
     }
@@ -1575,6 +1843,8 @@ void CollectionsPanel::createLayout()
         filterMenu->addSection(QStringLiteral("Search")));
     QAction *exactMatchAction = filterMenu->addAction(
         QStringLiteral("Exact Match"));
+    workspaceBooleanActions_.insert(QStringLiteral("filterExactName"),
+                                    exactMatchAction);
     searchFilterActions_.append(exactMatchAction);
     exactMatchAction->setCheckable(true);
     exactMatchAction->setChecked(exactNameMatch_);
@@ -1583,10 +1853,13 @@ void CollectionsPanel::createLayout()
         exactNameMatch_ = enabled;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterExactName"), enabled);
+        persistOutlinerWorkspaceState();
         applyNameFilter(filterEdit_->text());
     });
     QAction *caseSensitiveAction = filterMenu->addAction(
         QStringLiteral("Case Sensitive"));
+    workspaceBooleanActions_.insert(QStringLiteral("filterCaseSensitive"),
+                                    caseSensitiveAction);
     searchFilterActions_.append(caseSensitiveAction);
     caseSensitiveAction->setCheckable(true);
     caseSensitiveAction->setChecked(caseSensitiveNameFilter_);
@@ -1596,6 +1869,7 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/filterCaseSensitive"),
                           enabled);
+        persistOutlinerWorkspaceState();
         applyNameFilter(filterEdit_->text());
     });
     connect(stateGroup, &QActionGroup::triggered, this,
@@ -1637,6 +1911,7 @@ void CollectionsPanel::createLayout()
                 }
                 QSettings settings;
                 settings.setValue(settingsKey, visible);
+                persistOutlinerWorkspaceState();
                 const bool unavailable = viewLayerSpecific &&
                     (!callbacks_.activeViewLayerKey ||
                      callbacks_.activeViewLayerKey().isEmpty());
@@ -1670,7 +1945,10 @@ void CollectionsPanel::createLayout()
         "Scene objects and collection memberships. Click to select and activate; Ctrl-click toggles selection. The restriction columns control viewport visibility and selection."));
     layout->addWidget(tree_);
     connect(filterEdit_, &QLineEdit::textChanged, this,
-            [this](const QString &text) { applyNameFilter(text); });
+            [this](const QString &text) {
+        applyNameFilter(text);
+        persistOutlinerWorkspaceState();
+    });
     connect(viewLayerCombo_, &QComboBox::activated, this, [this](int index) {
         if (index < 0 || !callbacks_.setActiveViewLayer) return;
         const QString key = viewLayerCombo_->itemData(index).toString();
@@ -1719,6 +1997,14 @@ void CollectionsPanel::createLayout()
         callbacks_.setObjectInteractionMode(
             id, currentMode == 1 ? 0 : 1);
     });
+
+    outlinerWorkspaceState_ = callbacks_.loadOutlinerWorkspaceState
+        ? callbacks_.loadOutlinerWorkspaceState() : QJsonObject{};
+    if (!outlinerWorkspaceState_.isEmpty()) {
+        applyOutlinerWorkspaceState(outlinerWorkspaceState_);
+    }
+    currentStateScopeKey_ = callbacks_.stateScopeKey
+        ? callbacks_.stateScopeKey() : QString{};
 
     outlinerTree->setActivationHandlers(
         [this](QTreeWidgetItem *item, Qt::KeyboardModifiers modifiers) {
@@ -4577,6 +4863,18 @@ void CollectionsPanel::refresh()
         ? callbacks_.stateScopeKey() : QString{};
     const bool stateScopeChanged = stateScopeKey != currentStateScopeKey_;
     currentStateScopeKey_ = stateScopeKey;
+    const QJsonObject documentWorkspaceState =
+        callbacks_.loadOutlinerWorkspaceState
+            ? callbacks_.loadOutlinerWorkspaceState() : QJsonObject{};
+    if (stateScopeChanged ||
+        documentWorkspaceState != outlinerWorkspaceState_) {
+        if (documentWorkspaceState.isEmpty()) {
+            resetOutlinerWorkspaceState();
+        } else {
+            applyOutlinerWorkspaceState(documentWorkspaceState);
+        }
+        outlinerWorkspaceState_ = documentWorkspaceState;
+    }
     QString treeModeContext = QStringLiteral("/ViewLayer");
     if (scenesDisplayMode_) {
         treeModeContext = QStringLiteral("/Scenes");

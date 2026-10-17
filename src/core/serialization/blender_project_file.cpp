@@ -2701,6 +2701,8 @@ bool loadVignolaDocument(const QString &path,
             importReport.outlinerLibraries;
         snapshot.settings.importedBlenderOrphans =
             importReport.outlinerOrphans;
+        snapshot.settings.importedBlenderSequencer =
+            importReport.outlinerSequencer;
         snapshot.settings.importedBlenderOutlinerOnlyObjects =
             importReport.outlinerOnlyObjects;
         snapshot.settings.importedBlenderColorLuts =
@@ -2830,7 +2832,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 44 && bridgeVersion != 45 &&
          bridgeVersion != 46 && bridgeVersion != 47 &&
          bridgeVersion != 48 && bridgeVersion != 49 &&
-         bridgeVersion != 50 && bridgeVersion != 51)) {
+         bridgeVersion != 50 && bridgeVersion != 51 &&
+         bridgeVersion != 52)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3074,6 +3077,7 @@ bool importBlenderScene(const QString &path,
     QHash<QString, QString> sceneLibraryPaths;
     QJsonArray outlinerLibraries;
     QJsonArray outlinerOrphans;
+    QJsonObject outlinerSequencer;
     if (bridgeVersion >= 50) {
         const QJsonValue librariesValue = root.value(
             QStringLiteral("outliner_libraries"));
@@ -3207,6 +3211,86 @@ bool importBlenderScene(const QString &path,
             }
         }
         outlinerOrphans = orphanGroupsValue.toArray();
+    }
+    if (bridgeVersion >= 52) {
+        const QJsonValue sequenceValue = root.value(
+            QStringLiteral("outliner_sequencer"));
+        if (!sequenceValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Sequencer Outliner tree is invalid"));
+            return false;
+        }
+        const QJsonObject sequence = sequenceValue.toObject();
+        const QJsonValue workspaceNameValue = sequence.value(
+            QStringLiteral("workspace_name"));
+        const QJsonValue sceneIdValue = sequence.value(
+            QStringLiteral("scene_id"));
+        const QJsonValue sceneNameValue = sequence.value(
+            QStringLiteral("scene_name"));
+        const QJsonValue stripsValue = sequence.value(QStringLiteral("strips"));
+        const QJsonValue truncatedValue = sequence.value(
+            QStringLiteral("truncated"));
+        if (!workspaceNameValue.isString() ||
+            workspaceNameValue.toString().size() > 4096 ||
+            !sceneIdValue.isString() || sceneIdValue.toString().size() > 4096 ||
+            !sceneNameValue.isString() || sceneNameValue.toString().size() > 4096 ||
+            !stripsValue.isArray() || stripsValue.toArray().size() > 10000 ||
+            !truncatedValue.isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender Sequencer Outliner tree is invalid"));
+            return false;
+        }
+        int sequenceNodeCount = 0;
+        const auto validateSequenceRows = [&](const auto &self,
+                                               const QJsonArray &rows,
+                                               int depth) -> bool {
+            if (rows.isEmpty()) return true;
+            if (depth > 128 || sequenceNodeCount + rows.size() > 20000) {
+                return false;
+            }
+            for (const QJsonValue &rowValue : rows) {
+                if (!rowValue.isObject()) return false;
+                const QJsonObject row = rowValue.toObject();
+                const QJsonValue kindValue = row.value(QStringLiteral("kind"));
+                const QJsonValue nameValue = row.value(QStringLiteral("name"));
+                const QJsonValue typeValue = row.value(QStringLiteral("type"));
+                const QJsonValue mediaValue = row.value(
+                    QStringLiteral("media_filename"));
+                const QJsonValue directoryValue = row.value(
+                    QStringLiteral("data_directory"));
+                const QJsonValue metaValue = row.value(QStringLiteral("is_meta"));
+                const QJsonValue effectValue = row.value(
+                    QStringLiteral("is_effect"));
+                const QJsonValue selectedValue = row.value(
+                    QStringLiteral("selected"));
+                const QJsonValue childrenValue = row.value(
+                    QStringLiteral("children"));
+                if (!kindValue.isString() ||
+                    (kindValue.toString() != QLatin1String("STRIP") &&
+                     kindValue.toString() != QLatin1String("DUPLICATE")) ||
+                    !nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !typeValue.isString() || typeValue.toString().size() > 128 ||
+                    !mediaValue.isString() || mediaValue.toString().size() > 4096 ||
+                    !directoryValue.isString() ||
+                    directoryValue.toString().size() > 4096 ||
+                    !metaValue.isBool() || !effectValue.isBool() ||
+                    !selectedValue.isBool() || !childrenValue.isArray()) {
+                    return false;
+                }
+                ++sequenceNodeCount;
+                if (!self(self, childrenValue.toArray(), depth + 1)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!validateSequenceRows(validateSequenceRows,
+                                  stripsValue.toArray(), 0)) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender Sequencer strip row is invalid"));
+            return false;
+        }
+        outlinerSequencer = sequence;
     }
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
@@ -4203,6 +4287,7 @@ bool importBlenderScene(const QString &path,
         report->scenes = importedSceneRecords;
         report->outlinerLibraries = outlinerLibraries;
         report->outlinerOrphans = outlinerOrphans;
+        report->outlinerSequencer = outlinerSequencer;
         report->outlinerOnlyObjects = outlinerOnlyObjects;
         report->activeSceneId = activeSceneId;
         report->activeViewLayerKey = activeViewLayerKey;

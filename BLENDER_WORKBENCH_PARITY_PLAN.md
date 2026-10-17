@@ -11078,6 +11078,21 @@ scene depth.
   ported because classiCAD does not own or edit the original Blender ID
   database. `cmake --build build -j4`, Python syntax parsing, and `git diff
   --check` passed; no matched Blender Outliner UI comparison was run.
+- The thirty-eighth tree update follows Blender 5.2.2's Sequencer display mode
+  in [`tree_display_sequencer.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_sequencer.cc)
+  and strip expansion in
+  [`tree_element_seq.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_seq.cc).
+  It captures the active workspace's Sequencer scene and current Meta-strip
+  level, nests Meta strips, groups repeated image/movie filenames, expands
+  media rows to their directory (or `Strip None`), and leaves effect strips
+  without children. Sound strips are not grouped as repeated files, matching
+  Blender's `StripData::stripdata` check. Sequence rows preserve Blender's
+  selected state but do not synchronize it with a classiCAD timeline. Bridge
+  version 52 and native document version 42 retain the bounded tree (10,000
+  strip rows and 128 Meta levels). The display-mode chooser remains available
+  when the selected mode has no rows, like Blender. `cmake --build build -j4`,
+  Python syntax parsing, and `git diff --check` passed; no matched Blender
+  Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, additional
   specialized ID branches still under source review, and a matched
   Blender/classiCAD interaction comparison. Do not mark this port complete

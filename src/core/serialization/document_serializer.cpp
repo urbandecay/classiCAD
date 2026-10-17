@@ -125,6 +125,62 @@ bool isValidImportedColorLuts(
     return true;
 }
 
+bool isValidImportedBlenderSequencer(const QJsonValue &value)
+{
+    if (!value.isObject()) return false;
+    const QJsonObject record = value.toObject();
+    if (record.isEmpty()) return true;
+    const QJsonValue workspaceName = record.value(
+        QStringLiteral("workspace_name"));
+    const QJsonValue sceneId = record.value(QStringLiteral("scene_id"));
+    const QJsonValue sceneName = record.value(QStringLiteral("scene_name"));
+    const QJsonValue strips = record.value(QStringLiteral("strips"));
+    const QJsonValue truncated = record.value(QStringLiteral("truncated"));
+    if (!workspaceName.isString() || workspaceName.toString().size() > 4096 ||
+        !sceneId.isString() || sceneId.toString().size() > 4096 ||
+        !sceneName.isString() || sceneName.toString().size() > 4096 ||
+        !strips.isArray() || strips.toArray().size() > 10000 ||
+        !truncated.isBool()) {
+        return false;
+    }
+    int nodeCount = 0;
+    const auto validateRows = [&](const auto &self, const QJsonArray &rows,
+                                  int depth) -> bool {
+        if (rows.isEmpty()) return true;
+        if (depth > 128 || nodeCount + rows.size() > 20000) return false;
+        for (const QJsonValue &rowValue : rows) {
+            if (!rowValue.isObject()) return false;
+            const QJsonObject row = rowValue.toObject();
+            const QJsonValue kind = row.value(QStringLiteral("kind"));
+            const QJsonValue name = row.value(QStringLiteral("name"));
+            const QJsonValue type = row.value(QStringLiteral("type"));
+            const QJsonValue filename = row.value(
+                QStringLiteral("media_filename"));
+            const QJsonValue directory = row.value(
+                QStringLiteral("data_directory"));
+            const QJsonValue meta = row.value(QStringLiteral("is_meta"));
+            const QJsonValue effect = row.value(QStringLiteral("is_effect"));
+            const QJsonValue selected = row.value(QStringLiteral("selected"));
+            const QJsonValue children = row.value(QStringLiteral("children"));
+            if (!kind.isString() ||
+                (kind.toString() != QLatin1String("STRIP") &&
+                 kind.toString() != QLatin1String("DUPLICATE")) ||
+                !name.isString() || name.toString().size() > 4096 ||
+                !type.isString() || type.toString().size() > 128 ||
+                !filename.isString() || filename.toString().size() > 4096 ||
+                !directory.isString() || directory.toString().size() > 4096 ||
+                !meta.isBool() || !effect.isBool() || !selected.isBool() ||
+                !children.isArray()) {
+                return false;
+            }
+            ++nodeCount;
+            if (!self(self, children.toArray(), depth + 1)) return false;
+        }
+        return true;
+    };
+    return validateRows(validateRows, strips.toArray(), 0);
+}
+
 void setError(QString *errorMessage, const QString &message)
 {
     if (errorMessage != nullptr) {
@@ -343,7 +399,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 41);
+    serialized.insert(QStringLiteral("version"), 42);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -356,6 +412,8 @@ QJsonObject documentToJson(const Document &document)
                     document.settings().importedBlenderLibraries);
     settings.insert(QStringLiteral("importedBlenderOrphans"),
                     document.settings().importedBlenderOrphans);
+    settings.insert(QStringLiteral("importedBlenderSequencer"),
+                    document.settings().importedBlenderSequencer);
     settings.insert(QStringLiteral("importedBlenderOutlinerOnlyObjects"),
                     document.settings().importedBlenderOutlinerOnlyObjects);
     QJsonObject colorLuts;
@@ -793,7 +851,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 41) {
+    if (version < 1 || version > 42) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1225,6 +1283,16 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.importedBlenderOrphans = importedOrphans.toArray();
+        }
+        if (version >= 42) {
+            const QJsonValue importedSequencer = settingsObject.value(
+                QStringLiteral("importedBlenderSequencer"));
+            if (!isValidImportedBlenderSequencer(importedSequencer)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid imported Blender Sequencer metadata"));
+                return false;
+            }
+            settings.importedBlenderSequencer = importedSequencer.toObject();
         }
         if (version >= 37) {
             const QJsonValue outlinerOnlyValue = settingsObject.value(

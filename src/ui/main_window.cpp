@@ -3356,6 +3356,48 @@ private:
             }
             return groups;
         };
+        collectionCallbacks.sequencer = [this]() {
+            OutlinerSequenceTree tree;
+            const QJsonObject record = session_.document().settings()
+                                           .importedBlenderSequencer;
+            tree.workspaceName = record.value(
+                QStringLiteral("workspace_name")).toString();
+            tree.sceneName = record.value(
+                QStringLiteral("scene_name")).toString();
+            tree.truncated = record.value(
+                QStringLiteral("truncated")).toBool();
+            std::function<OutlinerSequenceStrip(const QJsonObject &)> parseStrip;
+            parseStrip = [&parseStrip](const QJsonObject &source) {
+                OutlinerSequenceStrip strip;
+                strip.kind = source.value(QStringLiteral("kind")).toString();
+                strip.name = source.value(QStringLiteral("name")).toString();
+                strip.type = source.value(QStringLiteral("type")).toString();
+                strip.mediaFilename = source.value(
+                    QStringLiteral("media_filename")).toString();
+                strip.dataDirectory = source.value(
+                    QStringLiteral("data_directory")).toString();
+                strip.isMeta = source.value(
+                    QStringLiteral("is_meta")).toBool();
+                strip.isEffect = source.value(
+                    QStringLiteral("is_effect")).toBool();
+                strip.selected = source.value(
+                    QStringLiteral("selected")).toBool();
+                for (const QJsonValue &childValue : source.value(
+                         QStringLiteral("children")).toArray()) {
+                    if (childValue.isObject()) {
+                        strip.children.append(parseStrip(childValue.toObject()));
+                    }
+                }
+                return strip;
+            };
+            for (const QJsonValue &stripValue : record.value(
+                     QStringLiteral("strips")).toArray()) {
+                if (stripValue.isObject()) {
+                    tree.strips.append(parseStrip(stripValue.toObject()));
+                }
+            }
+            return tree;
+        };
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();

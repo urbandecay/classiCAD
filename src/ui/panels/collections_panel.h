@@ -107,6 +107,7 @@ struct OutlinerObjectEntry {
 enum class OutlinerRowKind {
     Collection,
     Library,
+    SequencerStrip,
     Object,
     SceneRoot,
     SceneGroup,
@@ -166,12 +167,32 @@ struct OutlinerOrphanGroup {
     bool truncated = false;
 };
 
+struct OutlinerSequenceStrip {
+    QString kind;
+    QString name;
+    QString type;
+    QString mediaFilename;
+    QString dataDirectory;
+    bool isMeta = false;
+    bool isEffect = false;
+    bool selected = false;
+    QVector<OutlinerSequenceStrip> children;
+};
+
+struct OutlinerSequenceTree {
+    QString workspaceName;
+    QString sceneName;
+    bool truncated = false;
+    QVector<OutlinerSequenceStrip> strips;
+};
+
 struct CollectionsPanelCallbacks {
     std::function<QVector<CollectionPanelEntry>()> entries;
     std::function<QVector<OutlinerObjectEntry>()> objects;
     std::function<QVector<OutlinerSceneEntry>()> scenes;
     std::function<QVector<OutlinerLibraryEntry>()> libraries;
     std::function<QVector<OutlinerOrphanGroup>()> orphanGroups;
+    std::function<OutlinerSequenceTree()> sequencer;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;
@@ -283,6 +304,7 @@ private:
     bool scenesDisplayMode_ = false;
     bool librariesDisplayMode_ = false;
     bool orphanDataDisplayMode_ = false;
+    bool sequencerDisplayMode_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

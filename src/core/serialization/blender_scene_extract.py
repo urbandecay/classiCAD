@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 51
+BRIDGE_FORMAT_VERSION = 52
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -38,6 +38,8 @@ MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
 MAX_OUTLINER_HIERARCHY_ITEMS = 1024
 MAX_OUTLINER_LIBRARY_ITEMS = 20000
 MAX_OUTLINER_ORPHAN_ITEMS = 20000
+MAX_OUTLINER_SEQUENCE_ITEMS = 10000
+MAX_OUTLINER_SEQUENCE_DEPTH = 128
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -859,6 +861,161 @@ def outliner_orphan_groups():
             row_count += 1
             group["names"].append(str(id_block.name_full))
     return groups
+
+
+def outliner_sequencer_tree(active_window, fallback_scene):
+    """Capture Blender's current workspace Sequencer Outliner tree."""
+    workspace = getattr(active_window, "workspace", None)
+    scene = (getattr(workspace, "sequencer_scene", None)
+             if workspace is not None else fallback_scene)
+    record = {
+        "workspace_name": str(workspace.name) if workspace is not None else "",
+        "scene_id": stable_id(scene) if scene is not None else "",
+        "scene_name": str(scene.name) if scene is not None else "",
+        "strips": [],
+        "truncated": False,
+    }
+    sequence_editor = getattr(scene, "sequence_editor", None)
+    if sequence_editor is None:
+        return record
+
+    meta_stack = list(getattr(sequence_editor, "meta_stack", ()))
+    current_strips = (meta_stack[-1].strips if meta_stack
+                      else sequence_editor.strips)
+    remaining = [MAX_OUTLINER_SEQUENCE_ITEMS]
+    truncated = [False]
+    effect_types = {
+        "CROSS", "ADD", "SUBTRACT", "ALPHA_OVER", "ALPHA_UNDER",
+        "GAMMA_CROSS", "MULTIPLY", "OVERDROP", "WIPE", "GLOW",
+        "TRANSFORM", "SPEED",
+        "MULTICAM", "COMPOSITOR", "ADJUSTMENT", "GAUSSIAN_BLUR",
+        "COLORMIX", "COLOR", "TEXT",
+    }
+
+    def media_path(strip):
+        strip_type = str(getattr(strip, "type", ""))
+        if strip_type == "IMAGE":
+            try:
+                elements = getattr(strip, "elements", ())
+                if len(elements) > 0:
+                    directory = str(getattr(strip, "directory", "") or "")
+                    filename = str(getattr(elements[0], "filename", "") or "")
+                    return os.path.join(directory, filename) if directory else filename
+            except (AttributeError, RuntimeError, TypeError):
+                return ""
+            return ""
+        if strip_type != "MOVIE":
+            # Blender only groups rows with StripData::stripdata, which is
+            # present for image and movie strips. Sound paths belong to a
+            # separate Sound data-block and must not create duplicate groups.
+            return ""
+        try:
+            filepath = str(getattr(strip, "filepath", "") or "")
+        except (AttributeError, RuntimeError, TypeError):
+            filepath = ""
+        return filepath
+
+    def strip_record(strip, depth):
+        if remaining[0] <= 0:
+            truncated[0] = True
+            return None
+        remaining[0] -= 1
+        strip_type = str(getattr(strip, "type", ""))
+        is_meta = strip_type == "META"
+        is_effect = strip_type in effect_types
+        path = media_path(strip)
+        try:
+            directory = str(getattr(strip, "directory", "") or "")
+        except (AttributeError, RuntimeError, TypeError):
+            directory = ""
+        if not directory and path:
+            directory = os.path.dirname(path)
+        item = {
+            "kind": "STRIP",
+            "name": str(getattr(strip, "name", "")),
+            "type": strip_type,
+            "media_filename": bpy.path.basename(path) if path else "",
+            "data_directory": directory or "Strip None",
+            "is_meta": is_meta,
+            "is_effect": is_effect,
+            "selected": bool(getattr(strip, "select", False)),
+            "children": [],
+        }
+        if is_meta:
+            if depth >= MAX_OUTLINER_SEQUENCE_DEPTH:
+                if len(getattr(strip, "strips", ())) > 0:
+                    truncated[0] = True
+            else:
+                children = strip.strips
+                for child_index, child in enumerate(children):
+                    child_record = strip_record(child, depth + 1)
+                    if child_record is not None:
+                        item["children"].append(child_record)
+                    if remaining[0] <= 0 and child_index + 1 < len(children):
+                        truncated[0] = True
+                        break
+        return item
+
+    top_level = []
+    top_level_truncated = False
+    for strip in current_strips:
+        if len(top_level) >= MAX_OUTLINER_SEQUENCE_ITEMS:
+            top_level_truncated = True
+            break
+        top_level.append(strip)
+    truncated[0] = top_level_truncated
+    media_filenames = []
+    indices_by_filename = {}
+    for index, strip in enumerate(top_level):
+        path = media_path(strip)
+        filename = bpy.path.basename(path) if path else ""
+        media_filenames.append(filename)
+        if filename:
+            indices_by_filename.setdefault(filename, []).append(index)
+    rows = []
+    for index, strip in enumerate(top_level):
+        filename = media_filenames[index]
+        if filename:
+            matching_indices = indices_by_filename[filename]
+            if matching_indices[0] != index:
+                continue
+            if len(matching_indices) > 1:
+                duplicate_row = {
+                    "kind": "DUPLICATE",
+                    "name": filename,
+                    "type": "",
+                    "media_filename": filename,
+                    "data_directory": "",
+                    "is_meta": False,
+                    "is_effect": False,
+                    "selected": False,
+                    "children": [],
+                }
+                for matching_index in matching_indices:
+                    candidate = top_level[matching_index]
+                    child_record = strip_record(candidate, 0)
+                    if child_record is not None:
+                        duplicate_row["children"].append(child_record)
+                    if (remaining[0] <= 0 and
+                            matching_index != matching_indices[-1]):
+                        truncated[0] = True
+                        break
+                rows.append(duplicate_row)
+                if remaining[0] <= 0:
+                    if matching_indices[-1] + 1 < len(top_level):
+                        truncated[0] = True
+                    break
+                continue
+        strip_item = strip_record(strip, 0)
+        if strip_item is not None:
+            rows.append(strip_item)
+        if remaining[0] <= 0:
+            if index + 1 < len(top_level):
+                truncated[0] = True
+            break
+    record["strips"] = rows
+    record["truncated"] = truncated[0]
+    return record
 
 
 def object_metadata(obj, scene, depsgraph=None):
@@ -3060,6 +3217,8 @@ def extract_scene(input_path, mode):
         "saved_viewport_view": saved_viewport_view_record(active_scene),
         "outliner_libraries": outliner_library_tree(),
         "outliner_orphans": outliner_orphan_groups(),
+        "outliner_sequencer": outliner_sequencer_tree(
+            active_window, active_scene),
         "scenes": [],
         "collections": [],
         "items": [],

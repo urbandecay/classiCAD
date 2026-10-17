@@ -4,6 +4,7 @@
 
 #include <QString>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QHash>
 #include <QByteArray>
 
@@ -41,6 +42,8 @@ struct DocumentSettings {
     QJsonArray importedBlenderLibraries;
     // Blender Outliner Orphan Data rows, grouped by Blender ID type.
     QJsonArray importedBlenderOrphans;
+    // Current Blender workspace's Sequencer Outliner tree.
+    QJsonObject importedBlenderSequencer;
     // Blender objects with no classiCAD geometry representation still belong
     // in the Outliner. These source records preserve their tree rows only.
     QJsonArray importedBlenderOutlinerOnlyObjects;

@@ -17,6 +17,8 @@
  * tree_display_libraries.cc and the RNA labels from common.cc.
  * Orphan Data grouping and its zero-user/type-filter rules follow
  * tree_display_orphaned.cc and BKE_idtype.hh.
+ * Sequencer strip nesting, current meta level, and duplicate-file grouping
+ * follow tree_display_sequencer.cc and tree_element_seq.cc.
  * Generic object contents follow tree_element_id_object.cc, with Animation
  * rows following tree_element_anim_data.cc, tree_element_driver.cc, and
  * tree_element_nla.cc.
@@ -371,6 +373,7 @@ void CollectionsPanel::createLayout()
     displayModeCombo_ = new QComboBox(this);
     displayModeCombo_->addItem(QStringLiteral("View Layer"));
     displayModeCombo_->addItem(QStringLiteral("Scenes"));
+    displayModeCombo_->addItem(QStringLiteral("Sequence"));
     displayModeCombo_->addItem(QStringLiteral("Libraries"));
     displayModeCombo_->addItem(QStringLiteral("Orphan Data"));
     displayModeCombo_->setToolTip(QStringLiteral(
@@ -485,13 +488,19 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/displayMode"),
         QStringLiteral("VIEW_LAYER")).toString() ==
         QLatin1String("ORPHAN_DATA");
+    sequencerDisplayMode_ = outlinerSettings.value(
+        QStringLiteral("outliner/displayMode"),
+        QStringLiteral("VIEW_LAYER")).toString() ==
+        QLatin1String("SEQUENCE");
     idTypeFilter_ = outlinerSettings.value(
         QStringLiteral("outliner/idTypeFilter"),
         outlinerSettings.value(
             QStringLiteral("outliner/libraries/typeFilter"))).toString();
     displayModeCombo_->setCurrentIndex(
-        orphanDataDisplayMode_ ? 3
-            : (librariesDisplayMode_ ? 2 : (scenesDisplayMode_ ? 1 : 0)));
+        orphanDataDisplayMode_ ? 4
+            : (librariesDisplayMode_ ? 3
+                : (sequencerDisplayMode_ ? 2
+                    : (scenesDisplayMode_ ? 1 : 0))));
     objectStateFilter_ = static_cast<OutlinerObjectStateFilter>(
         qBound(0, outlinerSettings.value(
                     QStringLiteral("outliner/filterObjectState"), 0).toInt(),
@@ -526,7 +535,7 @@ void CollectionsPanel::createLayout()
     allViewLayersAction->setChecked(showAllViewLayers_);
     allViewLayersAction->setEnabled(
         !scenesDisplayMode_ && !librariesDisplayMode_ &&
-        !orphanDataDisplayMode_);
+        !orphanDataDisplayMode_ && !sequencerDisplayMode_);
     connect(allViewLayersAction, &QAction::toggled, this,
             [this](bool visible) {
         showAllViewLayers_ = visible;
@@ -538,20 +547,23 @@ void CollectionsPanel::createLayout()
     connect(displayModeCombo_, &QComboBox::activated, this,
             [this, allViewLayersAction](int index) {
         scenesDisplayMode_ = index == 1;
-        librariesDisplayMode_ = index == 2;
-        orphanDataDisplayMode_ = index == 3;
+        sequencerDisplayMode_ = index == 2;
+        librariesDisplayMode_ = index == 3;
+        orphanDataDisplayMode_ = index == 4;
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/displayMode"),
                           orphanDataDisplayMode_
                               ? QStringLiteral("ORPHAN_DATA")
                               : (librariesDisplayMode_
                                      ? QStringLiteral("LIBRARIES")
-                                     : (scenesDisplayMode_
-                                            ? QStringLiteral("SCENES")
-                                            : QStringLiteral("VIEW_LAYER"))));
+                                     : (sequencerDisplayMode_
+                                            ? QStringLiteral("SEQUENCE")
+                                            : (scenesDisplayMode_
+                                                   ? QStringLiteral("SCENES")
+                                                   : QStringLiteral("VIEW_LAYER")))));
         allViewLayersAction->setEnabled(
             !scenesDisplayMode_ && !librariesDisplayMode_ &&
-            !orphanDataDisplayMode_);
+            !orphanDataDisplayMode_ && !sequencerDisplayMode_);
         refresh();
     });
     connect(idTypeCombo_, &QComboBox::activated, this,
@@ -792,6 +804,7 @@ void CollectionsPanel::createLayout()
         },
         [this]() {
             if (!librariesDisplayMode_ && !orphanDataDisplayMode_ &&
+                !sequencerDisplayMode_ &&
                 callbacks_.setObjectSelection) {
                 callbacks_.setObjectSelection({}, ObjectId::invalid());
             }
@@ -1141,16 +1154,19 @@ void CollectionsPanel::restoreTreeState()
             .toHex());
     const QString settingsKey = scenesDisplayMode_
         ? QStringLiteral("outliner/%1/scenesExpandedPaths").arg(scopeHash)
-        : (librariesDisplayMode_
+        : (sequencerDisplayMode_
+               ? QStringLiteral("outliner/%1/sequenceExpandedPaths")
+                     .arg(scopeHash)
+               : (librariesDisplayMode_
                ? QStringLiteral("outliner/%1/librariesExpandedPaths").arg(scopeHash)
                : (orphanDataDisplayMode_
                       ? QStringLiteral("outliner/%1/orphanDataExpandedPaths")
                             .arg(scopeHash)
                       : QStringLiteral("outliner/%1/expandedPaths")
-                            .arg(scopeHash)));
+                            .arg(scopeHash))));
     bool hasSavedState = false;
     if (scenesDisplayMode_ || librariesDisplayMode_ ||
-        orphanDataDisplayMode_) {
+        orphanDataDisplayMode_ || sequencerDisplayMode_) {
         QSettings settings;
         if (!scope.isEmpty() && settings.contains(settingsKey)) {
             expandedPaths = settings.value(settingsKey).toStringList();
@@ -1210,7 +1226,7 @@ void CollectionsPanel::saveTreeState()
     expandedPaths.sort(Qt::CaseSensitive);
     expandedPaths.removeDuplicates();
     if (scenesDisplayMode_ || librariesDisplayMode_ ||
-        orphanDataDisplayMode_) {
+        orphanDataDisplayMode_ || sequencerDisplayMode_) {
         const QString scope = callbacks_.stateScopeKey
             ? callbacks_.stateScopeKey() : QString{};
         if (scope.isEmpty()) return;
@@ -1223,9 +1239,11 @@ void CollectionsPanel::saveTreeState()
             QStringLiteral("outliner/%1/%2ExpandedPaths")
                 .arg(scopeHash,
                      scenesDisplayMode_ ? QStringLiteral("scenes")
-                         : (librariesDisplayMode_
+                         : (sequencerDisplayMode_
+                                ? QStringLiteral("sequence")
+                                : (librariesDisplayMode_
                                 ? QStringLiteral("libraries")
-                                : QStringLiteral("orphanData"))),
+                                : QStringLiteral("orphanData")))),
             expandedPaths);
     } else if (callbacks_.saveExpandedTreePaths) {
         callbacks_.saveExpandedTreePaths(expandedPaths);
@@ -1397,7 +1415,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         item->data(nameColumn, itemKindRole).toInt());
     if (kind == OutlinerRowKind::ObjectContent ||
         kind == OutlinerRowKind::SceneGroup ||
-        kind == OutlinerRowKind::Library) return;
+        kind == OutlinerRowKind::Library ||
+        kind == OutlinerRowKind::SequencerStrip) return;
     QMenu menu(this);
 
     if (kind == OutlinerRowKind::SceneRoot &&
@@ -2188,11 +2207,13 @@ void CollectionsPanel::refresh()
         (callbacks_.treeStateContextKey
              ? callbacks_.treeStateContextKey() : QString{}) +
         (scenesDisplayMode_ ? QStringLiteral("/Scenes")
-             : (librariesDisplayMode_
+             : (sequencerDisplayMode_
+                    ? QStringLiteral("/Sequence")
+                    : (librariesDisplayMode_
                     ? QStringLiteral("/Libraries/%1").arg(idTypeFilter_)
                     : (orphanDataDisplayMode_
                            ? QStringLiteral("/OrphanData/%1").arg(idTypeFilter_)
-                           : QStringLiteral("/ViewLayer"))));
+                           : QStringLiteral("/ViewLayer")))));
     const bool treeStateContextChanged =
         treeStateContextKey != currentTreeStateContextKey_;
     currentTreeStateContextKey_ = treeStateContextKey;
@@ -2228,12 +2249,14 @@ void CollectionsPanel::refresh()
         ? callbacks_.libraries() : QVector<OutlinerLibraryEntry>{};
     const QVector<OutlinerOrphanGroup> orphanGroups = callbacks_.orphanGroups
         ? callbacks_.orphanGroups() : QVector<OutlinerOrphanGroup>{};
+    const OutlinerSequenceTree sequence = callbacks_.sequencer
+        ? callbacks_.sequencer() : OutlinerSequenceTree{};
     const bool librariesMode = librariesDisplayMode_;
     const bool orphanDataMode = orphanDataDisplayMode_;
+    const bool sequencerMode = sequencerDisplayMode_;
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
-    displayModeCombo_->setEnabled(!scenes.isEmpty() || !libraries.isEmpty() ||
-                                  !orphanGroups.isEmpty());
-    filterButton_->setVisible(!librariesMode && !orphanDataMode);
+    filterButton_->setVisible(!librariesMode && !orphanDataMode &&
+                              !sequencerMode);
     {
         const QSignalBlocker blocker(idTypeCombo_);
         idTypeCombo_->clear();
@@ -2338,6 +2361,7 @@ void CollectionsPanel::refresh()
         sceneCombo_->setCurrentIndex(activeIndex);
         sceneCombo_->setVisible(
             !scenesMode && !librariesMode && !orphanDataMode &&
+            !sequencerMode &&
             scenes.size() > 1);
     }
     {
@@ -2353,29 +2377,36 @@ void CollectionsPanel::refresh()
         viewLayerCombo_->setCurrentIndex(activeIndex);
         viewLayerCombo_->setVisible(
             !scenesMode && !librariesMode && !orphanDataMode &&
+            !sequencerMode &&
             viewLayers.size() > 1);
     }
     tree_->setColumnHidden(viewportColumn,
-                           librariesMode || orphanDataMode ||
+                           librariesMode || orphanDataMode || sequencerMode ||
                                !showViewportColumn_);
     tree_->setColumnHidden(renderColumn,
-                           librariesMode || orphanDataMode || !showRenderColumn_);
+                           librariesMode || orphanDataMode || sequencerMode ||
+                               !showRenderColumn_);
     tree_->setColumnHidden(selectColumn,
-                           librariesMode || orphanDataMode || !showSelectColumn_);
+                           librariesMode || orphanDataMode || sequencerMode ||
+                               !showSelectColumn_);
     tree_->setColumnHidden(viewLayerViewportColumn,
-                           librariesMode || orphanDataMode || scenesMode ||
+                           librariesMode || orphanDataMode || sequencerMode ||
+                               scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showHideColumn_);
     tree_->setColumnHidden(holdoutColumn,
-                           librariesMode || orphanDataMode || scenesMode ||
+                           librariesMode || orphanDataMode || sequencerMode ||
+                               scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showHoldoutColumn_);
     tree_->setColumnHidden(indirectOnlyColumn,
-                           librariesMode || orphanDataMode || scenesMode ||
+                           librariesMode || orphanDataMode || sequencerMode ||
+                               scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showIndirectOnlyColumn_);
     tree_->setColumnHidden(excludeColumn,
-                           librariesMode || orphanDataMode || scenesMode ||
+                           librariesMode || orphanDataMode || sequencerMode ||
+                               scenesMode ||
                                activeViewLayerKey.isEmpty() ||
                                !showEnableColumn_);
     QVector<QTreeWidgetItem *> sceneRoots;
@@ -2573,6 +2604,78 @@ void CollectionsPanel::refresh()
                     QStringLiteral("The 20,000-row extraction limit was reached"));
                 truncatedRow->setFlags(Qt::ItemIsEnabled);
             }
+        }
+    } else if (sequencerMode) {
+        const auto appendSequenceRows = [this, &sceneRoots, &sequence](
+            const auto &self,
+            const QVector<OutlinerSequenceStrip> &sourceRows,
+            QTreeWidgetItem *parent,
+            const QString &parentPath) -> void {
+            for (qsizetype index = 0; index < sourceRows.size(); ++index) {
+                const OutlinerSequenceStrip &source = sourceRows[index];
+                const bool duplicateGroup =
+                    source.kind == QLatin1String("DUPLICATE");
+                auto *row = parent != nullptr
+                    ? new QTreeWidgetItem(parent)
+                    : new QTreeWidgetItem(tree_);
+                row->setText(nameColumn, source.name);
+                row->setData(nameColumn, itemKindRole,
+                    static_cast<int>(duplicateGroup
+                        ? OutlinerRowKind::SceneGroup
+                        : OutlinerRowKind::SequencerStrip));
+                const QString rowPath = parentPath +
+                    QStringLiteral("/%1-%2")
+                        .arg(duplicateGroup ? QStringLiteral("duplicate")
+                                            : QStringLiteral("strip"))
+                        .arg(index);
+                row->setData(nameColumn, itemPathRole, rowPath);
+                QString description = duplicateGroup
+                    ? QStringLiteral("Blender strips using the same media file")
+                    : QStringLiteral("Blender %1 strip").arg(source.type);
+                if (!sequence.sceneName.isEmpty()) {
+                    description += QStringLiteral(" in %1")
+                                       .arg(sequence.sceneName);
+                }
+                if (!sequence.workspaceName.isEmpty()) {
+                    description += QStringLiteral(" (%1 workspace)")
+                                       .arg(sequence.workspaceName);
+                }
+                row->setToolTip(nameColumn, description);
+                row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+                row->setSelected(!duplicateGroup && source.selected);
+                if (parent == nullptr) sceneRoots.append(row);
+
+                if (duplicateGroup || source.isMeta) {
+                    self(self, source.children, row, rowPath);
+                } else if (!source.isEffect) {
+                    auto *dataRow = new QTreeWidgetItem(row);
+                    dataRow->setText(nameColumn, source.dataDirectory);
+                    dataRow->setData(nameColumn, itemKindRole,
+                        static_cast<int>(OutlinerRowKind::ObjectContent));
+                    dataRow->setData(nameColumn, itemPathRole,
+                                     rowPath + QStringLiteral("/data"));
+                    dataRow->setToolTip(
+                        nameColumn,
+                        QStringLiteral("Blender strip media directory"));
+                    dataRow->setFlags(Qt::ItemIsEnabled);
+                }
+            }
+        };
+        appendSequenceRows(appendSequenceRows, sequence.strips, nullptr,
+                           QStringLiteral("sequence"));
+        if (sequence.truncated) {
+            auto *truncatedRow = new QTreeWidgetItem(tree_);
+            truncatedRow->setText(
+                nameColumn,
+                QStringLiteral("Additional sequencer strips omitted"));
+            truncatedRow->setData(nameColumn, itemKindRole,
+                static_cast<int>(OutlinerRowKind::ObjectContent));
+            truncatedRow->setData(nameColumn, itemPathRole,
+                                  QStringLiteral("sequence/truncated"));
+            truncatedRow->setToolTip(
+                nameColumn,
+                QStringLiteral("The 10,000-strip extraction limit was reached"));
+            truncatedRow->setFlags(Qt::ItemIsEnabled);
         }
     } else if (scenesMode) {
         const auto appendSceneContentRow = [this](
@@ -2800,7 +2903,8 @@ void CollectionsPanel::refresh()
                           activeViewLayerKey,
                           QStringLiteral("scene"));
     }
-    if (showObjectChildren_ && !librariesMode && !orphanDataMode) {
+    if (showObjectChildren_ && !librariesMode && !orphanDataMode &&
+        !sequencerMode) {
         buildObjectParentHierarchy(displayObjects);
     }
     if (!hasRefreshed_ || stateScopeChanged || treeStateContextChanged) {
@@ -2828,6 +2932,22 @@ void CollectionsPanel::refresh()
                     pending.append(item->child(index));
                 }
             }
+        } else if (sequencerMode) {
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
+            }
+            while (!pending.isEmpty()) {
+                QTreeWidgetItem *item = pending.takeLast();
+                const int kind = item->data(nameColumn, itemKindRole).toInt();
+                if (kind == static_cast<int>(OutlinerRowKind::SequencerStrip) ||
+                    kind == static_cast<int>(OutlinerRowKind::SceneGroup)) {
+                    item->setExpanded(false);
+                }
+                for (int index = 0; index < item->childCount(); ++index) {
+                    pending.append(item->child(index));
+                }
+            }
         }
         restoreTreeState();
         hasRefreshed_ = true;
@@ -2839,6 +2959,12 @@ void CollectionsPanel::refresh()
             const auto saved = expandedPaths.constFind(path);
             if (saved != expandedPaths.cend()) {
                 item->setExpanded(saved.value());
+            } else if (sequencerMode &&
+                       (item->data(nameColumn, itemKindRole).toInt() ==
+                            static_cast<int>(OutlinerRowKind::SequencerStrip) ||
+                        item->data(nameColumn, itemKindRole).toInt() ==
+                            static_cast<int>(OutlinerRowKind::SceneGroup))) {
+                item->setExpanded(false);
             } else if (item->data(nameColumn, itemKindRole).toInt() ==
                            static_cast<int>(OutlinerRowKind::Collection) ||
                        item->data(nameColumn, itemKindRole).toInt() ==

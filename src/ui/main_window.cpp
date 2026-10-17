@@ -5585,6 +5585,8 @@ private:
             [this, activeSceneRecord, collectionBelongsToScene,
              updateSceneCollectionIds](const QVector<CollectionId> &requestedRootIds,
                                       CollectionId contextParentId,
+                                      const QHash<quint64, CollectionId>
+                                          &requestedRootParentIds,
                                       bool linkedData,
                                       bool fromClipboard) {
                 const Document &document = session_.document();
@@ -5609,43 +5611,6 @@ private:
                     }
                     rootValues.insert(rootId.value());
                     rootIds.append(rootId);
-                }
-                if (rootIds.isEmpty()) return;
-                QVector<CollectionId> topLevelRootIds;
-                for (const CollectionId rootId : rootIds) {
-                    QVector<CollectionId> pendingParents =
-                        collectionsById.value(rootId.value()).parentIds;
-                    QSet<quint64> visitedParents;
-                    bool hasSelectedAncestor = false;
-                    while (!pendingParents.isEmpty() &&
-                           !hasSelectedAncestor) {
-                        const CollectionId parentId = pendingParents.takeLast();
-                        if (!parentId.isValid() ||
-                            visitedParents.contains(parentId.value())) {
-                            continue;
-                        }
-                        visitedParents.insert(parentId.value());
-                        if (rootValues.contains(parentId.value())) {
-                            hasSelectedAncestor = true;
-                            break;
-                        }
-                        const auto parent = collectionsById.constFind(
-                            parentId.value());
-                        if (parent != collectionsById.cend()) {
-                            for (const CollectionId ancestorId :
-                                 parent->parentIds) {
-                                pendingParents.append(ancestorId);
-                            }
-                        }
-                    }
-                    if (!hasSelectedAncestor) {
-                        topLevelRootIds.append(rootId);
-                    }
-                }
-                rootIds = std::move(topLevelRootIds);
-                rootValues.clear();
-                for (const CollectionId rootId : rootIds) {
-                    rootValues.insert(rootId.value());
                 }
                 if (rootIds.isEmpty()) return;
                 if (fromClipboard) {
@@ -5830,8 +5795,14 @@ private:
                             collectionsById.value(rootIds[index].value());
                         CollectionId destinationParentId =
                             contextParentId;
-                        if (!sourceRoot.parentIds.contains(
-                                destinationParentId)) {
+                        const auto selectedParent =
+                            requestedRootParentIds.constFind(
+                                sourceRoot.id.value());
+                        if (selectedParent !=
+                            requestedRootParentIds.cend()) {
+                            destinationParentId = selectedParent.value();
+                        } else if (!sourceRoot.parentIds.contains(
+                                       destinationParentId)) {
                             destinationParentId = rootIds.size() > 1 &&
                                     !sourceRoot.parentIds.isEmpty()
                                 ? sourceRoot.parentIds.first()
@@ -6182,7 +6153,8 @@ private:
                     return;
                 }
                 duplicateCollectionForPaste(
-                    outlinerCollectionClipboardRootIds_, parentId, false, true);
+                    outlinerCollectionClipboardRootIds_, parentId, {}, false,
+                    true);
             };
         collectionCallbacks.renameCollection =
             [this](CollectionId id, const QString &name) {

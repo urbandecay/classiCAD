@@ -2024,6 +2024,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             selectedCollectionIds.append(target.collectionId);
         }
         QVector<CollectionId> topLevelCollectionIds;
+        QHash<quint64, CollectionId> topLevelCollectionParentIds;
         for (const OutlinerCollectionContext &target : collectionTargets) {
             const bool hasSelectedAncestor = std::any_of(
                 collectionTargets.cbegin(), collectionTargets.cend(),
@@ -2045,6 +2046,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             if (!hasSelectedAncestor &&
                 !topLevelCollectionIds.contains(target.collectionId)) {
                 topLevelCollectionIds.append(target.collectionId);
+                topLevelCollectionParentIds.insert(
+                    target.collectionId.value(), target.parentCollectionId);
             }
         }
         if (callbacks_.createCollection) {
@@ -2076,16 +2079,21 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             QAction *duplicate = menu.addAction(
                 QStringLiteral("Duplicate Collection"));
             connect(duplicate, &QAction::triggered, this,
-                    [this, topLevelCollectionIds, parentId]() {
+                    [this, topLevelCollectionIds, parentId,
+                     topLevelCollectionParentIds]() {
                 callbacks_.duplicateCollection(topLevelCollectionIds,
-                                               parentId, false, false);
+                                               parentId,
+                                               topLevelCollectionParentIds,
+                                               false, false);
             });
             QAction *duplicateLinked = menu.addAction(
                 QStringLiteral("Duplicate Linked"));
             connect(duplicateLinked, &QAction::triggered, this,
-                    [this, topLevelCollectionIds, parentId]() {
-                callbacks_.duplicateCollection(topLevelCollectionIds, parentId, true,
-                                               false);
+                    [this, topLevelCollectionIds, parentId,
+                     topLevelCollectionParentIds]() {
+                callbacks_.duplicateCollection(topLevelCollectionIds, parentId,
+                                               topLevelCollectionParentIds,
+                                               true, false);
             });
         }
         if (callbacks_.instanceCollectionsToScene) {

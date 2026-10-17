@@ -6184,59 +6184,81 @@ private:
                     }
                 }
 
-                const auto uniqueName = [](
+                struct BlenderIdNames {
+                    QSet<QString> fullNames;
+                    QHash<QString, QSet<int>> suffixesByBase;
+                };
+                const auto splitNameNumber = [](const QString &value) {
+                    const qsizetype separator =
+                        value.lastIndexOf(QLatin1Char('.'));
+                    if (separator > 0) {
+                        bool parsed = false;
+                        const int number = value.mid(separator + 1)
+                                               .toInt(&parsed);
+                        if (parsed && number >= 0) {
+                            return qMakePair(value.left(separator), number);
+                        }
+                    }
+                    return qMakePair(value, 0);
+                };
+                const auto recordName = [&splitNameNumber](
+                    BlenderIdNames &names, const QString &name) {
+                    names.fullNames.insert(name);
+                    const auto parts = splitNameNumber(name);
+                    names.suffixesByBase[parts.first].insert(parts.second);
+                };
+                const auto uniqueName = [&splitNameNumber, &recordName](
                     const QString &sourceName,
-                    QSet<QString> &usedNames,
+                    BlenderIdNames &usedNames,
                     const QString &fallback) {
                     const QString base = sourceName.trimmed().isEmpty()
                         ? fallback : sourceName.trimmed();
-                    if (!usedNames.contains(base)) {
-                        usedNames.insert(base);
+                    if (!usedNames.fullNames.contains(base)) {
+                        recordName(usedNames, base);
                         return base;
                     }
-                    QString stem = base;
-                    int nextSuffix = 1;
-                    const qsizetype dot = base.lastIndexOf(QLatin1Char('.'));
-                    if (dot >= 0) {
-                        bool parsed = false;
-                        const int existingSuffix =
-                            base.mid(dot + 1).toInt(&parsed);
-                        if (parsed && existingSuffix >= 0) {
-                            stem = base.left(dot);
-                            nextSuffix = existingSuffix + 1;
-                        }
-                    }
-                    for (int suffix = nextSuffix;; ++suffix) {
-                        const QString candidate = QStringLiteral("%1.%2")
-                            .arg(stem)
-                            .arg(suffix, 3, 10, QLatin1Char('0'));
-                        if (usedNames.contains(candidate)) continue;
-                        usedNames.insert(candidate);
-                        return candidate;
-                    }
+                    const QString stem = splitNameNumber(base).first;
+                    const QSet<int> usedSuffixes =
+                        usedNames.suffixesByBase.value(stem);
+                    int suffix = 1;
+                    while (usedSuffixes.contains(suffix)) ++suffix;
+                    const QString candidate = QStringLiteral("%1.%2")
+                        .arg(stem)
+                        .arg(suffix, 3, 10, QLatin1Char('0'));
+                    recordName(usedNames, candidate);
+                    return candidate;
                 };
 
-                QSet<QString> collectionNames;
+                BlenderIdNames collectionNames;
                 for (const DocumentCollection &collection :
                      document.collections()) {
-                    collectionNames.insert(collection.name);
+                    if (collection.libraryPath.isEmpty()) {
+                        recordName(collectionNames, collection.name);
+                    }
                 }
-                for (const DocumentCollection &collection : sourceCollections) {
-                    collectionNames.insert(collection.name);
-                }
-                QSet<QString> objectNames;
-                QSet<QString> dataNames;
+                BlenderIdNames objectNames;
+                BlenderIdNames dataNames;
                 const QString activeSceneName = activeSceneRecord().value(
                     QStringLiteral("name")).toString();
                 const auto collectObjectNames =
-                    [&objectNames, &dataNames](
+                    [&objectNames, &dataNames, &recordName](
                         const QVector<SceneObject> &objects) {
                         for (const SceneObject &object : objects) {
-                            if (!object.displayName.isEmpty()) {
-                                objectNames.insert(object.displayName);
+                            if (!object.libraryPath.isEmpty() &&
+                                !object.blenderLooseMeshEdgeCompanion) {
+                                if (!object.blenderSourceDataName.isEmpty()) {
+                                    recordName(dataNames,
+                                               object.blenderSourceDataName);
+                                }
+                                continue;
+                            }
+                            if (!object.blenderLooseMeshEdgeCompanion &&
+                                !object.displayName.isEmpty()) {
+                                recordName(objectNames, object.displayName);
                             }
                             if (!object.blenderSourceDataName.isEmpty()) {
-                                dataNames.insert(object.blenderSourceDataName);
+                                recordName(dataNames,
+                                           object.blenderSourceDataName);
                             }
                         }
                     };

@@ -11523,3 +11523,14 @@ scene depth.
   objects through the existing paste path. The action stays disabled when the
   clipboard is empty. `cmake --build build -j4` and `git diff --check` passed;
   no matched Blender Outliner interaction comparison was run.
+- The hundred-sixteenth tree update follows Blender 5.2.2's [collection
+  duplication](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_collections.cc#L634-L708)
+  and [ID name collision handling](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/main_namemap.cc#L530-L590).
+  Duplicated collection and object names now use Blender's lowest available
+  numeric suffix instead of always incrementing the source suffix. Collection
+  and object name allocation tracks local IDs of that type; newly cloned IDs
+  are added to the same name set as the batch proceeds. Data-block names use
+  the same lowest-suffix rule, though they still share one conservative name
+  set because the snapshot does not retain data-ID type identity. `cmake
+  --build build -j4` and `git diff --check` passed; no matched Blender
+  Outliner interaction comparison was run.

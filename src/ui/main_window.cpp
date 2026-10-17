@@ -3902,6 +3902,14 @@ private:
                     target.kind == OutlinerRowKind::Object) {
                     destinationCollection = target.parentCollectionId;
                 }
+                if (!parentObjects && destinationCollection.isValid()) {
+                    const DocumentCollection *destination =
+                        session_.document().collection(destinationCollection);
+                    if (destination == nullptr ||
+                        !destination->libraryPath.isEmpty()) {
+                        return;
+                    }
+                }
                 const ObjectId destinationObject =
                     target.kind == OutlinerRowKind::Object
                         ? target.objectId : ObjectId::invalid();
@@ -3927,8 +3935,15 @@ private:
                             continue;
                         }
                         QVector<CollectionId> parents = collection->parentIds;
+                        const DocumentCollection *sourceParent =
+                            source.parentCollectionId.isValid()
+                                ? session_.document().collection(
+                                      source.parentCollectionId)
+                                : nullptr;
                         if (!link && source.parentCollectionId.isValid() &&
-                            source.parentCollectionId != destinationCollection) {
+                            source.parentCollectionId != destinationCollection &&
+                            sourceParent != nullptr &&
+                            sourceParent->libraryPath.isEmpty()) {
                             parents.removeAll(source.parentCollectionId);
                         }
                         if (destinationCollection.isValid() &&
@@ -3987,7 +4002,13 @@ private:
                     QVector<CollectionId> memberships = object->collectionIds;
                     if (!link && source.linkedCollectionId.isValid() &&
                         !source.syntheticParentRow) {
-                        memberships.removeAll(source.linkedCollectionId);
+                        const DocumentCollection *sourceCollection =
+                            session_.document().collection(
+                                source.linkedCollectionId);
+                        if (sourceCollection != nullptr &&
+                            sourceCollection->libraryPath.isEmpty()) {
+                            memberships.removeAll(source.linkedCollectionId);
+                        }
                     }
                     if (destinationCollection.isValid() &&
                         !memberships.contains(destinationCollection)) {

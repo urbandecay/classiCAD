@@ -139,6 +139,29 @@ bool DocumentTransaction::setObjectAppearance(
     return true;
 }
 
+bool DocumentTransaction::appendMeshMaterialSlot(
+    ObjectId objectId, const QString &materialId)
+{
+    SceneObject *object = document_.mutableObject(objectId);
+    if (object == nullptr || materialId.isEmpty() ||
+        !document_.isObjectEditable(objectId) ||
+        object->geometry.geometryType != GeometryType::PolygonMesh) {
+        return false;
+    }
+    const bool materialExists = std::any_of(
+        document_.materials().cbegin(), document_.materials().cend(),
+        [&materialId](const DocumentMaterial &material) {
+            return material.id == materialId;
+        });
+    if (!materialExists) return false;
+
+    object->geometry.polygonMesh.materialSlotIds.append(materialId);
+    changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    changes_.objectAppearanceChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::addMaterial(const DocumentMaterial &material)
 {
     const bool alreadyPresent = std::any_of(

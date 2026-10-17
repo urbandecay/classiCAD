@@ -29,6 +29,7 @@ public:
     bool setObjectAppearance(ObjectId objectId,
                              const QVector4D &displayColorSceneLinear,
                              const WorkbenchMaterialData &workbenchMaterial);
+    bool appendMeshMaterialSlot(ObjectId objectId, const QString &materialId);
     bool addMaterial(const DocumentMaterial &material);
     CollectionId insertCollection(const DocumentCollection &collection);
     bool setCollectionVisibility(CollectionId collectionId,

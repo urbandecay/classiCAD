@@ -246,7 +246,8 @@ protected:
         QTreeWidgetItem *current = currentItem();
         const OutlinerRowReference currentReference = rowReference(current);
         if (currentReference.kind != OutlinerRowKind::Object &&
-            currentReference.kind != OutlinerRowKind::Collection) {
+            currentReference.kind != OutlinerRowKind::Collection &&
+            currentReference.kind != OutlinerRowKind::Material) {
             QTreeWidget::startDrag(supportedActions);
             return;
         }
@@ -280,7 +281,9 @@ protected:
             }
             const QString key = reference.kind == OutlinerRowKind::Object
                 ? QStringLiteral("o%1").arg(reference.objectId.value())
-                : QStringLiteral("c%1").arg(reference.collectionId.value());
+                : reference.kind == OutlinerRowKind::Collection
+                    ? QStringLiteral("c%1").arg(reference.collectionId.value())
+                    : QStringLiteral("m%1").arg(reference.materialId);
             if (seen.contains(key)) return;
             seen.insert(key);
             draggedRows_.append(reference);
@@ -339,6 +342,8 @@ protected:
             event->ignore();
             return;
         }
+        const bool materialDrop =
+            draggedRows_.first().kind == OutlinerRowKind::Material;
         if (target.kind == OutlinerRowKind::Collection &&
             draggedRows_.first().kind == OutlinerRowKind::Collection) {
             const QRect targetRect = visualItemRect(targetItem);
@@ -362,13 +367,17 @@ protected:
                 }
             }
         }
-        if (target.kind == OutlinerRowKind::Object &&
+        if (target.kind == OutlinerRowKind::Object && !materialDrop &&
             !event->modifiers().testFlag(Qt::ShiftModifier)) {
             target.kind = target.parentCollectionId.isValid()
                 ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
             target.collectionId = target.parentCollectionId;
         }
-        if (event->modifiers().testFlag(Qt::ShiftModifier) &&
+        if (materialDrop && target.kind != OutlinerRowKind::Object) {
+            event->ignore();
+            return;
+        }
+        if (event->modifiers().testFlag(Qt::ShiftModifier) && !materialDrop &&
             (draggedRows_.first().kind != OutlinerRowKind::Object ||
              target.kind != OutlinerRowKind::Object)) {
             event->ignore();
@@ -414,6 +423,9 @@ private:
         if (reference.kind == OutlinerRowKind::SceneRoot) {
             reference.sceneKey = item->data(nameColumn, itemSceneKeyRole)
                                      .toString();
+        }
+        if (reference.kind == OutlinerRowKind::Material) {
+            reference.materialId = item->data(nameColumn, itemIdRole).toString();
         }
         if (reference.kind == OutlinerRowKind::Object) {
             reference.objectId = ObjectId::fromValue(value);
@@ -2088,6 +2100,15 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             const QString &path, const QString &description) {
             QTreeWidgetItem *materialRow = appendContentRow(
                 parent, material.name, path, description);
+            if (materialRow != nullptr && !material.materialId.isEmpty()) {
+                materialRow->setData(nameColumn, itemKindRole,
+                    static_cast<int>(OutlinerRowKind::Material));
+                materialRow->setData(nameColumn, itemIdRole,
+                                     material.materialId);
+                materialRow->setFlags(Qt::ItemIsEnabled |
+                                      Qt::ItemIsSelectable |
+                                      Qt::ItemIsDragEnabled);
+            }
             const OutlinerAnimationEntry &source = material.animation;
             if (!source.hasAnimationData) return;
             QTreeWidgetItem *animation = appendContentRow(

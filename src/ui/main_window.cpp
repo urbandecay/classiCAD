@@ -3032,23 +3032,33 @@ private:
                     entry.sceneKeys.append(defaultSceneKey);
                 }
                 entry.materialNames = object.blenderSourceMaterialNames;
-                if (entry.materialNames.isEmpty() &&
-                    object.geometry.geometryType == GeometryType::PolygonMesh) {
+                QStringList materialIdsForRows;
+                if (object.geometry.geometryType == GeometryType::PolygonMesh &&
+                    !object.geometry.polygonMesh.materialSlotIds.isEmpty()) {
                     const PolygonMesh3D &mesh = object.geometry.polygonMesh;
-                    if (!mesh.materialSlotIds.isEmpty()) {
-                        for (const QString &materialId : mesh.materialSlotIds) {
-                            const QString materialName =
-                                materialNamesById.value(materialId);
-                            if (!materialName.isEmpty()) {
-                                entry.materialNames.append(materialName);
-                            }
+                    entry.materialNames.clear();
+                    int sourceMaterialIndex = 0;
+                    for (const QString &materialId : mesh.materialSlotIds) {
+                        if (materialId.isEmpty()) continue;
+                        QString materialName = materialNamesById.value(materialId);
+                        if (materialName.isEmpty() &&
+                            sourceMaterialIndex <
+                                object.blenderSourceMaterialNames.size()) {
+                            materialName = object.blenderSourceMaterialNames[
+                                sourceMaterialIndex];
                         }
-                    } else {
-                        for (const PolygonMeshMaterialSlot &material :
-                             mesh.materialSlots) {
-                            if (!material.name.isEmpty()) {
-                                entry.materialNames.append(material.name);
-                            }
+                        ++sourceMaterialIndex;
+                        if (materialName.isEmpty()) continue;
+                        entry.materialNames.append(materialName);
+                        materialIdsForRows.append(materialId);
+                    }
+                } else if (entry.materialNames.isEmpty() &&
+                           object.geometry.geometryType ==
+                               GeometryType::PolygonMesh) {
+                    for (const PolygonMeshMaterialSlot &material :
+                         object.geometry.polygonMesh.materialSlots) {
+                        if (!material.name.isEmpty()) {
+                            entry.materialNames.append(material.name);
                         }
                     }
                 }
@@ -3056,6 +3066,9 @@ private:
                      index < entry.materialNames.size(); ++index) {
                     OutlinerMaterialEntry material;
                     material.name = entry.materialNames[index];
+                    if (index < materialIdsForRows.size()) {
+                        material.materialId = materialIdsForRows[index];
+                    }
                     if (index < object.blenderSourceMaterialAnimations.size()) {
                         material.animation = toOutlinerAnimation(
                             object.blenderSourceMaterialAnimations[index]);
@@ -3889,6 +3902,35 @@ private:
                    bool parentObjects,
                    OutlinerDropPosition position) {
                 if (sources.isEmpty()) return;
+                if (sources.first().kind == OutlinerRowKind::Material) {
+                    if (target.kind != OutlinerRowKind::Object ||
+                        !target.objectId.isValid()) {
+                        return;
+                    }
+                    DocumentTransaction materialTransaction =
+                        session_.beginTransaction();
+                    QSet<QString> assignedMaterialIds;
+                    bool materialChanged = false;
+                    for (const OutlinerRowReference &source : sources) {
+                        if (source.kind != OutlinerRowKind::Material ||
+                            source.materialId.isEmpty() ||
+                            assignedMaterialIds.contains(source.materialId)) {
+                            continue;
+                        }
+                        assignedMaterialIds.insert(source.materialId);
+                        materialChanged =
+                            materialTransaction.appendMeshMaterialSlot(
+                                target.objectId, source.materialId) ||
+                            materialChanged;
+                    }
+                    if (materialChanged &&
+                        !session_.commitTransaction(materialTransaction)) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not assign material to object"),
+                            4000);
+                    }
+                    return;
+                }
                 DocumentTransaction transaction = session_.beginTransaction();
                 bool changed = false;
                 const bool relativeCollectionDrop =

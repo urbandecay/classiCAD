@@ -45,6 +45,8 @@ struct OutlinerAnimationEntry {
 
 struct OutlinerMaterialEntry {
     QString name;
+    // Stable imported material identity. Empty for display-only material rows.
+    QString materialId;
     OutlinerAnimationEntry animation;
 };
 
@@ -114,7 +116,8 @@ enum class OutlinerRowKind {
     SceneRoot,
     SceneGroup,
     ObjectContent,
-    SourceObject
+    SourceObject,
+    Material
 };
 enum class OutlinerDropPosition {
     Into,
@@ -137,6 +140,7 @@ struct OutlinerRowReference {
     CollectionId linkedCollectionId = CollectionId::invalid();
     CollectionId parentCollectionId = CollectionId::invalid();
     QString sceneKey;
+    QString materialId;
     bool syntheticParentRow = false;
 };
 

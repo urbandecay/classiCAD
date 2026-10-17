@@ -11451,3 +11451,13 @@ scene depth.
   identity snapshots and do not edit the source `.blend`. `cmake --build build
   -j4` and `git diff --check` passed; no matched Blender Outliner interaction
   comparison was run.
+- The hundred-ninth tree update follows Blender 5.2.2's selected object
+  [`unlink_object_fn()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L435-L503)
+  dispatch. Unlink from Collection now removes the selected Outliner object
+  rows' collection links in one undoable transaction. It groups repeated rows
+  for one object so multiple selected collection links are removed together,
+  and skips linked collections that Blender does not allow to be unlinked.
+  Right-clicking an unselected row targets only that row. This changes local
+  scene membership and does not edit source library files. `cmake --build
+  build -j4` and `git diff --check` passed; no matched Blender Outliner
+  interaction comparison was run.

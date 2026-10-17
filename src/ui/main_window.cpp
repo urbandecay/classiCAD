@@ -7288,18 +7288,46 @@ private:
                         QStringLiteral("Could not make objects local"), 4000);
                 }
             };
-        collectionCallbacks.unlinkObject =
-            [this](ObjectId id, CollectionId collectionId) {
-                const SceneObject *object = session_.document().object(id);
-                if (object == nullptr ||
-                    !object->collectionIds.contains(collectionId)) return;
-                QVector<CollectionId> memberships = object->collectionIds;
-                memberships.removeAll(collectionId);
+        collectionCallbacks.unlinkObjects =
+            [this](const QVector<OutlinerObjectCollectionLink> &targets) {
+                QHash<quint64, ObjectId> objectsByValue;
+                QHash<quint64, QSet<quint64>> collectionsByObject;
+                const Document &document = session_.document();
+                for (const OutlinerObjectCollectionLink &target : targets) {
+                    const SceneObject *object = document.object(target.objectId);
+                    const DocumentCollection *collection =
+                        document.collection(target.collectionId);
+                    if (object == nullptr || collection == nullptr ||
+                        !object->collectionIds.contains(target.collectionId) ||
+                        !collection->libraryPath.isEmpty()) {
+                        continue;
+                    }
+                    objectsByValue.insert(target.objectId.value(),
+                                          target.objectId);
+                    collectionsByObject[target.objectId.value()].insert(
+                        target.collectionId.value());
+                }
+                if (objectsByValue.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setObjectCollections(id, memberships) ||
-                    !session_.commitTransaction(transaction)) {
+                bool changed = false;
+                for (auto it = objectsByValue.cbegin();
+                     it != objectsByValue.cend(); ++it) {
+                    const SceneObject *object = document.object(it.value());
+                    if (object == nullptr) continue;
+                    QVector<CollectionId> memberships = object->collectionIds;
+                    for (const quint64 collectionValue :
+                         collectionsByObject.value(it.key())) {
+                        memberships.removeAll(
+                            CollectionId::fromValue(collectionValue));
+                    }
+                    if (memberships != object->collectionIds) {
+                        changed = transaction.setObjectCollections(
+                                      it.value(), memberships) || changed;
+                    }
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not unlink object from collection"),
+                        QStringLiteral("Could not unlink objects from collections"),
                         4000);
                 }
             };

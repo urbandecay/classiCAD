@@ -3016,14 +3016,41 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.setObjectsAssetMarked(objectTargetIds, false);
             });
         }
-        const CollectionId linkedCollectionId = CollectionId::fromValue(
-            item->data(nameColumn, itemLinkedCollectionRole).toULongLong());
-        if (callbacks_.unlinkObject && linkedCollectionId.isValid()) {
+        QVector<OutlinerObjectCollectionLink> unlinkTargets;
+        const QString clickedViewLayerKey = item->data(
+            nameColumn, itemViewLayerKeyRole).toString();
+        for (QTreeWidgetItem *candidate : objectTargetRows) {
+            if (candidate->data(nameColumn, itemViewLayerKeyRole).toString() !=
+                clickedViewLayerKey) {
+                continue;
+            }
+            const ObjectId candidateObjectId = ObjectId::fromValue(
+                candidate->data(nameColumn, itemIdRole).toULongLong());
+            const CollectionId candidateCollectionId = CollectionId::fromValue(
+                candidate->data(nameColumn,
+                                itemLinkedCollectionRole).toULongLong());
+            if (!candidateObjectId.isValid() ||
+                !candidateCollectionId.isValid()) {
+                continue;
+            }
+            const bool alreadyIncluded = std::any_of(
+                unlinkTargets.cbegin(), unlinkTargets.cend(),
+                [candidateObjectId, candidateCollectionId](
+                    const OutlinerObjectCollectionLink &target) {
+                    return target.objectId == candidateObjectId &&
+                           target.collectionId == candidateCollectionId;
+                });
+            if (!alreadyIncluded) {
+                unlinkTargets.append(
+                    {candidateObjectId, candidateCollectionId});
+            }
+        }
+        if (callbacks_.unlinkObjects && !unlinkTargets.isEmpty()) {
             QAction *unlink = menu.addAction(
                 QStringLiteral("Unlink from Collection"));
             connect(unlink, &QAction::triggered, this,
-                    [this, objectId, linkedCollectionId]() {
-                callbacks_.unlinkObject(objectId, linkedCollectionId);
+                    [this, unlinkTargets]() {
+                callbacks_.unlinkObjects(unlinkTargets);
             });
         }
         if (callbacks_.createCollection) {

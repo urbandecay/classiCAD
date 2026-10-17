@@ -160,6 +160,11 @@ struct OutlinerCollectionContext {
     QStringList sourcePath;
 };
 
+struct OutlinerObjectCollectionLink {
+    ObjectId objectId = ObjectId::invalid();
+    CollectionId collectionId = CollectionId::invalid();
+};
+
 struct OutlinerViewLayerEntry {
     QString key;
     QString displayName;
@@ -303,7 +308,8 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId, const QString &)> renameObject;
     std::function<void(const QVector<ObjectId> &, bool)> setObjectsAssetMarked;
     std::function<void(const QVector<ObjectId> &)> makeObjectsLocal;
-    std::function<void(ObjectId, CollectionId)> unlinkObject;
+    std::function<void(const QVector<OutlinerObjectCollectionLink> &)>
+        unlinkObjects;
     std::function<void(const QVector<CollectionId> &)>
         removeCollectionHierarchy;
     std::function<void(CollectionId, bool, bool, bool)> setViewportVisibility;

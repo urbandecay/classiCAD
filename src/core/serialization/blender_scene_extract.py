@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 44
+BRIDGE_FORMAT_VERSION = 45
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -35,6 +35,7 @@ SCENE_LINEAR_FLOAT_PAYLOAD_BYTES = 0
 SCENE_LINEAR_FLOAT_PAYLOAD_CACHE = {}
 MAX_COLOR_LUTS = 8
 MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
+MAX_OUTLINER_HIERARCHY_ITEMS = 1024
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
@@ -657,6 +658,43 @@ def data_block_animation_metadata(data_block):
     }
 
 
+def outliner_name_tree(items, include_constraints=False):
+    """Bounded Blender name/parent tree used by display-only Outliner rows."""
+    remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+
+    def convert(item, depth):
+        if remaining[0] <= 0 or depth >= 128:
+            return None
+        remaining[0] -= 1
+        result = {"name": str(item.name), "children": []}
+        if include_constraints:
+            constraints = []
+            for constraint in list(getattr(item, "constraints", ())):
+                if remaining[0] <= 0:
+                    break
+                constraints.append(str(constraint.name))
+                remaining[0] -= 1
+            result["constraints"] = constraints
+        for child in getattr(item, "children", ()):
+            row = convert(child, depth + 1)
+            if row is not None:
+                result["children"].append(row)
+            if remaining[0] <= 0:
+                break
+        return result
+
+    rows = []
+    for item in items:
+        if getattr(item, "parent", None) is not None:
+            continue
+        row = convert(item, 0)
+        if row is not None:
+            rows.append(row)
+        if remaining[0] <= 0:
+            break
+    return rows
+
+
 def object_metadata(obj, scene, depsgraph=None):
     parent = obj.parent
     library_path = source_library_path(obj)
@@ -804,6 +842,23 @@ def object_metadata(obj, scene, depsgraph=None):
                 max(corner[axis] for corner in corners) for axis in range(3)]
             record["bounds_transform_world"] = matrix_values(
                 bounds_obj.matrix_world)
+    if obj.type == "ARMATURE" and obj.data is not None:
+        is_pose_mode = str(getattr(obj, "mode", "")) == "POSE"
+        is_edit_mode = str(getattr(obj, "mode", "")) == "EDIT"
+        record["has_pose"] = obj.pose is not None
+        record["show_pose_channels"] = bool(
+            obj.pose is not None and is_pose_mode and not is_edit_mode)
+        if is_edit_mode:
+            bones = getattr(obj.data, "edit_bones", ())
+        else:
+            bones = getattr(obj.data, "bones", ())
+        record["armature_bone_tree"] = (
+            [] if is_pose_mode else outliner_name_tree(bones))
+        record["pose_bone_tree"] = (
+            outliner_name_tree(obj.pose.bones, include_constraints=True)
+            if record["show_pose_channels"] else [])
+        record["bone_collection_tree"] = outliner_name_tree(
+            getattr(obj.data, "collections", ()))
     return record
 
 

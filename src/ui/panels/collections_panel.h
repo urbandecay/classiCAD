@@ -7,6 +7,7 @@
 
 #include <QFrame>
 #include <QHash>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPoint>
 #include <QSet>
@@ -59,6 +60,11 @@ struct OutlinerObjectEntry {
     QString sourceObjectId;
     QString outlinerDescription;
     QString instancedCollectionName;
+    bool hasPose = false;
+    bool showPoseChannels = false;
+    QJsonArray poseBoneTree;
+    QJsonArray armatureBoneTree;
+    QJsonArray boneCollectionTree;
     QString name;
     QString blenderType;
     QString dataBlockName;

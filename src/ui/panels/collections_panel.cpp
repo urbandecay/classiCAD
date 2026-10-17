@@ -1721,6 +1721,42 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                 }
             }
         };
+        const auto appendNamedTree = [&appendContentRow] (
+            const auto &self, QTreeWidgetItem *parent,
+            const QJsonArray &nodes, const QString &path,
+            const QString &description, bool includeConstraints) -> void {
+            for (qsizetype index = 0; index < nodes.size(); ++index) {
+                const QJsonObject node = nodes[index].toObject();
+                const QString nodePath = path + QStringLiteral("/item-%1")
+                    .arg(index);
+                QTreeWidgetItem *row = appendContentRow(
+                    parent, node.value(QStringLiteral("name")).toString(),
+                    nodePath, description);
+                if (row == nullptr) continue;
+                if (includeConstraints) {
+                    const QJsonArray constraints = node.value(
+                        QStringLiteral("constraints")).toArray();
+                    if (!constraints.isEmpty()) {
+                        QTreeWidgetItem *constraintGroup = appendContentRow(
+                            row, QStringLiteral("Constraints"),
+                            nodePath + QStringLiteral("/constraints"),
+                            QStringLiteral("Blender pose-bone constraints"));
+                        for (qsizetype constraintIndex = 0;
+                             constraintIndex < constraints.size();
+                             ++constraintIndex) {
+                            appendContentRow(
+                                constraintGroup,
+                                constraints[constraintIndex].toString(),
+                                nodePath + QStringLiteral("/constraint-%1")
+                                    .arg(constraintIndex),
+                                QStringLiteral("Blender pose-bone constraint"));
+                        }
+                    }
+                }
+                self(self, row, node.value(QStringLiteral("children")).toArray(),
+                     nodePath, description, includeConstraints);
+            }
+        };
         if (entry.hasAnimationData) {
             QTreeWidgetItem *animation = appendContentRow(
                 item, QStringLiteral("Animation"), QStringLiteral("/animation"),
@@ -1769,6 +1805,17 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                             QStringLiteral("Blender NLA action data block"));
                     }
                 }
+            }
+        }
+        if (entry.hasPose) {
+            QTreeWidgetItem *pose = appendContentRow(
+                item, QStringLiteral("Pose"), QStringLiteral("/pose"),
+                QStringLiteral("Blender armature pose"));
+            if (entry.showPoseChannels) {
+                appendNamedTree(
+                    appendNamedTree, pose, entry.poseBoneTree,
+                    QStringLiteral("/pose/bones"),
+                    QStringLiteral("Blender pose bone"), true);
             }
         }
         QTreeWidgetItem *dataBlock = appendContentRow(
@@ -1828,6 +1875,21 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                         }
                     }
                 }
+            }
+            appendNamedTree(
+                appendNamedTree, dataBlock, entry.armatureBoneTree,
+                QStringLiteral("/data/bones"),
+                QStringLiteral("Blender armature bone"), false);
+            if (!entry.boneCollectionTree.isEmpty()) {
+                QTreeWidgetItem *boneCollections = appendContentRow(
+                    dataBlock, QStringLiteral("Bone Collections"),
+                    QStringLiteral("/data/bone-collections"),
+                    QStringLiteral("Blender armature bone collections"));
+                appendNamedTree(
+                    appendNamedTree, boneCollections,
+                    entry.boneCollectionTree,
+                    QStringLiteral("/data/bone-collections/items"),
+                    QStringLiteral("Blender bone collection"), false);
             }
             if (!entry.shapeKeyDataName.isEmpty()) {
                 QTreeWidgetItem *shapeKeyData = appendContentRow(

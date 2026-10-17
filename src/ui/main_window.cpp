@@ -3084,6 +3084,16 @@ private:
                     entry.instancedCollectionName = record.value(
                         QStringLiteral("instance_collection")).toString();
                 }
+                entry.hasPose = record.value(
+                    QStringLiteral("has_pose")).toBool();
+                entry.showPoseChannels = record.value(
+                    QStringLiteral("show_pose_channels")).toBool();
+                entry.poseBoneTree = record.value(
+                    QStringLiteral("pose_bone_tree")).toArray();
+                entry.armatureBoneTree = record.value(
+                    QStringLiteral("armature_bone_tree")).toArray();
+                entry.boneCollectionTree = record.value(
+                    QStringLiteral("bone_collection_tree")).toArray();
                 entry.name = record.value(QStringLiteral("name")).toString();
                 entry.blenderType = objectType;
                 entry.dataBlockName = record.value(

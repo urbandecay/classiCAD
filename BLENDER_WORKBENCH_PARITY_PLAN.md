@@ -10990,9 +10990,21 @@ scene depth.
   collection ID and display name, while native document version 37 already
   preserves the optional source record. Build passed; no matched Outliner UI
   comparison was run.
+- The thirtieth tree update follows Blender's Pose, Armature, and Bone
+  Collection elements in
+  [`tree_element_pose.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_pose.cc#L25-L71),
+  [`tree_element_id_armature.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_armature.cc#L29-L49),
+  and [`tree_element_bone_collection.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_bone_collection.cc#L18-L50).
+  Armature Outliner rows now retain the Pose group, pose bones and their
+  constraints when pose channels are available, the parented armature bone
+  rows, and nested bone collections. The extractor bounds each captured tree
+  to 1,024 names. Blender bridge version 45 adds this data to the already
+  preserved source-only records; native document version 37 remains unchanged.
+  These rows remain display-only. Build passed; no matched Outliner UI
+  comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
-  subtrees beyond the currently supported rows, and a matched Blender/classiCAD
-  interaction comparison. Do not
+  subtrees beyond the currently supported rows, unsupported-object parenting,
+  and a matched Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

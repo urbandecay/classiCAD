@@ -1913,7 +1913,104 @@ bool CollectionsPanel::activateObjectRow(
 void CollectionsPanel::showContextMenu(const QPoint &position)
 {
     QTreeWidgetItem *item = tree_ != nullptr ? tree_->itemAt(position) : nullptr;
-    if (item == nullptr) return;
+    if (item == nullptr) {
+        if (tree_ == nullptr) return;
+        QMenu menu(this);
+        QMenu *viewMenu = menu.addMenu(QStringLiteral("View"));
+        const ObjectId activeObjectId = callbacks_.activeObjectId
+            ? callbacks_.activeObjectId() : ObjectId::invalid();
+        QAction *showActive = viewMenu->addAction(
+            QStringLiteral("Show Active"));
+        showActive->setEnabled(activeObjectId.isValid());
+        connect(showActive, &QAction::triggered, this,
+                [this, activeObjectId]() {
+            if (!activeObjectId.isValid() || tree_ == nullptr) return;
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
+            }
+            while (!pending.isEmpty()) {
+                QTreeWidgetItem *candidate = pending.takeLast();
+                if (candidate->data(nameColumn, itemKindRole).toInt() ==
+                        static_cast<int>(OutlinerRowKind::Object) &&
+                    ObjectId::fromValue(candidate->data(
+                        nameColumn, itemIdRole).toULongLong()) ==
+                        activeObjectId) {
+                    for (QTreeWidgetItem *ancestor = candidate->parent();
+                         ancestor != nullptr; ancestor = ancestor->parent()) {
+                        if (!ancestor->isHidden()) ancestor->setExpanded(true);
+                    }
+                    tree_->scrollToItem(candidate,
+                                        QAbstractItemView::PositionAtCenter);
+                    tree_->setCurrentItem(candidate, nameColumn,
+                                          QItemSelectionModel::NoUpdate);
+                    return;
+                }
+                for (int childIndex = 0;
+                     childIndex < candidate->childCount(); ++childIndex) {
+                    pending.append(candidate->child(childIndex));
+                }
+            }
+        });
+        viewMenu->addSeparator();
+
+        QAction *expandedToggle = viewMenu->addAction(
+            QStringLiteral("Expand/Collapse All"));
+        expandedToggle->setEnabled(!dataApiDisplayMode_);
+        connect(expandedToggle, &QAction::triggered, this, [this]() {
+            if (tree_ == nullptr || dataApiDisplayMode_) return;
+            bool anyExpanded = false;
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
+            }
+            while (!pending.isEmpty()) {
+                QTreeWidgetItem *candidate = pending.takeLast();
+                anyExpanded = anyExpanded || candidate->isExpanded();
+                for (int childIndex = 0;
+                     childIndex < candidate->childCount(); ++childIndex) {
+                    pending.append(candidate->child(childIndex));
+                }
+            }
+            if (anyExpanded) {
+                tree_->collapseAll();
+            } else {
+                tree_->expandAll();
+            }
+        });
+
+        QAction *showHierarchy = viewMenu->addAction(
+            QStringLiteral("Show Object Hierarchy"));
+        showHierarchy->setEnabled(!dataApiDisplayMode_);
+        connect(showHierarchy, &QAction::triggered, this, [this]() {
+            if (tree_ != nullptr && !dataApiDisplayMode_) tree_->expandAll();
+        });
+
+        const auto setOneLevel = [this](bool open) {
+            if (tree_ == nullptr || dataApiDisplayMode_) return;
+            QVector<QTreeWidgetItem *> targets = tree_->selectedItems();
+            if (targets.isEmpty()) {
+                for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                    targets.append(tree_->topLevelItem(index));
+                }
+            }
+            for (QTreeWidgetItem *target : targets) {
+                target->setExpanded(open);
+            }
+        };
+        QAction *showOneLevel = viewMenu->addAction(
+            QStringLiteral("Show One Level"));
+        showOneLevel->setEnabled(!dataApiDisplayMode_);
+        connect(showOneLevel, &QAction::triggered, this,
+                [setOneLevel]() { setOneLevel(true); });
+        QAction *hideOneLevel = viewMenu->addAction(
+            QStringLiteral("Hide One Level"));
+        hideOneLevel->setEnabled(!dataApiDisplayMode_);
+        connect(hideOneLevel, &QAction::triggered, this,
+                [setOneLevel]() { setOneLevel(false); });
+        menu.exec(tree_->viewport()->mapToGlobal(position));
+        return;
+    }
     const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
         item->data(nameColumn, itemKindRole).toInt());
     if (kind == OutlinerRowKind::ObjectContent ||

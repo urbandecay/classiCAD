@@ -1627,9 +1627,14 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             QTreeWidgetItem *animation = appendContentRow(
                 item, QStringLiteral("Animation"), QStringLiteral("/animation"),
                 QStringLiteral("Blender object animation data"));
-            appendContentRow(animation, entry.animationActionName,
-                             QStringLiteral("/animation/action"),
-                             QStringLiteral("Blender active action data block"));
+            QTreeWidgetItem *action = appendContentRow(
+                animation, entry.animationActionName,
+                QStringLiteral("/animation/action"),
+                QStringLiteral("Blender active action data block"));
+            appendContentRow(
+                action, entry.animationActionSlotName,
+                QStringLiteral("/animation/action/slot"),
+                QStringLiteral("Blender assigned action slot"));
             if (entry.hasDrivers) {
                 QTreeWidgetItem *drivers = appendContentRow(
                     animation, QStringLiteral("Drivers"),
@@ -1677,10 +1682,14 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                     dataBlock, QStringLiteral("Animation"),
                     QStringLiteral("/data/animation"),
                     QStringLiteral("Blender data-block animation data"));
-                appendContentRow(
+                QTreeWidgetItem *action = appendContentRow(
                     animation, entry.dataAnimationActionName,
                     QStringLiteral("/data/animation/action"),
                     QStringLiteral("Blender data-block active action"));
+                appendContentRow(
+                    action, entry.dataAnimationActionSlotName,
+                    QStringLiteral("/data/animation/action/slot"),
+                    QStringLiteral("Blender assigned data-block action slot"));
                 if (entry.dataHasDrivers) {
                     QTreeWidgetItem *drivers = appendContentRow(
                         animation, QStringLiteral("Drivers"),

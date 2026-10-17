@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 34);
+    serialized.insert(QStringLiteral("version"), 35);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -571,6 +571,8 @@ QJsonObject documentToJson(const Document &document)
                  sceneObject.blenderSourceDataAnimation.hasAnimationData},
                 {QStringLiteral("actionName"),
                  sceneObject.blenderSourceDataAnimation.actionName},
+                {QStringLiteral("actionSlotName"),
+                 sceneObject.blenderSourceDataAnimation.actionSlotName},
                 {QStringLiteral("hasDrivers"),
                  sceneObject.blenderSourceDataAnimation.hasDrivers},
                 {QStringLiteral("driverTargetNames"), dataDriverTargetNames},
@@ -607,6 +609,9 @@ QJsonObject documentToJson(const Document &document)
                                 sceneObject.blenderSourceHasAnimationData);
         serializedObject.insert(QStringLiteral("blenderSourceAnimationActionName"),
                                 sceneObject.blenderSourceAnimationActionName);
+        serializedObject.insert(
+            QStringLiteral("blenderSourceAnimationActionSlotName"),
+            sceneObject.blenderSourceAnimationActionSlotName);
         serializedObject.insert(QStringLiteral("blenderSourceHasDrivers"),
                                 sceneObject.blenderSourceHasDrivers);
         QJsonArray driverTargetNames;
@@ -732,7 +737,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 34) {
+    if (version < 1 || version > 35) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1671,6 +1676,18 @@ bool documentFromJson(const QJsonValue &value,
             }
             sceneObject.blenderSourceHasAnimationData = hasAnimationValue.toBool();
             sceneObject.blenderSourceAnimationActionName = actionNameValue.toString();
+            if (version >= 35) {
+                const QJsonValue actionSlotNameValue = serializedObject.value(
+                    QStringLiteral("blenderSourceAnimationActionSlotName"));
+                if (!actionSlotNameValue.isString() ||
+                    actionSlotNameValue.toString().size() > 4096) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender animation action slot name"));
+                    return false;
+                }
+                sceneObject.blenderSourceAnimationActionSlotName =
+                    actionSlotNameValue.toString();
+            }
             sceneObject.blenderSourceHasDrivers = hasDriversValue.toBool();
             for (const QJsonValue &nameValue : driverNamesValue.toArray()) {
                 if (!nameValue.isString() || nameValue.toString().size() > 4096) {
@@ -1799,6 +1816,8 @@ bool documentFromJson(const QJsonValue &value,
                 QStringLiteral("hasAnimationData"));
             const QJsonValue actionNameValue = dataAnimation.value(
                 QStringLiteral("actionName"));
+            const QJsonValue actionSlotNameValue = dataAnimation.value(
+                QStringLiteral("actionSlotName"));
             const QJsonValue hasDriversValue = dataAnimation.value(
                 QStringLiteral("hasDrivers"));
             const QJsonValue driverNamesValue = dataAnimation.value(
@@ -1807,6 +1826,8 @@ bool documentFromJson(const QJsonValue &value,
                 QStringLiteral("nlaTracks"));
             if (!hasAnimationValue.isBool() || !actionNameValue.isString() ||
                 actionNameValue.toString().size() > 4096 ||
+                (version >= 35 && (!actionSlotNameValue.isString() ||
+                    actionSlotNameValue.toString().size() > 4096)) ||
                 !hasDriversValue.isBool() || !driverNamesValue.isArray() ||
                 driverNamesValue.toArray().size() > 1024 ||
                 !nlaTracksValue.isArray() || nlaTracksValue.toArray().size() > 1024) {
@@ -1818,6 +1839,9 @@ bool documentFromJson(const QJsonValue &value,
                 sceneObject.blenderSourceDataAnimation;
             animation.hasAnimationData = hasAnimationValue.toBool();
             animation.actionName = actionNameValue.toString();
+            if (version >= 35) {
+                animation.actionSlotName = actionSlotNameValue.toString();
+            }
             animation.hasDrivers = hasDriversValue.toBool();
             for (const QJsonValue &nameValue : driverNamesValue.toArray()) {
                 if (!nameValue.isString() || nameValue.toString().size() > 4096) {

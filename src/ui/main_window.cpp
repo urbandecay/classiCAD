@@ -2887,6 +2887,8 @@ private:
                     object.blenderSourceDataAnimation.hasAnimationData;
                 entry.dataAnimationActionName =
                     object.blenderSourceDataAnimation.actionName;
+                entry.dataAnimationActionSlotName =
+                    object.blenderSourceDataAnimation.actionSlotName;
                 entry.dataHasDrivers =
                     object.blenderSourceDataAnimation.hasDrivers;
                 entry.dataDriverTargetNames =
@@ -2906,6 +2908,8 @@ private:
                 entry.hasAnimationData = object.blenderSourceHasAnimationData;
                 entry.animationActionName =
                     object.blenderSourceAnimationActionName;
+                entry.animationActionSlotName =
+                    object.blenderSourceAnimationActionSlotName;
                 entry.hasDrivers = object.blenderSourceHasDrivers;
                 entry.driverTargetNames =
                     object.blenderSourceDriverTargetNames;

@@ -122,6 +122,7 @@ struct BlenderSourceModifier {
 struct BlenderSourceAnimationData {
     bool hasAnimationData = false;
     QString actionName;
+    QString actionSlotName;
     bool hasDrivers = false;
     QStringList driverTargetNames;
     QVector<BlenderSourceNlaTrack> nlaTracks;
@@ -168,6 +169,7 @@ struct SceneObject {
     QStringList blenderSourceVertexGroupNames;
     bool blenderSourceHasAnimationData = false;
     QString blenderSourceAnimationActionName;
+    QString blenderSourceAnimationActionSlotName;
     bool blenderSourceHasDrivers = false;
     QStringList blenderSourceDriverTargetNames;
     QVector<BlenderSourceNlaTrack> blenderSourceNlaTracks;

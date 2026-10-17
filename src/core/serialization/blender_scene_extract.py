@@ -24,7 +24,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 41
+BRIDGE_FORMAT_VERSION = 42
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -616,6 +616,7 @@ def visibility_metadata(obj):
 def data_block_animation_metadata(data_block):
     animation_data = getattr(data_block, "animation_data", None)
     action = getattr(animation_data, "action", None)
+    action_slot = getattr(animation_data, "action_slot", None)
     drivers = getattr(animation_data, "drivers", ())
     nla_track_collection = getattr(animation_data, "nla_tracks", ())
     driver_target_names = []
@@ -646,6 +647,10 @@ def data_block_animation_metadata(data_block):
             (action is not None or drivers or nla_track_collection)
         ),
         "action_name": action.name if action is not None else "",
+        "action_slot_name": (
+            getattr(action_slot, "name_display", "")
+            if action_slot is not None else ""
+        ),
         "has_drivers": bool(drivers),
         "driver_target_names": driver_target_names[:1024],
         "nla_tracks": nla_tracks,
@@ -656,6 +661,7 @@ def object_metadata(obj, scene, depsgraph=None):
     parent = obj.parent
     library_path = source_library_path(obj)
     animation_data = getattr(obj, "animation_data", None)
+    action_slot = getattr(animation_data, "action_slot", None)
     driver_target_names = []
     if animation_data is not None:
         last_added_target = None
@@ -742,6 +748,10 @@ def object_metadata(obj, scene, depsgraph=None):
             animation_data.action.name
             if animation_data is not None and animation_data.action is not None
             else ""
+        ),
+        "animation_action_slot_name": (
+            getattr(action_slot, "name_display", "")
+            if action_slot is not None else ""
         ),
         "has_drivers": bool(
             animation_data is not None and animation_data.drivers

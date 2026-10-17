@@ -2819,7 +2819,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
          bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38 &&
-         bridgeVersion != 39 && bridgeVersion != 40 && bridgeVersion != 41)) {
+         bridgeVersion != 39 && bridgeVersion != 40 && bridgeVersion != 41 &&
+         bridgeVersion != 42)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3549,6 +3550,23 @@ bool importBlenderScene(const QString &path,
                 }
             }
         }
+        if (bridgeVersion >= 42) {
+            const QJsonValue actionSlotNameValue = item.value(
+                QStringLiteral("animation_action_slot_name"));
+            const QJsonValue dataAnimationValue = item.value(
+                QStringLiteral("data_animation"));
+            const QJsonValue dataActionSlotNameValue = dataAnimationValue
+                .toObject().value(QStringLiteral("action_slot_name"));
+            if (!actionSlotNameValue.isString() ||
+                actionSlotNameValue.toString().size() > 4096 ||
+                !dataAnimationValue.isObject() ||
+                !dataActionSlotNameValue.isString() ||
+                dataActionSlotNameValue.toString().size() > 4096) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender action-slot name is invalid"));
+                return false;
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3661,6 +3679,10 @@ bool importBlenderScene(const QString &path,
                 QStringLiteral("has_animation_data")).toBool();
             animation.actionName = dataAnimation.value(
                 QStringLiteral("action_name")).toString();
+            if (bridgeVersion >= 42) {
+                animation.actionSlotName = dataAnimation.value(
+                    QStringLiteral("action_slot_name")).toString();
+            }
             animation.hasDrivers = dataAnimation.value(
                 QStringLiteral("has_drivers")).toBool();
             for (const QJsonValue &nameValue : dataAnimation.value(
@@ -3705,6 +3727,10 @@ bool importBlenderScene(const QString &path,
                 QStringLiteral("has_animation_data")).toBool();
             sceneObject.blenderSourceAnimationActionName = item.value(
                 QStringLiteral("animation_action_name")).toString();
+            if (bridgeVersion >= 42) {
+                sceneObject.blenderSourceAnimationActionSlotName = item.value(
+                    QStringLiteral("animation_action_slot_name")).toString();
+            }
             sceneObject.blenderSourceHasDrivers = item.value(
                 QStringLiteral("has_drivers")).toBool();
             for (const QJsonValue &nameValue : item.value(

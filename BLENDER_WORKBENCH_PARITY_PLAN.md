@@ -10944,6 +10944,16 @@ scene depth.
   animation defaults. This keeps row names and hierarchy only: data-block row
   selection/context operations and animation editing remain unimplemented.
   No matched Blender UI comparison was run; `cmake --build build -j4` passed.
+- The twenty-sixth tree update follows Blender 5.2.2's active Action expansion
+  in [`tree_element_id_action.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_action.cc#L54-L81)
+  and its slot label in
+  [`tree_element_action_slot.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_action_slot.cc#L17-L22).
+  Object and object-data Animation trees now show the assigned Action Slot
+  beneath the active Action, using Blender's slot display name. Blender bridge
+  version 42 and native document version 35 retain it; older files default to
+  no slot row. NLA strip actions remain simple action rows, matching their
+  separate Blender tree-element type. No matched UI comparison was run;
+  `cmake --build build -j4` passed.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

@@ -48,6 +48,7 @@ struct OutlinerObjectEntry {
     QStringList dataMaterialNames;
     bool dataHasAnimationData = false;
     QString dataAnimationActionName;
+    QString dataAnimationActionSlotName;
     bool dataHasDrivers = false;
     QStringList dataDriverTargetNames;
     QVector<OutlinerNlaTrackEntry> dataNlaTracks;
@@ -58,6 +59,7 @@ struct OutlinerObjectEntry {
     QStringList vertexGroupNames;
     bool hasAnimationData = false;
     QString animationActionName;
+    QString animationActionSlotName;
     bool hasDrivers = false;
     QStringList driverTargetNames;
     QVector<OutlinerNlaTrackEntry> nlaTracks;

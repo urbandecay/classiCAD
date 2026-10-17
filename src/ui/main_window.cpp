@@ -2792,7 +2792,8 @@ private:
                 const ObjectId parentObjectId = objectIdsByIdentity.value(
                     object.blenderParentObjectId, ObjectId::invalid());
                 objects.append({object.id, name, object.collectionIds,
-                                object.hideViewport, object.hideSelect,
+                                object.hideViewport, object.hideRender,
+                                object.hideSelect,
                                 object.viewLayerHidden, parentObjectId});
             }
             return objects;
@@ -3026,6 +3027,20 @@ private:
                 }
                 pruneOutlinerSelection();
             };
+        collectionCallbacks.setCollectionRenderVisibility =
+            [this](CollectionId id, bool hideRender) {
+                const DocumentCollection *collection =
+                    session_.document().collection(id);
+                if (collection == nullptr) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setCollectionVisibility(
+                        id, collection->hideViewport, hideRender) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update collection render visibility"),
+                        4000);
+                }
+            };
         collectionCallbacks.setCollectionSelectability =
             [this](CollectionId id, bool hideSelect) {
                 DocumentTransaction transaction = session_.beginTransaction();
@@ -3052,6 +3067,16 @@ private:
                     return;
                 }
                 pruneOutlinerSelection();
+            };
+        collectionCallbacks.setObjectRenderVisibility =
+            [this](ObjectId id, bool hideRender) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectRenderVisibility(id, hideRender) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update object render visibility"),
+                        4000);
+                }
             };
         collectionCallbacks.setObjectSelectability =
             [this](ObjectId id, bool hideSelect) {

@@ -723,6 +723,19 @@ bool Document::setObjectVisibilityFlags(ObjectId objectId,
     return true;
 }
 
+bool Document::setObjectRenderVisibility(ObjectId objectId, bool hideRender)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr) return false;
+    if (candidate->hideRender == hideRender) return true;
+    candidate->hideRender = hideRender;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::setObjectViewLayerHidden(ObjectId objectId,
                                        const QString &viewLayerKey,
                                        bool hidden)

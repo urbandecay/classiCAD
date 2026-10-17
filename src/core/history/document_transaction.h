@@ -38,6 +38,7 @@ public:
     bool setObjectVisibilityFlags(ObjectId objectId,
                                   bool hideViewport,
                                   bool hideSelect);
+    bool setObjectRenderVisibility(ObjectId objectId, bool hideRender);
     bool setObjectViewLayerHidden(ObjectId objectId,
                                   const QString &viewLayerKey,
                                   bool hidden);

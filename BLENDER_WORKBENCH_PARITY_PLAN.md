@@ -10729,10 +10729,19 @@ scene depth.
   workspace data, this state is local to the classiCAD installation and is not
   carried inside a copied project file. The full build passed; no GUI
   interaction comparison was run.
+- The seventh tree update adds Blender's global render restriction column for
+  objects and collections, following the `hide_render` controls in
+  [`outliner_draw.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1087-L1107)
+  and [the object/collection row controls](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L1182-L1282).
+  The control writes object or collection `hide_render` through a document
+  transaction, separate from viewport visibility and active view-layer
+  restrictions. The remaining Blender hierarchy, recursive Shift behavior,
+  and drag-toggle gestures are not implemented by this checkbox. The full
+  `cmake --build build -j4` passed; no GUI comparison was run.
 - Remaining Outliner scope includes carrying row state inside the project file,
-  other Blender datablock rows and restriction
-  controls, multiple view-layer switching, and a matched Blender/classiCAD
-  interaction comparison. Do not mark this port complete until the remaining
+  other Blender datablock rows and restriction controls, multiple view-layer
+  switching, and a matched Blender/classiCAD interaction comparison. Do not
+  mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including

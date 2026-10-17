@@ -53,9 +53,10 @@ constexpr int itemNotInCollectionRole = Qt::UserRole + 7;
 constexpr int itemParentCollectionRole = Qt::UserRole + 8;
 constexpr int nameColumn = 0;
 constexpr int viewportColumn = 1;
-constexpr int viewLayerViewportColumn = 2;
-constexpr int selectColumn = 3;
-constexpr int excludeColumn = 4;
+constexpr int renderColumn = 2;
+constexpr int viewLayerViewportColumn = 3;
+constexpr int selectColumn = 4;
+constexpr int excludeColumn = 5;
 
 QJsonObject viewLayerState(const DocumentCollection &collection,
                            const QString &viewLayerKey,
@@ -298,14 +299,17 @@ void CollectionsPanel::createLayout()
     layout->addWidget(filterEdit_);
     auto *outlinerTree = new OutlinerTreeWidget(this);
     tree_ = outlinerTree;
-    tree_->setColumnCount(5);
+    tree_->setColumnCount(6);
     tree_->setHeaderLabels({QStringLiteral("Name"),
                             QStringLiteral("Viewport"),
+                            QStringLiteral("Render"),
                             QStringLiteral("Layer View"),
                             QStringLiteral("Select"),
                             QStringLiteral("Exclude")});
     tree_->headerItem()->setToolTip(viewportColumn,
                                     QStringLiteral("Hide globally in the viewport"));
+    tree_->headerItem()->setToolTip(renderColumn,
+                                    QStringLiteral("Hide globally in renders"));
     tree_->headerItem()->setToolTip(viewLayerViewportColumn,
                                     QStringLiteral("Hide in the active Blender view layer"));
     tree_->headerItem()->setToolTip(selectColumn,
@@ -323,6 +327,8 @@ void CollectionsPanel::createLayout()
     tree_->setDragDropMode(QAbstractItemView::InternalMove);
     tree_->header()->setSectionResizeMode(nameColumn, QHeaderView::Stretch);
     tree_->header()->setSectionResizeMode(viewportColumn,
+                                          QHeaderView::ResizeToContents);
+    tree_->header()->setSectionResizeMode(renderColumn,
                                           QHeaderView::ResizeToContents);
     tree_->header()->setSectionResizeMode(selectColumn,
                                           QHeaderView::ResizeToContents);
@@ -370,7 +376,8 @@ void CollectionsPanel::createLayout()
     connect(tree_, &QTreeWidget::itemChanged, this,
             [this](QTreeWidgetItem *item, int column) {
         if (refreshing_ || item == nullptr ||
-            (column != viewportColumn && column != viewLayerViewportColumn &&
+            (column != viewportColumn && column != renderColumn &&
+             column != viewLayerViewportColumn &&
              column != selectColumn && column != excludeColumn)) {
             return;
         }
@@ -393,6 +400,9 @@ void CollectionsPanel::createLayout()
                 const CollectionId id = CollectionId::fromValue(value);
                 if (column == viewportColumn && callbacks_.setViewportVisibility) {
                     callbacks_.setViewportVisibility(id, hidden);
+                } else if (column == renderColumn &&
+                           callbacks_.setCollectionRenderVisibility) {
+                    callbacks_.setCollectionRenderVisibility(id, hidden);
                 } else if (column == viewLayerViewportColumn &&
                            callbacks_.setCollectionViewLayerState) {
                     callbacks_.setCollectionViewLayerState(
@@ -412,6 +422,9 @@ void CollectionsPanel::createLayout()
                 if (column == viewportColumn &&
                     callbacks_.setObjectViewportVisibility) {
                     callbacks_.setObjectViewportVisibility(id, hidden);
+                } else if (column == renderColumn &&
+                           callbacks_.setObjectRenderVisibility) {
+                    callbacks_.setObjectRenderVisibility(id, hidden);
                 } else if (column == viewLayerViewportColumn &&
                            callbacks_.setObjectViewLayerHidden) {
                     callbacks_.setObjectViewLayerHidden(id, viewLayerKey,
@@ -848,6 +861,8 @@ void CollectionsPanel::appendCollection(
                    Qt::ItemIsDropEnabled);
     item->setCheckState(viewportColumn, entry.collection.hideViewport
                                ? Qt::Unchecked : Qt::Checked);
+    item->setCheckState(renderColumn, entry.collection.hideRender
+                             ? Qt::Unchecked : Qt::Checked);
     item->setCheckState(selectColumn, entry.collection.hideSelect
                                ? Qt::Unchecked : Qt::Checked);
     const QJsonObject layerState = viewLayerState(
@@ -904,6 +919,8 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                    Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
                    Qt::ItemIsDropEnabled);
     item->setCheckState(viewportColumn, entry.hideViewport
+                               ? Qt::Unchecked : Qt::Checked);
+    item->setCheckState(renderColumn, entry.hideRender
                                ? Qt::Unchecked : Qt::Checked);
     item->setCheckState(selectColumn, entry.hideSelect
                                ? Qt::Unchecked : Qt::Checked);

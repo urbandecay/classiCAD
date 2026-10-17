@@ -30,6 +30,7 @@ struct OutlinerObjectEntry {
     QString name;
     QVector<CollectionId> collectionIds;
     bool hideViewport = false;
+    bool hideRender = false;
     bool hideSelect = false;
     QJsonObject viewLayerHidden;
     ObjectId parentObjectId = ObjectId::invalid();
@@ -61,8 +62,10 @@ struct CollectionsPanelCallbacks {
     std::function<void(ObjectId, const QString &)> renameObject;
     std::function<void(ObjectId, CollectionId)> unlinkObject;
     std::function<void(CollectionId, bool)> setViewportVisibility;
+    std::function<void(CollectionId, bool)> setCollectionRenderVisibility;
     std::function<void(CollectionId, bool)> setCollectionSelectability;
     std::function<void(ObjectId, bool)> setObjectViewportVisibility;
+    std::function<void(ObjectId, bool)> setObjectRenderVisibility;
     std::function<void(ObjectId, bool)> setObjectSelectability;
     std::function<void(ObjectId, const QString &, bool)> setObjectViewLayerHidden;
     std::function<void(CollectionId,

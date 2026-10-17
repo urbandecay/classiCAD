@@ -219,6 +219,15 @@ bool DocumentTransaction::setObjectVisibilityFlags(ObjectId objectId,
     return true;
 }
 
+bool DocumentTransaction::setObjectRenderVisibility(ObjectId objectId,
+                                                     bool hideRender)
+{
+    if (!document_.setObjectRenderVisibility(objectId, hideRender)) return false;
+    changes_.addObject(objectId);
+    changes_.visibilityChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::setObjectViewLayerHidden(ObjectId objectId,
                                                    const QString &viewLayerKey,
                                                    bool hidden)

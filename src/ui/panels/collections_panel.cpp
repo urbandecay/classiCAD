@@ -1877,36 +1877,18 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
             });
         }
-        if (callbacks_.setObjectSelection) {
+        if (callbacks_.setCollectionObjectSelection) {
             QAction *selectObjects = menu.addAction(
                 QStringLiteral("Select Objects"));
             connect(selectObjects, &QAction::triggered, this,
-                    [this, item]() {
-                QVector<ObjectId> objectIds;
-                QSet<quint64> seen;
-                QVector<QTreeWidgetItem *> pending{item};
-                while (!pending.isEmpty()) {
-                    QTreeWidgetItem *current = pending.takeLast();
-                    if (current->data(nameColumn, itemKindRole).toInt() ==
-                        static_cast<int>(OutlinerRowKind::Object)) {
-                        const ObjectId id = ObjectId::fromValue(
-                            current->data(nameColumn, itemIdRole)
-                                .toULongLong());
-                        if (id.isValid() && !seen.contains(id.value()) &&
-                            (!callbacks_.canSelectObject ||
-                             callbacks_.canSelectObject(id))) {
-                            seen.insert(id.value());
-                            objectIds.append(id);
-                        }
-                    }
-                    for (int childIndex = 0;
-                         childIndex < current->childCount(); ++childIndex) {
-                        pending.append(current->child(childIndex));
-                    }
-                }
-                callbacks_.setObjectSelection(
-                    objectIds, objectIds.isEmpty() ? ObjectId::invalid()
-                                                   : objectIds.back());
+                    [this, collectionId]() {
+                callbacks_.setCollectionObjectSelection(collectionId, true);
+            });
+            QAction *deselectObjects = menu.addAction(
+                QStringLiteral("Deselect Objects"));
+            connect(deselectObjects, &QAction::triggered, this,
+                    [this, collectionId]() {
+                callbacks_.setCollectionObjectSelection(collectionId, false);
             });
         }
         const QVector<ObjectId> selectedIds = callbacks_.selectedObjectIds

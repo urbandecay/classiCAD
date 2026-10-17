@@ -4304,6 +4304,55 @@ private:
             }
             return result;
         };
+        collectionCallbacks.setCollectionObjectSelection =
+            [this, collectionHierarchyIds](CollectionId root, bool select) {
+                QSet<quint64> collectionIds;
+                for (const CollectionId id : collectionHierarchyIds(root)) {
+                    collectionIds.insert(id.value());
+                }
+                if (collectionIds.isEmpty()) return;
+
+                QVector<ObjectId> collectionObjectIds;
+                for (const SceneObject &object :
+                     session_.document().objects()) {
+                    if (object.blenderLooseMeshEdgeCompanion) continue;
+                    const bool belongsToCollection = std::any_of(
+                        object.collectionIds.cbegin(),
+                        object.collectionIds.cend(),
+                        [&collectionIds](CollectionId id) {
+                            return collectionIds.contains(id.value());
+                        });
+                    if (belongsToCollection &&
+                        (!select || session_.document().isObjectEditable(
+                                        object.id))) {
+                        collectionObjectIds.append(object.id);
+                    }
+                }
+                if (collectionObjectIds.isEmpty()) return;
+
+                SelectionModel &selection = session_.selection();
+                QVector<ObjectId> selectedIds = selection.objectIds();
+                const QVector<ObjectId> previousIds = selectedIds;
+                if (select) {
+                    for (const ObjectId id : collectionObjectIds) {
+                        if (!selectedIds.contains(id)) selectedIds.append(id);
+                    }
+                } else {
+                    for (const ObjectId id : collectionObjectIds) {
+                        selectedIds.removeAll(id);
+                    }
+                }
+                if (selectedIds == previousIds) return;
+
+                ObjectId primary = selection.primaryObjectId();
+                if (!selectedIds.contains(primary)) {
+                    primary = selectedIds.isEmpty()
+                        ? ObjectId::invalid() : selectedIds.back();
+                }
+                const ObjectId active = selection.activeObjectId();
+                selection.setObjectIds(selectedIds, primary);
+                selection.setActiveObjectId(active);
+            };
         const auto collectionRelationIds =
             [this, collectionHierarchyIds,
              collectionBelongsToActiveScene](CollectionId root) {

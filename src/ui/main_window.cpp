@@ -4727,9 +4727,10 @@ private:
                 }
                 return id;
             };
-        collectionCallbacks.linkCollectionToActiveScene =
+        collectionCallbacks.linkCollectionsToActiveScene =
             [this, activeSceneRecord, collectionBelongsToScene,
-             updateSceneCollectionIds](CollectionId rootId) {
+             updateSceneCollectionIds](
+                const QVector<CollectionId> &requestedRootIds) {
                 const Document &document = session_.document();
                 const QJsonObject scene = activeSceneRecord();
                 const QString sceneId = scene.value(
@@ -4748,9 +4749,21 @@ private:
                 for (const DocumentCollection &collection : sourceCollections) {
                     collectionsById.insert(collection.id.value(), collection);
                 }
-                if (!collectionsById.contains(rootId.value())) return;
-                QVector<CollectionId> hierarchy{rootId};
-                QSet<quint64> hierarchyValues{rootId.value()};
+                QVector<CollectionId> hierarchy;
+                QSet<quint64> hierarchyValues;
+                QSet<quint64> seenRoots;
+                for (const CollectionId rootId : requestedRootIds) {
+                    if (!rootId.isValid() ||
+                        !collectionsById.contains(rootId.value()) ||
+                        seenRoots.contains(rootId.value())) {
+                        continue;
+                    }
+                    seenRoots.insert(rootId.value());
+                    hierarchy.append(rootId);
+                    hierarchyValues.insert(rootId.value());
+                }
+                if (hierarchy.isEmpty()) return;
+                const QVector<CollectionId> selectedRoots = hierarchy;
                 for (qsizetype index = 0; index < hierarchy.size(); ++index) {
                     const CollectionId parentId = hierarchy[index];
                     for (const DocumentCollection &candidate :
@@ -4774,13 +4787,17 @@ private:
                     QStringList sourcePath;
                     QSet<quint64> ancestors;
                 };
-                const DocumentCollection root =
-                    collectionsById.value(rootId.value());
-                if (root.sourceId.isEmpty()) return;
-                QVector<SceneCollectionPath> paths{
-                    {rootId, {root.sourceId}, {rootId.value()}}};
+                QVector<SceneCollectionPath> paths;
                 QHash<quint64, QSet<QString>> visitedPaths;
-                visitedPaths[rootId.value()].insert(root.sourceId);
+                for (const CollectionId rootId : selectedRoots) {
+                    const DocumentCollection root =
+                        collectionsById.value(rootId.value());
+                    if (root.sourceId.isEmpty()) continue;
+                    visitedPaths[rootId.value()].insert(root.sourceId);
+                    paths.append(
+                        {rootId, {root.sourceId}, {rootId.value()}});
+                }
+                if (paths.isEmpty()) return;
                 for (qsizetype index = 0; index < paths.size(); ++index) {
                     const SceneCollectionPath current = paths[index];
                     for (const DocumentCollection &candidate :
@@ -4883,10 +4900,10 @@ private:
                 }
                 pruneOutlinerSelection();
             };
-        collectionCallbacks.unlinkCollection =
+        collectionCallbacks.unlinkCollections =
             [this, activeSceneRecord, collectionBelongsToScene,
-             updateSceneCollectionIds](CollectionId collectionId,
-                                       CollectionId parentId) {
+             updateSceneCollectionIds](
+                const QVector<OutlinerCollectionContext> &requestedTargets) {
                 const Document &document = session_.document();
                 const QJsonObject scene = activeSceneRecord();
                 const QString sceneId = scene.value(
@@ -4905,9 +4922,24 @@ private:
                 for (const DocumentCollection &collection : sourceCollections) {
                     collectionsById.insert(collection.id.value(), collection);
                 }
-                const auto selected =
-                    collectionsById.constFind(collectionId.value());
-                if (selected == collectionsById.cend()) return;
+                QVector<OutlinerCollectionContext> targets;
+                QSet<QString> seenTargets;
+                for (const OutlinerCollectionContext &target :
+                     requestedTargets) {
+                    if (!target.collectionId.isValid() ||
+                        !collectionsById.contains(
+                            target.collectionId.value())) {
+                        continue;
+                    }
+                    const QString key =
+                        QString::number(target.collectionId.value()) +
+                        QLatin1Char('\x1f') +
+                        QString::number(target.parentCollectionId.value());
+                    if (seenTargets.contains(key)) continue;
+                    seenTargets.insert(key);
+                    targets.append(target);
+                }
+                if (targets.isEmpty()) return;
                 QVector<CollectionId> sceneRoots;
                 for (const DocumentCollection &collection : sourceCollections) {
                     if (!collectionBelongsToScene(collection, sceneName)) {
@@ -4930,25 +4962,44 @@ private:
                 }
 
                 DocumentTransaction transaction = session_.beginTransaction();
-                if (parentId.isValid()) {
-                    if (!selected->parentIds.contains(parentId)) return;
-                    QVector<CollectionId> parents = selected->parentIds;
-                    parents.removeAll(parentId);
-                    if (!transaction.setCollectionParents(collectionId,
-                                                          parents)) {
+                QHash<quint64, QVector<CollectionId>> updatedParentIds;
+                QSet<quint64> unlinkedSceneRoots;
+                for (const OutlinerCollectionContext &target : targets) {
+                    const auto selected = collectionsById.constFind(
+                        target.collectionId.value());
+                    if (selected == collectionsById.cend()) continue;
+                    if (target.parentCollectionId.isValid()) {
+                        QVector<CollectionId> &parents =
+                            updatedParentIds[target.collectionId.value()];
+                        if (parents.isEmpty()) parents = selected->parentIds;
+                        if (!parents.contains(target.parentCollectionId)) {
+                            continue;
+                        }
+                        parents.removeAll(target.parentCollectionId);
+                    } else if (sceneRoots.contains(target.collectionId)) {
+                        unlinkedSceneRoots.insert(
+                            target.collectionId.value());
+                    }
+                }
+                for (auto it = updatedParentIds.cbegin();
+                     it != updatedParentIds.cend(); ++it) {
+                    const DocumentCollection &collection =
+                        collectionsById.value(it.key());
+                    if (collection.parentIds == it.value()) continue;
+                    if (!transaction.setCollectionParents(
+                            collection.id, it.value())) {
                         statusBar()->showMessage(
-                            QStringLiteral("Could not unlink collection from parent"),
+                            QStringLiteral("Could not unlink selected collections from their parents"),
                             4000);
                         return;
                     }
-                } else {
-                    if (!sceneRoots.contains(collectionId)) {
-                        statusBar()->showMessage(
-                            QStringLiteral("Collection is not linked to the active scene root"),
-                            4000);
-                        return;
+                }
+                for (qsizetype index = sceneRoots.size() - 1;
+                     index >= 0; --index) {
+                    if (unlinkedSceneRoots.contains(
+                            sceneRoots[index].value())) {
+                        sceneRoots.removeAt(index);
                     }
-                    sceneRoots.removeAll(collectionId);
                 }
 
                 QSet<quint64> reachable;
@@ -7645,7 +7696,7 @@ private:
                 const QStringList &sourcePath, const QString &stateKey,
                 bool value, bool recursive, bool isolate) {
                 const OutlinerCollectionContext target{
-                    id, viewLayerKey, sourcePath};
+                    id, CollectionId::invalid(), viewLayerKey, sourcePath};
                 setCollectionViewLayerStates(
                     QVector<OutlinerCollectionContext>{target}, stateKey,
                     value, recursive, isolate);

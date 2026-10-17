@@ -1985,6 +1985,11 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 }
                 OutlinerCollectionContext context;
                 context.collectionId = candidateId;
+                const quint64 parentValue = candidate->data(
+                    nameColumn, itemParentCollectionRole).toULongLong();
+                context.parentCollectionId = parentValue == 0
+                    ? CollectionId::invalid()
+                    : CollectionId::fromValue(parentValue);
                 context.viewLayerKey = candidateViewLayerKey;
                 context.sourcePath = candidate->data(
                     nameColumn, itemSourcePathRole).toStringList();
@@ -2009,6 +2014,30 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 continue;
             }
             selectedCollectionIds.append(target.collectionId);
+        }
+        QVector<CollectionId> topLevelCollectionIds;
+        for (const OutlinerCollectionContext &target : collectionTargets) {
+            const bool hasSelectedAncestor = std::any_of(
+                collectionTargets.cbegin(), collectionTargets.cend(),
+                [&target](const OutlinerCollectionContext &candidate) {
+                    if (candidate.viewLayerKey != target.viewLayerKey ||
+                        candidate.sourcePath.size() >=
+                            target.sourcePath.size()) {
+                        return false;
+                    }
+                    for (qsizetype index = 0;
+                         index < candidate.sourcePath.size(); ++index) {
+                        if (candidate.sourcePath[index] !=
+                            target.sourcePath[index]) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            if (!hasSelectedAncestor &&
+                !topLevelCollectionIds.contains(target.collectionId)) {
+                topLevelCollectionIds.append(target.collectionId);
+            }
         }
         if (callbacks_.createCollection) {
             QAction *create = menu.addAction(QStringLiteral("New Collection"));
@@ -2053,54 +2082,28 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             });
         }
         if (callbacks_.instanceCollectionsToScene) {
-            QVector<CollectionId> instanceCollectionIds;
-            for (const OutlinerCollectionContext &target : collectionTargets) {
-                const bool hasSelectedAncestor = std::any_of(
-                    collectionTargets.cbegin(), collectionTargets.cend(),
-                    [&target](const OutlinerCollectionContext &candidate) {
-                        if (candidate.viewLayerKey != target.viewLayerKey ||
-                            candidate.sourcePath.size() >=
-                                target.sourcePath.size()) {
-                            return false;
-                        }
-                        for (qsizetype index = 0;
-                             index < candidate.sourcePath.size(); ++index) {
-                            if (candidate.sourcePath[index] !=
-                                target.sourcePath[index]) {
-                                return false;
-                            }
-                        }
-                        return true;
-                    });
-                if (!hasSelectedAncestor &&
-                    !instanceCollectionIds.contains(target.collectionId)) {
-                    instanceCollectionIds.append(target.collectionId);
-                }
-            }
             QAction *instance = menu.addAction(
                 QStringLiteral("Instance to Scene"));
-            instance->setEnabled(!instanceCollectionIds.isEmpty());
+            instance->setEnabled(!topLevelCollectionIds.isEmpty());
             connect(instance, &QAction::triggered, this,
-                    [this, instanceCollectionIds]() {
-                callbacks_.instanceCollectionsToScene(instanceCollectionIds);
+                    [this, topLevelCollectionIds]() {
+                callbacks_.instanceCollectionsToScene(topLevelCollectionIds);
             });
         }
-        if (scenesDisplayMode_ && callbacks_.linkCollectionToActiveScene) {
+        if (scenesDisplayMode_ && callbacks_.linkCollectionsToActiveScene) {
             QAction *linkToScene = menu.addAction(
                 QStringLiteral("Link to Scene"));
             connect(linkToScene, &QAction::triggered, this,
-                    [this, collectionId]() {
-                callbacks_.linkCollectionToActiveScene(collectionId);
+                    [this, topLevelCollectionIds]() {
+                callbacks_.linkCollectionsToActiveScene(
+                    topLevelCollectionIds);
             });
         }
-        if (callbacks_.unlinkCollection) {
-            const CollectionId parentId = CollectionId::fromValue(
-                item->data(nameColumn, itemParentCollectionRole)
-                    .toULongLong());
+        if (callbacks_.unlinkCollections) {
             QAction *unlink = menu.addAction(QStringLiteral("Unlink"));
             connect(unlink, &QAction::triggered, this,
-                    [this, collectionId, parentId]() {
-                callbacks_.unlinkCollection(collectionId, parentId);
+                    [this, collectionTargets]() {
+                callbacks_.unlinkCollections(collectionTargets);
             });
         }
         const bool hasViewLayerPath = !viewLayerKey.isEmpty() &&

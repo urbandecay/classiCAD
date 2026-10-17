@@ -153,6 +153,7 @@ struct OutlinerRowReference {
 
 struct OutlinerCollectionContext {
     CollectionId collectionId = CollectionId::invalid();
+    CollectionId parentCollectionId = CollectionId::invalid();
     QString viewLayerKey;
     QStringList sourcePath;
 };
@@ -269,10 +270,12 @@ struct CollectionsPanelCallbacks {
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
     std::function<void(CollectionId, CollectionId, bool, bool)>
         duplicateCollection;
-    std::function<void(CollectionId)> linkCollectionToActiveScene;
+    std::function<void(const QVector<CollectionId> &)>
+        linkCollectionsToActiveScene;
     std::function<void(const QVector<CollectionId> &)>
         instanceCollectionsToScene;
-    std::function<void(CollectionId, CollectionId)> unlinkCollection;
+    std::function<void(const QVector<OutlinerCollectionContext> &)>
+        unlinkCollections;
     std::function<void(CollectionId, const QString &)> renameCollection;
     std::function<void(CollectionId)> removeCollection;
     std::function<void(const QVector<ObjectId> &, CollectionId)> linkObjects;

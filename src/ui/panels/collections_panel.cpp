@@ -1192,9 +1192,15 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     const auto filterSubtree = [&](const auto &self,
                                    QTreeWidgetItem *item) -> bool {
         if (item == nullptr) return false;
+        const bool nameMatches = text.isEmpty() ||
+            matcher.match(item->text(nameColumn)).hasMatch();
+        const bool searchChildren = text.isEmpty() ||
+            !dataApiDisplayMode_ || item->isExpanded() || nameMatches;
         bool childMatches = false;
-        for (int index = 0; index < item->childCount(); ++index) {
-            childMatches = self(self, item->child(index)) || childMatches;
+        if (searchChildren) {
+            for (int index = 0; index < item->childCount(); ++index) {
+                childMatches = self(self, item->child(index)) || childMatches;
+            }
         }
         bool eligible = true;
         const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
@@ -1205,8 +1211,6 @@ void CollectionsPanel::applyNameFilter(const QString &text)
                    kind == OutlinerRowKind::SourceObject) {
             eligible = showObjects_ && objectMatchesFilter(item);
         }
-        const bool nameMatches = text.isEmpty() ||
-            matcher.match(item->text(nameColumn)).hasMatch();
         const bool visible = (eligible && nameMatches) || childMatches;
         item->setHidden(!visible);
         if ((!text.isEmpty() || objectStateFilter_ !=

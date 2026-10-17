@@ -4085,21 +4085,32 @@ private:
                         }
                         if (alreadyInScene) continue;
                     }
-                    if (parentObjects && destinationObject.isValid()) {
-                        const SceneObject *parentObject =
-                            session_.document().object(destinationObject);
-                        const QString parentIdentity = parentObject == nullptr
-                            ? QString{}
-                            : (parentObject->blenderSourceObjectId.isEmpty()
-                                   ? QStringLiteral("classiCAD-local-object:%1")
-                                         .arg(destinationObject.value())
-                                   : parentObject->blenderSourceObjectId);
-                        if (source.objectId != destinationObject &&
-                            !parentIdentity.isEmpty() &&
-                            object->blenderParentObjectId != parentIdentity) {
+                    if (parentObjects) {
+                        if (destinationObject.isValid()) {
+                            const SceneObject *parentObject =
+                                session_.document().object(destinationObject);
+                            QString parentIdentity;
+                            if (parentObject != nullptr) {
+                                parentIdentity =
+                                    parentObject->blenderSourceObjectId;
+                                if (parentIdentity.isEmpty()) {
+                                    parentIdentity = QStringLiteral(
+                                        "classiCAD-local-object:%1")
+                                        .arg(destinationObject.value());
+                                }
+                            }
+                            if (source.objectId != destinationObject &&
+                                !parentIdentity.isEmpty() &&
+                                object->blenderParentObjectId !=
+                                    parentIdentity) {
+                                changed = transaction.setObjectParent(
+                                              source.objectId,
+                                              destinationObject) || changed;
+                            }
+                        } else if (!object->blenderParentObjectId.isEmpty()) {
                             changed = transaction.setObjectParent(
-                                          source.objectId, destinationObject) ||
-                                      changed;
+                                          source.objectId,
+                                          ObjectId::invalid()) || changed;
                         }
                         continue;
                     }

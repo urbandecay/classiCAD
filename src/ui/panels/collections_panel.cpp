@@ -332,7 +332,22 @@ protected:
         OutlinerRowReference target = targetItem == nullptr
             ? OutlinerRowReference{} : rowReference(targetItem);
         OutlinerDropPosition position = OutlinerDropPosition::Into;
-        if (target.kind == OutlinerRowKind::ObjectContent) {
+        const bool materialDrop =
+            draggedRows_.first().kind == OutlinerRowKind::Material;
+        const bool shiftHeld =
+            event->modifiers().testFlag(Qt::ShiftModifier);
+        const QString targetPath = targetItem == nullptr
+            ? QString{}
+            : targetItem->data(nameColumn, itemPathRole).toString();
+        const bool clearParentDrop =
+            draggedRows_.first().kind == OutlinerRowKind::Object && shiftHeld &&
+            ((target.kind == OutlinerRowKind::SceneRoot &&
+              target.sceneKey.isEmpty()) ||
+             (target.kind == OutlinerRowKind::ObjectContent &&
+              (targetPath.endsWith(QStringLiteral("/modifiers")) ||
+               targetPath.endsWith(QStringLiteral("/constraints")))));
+        if (target.kind == OutlinerRowKind::ObjectContent &&
+            !clearParentDrop) {
             event->ignore();
             return;
         }
@@ -342,8 +357,6 @@ protected:
             event->ignore();
             return;
         }
-        const bool materialDrop =
-            draggedRows_.first().kind == OutlinerRowKind::Material;
         if (target.kind == OutlinerRowKind::Collection &&
             draggedRows_.first().kind == OutlinerRowKind::Collection) {
             const QRect targetRect = visualItemRect(targetItem);
@@ -368,7 +381,7 @@ protected:
             }
         }
         if (target.kind == OutlinerRowKind::Object && !materialDrop &&
-            !event->modifiers().testFlag(Qt::ShiftModifier)) {
+            !shiftHeld) {
             target.kind = target.parentCollectionId.isValid()
                 ? OutlinerRowKind::Collection : OutlinerRowKind::SceneRoot;
             target.collectionId = target.parentCollectionId;
@@ -377,9 +390,9 @@ protected:
             event->ignore();
             return;
         }
-        if (event->modifiers().testFlag(Qt::ShiftModifier) && !materialDrop &&
+        if (shiftHeld && !materialDrop &&
             (draggedRows_.first().kind != OutlinerRowKind::Object ||
-             target.kind != OutlinerRowKind::Object)) {
+             (target.kind != OutlinerRowKind::Object && !clearParentDrop))) {
             event->ignore();
             return;
         }
@@ -395,8 +408,8 @@ protected:
 
         const QVector<OutlinerRowReference> sources = draggedRows_;
         const bool link = event->modifiers().testFlag(Qt::ControlModifier);
-        const bool parent = event->modifiers().testFlag(Qt::ShiftModifier) &&
-                            target.kind == OutlinerRowKind::Object;
+        const bool parent = shiftHeld &&
+            (target.kind == OutlinerRowKind::Object || clearParentDrop);
         QTimer::singleShot(0, this,
                            [this, sources, target, link, parent, position]() {
             if (applyDrop_) applyDrop_(sources, target, link, parent, position);

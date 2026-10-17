@@ -5180,6 +5180,20 @@ private:
                     QStringLiteral("scene_id")).toString();
                 const QString sceneName = activeScene.value(
                     QStringLiteral("name")).toString();
+                Point3D sceneCursorLocation;
+                const QJsonArray sceneCursor = activeScene.value(
+                    QStringLiteral("cursor_location")).toArray();
+                if (sceneCursor.size() == 3 &&
+                    sceneCursor[0].isDouble() &&
+                    sceneCursor[1].isDouble() &&
+                    sceneCursor[2].isDouble() &&
+                    std::isfinite(sceneCursor[0].toDouble()) &&
+                    std::isfinite(sceneCursor[1].toDouble()) &&
+                    std::isfinite(sceneCursor[2].toDouble())) {
+                    sceneCursorLocation = {sceneCursor[0].toDouble(),
+                                           sceneCursor[1].toDouble(),
+                                           sceneCursor[2].toDouble()};
+                }
                 CollectionId destinationId =
                     activeCollectionContext.collectionId;
                 CollectionId activeParentId =
@@ -5313,6 +5327,8 @@ private:
                     instance.geometry.points.append(QPointF(0.0, 0.0));
                     instance.geometry.workPlaneFrame =
                         makeWorkPlaneFrame(WorkPlane::XY);
+                    instance.geometry.workPlaneFrame.origin =
+                        sceneCursorLocation;
                     const ObjectId instanceId = transaction.insertObject(
                         document.size(), instance);
                     if (!instanceId.isValid()) {

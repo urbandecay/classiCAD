@@ -11679,3 +11679,12 @@ scene depth.
   Base ID snapshot; incomplete snapshots preserve a fallback for older or
   unusually large files. `cmake --build build -j4` and `git diff --check`
   passed; no matched Blender Outliner comparison was run.
+- The hundred-twenty-sixth Outliner update applies the retained Blender Base
+  membership before populating collection hierarchies as well as the flat
+  object list. An object now appears under a collection in a View Layer only
+  when its source Blender object belongs to that layer; local classiCAD
+  objects remain in the active layer, and incomplete or older snapshots keep
+  their fallback. This closes the gap where collection rows still received
+  scene-wide objects after the flat list had been corrected. `cmake --build
+  build -j4` and `git diff --check` passed; no matched Blender Outliner
+  comparison was run.

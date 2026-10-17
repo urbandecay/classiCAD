@@ -5478,16 +5478,18 @@ void CollectionsPanel::refresh()
                                        const QVector<OutlinerObjectEntry> &objects,
                                        const QString &viewLayerKey,
                                        const QString &rootPath) {
+        const QVector<OutlinerObjectEntry> layerObjects =
+            objectsForViewLayer(objects, viewLayerKey);
         if (showCollections_) {
             for (const int rootIndex : topLevelCollectionIndices(entries)) {
                 const CollectionPanelEntry &entry = entries[rootIndex];
                 if (entry.collection.id.isValid()) {
-                    appendCollection(tree_, entry, entries, objects, root, {},
+                    appendCollection(tree_, entry, entries, layerObjects, root, {},
                                      {rootPath}, {}, viewLayerKey,
                                      viewLayerKey);
                 }
             }
-            for (const OutlinerObjectEntry &object : objects) {
+            for (const OutlinerObjectEntry &object : layerObjects) {
                 if (object.collectionIds.isEmpty()) {
                     appendObject(root, object, {rootPath,
                                                 QStringLiteral("root")},
@@ -5495,8 +5497,6 @@ void CollectionsPanel::refresh()
                 }
             }
         } else {
-            const QVector<OutlinerObjectEntry> layerObjects =
-                objectsForViewLayer(objects, viewLayerKey);
             for (const OutlinerObjectEntry &object : layerObjects) {
                 appendObject(root, object, {rootPath,
                                             QStringLiteral("root")},

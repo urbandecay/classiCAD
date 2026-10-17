@@ -2841,7 +2841,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 54 && bridgeVersion != 55 &&
          bridgeVersion != 56 && bridgeVersion != 57 &&
          bridgeVersion != 58 && bridgeVersion != 59 &&
-         bridgeVersion != 60 && bridgeVersion != 61)) {
+         bridgeVersion != 60 && bridgeVersion != 61 &&
+         bridgeVersion != 62)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3331,6 +3332,8 @@ bool importBlenderScene(const QString &path,
                             QStringLiteral("collection_tree"));
                         const QJsonValue objectTreeValue = subtree.value(
                             QStringLiteral("object_tree"));
+                        const QJsonValue textureImageNameValue = subtree.value(
+                            QStringLiteral("texture_image_name"));
                         const QString dataName = dataNameValue.toString();
                         const QString shapeKeyDataName =
                             shapeKeyDataNameValue.toString();
@@ -3351,7 +3354,10 @@ bool importBlenderScene(const QString &path,
                             (bridgeVersion >= 60 &&
                              !collectionTreeValue.isArray()) ||
                             (bridgeVersion >= 61 &&
-                             !objectTreeValue.isArray())) {
+                             !objectTreeValue.isArray()) ||
+                            (bridgeVersion >= 62 &&
+                             (!textureImageNameValue.isString() ||
+                              textureImageNameValue.toString().size() > 4096))) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library data-block subtree is invalid"));
                             return false;
@@ -3570,6 +3576,10 @@ bool importBlenderScene(const QString &path,
                                 return false;
                             }
                             subtreeRows += objectRows;
+                        }
+                        if (bridgeVersion >= 62 &&
+                            !textureImageNameValue.toString().isEmpty()) {
+                            ++subtreeRows;
                         }
                         if ((shapeKeyDataName.isEmpty() &&
                              !shapeKeyNamesValue.toArray().isEmpty()) ||

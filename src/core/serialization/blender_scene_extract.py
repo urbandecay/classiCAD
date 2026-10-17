@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 61
+BRIDGE_FORMAT_VERSION = 62
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1204,7 +1204,7 @@ def outliner_library_tree():
                         "animation": animation,
                     })
             id_type = id_block.bl_rna.identifier
-            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object"}
+            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object", "Texture"}
                     or "GreasePencil" in id_type):
                 subtree = {
                     "data_block_name": data_block_name,
@@ -1216,6 +1216,7 @@ def outliner_library_tree():
                     "grease_pencil_layer_tree": [],
                     "collection_tree": [],
                     "object_tree": [],
+                    "texture_image_name": "",
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -1307,6 +1308,12 @@ def outliner_library_tree():
                     if object_tree_truncated == [True]:
                         subtree_truncated[0] = True
 
+                if id_type == "Texture":
+                    image = getattr(id_block, "image", None)
+                    if image is not None:
+                        if reserve_subtree_row():
+                            subtree["texture_image_name"] = str(image.name)
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
@@ -1315,7 +1322,8 @@ def outliner_library_tree():
                         subtree["bone_collection_tree"] or
                         subtree["grease_pencil_layer_tree"] or
                         subtree["collection_tree"] or
-                        subtree["object_tree"]):
+                        subtree["object_tree"] or
+                        subtree["texture_image_name"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

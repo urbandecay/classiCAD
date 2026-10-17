@@ -3187,6 +3187,12 @@ void CollectionsPanel::refresh()
                                 appendLibraryObjectTree, dataRow,
                                 dataBlockTree->objectTree,
                                 treePath + QStringLiteral("/object-tree"));
+                            if (!dataBlockTree->textureImageName.isEmpty()) {
+                                appendLibraryContentRow(
+                                    dataRow, dataBlockTree->textureImageName,
+                                    treePath + QStringLiteral("/texture-image"),
+                                    QStringLiteral("Blender Texture image ID"));
+                            }
                             appendLibraryCollectionTree(
                                 appendLibraryCollectionTree, dataRow,
                                 dataBlockTree->collectionTree,

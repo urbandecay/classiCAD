@@ -3410,6 +3410,8 @@ private:
                             QStringLiteral("collection_tree")).toArray();
                         dataBlockTree.objectTree = subtree.value(
                             QStringLiteral("object_tree")).toArray();
+                        dataBlockTree.textureImageName = subtree.value(
+                            QStringLiteral("texture_image_name")).toString();
                         group.dataBlockTreesByName.insert(
                             dataBlockName, std::move(dataBlockTree));
                     }

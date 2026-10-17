@@ -82,6 +82,8 @@ struct CollectionsPanelCallbacks {
     std::function<QVector<ObjectId>()> selectedObjectIds;
     std::function<ObjectId()> activeObjectId;
     std::function<bool(ObjectId)> canSelectObject;
+    std::function<bool(ObjectId, const QString &)> objectVisibleInViewLayer;
+    std::function<bool(ObjectId, const QString &)> objectSelectableInViewLayer;
     std::function<void(const QVector<ObjectId> &, ObjectId)> setObjectSelection;
     std::function<CollectionId(const QString &, CollectionId)> createCollection;
     std::function<void(CollectionId, const QString &)> renameCollection;
@@ -169,6 +171,7 @@ private:
     bool showCollections_ = true;
     bool showObjects_ = true;
     bool showObjectChildren_ = true;
+    bool showAllViewLayers_ = false;
     bool invertObjectStateFilter_ = false;
     bool exactNameMatch_ = false;
     bool caseSensitiveNameFilter_ = false;

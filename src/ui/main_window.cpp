@@ -3126,6 +3126,14 @@ private:
         collectionCallbacks.canSelectObject = [this](ObjectId id) {
             return session_.document().isObjectEditable(id);
         };
+        collectionCallbacks.objectVisibleInViewLayer =
+            [this](ObjectId id, const QString &viewLayerKey) {
+                return session_.document().isObjectVisible(id, viewLayerKey);
+            };
+        collectionCallbacks.objectSelectableInViewLayer =
+            [this](ObjectId id, const QString &viewLayerKey) {
+                return session_.document().isObjectEditable(id, viewLayerKey);
+            };
         collectionCallbacks.setObjectSelection =
             [this](const QVector<ObjectId> &objectIds, ObjectId activeObjectId) {
                 QVector<ObjectId> selectableIds;

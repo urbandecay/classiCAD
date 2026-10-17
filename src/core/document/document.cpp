@@ -987,10 +987,24 @@ bool Document::setObjectDisplayName(ObjectId objectId, const QString &name)
 bool Document::isObjectVisible(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
-    if (sceneObject == nullptr || sceneObject->hideViewport ||
-        sceneObject->hiddenInViewport) return false;
-    const QString activeViewLayerKey = settings_.activeViewLayerKey.isEmpty()
+    if (sceneObject == nullptr) return false;
+    const QString viewLayerKey = settings_.activeViewLayerKey.isEmpty()
         ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
+    return isObjectVisible(objectId, viewLayerKey);
+}
+
+bool Document::isObjectVisible(ObjectId objectId,
+                               const QString &viewLayerKey) const
+{
+    const SceneObject *sceneObject = object(objectId);
+    if (sceneObject == nullptr || sceneObject->hideViewport) return false;
+    const QString activeViewLayerKey = viewLayerKey.isEmpty()
+        ? sceneObject->defaultViewLayerKey : viewLayerKey;
+    if (sceneObject->hiddenInViewport &&
+        (activeViewLayerKey.isEmpty() ||
+         !sceneObject->viewLayerHidden.contains(activeViewLayerKey))) {
+        return false;
+    }
     if (!activeViewLayerKey.isEmpty() &&
         sceneObject->viewLayerHidden.contains(activeViewLayerKey) &&
         sceneObject->viewLayerHidden.value(activeViewLayerKey).toBool()) return false;
@@ -1183,14 +1197,24 @@ bool Document::isObjectRenderable(ObjectId objectId) const
 bool Document::isObjectEditable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
+    if (sceneObject == nullptr) return false;
+    const QString viewLayerKey = settings_.activeViewLayerKey.isEmpty()
+        ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
+    return isObjectEditable(objectId, viewLayerKey);
+}
+
+bool Document::isObjectEditable(ObjectId objectId,
+                                const QString &viewLayerKey) const
+{
+    const SceneObject *sceneObject = object(objectId);
     if (sceneObject == nullptr || sceneObject->hideSelect ||
-        !isObjectVisible(objectId)) {
+        !isObjectVisible(objectId, viewLayerKey)) {
         return false;
     }
     if (sceneObject->collectionIds.isEmpty()) return true;
 
-    const QString activeViewLayerKey = settings_.activeViewLayerKey.isEmpty()
-        ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
+    const QString activeViewLayerKey = viewLayerKey.isEmpty()
+        ? sceneObject->defaultViewLayerKey : viewLayerKey;
     if (activeViewLayerKey.isEmpty()) {
         const auto hasSelectableCollectionPath =
             [&](const auto &self, CollectionId id, QSet<quint64> path) -> bool {

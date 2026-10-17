@@ -112,10 +112,14 @@ public:
                                      bool value);
     bool setObjectDisplayName(ObjectId objectId, const QString &name);
     bool isObjectVisible(ObjectId objectId) const;
+    bool isObjectVisible(ObjectId objectId,
+                         const QString &viewLayerKey) const;
     // Render visibility follows Blender's hide_render/excluded collection
     // state without applying viewport-only hide flags.
     bool isObjectRenderable(ObjectId objectId) const;
     bool isObjectEditable(ObjectId objectId) const;
+    bool isObjectEditable(ObjectId objectId,
+                          const QString &viewLayerKey) const;
 
     Snapshot snapshot() const;
     void restoreSnapshot(const Snapshot &snapshot);

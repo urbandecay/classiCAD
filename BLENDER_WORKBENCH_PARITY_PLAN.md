@@ -10811,14 +10811,26 @@ scene depth.
   directly under the scene root; with Object Children off, parented objects
   remain at their collection memberships. These per-user filter choices use
   QSettings because classiCAD does not yet have Blender's workspace editor
-  model. Blender's All View Layers and Object Contents options, other display
-  modes/data-block rows, and unsupported Blender object types remain
-  unimplemented. The full build passed; no GUI interaction comparison was
-  run.
+  model. Object Contents, other display modes/data-block rows, and unsupported
+  Blender object types remain unimplemented. The full build passed; no GUI
+  interaction comparison was run.
+- The fifteenth tree update ports the View Layer "All View Layers" filter from
+  Blender 5.2.2's
+  [`tree_display_view_layer.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L69-L189)
+  and its [Outliner filter option](https://docs.blender.org/manual/en/5.2/editors/outliner/interface.html).
+  When enabled, the tree shows each imported view layer and its collection
+  paths. Collection rows only appear where that exact path exists; objects
+  under excluded paths are omitted. Visible, Hidden, and Selectable filters
+  query the represented layer's visibility/editability state. Selecting a
+  view-layer root or its object row first activates that view layer, preserving
+  classiCAD's saved selection per layer. This display preference uses
+  installation-local QSettings. The document model still keeps its classiCAD
+  object selection separate from Blender's per-view-layer Base selection, and
+  All View Layers has not had a matched Blender UI interaction comparison.
+  The full build is running; its result will be recorded with this change.
 - Remaining Outliner scope includes Blender's additional display modes and
-  datablock rows, All View Layers/Object Contents controls, other unported
-  view-layer restriction toggles, and a matched Blender/classiCAD interaction
-  comparison. Do not
+  datablock rows, Object Contents, other unported view-layer restriction
+  toggles, and a matched Blender/classiCAD interaction comparison. Do not
   mark this port complete until the remaining
   items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated

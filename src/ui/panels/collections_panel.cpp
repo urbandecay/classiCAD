@@ -351,8 +351,9 @@ protected:
             : targetItem->data(nameColumn, itemPathRole).toString();
         const bool clearParentDrop =
             parentActionAllowed &&
-            ((target.kind == OutlinerRowKind::SceneRoot &&
-              target.sceneKey.isEmpty()) ||
+            (((target.kind == OutlinerRowKind::SceneRoot &&
+               target.sceneKey.isEmpty()) ||
+              (target.kind == OutlinerRowKind::Collection && shiftHeld)) ||
              (target.kind == OutlinerRowKind::ObjectContent &&
               (targetPath.endsWith(QStringLiteral("/modifiers")) ||
                targetPath.endsWith(QStringLiteral("/constraints")))));

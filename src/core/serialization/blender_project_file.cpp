@@ -2840,7 +2840,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 52 && bridgeVersion != 53 &&
          bridgeVersion != 54 && bridgeVersion != 55 &&
          bridgeVersion != 56 && bridgeVersion != 57 &&
-         bridgeVersion != 58 && bridgeVersion != 59)) {
+         bridgeVersion != 58 && bridgeVersion != 59 &&
+         bridgeVersion != 60)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3326,6 +3327,8 @@ bool importBlenderScene(const QString &path,
                             QStringLiteral("bone_collection_tree"));
                         const QJsonValue greasePencilLayerTreeValue = subtree.value(
                             QStringLiteral("grease_pencil_layer_tree"));
+                        const QJsonValue collectionTreeValue = subtree.value(
+                            QStringLiteral("collection_tree"));
                         const QString dataName = dataNameValue.toString();
                         const QString shapeKeyDataName =
                             shapeKeyDataNameValue.toString();
@@ -3342,7 +3345,9 @@ bool importBlenderScene(const QString &path,
                              (!armatureBoneTreeValue.isArray() ||
                               !boneCollectionTreeValue.isArray())) ||
                             (bridgeVersion >= 59 &&
-                             !greasePencilLayerTreeValue.isArray())) {
+                             !greasePencilLayerTreeValue.isArray()) ||
+                            (bridgeVersion >= 60 &&
+                             !collectionTreeValue.isArray())) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library data-block subtree is invalid"));
                             return false;
@@ -3425,6 +3430,49 @@ bool importBlenderScene(const QString &path,
                                 return false;
                             }
                             subtreeRows += greasePencilRows;
+                        }
+                        if (bridgeVersion >= 60) {
+                            const auto countCollectionTree =
+                                [&](const auto &self, const QJsonArray &nodes,
+                                    int depth, int *nodeCount) -> bool {
+                                if (nodes.isEmpty()) return true;
+                                if (depth >= 128 || nodeCount == nullptr ||
+                                    *nodeCount + nodes.size() > 1024) return false;
+                                for (const QJsonValue &nodeValue : nodes) {
+                                    if (!nodeValue.isObject()) return false;
+                                    const QJsonObject node = nodeValue.toObject();
+                                    const QJsonValue name = node.value(
+                                        QStringLiteral("name"));
+                                    const QJsonValue kind = node.value(
+                                        QStringLiteral("kind"));
+                                    const QJsonValue children = node.value(
+                                        QStringLiteral("children"));
+                                    const QString nodeKind = kind.toString();
+                                    if (!name.isString() || name.toString().size() > 4096 ||
+                                        !kind.isString() ||
+                                        (nodeKind != QLatin1String("COLLECTION") &&
+                                         nodeKind != QLatin1String("OBJECT")) ||
+                                        !children.isArray() ||
+                                        (nodeKind == QLatin1String("OBJECT") &&
+                                         !children.toArray().isEmpty())) {
+                                        return false;
+                                    }
+                                    ++(*nodeCount);
+                                    if (nodeKind == QLatin1String("COLLECTION") &&
+                                        !self(self, children.toArray(), depth + 1,
+                                              nodeCount)) return false;
+                                }
+                                return true;
+                            };
+                            int collectionRows = 0;
+                            if (!countCollectionTree(countCollectionTree,
+                                                     collectionTreeValue.toArray(),
+                                                     0, &collectionRows)) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library collection tree is invalid"));
+                                return false;
+                            }
+                            subtreeRows += collectionRows;
                         }
                         if ((shapeKeyDataName.isEmpty() &&
                              !shapeKeyNamesValue.toArray().isEmpty()) ||

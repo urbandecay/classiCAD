@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 59
+BRIDGE_FORMAT_VERSION = 60
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -886,6 +886,82 @@ def outliner_grease_pencil_layer_tree(obj):
     return []
 
 
+def outliner_library_collection_children(collection, remaining_rows,
+                                         truncated_out=None):
+    """Capture Collection ID children in Blender's collection-then-object order."""
+    local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    budgets = [local_remaining]
+    if remaining_rows is not None:
+        budgets.append(remaining_rows)
+    truncated = [False]
+
+    def reserve_row():
+        if any(budget[0] <= 0 for budget in budgets):
+            truncated[0] = True
+            return False
+        for budget in budgets:
+            budget[0] -= 1
+        return True
+
+    def convert_collection(child, depth, ancestry):
+        if depth >= 128:
+            truncated[0] = True
+            return None
+        child_id = stable_id(child)
+        if child_id in ancestry:
+            truncated[0] = True
+            return None
+        if not reserve_row():
+            return None
+        next_ancestry = ancestry | {child_id}
+        node = {"name": str(child.name), "kind": "COLLECTION", "children": []}
+        try:
+            nested_collections = child.children
+            for nested in nested_collections:
+                nested_node = convert_collection(
+                    nested, depth + 1, next_ancestry)
+                if nested_node is not None:
+                    node["children"].append(nested_node)
+                if any(budget[0] <= 0 for budget in budgets):
+                    truncated[0] = True
+                    break
+            if any(budget[0] <= 0 for budget in budgets):
+                return node
+            for obj in child.objects:
+                if not reserve_row():
+                    break
+                node["children"].append({
+                    "name": str(obj.name), "kind": "OBJECT", "children": []
+                })
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            truncated[0] = True
+        return node
+
+    children = []
+    ancestry = {stable_id(collection)}
+    try:
+        for child in collection.children:
+            node = convert_collection(child, 0, ancestry)
+            if node is not None:
+                children.append(node)
+            if any(budget[0] <= 0 for budget in budgets):
+                truncated[0] = True
+                break
+        if not any(budget[0] <= 0 for budget in budgets):
+            for obj in collection.objects:
+                if not reserve_row():
+                    break
+                children.append({
+                    "name": str(obj.name), "kind": "OBJECT", "children": []
+                })
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        truncated[0] = True
+
+    if truncated_out is not None:
+        truncated_out[:] = [truncated[0]]
+    return children
+
+
 def outliner_library_tree():
     """Capture Blender's linked-library/type grouping for Libraries mode."""
     current_file = {
@@ -960,7 +1036,7 @@ def outliner_library_tree():
             # RNA ID.name (without name_full's linked-library suffix).
             data_block_name = str(id_block.name)
             group["names"].append(data_block_name)
-            if id_block.bl_rna.identifier != "Action":
+            if id_block.bl_rna.identifier not in {"Action", "Collection"}:
                 animation = data_block_animation_metadata(
                     id_block, library_animation_rows_remaining)
                 if animation["truncated"]:
@@ -971,7 +1047,8 @@ def outliner_library_tree():
                         "animation": animation,
                     })
             id_type = id_block.bl_rna.identifier
-            if id_type in {"Mesh", "Curve", "MetaBall"}:
+            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection"}
+                    or "GreasePencil" in id_type):
                 subtree = {
                     "data_block_name": data_block_name,
                     "shape_key_data_name": "",
@@ -980,6 +1057,7 @@ def outliner_library_tree():
                     "armature_bone_tree": [],
                     "bone_collection_tree": [],
                     "grease_pencil_layer_tree": [],
+                    "collection_tree": [],
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -1053,13 +1131,23 @@ def outliner_library_tree():
                     if grease_pencil_tree_truncated == [True]:
                         subtree_truncated[0] = True
 
+                if id_type == "Collection":
+                    collection_tree_truncated = []
+                    subtree["collection_tree"] = (
+                        outliner_library_collection_children(
+                            id_block, library_specialized_rows_remaining,
+                            collection_tree_truncated))
+                    if collection_tree_truncated == [True]:
+                        subtree_truncated[0] = True
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
                         subtree["material_names"] or
                         subtree["armature_bone_tree"] or
                         subtree["bone_collection_tree"] or
-                        subtree["grease_pencil_layer_tree"]):
+                        subtree["grease_pencil_layer_tree"] or
+                        subtree["collection_tree"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

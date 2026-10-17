@@ -2999,6 +2999,27 @@ void CollectionsPanel::refresh()
                     description);
             }
         };
+        const auto appendLibraryCollectionTree = [&appendLibraryContentRow](
+            const auto &self, QTreeWidgetItem *parent,
+            const QJsonArray &nodes, const QString &path) -> void {
+            for (qsizetype index = 0; index < nodes.size(); ++index) {
+                const QJsonObject node = nodes[index].toObject();
+                const QString nodePath = path + QStringLiteral("/item-%1")
+                    .arg(index);
+                const QString kind = node.value(
+                    QStringLiteral("kind")).toString();
+                const bool isCollection = kind == QLatin1String("COLLECTION");
+                QTreeWidgetItem *row = appendLibraryContentRow(
+                    parent, node.value(QStringLiteral("name")).toString(),
+                    nodePath,
+                    isCollection ? QStringLiteral("Blender child collection")
+                                 : QStringLiteral("Object in Blender collection"));
+                if (isCollection) {
+                    self(self, row, node.value(
+                        QStringLiteral("children")).toArray(), nodePath);
+                }
+            }
+        };
         QHash<QString, QTreeWidgetItem *> libraryRows;
         for (const OutlinerLibraryEntry &library : libraries) {
             auto *row = new QTreeWidgetItem;
@@ -3112,6 +3133,10 @@ void CollectionsPanel::refresh()
                             sourceGroup.dataBlockTreesByName.cend()) {
                             const QString treePath = dataPath +
                                 QStringLiteral("/item-%1").arg(dataIndex);
+                            appendLibraryCollectionTree(
+                                appendLibraryCollectionTree, dataRow,
+                                dataBlockTree->collectionTree,
+                                treePath + QStringLiteral("/collection-tree"));
                             appendLibraryNameTree(
                                 appendLibraryNameTree, dataRow,
                                 dataBlockTree->armatureBoneTree,

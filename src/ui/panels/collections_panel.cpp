@@ -2161,8 +2161,10 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                               QItemSelectionModel::NoUpdate);
         rangeAnchorItem_ = item;
 
-        if (item->data(nameColumn, itemKindRole).toInt() ==
-                static_cast<int>(OutlinerRowKind::Object) &&
+        const OutlinerRowKind contextRowKind =
+            static_cast<OutlinerRowKind>(
+                item->data(nameColumn, itemKindRole).toInt());
+        if (contextRowKind == OutlinerRowKind::Object &&
             callbacks_.setObjectSelection) {
             QVector<ObjectId> selectedObjectIds;
             for (QTreeWidgetItem *selected : tree_->selectedItems()) {
@@ -2181,6 +2183,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 item->data(nameColumn, itemIdRole).toULongLong());
             callbacks_.setObjectSelection(selectedObjectIds,
                                            activeObjectId);
+        } else {
+            activateObjectRow(item, Qt::NoModifier);
         }
     }
     if (item == nullptr) {
@@ -2849,12 +2853,14 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             rename->setEnabled(
                 !item->data(nameColumn, itemLinkedLibraryRole).toBool() &&
                 !item->data(nameColumn, itemSceneMasterRole).toBool());
-            connect(rename, &QAction::triggered, this, [this, item, collectionId]() {
+            const QString originalName = item->text(nameColumn);
+            connect(rename, &QAction::triggered, this,
+                    [this, originalName, collectionId]() {
                 bool accepted = false;
                 const QString name = QInputDialog::getText(
                     this, QStringLiteral("Rename Collection"),
                     QStringLiteral("Name"), QLineEdit::Normal,
-                    item->text(nameColumn), &accepted);
+                    originalName, &accepted);
                 if (accepted && !name.trimmed().isEmpty()) {
                     callbacks_.renameCollection(collectionId, name);
                 }

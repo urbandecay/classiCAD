@@ -11475,3 +11475,12 @@ scene depth.
   the earlier global Deselect behavior. Deletion remains one undoable local
   document edit. `cmake --build build -j4` and `git diff --check` passed; no
   matched Blender Outliner interaction comparison was run.
+- The hundred-eleventh tree update completes Blender's [right-click hovered-row
+  activation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L3926-L4024)
+  for classiCAD's Scene and Collection rows. It switches to the row's Scene or
+  View Layer and activates the clicked collection path before its context menu
+  action runs, using the existing row activation callback. Collection rename
+  captures the displayed name before a scene or layer switch can refresh and
+  rebuild the tree. No document-format changes are needed. `cmake --build
+  build -j4` and `git diff --check` passed; no matched Blender Outliner
+  interaction comparison was run.

@@ -2245,12 +2245,55 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             createCollection(parentId);
         });
     };
+    const auto activeCollectionId = [this]() {
+        if (!callbacks_.activeCollectionSourcePath || !callbacks_.entries) {
+            return CollectionId::invalid();
+        }
+        const QStringList sourcePath =
+            callbacks_.activeCollectionSourcePath();
+        if (sourcePath.isEmpty()) return CollectionId::invalid();
+        for (const CollectionPanelEntry &entry : callbacks_.entries()) {
+            if (entry.collection.sourceId == sourcePath.last()) {
+                return entry.collection.id;
+            }
+        }
+        return CollectionId::invalid();
+    };
+    const auto addPasteDataBlocksAction = [this, activeCollectionId](
+        QMenu &menu, CollectionId parentId) {
+        const bool hasCollectionClipboard =
+            callbacks_.hasOutlinerCollectionClipboard &&
+            callbacks_.hasOutlinerCollectionClipboard();
+        const bool hasObjectClipboard = callbacks_.hasOutlinerObjectClipboard &&
+                                        callbacks_.hasOutlinerObjectClipboard();
+        if (!callbacks_.pasteOutlinerCollection &&
+            !callbacks_.pasteOutlinerObjects) {
+            return;
+        }
+        QAction *paste = menu.addAction(QStringLiteral("Paste Data-Blocks"));
+        paste->setEnabled(hasCollectionClipboard || hasObjectClipboard);
+        connect(paste, &QAction::triggered, this,
+                [this, parentId, activeCollectionId]() {
+            const CollectionId destinationParentId = parentId.isValid()
+                ? parentId : activeCollectionId();
+            if (callbacks_.hasOutlinerCollectionClipboard &&
+                callbacks_.hasOutlinerCollectionClipboard() &&
+                callbacks_.pasteOutlinerCollection) {
+                callbacks_.pasteOutlinerCollection(destinationParentId);
+            } else if (callbacks_.hasOutlinerObjectClipboard &&
+                       callbacks_.hasOutlinerObjectClipboard() &&
+                       callbacks_.pasteOutlinerObjects) {
+                callbacks_.pasteOutlinerObjects();
+            }
+        });
+    };
     if (item == nullptr) {
         if (tree_ == nullptr) return;
         QMenu menu(this);
         const QString activeViewLayerKey = callbacks_.activeViewLayerKey
             ? callbacks_.activeViewLayerKey() : QString{};
         addNewCollectionAction(menu, activeViewLayerKey);
+        addPasteDataBlocksAction(menu, CollectionId::invalid());
         menu.addSeparator();
         QMenu *viewMenu = menu.addMenu(QStringLiteral("View"));
         const auto treeRows = [this]() {
@@ -2456,6 +2499,7 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         const QString activeViewLayerKey = callbacks_.activeViewLayerKey
             ? callbacks_.activeViewLayerKey() : QString{};
         addNewCollectionAction(menu, activeViewLayerKey);
+        addPasteDataBlocksAction(menu, CollectionId::invalid());
     } else if (kind == OutlinerRowKind::Collection) {
         const CollectionId collectionId = CollectionId::fromValue(
             item->data(nameColumn, itemIdRole).toULongLong());

@@ -11514,3 +11514,12 @@ scene depth.
   `.002`. Linked collections and the Scene master collection remain
   noneditable. `cmake --build build -j4` and `git diff --check` passed; no
   matched Blender Outliner interaction comparison was run.
+- The hundred-fifteenth tree update follows Blender 5.2.2's [Collection New
+  menu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L308-L314)
+  and [ID paste operator](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1013-L1048).
+  Empty Outliner space and the Scene-root context now offer Paste Data-Blocks
+  when classiCAD has copied objects or collections. It pastes through the
+  existing snapshot clipboard into the active collection, selecting copied
+  objects through the existing paste path. The action stays disabled when the
+  clipboard is empty. `cmake --build build -j4` and `git diff --check` passed;
+  no matched Blender Outliner interaction comparison was run.

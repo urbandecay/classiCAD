@@ -5109,26 +5109,63 @@ private:
                 selection.setObjectIds(selectedIds, primary);
                 selection.setActiveObjectId(previousActive);
             };
+        const auto blenderDataTypeKey = [](const SceneObject &object) {
+            if (!object.blenderSourceDataType.isEmpty()) {
+                return object.blenderSourceDataType;
+            }
+            const QString &objectType = object.blenderSourceObjectType;
+            if (objectType == QLatin1String("CURVE") ||
+                objectType == QLatin1String("SURFACE") ||
+                objectType == QLatin1String("FONT")) {
+                return QStringLiteral("Curve");
+            }
+            if (objectType == QLatin1String("MESH")) {
+                return QStringLiteral("Mesh");
+            }
+            if (objectType == QLatin1String("META")) {
+                return QStringLiteral("MetaBall");
+            }
+            if (objectType == QLatin1String("GPENCIL") ||
+                objectType == QLatin1String("GREASEPENCIL")) {
+                return QStringLiteral("GreasePencil");
+            }
+            if (objectType == QLatin1String("POINTCLOUD")) {
+                return QStringLiteral("PointCloud");
+            }
+            if (objectType == QLatin1String("LIGHT_PROBE")) {
+                return QStringLiteral("LightProbe");
+            }
+            if (objectType.isEmpty() || objectType == QLatin1String("EMPTY")) {
+                return QString{};
+            }
+            QString dataType = objectType.toLower();
+            if (!dataType.isEmpty()) {
+                dataType[0] = dataType[0].toUpper();
+            }
+            return dataType;
+        };
         const auto linkedObjectDataUsers =
-            [this](const QVector<ObjectId> &sourceIds) {
+            [this, blenderDataTypeKey](const QVector<ObjectId> &sourceIds) {
             QVector<ObjectId> users;
             const Document &document = session_.document();
             QSet<QString> sourceDataKeys;
             for (const ObjectId sourceId : sourceIds) {
                 const SceneObject *source = document.object(sourceId);
                 if (source == nullptr ||
-                    source->blenderSourceDataName.isEmpty() ||
-                    source->blenderSourceObjectType.isEmpty()) {
+                    source->blenderSourceDataName.isEmpty()) {
                     continue;
                 }
+                const QString dataType = blenderDataTypeKey(*source);
+                if (dataType.isEmpty()) continue;
                 sourceDataKeys.insert(
-                    source->blenderSourceObjectType + QChar(0x1f) +
+                    dataType + QChar(0x1f) +
                     source->blenderSourceDataName);
             }
             if (sourceDataKeys.isEmpty()) return users;
             for (const SceneObject &candidate : document.objects()) {
+                const QString dataType = blenderDataTypeKey(candidate);
                 const QString candidateKey =
-                    candidate.blenderSourceObjectType + QChar(0x1f) +
+                    dataType + QChar(0x1f) +
                     candidate.blenderSourceDataName;
                 if (!sourceDataKeys.contains(candidateKey) ||
                     !document.isObjectEditable(candidate.id)) {
@@ -6119,6 +6156,7 @@ private:
             };
         collectionCallbacks.duplicateCollection =
             [this, activeSceneRecord, collectionBelongsToScene,
+             blenderDataTypeKey,
              updateSceneCollectionIds](const QVector<CollectionId> &requestedRootIds,
                                       CollectionId contextParentId,
                                       const QHash<quint64, CollectionId>
@@ -6237,17 +6275,19 @@ private:
                     }
                 }
                 BlenderIdNames objectNames;
-                BlenderIdNames dataNames;
+                QHash<QString, BlenderIdNames> dataNamesByType;
                 const QString activeSceneName = activeSceneRecord().value(
                     QStringLiteral("name")).toString();
                 const auto collectObjectNames =
-                    [&objectNames, &dataNames, &recordName](
+                    [&objectNames, &dataNamesByType, &recordName,
+                     blenderDataTypeKey](
                         const QVector<SceneObject> &objects) {
                         for (const SceneObject &object : objects) {
                             if (!object.libraryPath.isEmpty() &&
                                 !object.blenderLooseMeshEdgeCompanion) {
                                 if (!object.blenderSourceDataName.isEmpty()) {
-                                    recordName(dataNames,
+                                    recordName(dataNamesByType[
+                                                   blenderDataTypeKey(object)],
                                                object.blenderSourceDataName);
                                 }
                                 continue;
@@ -6257,7 +6297,8 @@ private:
                                 recordName(objectNames, object.displayName);
                             }
                             if (!object.blenderSourceDataName.isEmpty()) {
-                                recordName(dataNames,
+                                recordName(dataNamesByType[
+                                               blenderDataTypeKey(object)],
                                            object.blenderSourceDataName);
                             }
                         }
@@ -6383,6 +6424,7 @@ private:
                 QVector<SceneObject> clones;
                 QVector<ObjectCloneSource> cloneSources;
                 QHash<QString, int> cloneIndexBySourceIdentity;
+                QHash<QString, QString> duplicatedDataNames;
                 const auto objectIdentity = [](const SceneObject &object) {
                     return object.blenderSourceObjectId.isEmpty()
                         ? QStringLiteral("classiCAD-local-object:%1")
@@ -6461,9 +6503,26 @@ private:
                     }
                     if (!linkedData &&
                         !clone.blenderSourceDataName.isEmpty()) {
-                        clone.blenderSourceDataName = uniqueName(
-                            clone.blenderSourceDataName, dataNames,
-                            QStringLiteral("Data"));
+                        const QString sourceDataIdentity =
+                            blenderDataTypeKey(source) + QChar(0x1f) +
+                            source.blenderSourceDataName;
+                        const auto duplicatedDataName =
+                            duplicatedDataNames.constFind(
+                                sourceDataIdentity);
+                        if (duplicatedDataName !=
+                            duplicatedDataNames.cend()) {
+                            clone.blenderSourceDataName =
+                                duplicatedDataName.value();
+                        } else {
+                            BlenderIdNames &dataNames =
+                                dataNamesByType[blenderDataTypeKey(clone)];
+                            clone.blenderSourceDataName = uniqueName(
+                                clone.blenderSourceDataName, dataNames,
+                                QStringLiteral("Data"));
+                            duplicatedDataNames.insert(
+                                sourceDataIdentity,
+                                clone.blenderSourceDataName);
+                        }
                     }
                     if (!clone.displayName.isEmpty()) {
                         clone.displayName = uniqueName(

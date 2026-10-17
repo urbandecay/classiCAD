@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 76
+BRIDGE_FORMAT_VERSION = 77
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -2637,6 +2637,9 @@ def object_metadata(obj, scene, depsgraph=None):
         # the Workbench color before the separate library path is mixed in.
         "name": obj.name,
         "data_name": getattr(getattr(obj, "data", None), "name_full", ""),
+        "data_type": getattr(
+            getattr(getattr(obj, "data", None), "bl_rna", None),
+            "identifier", ""),
         "data_animation": data_block_animation_metadata(
             getattr(obj, "data", None)),
         "data_material_names": [

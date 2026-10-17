@@ -173,6 +173,8 @@ struct SceneObject {
     QString blenderParentObjectId;
     // Name of the Blender ID stored in Object.data, used by the Outliner.
     QString blenderSourceDataName;
+    // Blender ID type of Object.data, distinct from the owning Object type.
+    QString blenderSourceDataType;
     QString blenderSourceShapeKeyDataName;
     QStringList blenderSourceShapeKeyNames;
     QStringList blenderSourceDataMaterialNames;

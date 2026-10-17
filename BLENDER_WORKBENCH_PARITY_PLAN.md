@@ -11534,3 +11534,15 @@ scene depth.
   set because the snapshot does not retain data-ID type identity. `cmake
   --build build -j4` and `git diff --check` passed; no matched Blender
   Outliner interaction comparison was run.
+- The hundred-seventeenth tree update follows Blender 5.2.2's object-data
+  identity in [`select_linked_by_id()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/object/object_select.cc#L589-L602)
+  and per-ID-type name maps in [`main_namemap.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/main_namemap.cc#L530-L590).
+  The Blender extractor bridge v77 and native document v68 now preserve the
+  actual `Object.data` ID type from RNA. Select Linked and duplicate data-name
+  allocation use that type with the full data-block name, so CURVE, SURFACE,
+  and FONT objects that use one Curve datablock share the same identity pool.
+  Older snapshots infer the common ID type from the owning object type. This
+  ports identity and naming behavior; classiCAD still stores per-object
+  geometry snapshots rather than shared Blender data pointers. `cmake --build
+  build -j4` passed; no matched Blender Outliner interaction comparison was
+  run.

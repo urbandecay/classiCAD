@@ -1242,7 +1242,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 67);
+    serialized.insert(QStringLiteral("version"), 68);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1486,6 +1486,8 @@ QJsonObject documentToJson(const Document &document)
                                 sceneObject.blenderSourceObjectType);
         serializedObject.insert(QStringLiteral("blenderSourceDataName"),
                                 sceneObject.blenderSourceDataName);
+        serializedObject.insert(QStringLiteral("blenderSourceDataType"),
+                                sceneObject.blenderSourceDataType);
         serializedObject.insert(QStringLiteral("blenderSourceShapeKeyDataName"),
                                 sceneObject.blenderSourceShapeKeyDataName);
         QJsonArray blenderSourceShapeKeyNames;
@@ -1738,7 +1740,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 67) {
+    if (version < 1 || version > 68) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -2933,6 +2935,16 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             sceneObject.blenderSourceDataName = dataName.toString();
+        }
+        if (version >= 68) {
+            const QJsonValue dataType = serializedObject.value(
+                QStringLiteral("blenderSourceDataType"));
+            if (!dataType.isString()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender object data type"));
+                return false;
+            }
+            sceneObject.blenderSourceDataType = dataType.toString();
         }
         if (version >= 29) {
             const QJsonValue namesValue = serializedObject.value(

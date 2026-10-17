@@ -2819,7 +2819,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 30 && bridgeVersion != 31 && bridgeVersion != 32 &&
          bridgeVersion != 33 && bridgeVersion != 34 && bridgeVersion != 35 &&
          bridgeVersion != 36 && bridgeVersion != 37 && bridgeVersion != 38 &&
-         bridgeVersion != 39)) {
+         bridgeVersion != 39 && bridgeVersion != 40)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3461,6 +3461,33 @@ bool importBlenderScene(const QString &path,
                 }
             }
         }
+        if (bridgeVersion >= 40) {
+            const QJsonValue shapeKeyDataNameValue = item.value(
+                QStringLiteral("shape_key_data_name"));
+            const QJsonValue shapeKeyNamesValue = item.value(
+                QStringLiteral("shape_key_names"));
+            const QJsonValue dataMaterialNamesValue = item.value(
+                QStringLiteral("data_material_names"));
+            const auto validDataNameList = [](const QJsonValue &namesValue) {
+                if (!namesValue.isArray() || namesValue.toArray().size() > 1024)
+                    return false;
+                for (const QJsonValue &nameValue : namesValue.toArray()) {
+                    if (!nameValue.isString() ||
+                        nameValue.toString().size() > 4096) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (!shapeKeyDataNameValue.isString() ||
+                shapeKeyDataNameValue.toString().size() > 4096 ||
+                !validDataNameList(shapeKeyNamesValue) ||
+                !validDataNameList(dataMaterialNamesValue)) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender object data-block subtree is invalid"));
+                return false;
+            }
+        }
         if (bridgeVersion >= 33 &&
             !item.value(QStringLiteral("visibility")).toObject()
                  .value(QStringLiteral("hide_surface_pick")).isBool()) {
@@ -3551,6 +3578,18 @@ bool importBlenderScene(const QString &path,
         if (sceneObject.blenderSourceDataName.isEmpty()) {
             sceneObject.blenderSourceDataName = item.value(
                 QStringLiteral("mesh_name")).toString();
+        }
+        if (bridgeVersion >= 40) {
+            sceneObject.blenderSourceShapeKeyDataName = item.value(
+                QStringLiteral("shape_key_data_name")).toString();
+            for (const QJsonValue &nameValue : item.value(
+                     QStringLiteral("shape_key_names")).toArray()) {
+                sceneObject.blenderSourceShapeKeyNames.append(nameValue.toString());
+            }
+            for (const QJsonValue &nameValue : item.value(
+                     QStringLiteral("data_material_names")).toArray()) {
+                sceneObject.blenderSourceDataMaterialNames.append(nameValue.toString());
+            }
         }
         if (bridgeVersion >= 36) {
             for (const QJsonValue &materialNameValue : item.value(

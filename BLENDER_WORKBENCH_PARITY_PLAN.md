@@ -10922,6 +10922,14 @@ scene depth.
   Blender bridge version 39 and native document version 32. The linked rows
   are display-only and do not activate or select the referenced data block.
   Build passed; no matched Outliner UI comparison was run.
+- The twenty-fourth tree update follows Blender 5.2.2's mesh and curve data
+  expansion in [`tree_element_id_mesh.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_mesh.cc#L21-L46),
+  [`tree_element_shapekey.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_shapekey.cc#L20-L42),
+  and [`tree_element_id_curve.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_curve.cc#L21-L36).
+  Expanding an object's data row now shows mesh shape-key data and its keys,
+  plus the material slots owned by the data block. The Blender bridge advances
+  to version 40 and native documents to version 33. Data-block animation rows
+  remain unported. Build passed; no matched Outliner UI comparison was run.
 - Remaining Outliner scope includes unsupported display modes, data-block
   subtrees beyond the currently supported rows, and a matched Blender/classiCAD
   interaction comparison. Do not

@@ -1668,8 +1668,31 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
                 }
             }
         }
-        appendContentRow(item, entry.dataBlockName, QStringLiteral("/data"),
-                         QStringLiteral("Blender object data block"));
+        QTreeWidgetItem *dataBlock = appendContentRow(
+            item, entry.dataBlockName, QStringLiteral("/data"),
+            QStringLiteral("Blender object data block"));
+        if (dataBlock != nullptr) {
+            if (!entry.shapeKeyDataName.isEmpty()) {
+                QTreeWidgetItem *shapeKeyData = appendContentRow(
+                    dataBlock, entry.shapeKeyDataName,
+                    QStringLiteral("/data/shape-keys"),
+                    QStringLiteral("Blender shape-key data block"));
+                for (qsizetype index = 0;
+                     index < entry.shapeKeyNames.size(); ++index) {
+                    appendContentRow(
+                        shapeKeyData, entry.shapeKeyNames[index],
+                        QStringLiteral("/data/shape-key-%1").arg(index),
+                        QStringLiteral("Blender shape key"));
+                }
+            }
+            for (qsizetype index = 0;
+                 index < entry.dataMaterialNames.size(); ++index) {
+                appendContentRow(
+                    dataBlock, entry.dataMaterialNames[index],
+                    QStringLiteral("/data/material-%1").arg(index),
+                    QStringLiteral("Blender data-block material"));
+            }
+        }
         for (qsizetype index = 0; index < entry.materialNames.size(); ++index) {
             appendContentRow(
                 item,

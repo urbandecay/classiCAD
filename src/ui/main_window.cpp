@@ -2878,6 +2878,11 @@ private:
                 entry.name = name;
                 entry.blenderType = object.blenderSourceObjectType;
                 entry.dataBlockName = object.blenderSourceDataName;
+                entry.shapeKeyDataName =
+                    object.blenderSourceShapeKeyDataName;
+                entry.shapeKeyNames = object.blenderSourceShapeKeyNames;
+                entry.dataMaterialNames =
+                    object.blenderSourceDataMaterialNames;
                 entry.modifierNames = object.blenderSourceModifierNames;
                 for (const BlenderSourceModifier &modifier :
                      object.blenderSourceModifiers) {

@@ -43,6 +43,9 @@ struct OutlinerObjectEntry {
     QString name;
     QString blenderType;
     QString dataBlockName;
+    QString shapeKeyDataName;
+    QStringList shapeKeyNames;
+    QStringList dataMaterialNames;
     QStringList materialNames;
     QStringList modifierNames;
     QVector<OutlinerModifierEntry> modifiers;

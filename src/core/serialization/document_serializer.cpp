@@ -343,7 +343,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 32);
+    serialized.insert(QStringLiteral("version"), 33);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -535,6 +535,20 @@ QJsonObject documentToJson(const Document &document)
                                 sceneObject.blenderSourceObjectType);
         serializedObject.insert(QStringLiteral("blenderSourceDataName"),
                                 sceneObject.blenderSourceDataName);
+        serializedObject.insert(QStringLiteral("blenderSourceShapeKeyDataName"),
+                                sceneObject.blenderSourceShapeKeyDataName);
+        QJsonArray blenderSourceShapeKeyNames;
+        for (const QString &name : sceneObject.blenderSourceShapeKeyNames) {
+            blenderSourceShapeKeyNames.append(name);
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceShapeKeyNames"),
+                                blenderSourceShapeKeyNames);
+        QJsonArray blenderSourceDataMaterialNames;
+        for (const QString &name : sceneObject.blenderSourceDataMaterialNames) {
+            blenderSourceDataMaterialNames.append(name);
+        }
+        serializedObject.insert(QStringLiteral("blenderSourceDataMaterialNames"),
+                                blenderSourceDataMaterialNames);
         QJsonArray blenderSourceMaterialNames;
         for (const QString &name : sceneObject.blenderSourceMaterialNames) {
             blenderSourceMaterialNames.append(name);
@@ -692,7 +706,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 32) {
+    if (version < 1 || version > 33) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1705,6 +1719,46 @@ bool documentFromJson(const QJsonValue &value,
                 sceneObject.blenderSourceModifiers.append({
                     nameValue.toString(), linkedNameValue.toString(), linkedType});
             }
+        }
+        if (version >= 33) {
+            const QJsonValue shapeKeyDataNameValue = serializedObject.value(
+                QStringLiteral("blenderSourceShapeKeyDataName"));
+            const QJsonValue shapeKeyNamesValue = serializedObject.value(
+                QStringLiteral("blenderSourceShapeKeyNames"));
+            const QJsonValue dataMaterialNamesValue = serializedObject.value(
+                QStringLiteral("blenderSourceDataMaterialNames"));
+            const auto readNames = [errorMessage](
+                const QJsonValue &namesValue, const QString &label,
+                QStringList *names) {
+                if (!namesValue.isArray() || namesValue.toArray().size() > 1024) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid Blender %1 list").arg(label));
+                    return false;
+                }
+                for (const QJsonValue &nameValue : namesValue.toArray()) {
+                    if (!nameValue.isString() ||
+                        nameValue.toString().size() > 4096) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid Blender %1 name").arg(label));
+                        return false;
+                    }
+                    names->append(nameValue.toString());
+                }
+                return true;
+            };
+            if (!shapeKeyDataNameValue.isString() ||
+                shapeKeyDataNameValue.toString().size() > 4096 ||
+                !readNames(shapeKeyNamesValue, QStringLiteral("shape key"),
+                           &sceneObject.blenderSourceShapeKeyNames) ||
+                !readNames(dataMaterialNamesValue,
+                           QStringLiteral("data material"),
+                           &sceneObject.blenderSourceDataMaterialNames)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid Blender data-block contents"));
+                return false;
+            }
+            sceneObject.blenderSourceShapeKeyDataName =
+                shapeKeyDataNameValue.toString();
         }
         const QJsonValue surfaceWireValue = serializedObject.value(
             QStringLiteral("blenderSurfaceWireVerticesWorld"));

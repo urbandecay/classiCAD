@@ -1159,7 +1159,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 56);
+    serialized.insert(QStringLiteral("version"), 57);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1615,7 +1615,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 56) {
+    if (version < 1 || version > 57) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

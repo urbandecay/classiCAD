@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 66
+BRIDGE_FORMAT_VERSION = 67
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -2201,6 +2201,20 @@ def outliner_data_api_tree():
             return text[:4096]
         return ""
 
+    def array_component_name(subtype, index):
+        """Match Blender RNA_property_array_item_char() labels."""
+        if index < 4:
+            if subtype in ("QUATERNION", "AXISANGLE"):
+                return ("W", "X", "Y", "Z")[index]
+            if subtype in {
+                    "TRANSLATION", "DIRECTION", "XYZ", "XYZ_LENGTH",
+                    "EULER", "VELOCITY", "ACCELERATION", "COORDS",
+                    "PIXEL"}:
+                return ("X", "Y", "Z", "W")[index]
+            if subtype in ("COLOR", "COLOR_GAMMA"):
+                return ("R", "G", "B", "A")[index]
+        return str(index + 1)
+
     def struct_name(value):
         try:
             name = getattr(value, "name", None)
@@ -2311,12 +2325,9 @@ def outliner_data_api_tree():
                 except (AttributeError, ReferenceError, RuntimeError, TypeError):
                     values = []
                 subtype = str(getattr(prop, "subtype", ""))
-                labels = ("R", "G", "B", "A") if subtype.startswith("COLOR") else (
-                    "X", "Y", "Z", "W")
                 for index, element in enumerate(values):
                     array_key = str(index)
-                    array_name = (labels[index] if index < len(labels)
-                                  else str(index + 1))
+                    array_name = array_component_name(subtype, index)
                     array_node = reserve_node(
                         "ARRAY_ELEM", array_key, array_name, prop_type,
                         display_value(element))
@@ -2378,11 +2389,8 @@ def outliner_data_api_tree():
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 values = []
             subtype = str(getattr(prop, "subtype", ""))
-            labels = ("R", "G", "B", "A") if subtype.startswith("COLOR") else (
-                "X", "Y", "Z", "W")
             for index, element in enumerate(values):
-                array_name = (labels[index] if index < len(labels)
-                              else str(index + 1))
+                array_name = array_component_name(subtype, index)
                 array_node = reserve_node(
                     "ARRAY_ELEM", str(index), array_name, prop_type,
                     display_value(element))

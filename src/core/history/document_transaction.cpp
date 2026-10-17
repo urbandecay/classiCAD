@@ -194,6 +194,123 @@ bool DocumentTransaction::setCollectionVisibility(CollectionId collectionId,
     return true;
 }
 
+bool DocumentTransaction::setCollectionHideSelect(CollectionId collectionId,
+                                                   bool hideSelect)
+{
+    if (!document_.setCollectionHideSelect(collectionId, hideSelect)) {
+        return false;
+    }
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setObjectVisibilityFlags(ObjectId objectId,
+                                                    bool hideViewport,
+                                                    bool hideSelect)
+{
+    if (!document_.setObjectVisibilityFlags(objectId, hideViewport,
+                                             hideSelect)) {
+        return false;
+    }
+    changes_.addObject(objectId);
+    changes_.visibilityChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setObjectDisplayName(ObjectId objectId,
+                                                const QString &name)
+{
+    if (!document_.setObjectDisplayName(objectId, name)) return false;
+    changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::renameCollection(CollectionId collectionId,
+                                            const QString &name)
+{
+    if (!document_.renameCollection(collectionId, name)) return false;
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setCollectionParents(
+    CollectionId collectionId, const QVector<CollectionId> &parentIds)
+{
+    const DocumentCollection *collection = document_.collection(collectionId);
+    if (collection == nullptr) return false;
+    const QVector<CollectionId> previousParentIds = collection->parentIds;
+    if (!document_.setCollectionParents(collectionId, parentIds)) return false;
+    changes_.addCollection(collectionId);
+    for (const CollectionId parentId : previousParentIds) {
+        changes_.addCollection(parentId);
+    }
+    for (const CollectionId parentId : parentIds) {
+        changes_.addCollection(parentId);
+    }
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setObjectCollections(
+    ObjectId objectId, const QVector<CollectionId> &collectionIds)
+{
+    const SceneObject *object = document_.object(objectId);
+    if (object == nullptr) return false;
+    const QVector<CollectionId> previousCollectionIds = object->collectionIds;
+    if (!document_.setObjectCollections(objectId, collectionIds)) return false;
+    changes_.addObject(objectId);
+    for (const CollectionId collectionId : previousCollectionIds) {
+        changes_.addCollection(collectionId);
+    }
+    for (const CollectionId collectionId : collectionIds) {
+        changes_.addCollection(collectionId);
+    }
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::removeCollection(CollectionId collectionId)
+{
+    const DocumentCollection *collection = document_.collection(collectionId);
+    if (collection == nullptr) return false;
+    const QVector<CollectionId> parents = collection->parentIds;
+    QVector<CollectionId> children;
+    for (const DocumentCollection &candidate : document_.collections()) {
+        if (candidate.parentIds.contains(collectionId)) {
+            children.append(candidate.id);
+        }
+    }
+    QVector<ObjectId> linkedObjects;
+    for (const SceneObject &object : document_.objects()) {
+        if (object.collectionIds.contains(collectionId)) {
+            linkedObjects.append(object.id);
+        }
+    }
+    if (!document_.removeCollection(collectionId)) return false;
+    changes_.addCollection(collectionId);
+    for (const CollectionId parentId : parents) {
+        changes_.addCollection(parentId);
+    }
+    for (const CollectionId childId : children) {
+        changes_.addCollection(childId);
+    }
+    for (const ObjectId objectId : linkedObjects) {
+        changes_.addObject(objectId);
+    }
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::translateObjects(const QVector<ObjectId> &objectIds,
                                            const Point3D &worldDelta)
 {

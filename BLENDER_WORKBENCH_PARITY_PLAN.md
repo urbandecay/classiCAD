@@ -17,10 +17,9 @@ material values without replacing the native model or tessellation data.
 
 Blender's relevant rendering behavior and pass structure are implementation
 references; classiCAD remains a separate application rather than importing
-Blender's entire internal architecture. The work should leave clean seams for
-later Blender-like features, including an Outliner. Object Mode and Edit Mode
-interaction have been added as a separate parity category; the rendering work
-does not itself provide that interaction system.
+Blender's entire internal architecture. Object Mode and Edit Mode interaction
+and an initial collection/object Outliner are tracked as separate parity
+categories; the rendering work does not itself provide those systems.
 
 Use Blender 5.2.2 as the reference version. The bundled Workbench lights,
 MatCaps, and color-management data in this repository already come from
@@ -10651,6 +10650,33 @@ scene depth.
   Edit Mode wires keep their existing coverage. `cmake --build build -j4`
   passed; the user's next rebuilt viewport comparison is still needed to
   confirm the visible result.
+
+### Blender Outliner scene-tree and selection port (2026-10-16)
+
+- The reference is Blender 5.2.2's
+  [`TreeDisplayViewLayer::build_tree()` and collection membership builder](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L69-L189)
+  plus its
+  [item activation and object-selection logic](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_select.cc#L300-L404).
+  The classiCAD adaptation keeps Blender's important rules: a scene collection
+  root, nested collection paths, one object row for each collection
+  membership, canonical object selection shared by those repeated rows,
+  click-to-select-and-activate, Ctrl-toggle, Shift range selection, and
+  deselection from empty space. Repeated rows share selection while keeping
+  the activated membership row current. Restriction changes are deferred
+  until Qt finishes its row event so the synchronous document refresh cannot
+  destroy an item during its own check-state update. Blender-specific `Main`, `TreeStoreElem`,
+  `ViewLayer::Base`, notifier, and depsgraph machinery is not imported; the
+  equivalent row occurrences and selection state use classiCAD's Document and
+  SelectionModel. Adapted source attribution is kept in the panel code under
+  Blender's GPL-2.0-or-later license.
+- The planned UI slice also includes collection/object restriction toggles
+  and transaction-backed collection/object actions. Remaining Outliner scope
+  must be checked against the pinned source before marking complete: exact
+  per-view-layer `LayerCollection` restriction state, object-parent nesting,
+  drag/drop and reparenting, row-state persistence/filtering, other Blender
+  datablock rows, and a matched Blender/classiCAD interaction comparison.
+  `git diff --check` and `cmake --build build -j4` passed for this slice; no
+  GUI comparison was run.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

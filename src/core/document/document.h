@@ -89,7 +89,12 @@ public:
     bool renameCollection(CollectionId id, const QString &name);
     bool setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds);
     bool setCollectionVisibility(CollectionId id, bool hideViewport, bool hideRender);
+    bool setCollectionHideSelect(CollectionId id, bool hideSelect);
     bool setObjectCollections(ObjectId objectId, const QVector<CollectionId> &collectionIds);
+    bool setObjectVisibilityFlags(ObjectId objectId,
+                                  bool hideViewport,
+                                  bool hideSelect);
+    bool setObjectDisplayName(ObjectId objectId, const QString &name);
     bool isObjectVisible(ObjectId objectId) const;
     // Render visibility follows Blender's hide_render/excluded collection
     // state without applying viewport-only hide flags.

@@ -34,6 +34,17 @@ public:
     bool setCollectionVisibility(CollectionId collectionId,
                                  bool hideViewport,
                                  bool hideRender);
+    bool setCollectionHideSelect(CollectionId collectionId, bool hideSelect);
+    bool setObjectVisibilityFlags(ObjectId objectId,
+                                  bool hideViewport,
+                                  bool hideSelect);
+    bool setObjectDisplayName(ObjectId objectId, const QString &name);
+    bool renameCollection(CollectionId collectionId, const QString &name);
+    bool setCollectionParents(CollectionId collectionId,
+                              const QVector<CollectionId> &parentIds);
+    bool setObjectCollections(ObjectId objectId,
+                              const QVector<CollectionId> &collectionIds);
+    bool removeCollection(CollectionId collectionId);
     bool translateObjects(const QVector<ObjectId> &objectIds,
                           const Point3D &worldDelta);
     bool removeObject(ObjectId objectId);

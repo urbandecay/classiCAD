@@ -671,6 +671,20 @@ bool Document::setCollectionVisibility(CollectionId id, bool hideViewport, bool 
     return true;
 }
 
+bool Document::setCollectionHideSelect(CollectionId id, bool hideSelect)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    if (candidate == nullptr) return false;
+    if (candidate->hideSelect == hideSelect) return true;
+    candidate->hideSelect = hideSelect;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::setObjectCollections(ObjectId objectId, const QVector<CollectionId> &collectionIds)
 {
     SceneObject *candidate = mutableObject(objectId);
@@ -685,6 +699,39 @@ bool Document::setObjectCollections(ObjectId objectId, const QVector<CollectionI
     DocumentChangeSet changes;
     changes.addObject(objectId);
     changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setObjectVisibilityFlags(ObjectId objectId,
+                                        bool hideViewport,
+                                        bool hideSelect)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr) return false;
+    if (candidate->hideViewport == hideViewport &&
+        candidate->hideSelect == hideSelect) {
+        return true;
+    }
+    candidate->hideViewport = hideViewport;
+    candidate->hideSelect = hideSelect;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setObjectDisplayName(ObjectId objectId, const QString &name)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    const QString trimmed = name.trimmed();
+    if (candidate == nullptr || trimmed.isEmpty()) return false;
+    if (candidate->displayName == trimmed) return true;
+    candidate->displayName = trimmed;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.structureChanged = true;
     applyChanges(changes);
     return true;
 }

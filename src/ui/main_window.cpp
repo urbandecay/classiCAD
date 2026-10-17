@@ -94,6 +94,9 @@ public:
                 markDocumentModified();
                 break;
             case ApplicationSessionChange::Selection:
+                if (collectionsPanel_ != nullptr) {
+                    collectionsPanel_->syncSelection();
+                }
                 break;
             case ApplicationSessionChange::DocumentWillBeReplaced:
                 if (viewport_ != nullptr) {
@@ -2745,6 +2748,15 @@ private:
         }
     }
 
+    void pruneOutlinerSelection()
+    {
+        SelectionModel &selection = session_.selection();
+        selection.prune(session_.document());
+        if (!selection.contains(selection.activeObjectId())) {
+            selection.setActiveObjectId(selection.primaryObjectId());
+        }
+    }
+
     QWidget *createRightPanel()
     {
         CollectionsPanelCallbacks collectionCallbacks;
@@ -2753,16 +2765,129 @@ private:
             const Document &document = session_.document();
             entries.reserve(document.collections().size());
             for (const DocumentCollection &collection : document.collections()) {
-                int objectCount = 0;
-                for (const SceneObject &object : document.objects()) {
-                    if (object.collectionIds.contains(collection.id)) {
-                        ++objectCount;
-                    }
-                }
-                entries.append({collection, objectCount});
+                entries.append({collection});
             }
             return entries;
         };
+        collectionCallbacks.objects = [this]() {
+            QVector<OutlinerObjectEntry> objects;
+            const Document &document = session_.document();
+            objects.reserve(document.objects().size());
+            for (const SceneObject &object : document.objects()) {
+                QString name = object.displayName.trimmed();
+                if (name.isEmpty()) {
+                    name = QStringLiteral("Object %1").arg(object.id.value());
+                }
+                objects.append({object.id, name, object.collectionIds,
+                                object.hideViewport, object.hideSelect});
+            }
+            return objects;
+        };
+        collectionCallbacks.selectedObjectIds = [this]() {
+            return session_.selection().objectIds();
+        };
+        collectionCallbacks.activeObjectId = [this]() {
+            return session_.selection().activeObjectId();
+        };
+        collectionCallbacks.canSelectObject = [this](ObjectId id) {
+            return session_.document().isObjectEditable(id);
+        };
+        collectionCallbacks.setObjectSelection =
+            [this](const QVector<ObjectId> &objectIds, ObjectId activeObjectId) {
+                QVector<ObjectId> selectableIds;
+                for (const ObjectId id : objectIds) {
+                    if (session_.document().isObjectEditable(id) &&
+                        !selectableIds.contains(id)) {
+                        selectableIds.append(id);
+                    }
+                }
+                ObjectId active = activeObjectId;
+                if (!selectableIds.contains(active)) {
+                    active = selectableIds.isEmpty() ? ObjectId::invalid()
+                                                     : selectableIds.back();
+                }
+                session_.selection().setObjectIds(selectableIds, active);
+                session_.selection().setActiveObjectId(active);
+            };
+        collectionCallbacks.createCollection =
+            [this](const QString &name, CollectionId parentId) {
+                DocumentCollection collection;
+                collection.name = name;
+                if (parentId.isValid()) collection.parentIds = {parentId};
+                DocumentTransaction transaction = session_.beginTransaction();
+                const CollectionId id = transaction.insertCollection(collection);
+                if (!id.isValid() ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not create collection"), 4000);
+                    return CollectionId::invalid();
+                }
+                return id;
+            };
+        collectionCallbacks.renameCollection =
+            [this](CollectionId id, const QString &name) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.renameCollection(id, name) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not rename collection"), 4000);
+                }
+            };
+        collectionCallbacks.removeCollection = [this](CollectionId id) {
+            DocumentTransaction transaction = session_.beginTransaction();
+            if (!transaction.removeCollection(id) ||
+                !session_.commitTransaction(transaction)) {
+                statusBar()->showMessage(
+                    QStringLiteral("Could not remove collection"), 4000);
+                return;
+            }
+            pruneOutlinerSelection();
+        };
+        collectionCallbacks.linkObjects =
+            [this](const QVector<ObjectId> &objectIds, CollectionId collectionId) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                bool changed = false;
+                for (const ObjectId id : objectIds) {
+                    const SceneObject *object = session_.document().object(id);
+                    if (object == nullptr ||
+                        object->collectionIds.contains(collectionId)) {
+                        continue;
+                    }
+                    QVector<CollectionId> memberships = object->collectionIds;
+                    memberships.append(collectionId);
+                    changed = transaction.setObjectCollections(id, memberships) ||
+                              changed;
+                }
+                if (changed && !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not link objects to collection"),
+                        4000);
+                }
+            };
+        collectionCallbacks.renameObject =
+            [this](ObjectId id, const QString &name) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectDisplayName(id, name) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not rename object"), 4000);
+                }
+            };
+        collectionCallbacks.unlinkObject =
+            [this](ObjectId id, CollectionId collectionId) {
+                const SceneObject *object = session_.document().object(id);
+                if (object == nullptr ||
+                    !object->collectionIds.contains(collectionId)) return;
+                QVector<CollectionId> memberships = object->collectionIds;
+                memberships.removeAll(collectionId);
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectCollections(id, memberships) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not unlink object from collection"),
+                        4000);
+                }
+            };
         collectionCallbacks.setViewportVisibility =
             [this](CollectionId id, bool hideViewport) {
                 const DocumentCollection *collection =
@@ -2775,7 +2900,51 @@ private:
                     statusBar()->showMessage(
                         QStringLiteral("Could not update collection visibility"),
                         4000);
+                    return;
                 }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.setCollectionSelectability =
+            [this](CollectionId id, bool hideSelect) {
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setCollectionHideSelect(id, hideSelect) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update collection selection lock"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.setObjectViewportVisibility =
+            [this](ObjectId id, bool hideViewport) {
+                const SceneObject *object = session_.document().object(id);
+                if (object == nullptr) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectVisibilityFlags(
+                        id, hideViewport, object->hideSelect) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update object visibility"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
+            };
+        collectionCallbacks.setObjectSelectability =
+            [this](ObjectId id, bool hideSelect) {
+                const SceneObject *object = session_.document().object(id);
+                if (object == nullptr) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setObjectVisibilityFlags(
+                        id, object->hideViewport, hideSelect) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update object selection lock"),
+                        4000);
+                    return;
+                }
+                pruneOutlinerSelection();
             };
         collectionsPanel_ = new CollectionsPanel(collectionCallbacks);
 

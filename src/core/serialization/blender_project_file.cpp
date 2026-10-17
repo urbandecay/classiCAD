@@ -2844,7 +2844,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 60 && bridgeVersion != 61 &&
          bridgeVersion != 62 && bridgeVersion != 63 &&
          bridgeVersion != 64 && bridgeVersion != 65 &&
-         bridgeVersion != 66 && bridgeVersion != 67)) {
+         bridgeVersion != 66 && bridgeVersion != 67 &&
+         bridgeVersion != 68)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

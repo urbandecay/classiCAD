@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 64
+BRIDGE_FORMAT_VERSION = 65
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1045,12 +1045,14 @@ def outliner_library_object_tree(obj, parent_budgets=None, truncated=None,
 
 def outliner_library_collection_children(collection, remaining_rows,
                                          truncated_out=None,
-                                         id_group_names_by_type=None):
+                                         id_group_names_by_type=None,
+                                         additional_budgets=None):
     """Capture Collection ID children in Blender's collection-then-object order."""
     local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
     budgets = [local_remaining]
     if remaining_rows is not None:
         budgets.append(remaining_rows)
+    budgets.extend(additional_budgets or [])
     truncated = [False]
 
     def id_group_name_for_id(id_block):
@@ -1140,6 +1142,123 @@ def outliner_library_collection_children(collection, remaining_rows,
     if truncated_out is not None:
         truncated_out[:] = [truncated[0]]
     return children
+
+
+def outliner_library_scene_tree(scene, parent_budgets,
+                                id_group_names_by_type, truncated_out=None):
+    """Capture Scene ID children in Blender's view-layer/world/collection/object order."""
+    remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    budgets = [remaining] + list(parent_budgets or [])
+    truncated = [False]
+
+    def reserve_row():
+        if any(budget[0] <= 0 for budget in budgets):
+            truncated[0] = True
+            return False
+        for budget in budgets:
+            budget[0] -= 1
+        return True
+
+    def id_group_name_for_id(id_block):
+        if id_group_names_by_type is None or id_block is None:
+            return ""
+        id_type = getattr(getattr(id_block, "bl_rna", None), "identifier", "")
+        return str(id_group_names_by_type.get(id_type, ""))
+
+    result = {
+        "has_view_layers_group": False,
+        "view_layer_names": [],
+        "world_name": "",
+        "world_group_name": "",
+        "has_scene_collection_group": False,
+        "collection_tree": [],
+        "has_objects_group": False,
+        "object_tree": [],
+    }
+    if reserve_row():
+        result["has_view_layers_group"] = True
+        for view_layer in scene.view_layers:
+            if not reserve_row():
+                break
+            result["view_layer_names"].append(str(view_layer.name))
+
+    world = getattr(scene, "world", None)
+    if world is not None and reserve_row():
+        result["world_name"] = str(world.name)
+        result["world_group_name"] = id_group_name_for_id(world)
+
+    master_collection = getattr(scene, "master_collection", None)
+    if master_collection is None:
+        master_collection = getattr(scene, "collection", None)
+    if master_collection is not None and reserve_row():
+        result["has_scene_collection_group"] = True
+        if reserve_row():
+            collection_truncated = []
+            children = outliner_library_collection_children(
+                master_collection, remaining, collection_truncated,
+                id_group_names_by_type, budgets[1:])
+            result["collection_tree"].append({
+                "name": str(master_collection.name),
+                "kind": "COLLECTION",
+                "children": children,
+            })
+            if collection_truncated == [True]:
+                truncated[0] = True
+
+    if reserve_row():
+        result["has_objects_group"] = True
+        records = []
+        records_by_id = {}
+        for obj in scene.objects:
+            if not reserve_row():
+                break
+            object_id = stable_id(obj)
+            object_truncated = []
+            node = {
+                "name": str(obj.name),
+                "kind": "OBJECT",
+                "id_group_name": id_group_name_for_id(obj),
+                "object_contents": outliner_library_object_tree(
+                    obj, budgets, object_truncated,
+                    id_group_names_by_type),
+                "children": [],
+            }
+            if object_truncated == [True]:
+                truncated[0] = True
+            parent = getattr(obj, "parent", None)
+            parent_id = stable_id(parent) if parent is not None else ""
+            record = {"id": object_id, "parent_id": parent_id, "node": node}
+            records.append(record)
+            records_by_id[object_id] = record
+
+        roots = []
+        for record in records:
+            parent_id = record["parent_id"]
+            parent_record = records_by_id.get(parent_id)
+            if parent_record is None:
+                roots.append(record["node"])
+                continue
+            cursor = parent_id
+            ancestry = {record["id"]}
+            depth = 0
+            cyclic = False
+            while cursor in records_by_id:
+                if cursor in ancestry or depth >= 128:
+                    cyclic = True
+                    break
+                ancestry.add(cursor)
+                cursor = records_by_id[cursor]["parent_id"]
+                depth += 1
+            if cyclic:
+                truncated[0] = True
+                roots.append(record["node"])
+            else:
+                parent_record["node"]["children"].append(record["node"])
+        result["object_tree"] = roots
+
+    if truncated_out is not None:
+        truncated_out[:] = [truncated[0]]
+    return result
 
 
 def outliner_library_tree():
@@ -1236,7 +1355,7 @@ def outliner_library_tree():
                         "animation": animation,
                     })
             id_type = id_block.bl_rna.identifier
-            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object", "Texture", "FreestyleLineStyle"}
+            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object", "Texture", "FreestyleLineStyle", "Scene"}
                     or "GreasePencil" in id_type):
                 subtree = {
                     "data_block_name": data_block_name,
@@ -1250,6 +1369,7 @@ def outliner_library_tree():
                     "object_tree": [],
                     "texture_image_name": "",
                     "line_style_texture_names": [],
+                    "scene_tree": {},
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -1364,6 +1484,17 @@ def outliner_library_tree():
                     except (AttributeError, ReferenceError, RuntimeError, TypeError):
                         subtree_truncated[0] = True
 
+                if id_type == "Scene":
+                    scene_tree_truncated = []
+                    subtree["scene_tree"] = outliner_library_scene_tree(
+                        id_block,
+                        [local_rows_remaining,
+                         library_specialized_rows_remaining],
+                        id_group_names_by_type,
+                        scene_tree_truncated)
+                    if scene_tree_truncated == [True]:
+                        subtree_truncated[0] = True
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
@@ -1374,7 +1505,8 @@ def outliner_library_tree():
                         subtree["collection_tree"] or
                         subtree["object_tree"] or
                         subtree["texture_image_name"] or
-                        subtree["line_style_texture_names"]):
+                        subtree["line_style_texture_names"] or
+                        subtree["scene_tree"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

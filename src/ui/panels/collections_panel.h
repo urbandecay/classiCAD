@@ -168,6 +168,7 @@ struct OutlinerLibraryDataGroup {
         QJsonArray greasePencilLayerTree;
         QJsonArray collectionTree;
         QJsonArray objectTree;
+        QJsonObject sceneTree;
         QString textureImageName;
         QStringList lineStyleTextureNames;
     };

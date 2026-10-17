@@ -3179,14 +3179,55 @@ void CollectionsPanel::refresh()
                 }
                 return count;
             };
+            const auto countLibrarySceneObjectRows = [
+                &countLibraryTreeRows](const auto &self,
+                    const QJsonArray &nodes) -> qsizetype {
+                qsizetype count = 0;
+                for (const QJsonValue &value : nodes) {
+                    const QJsonObject node = value.toObject();
+                    ++count;
+                    count += countLibraryTreeRows(
+                        countLibraryTreeRows,
+                        node.value(QStringLiteral("object_contents")).toArray());
+                    count += self(self, node.value(
+                        QStringLiteral("children")).toArray());
+                }
+                return count;
+            };
+            const auto countLibrarySceneTreeRows = [
+                &countLibraryCollectionRows,
+                &countLibrarySceneObjectRows](const QJsonObject &tree) {
+                if (tree.isEmpty()) return qsizetype{0};
+                qsizetype count =
+                    (tree.value(QStringLiteral("has_view_layers_group")).toBool()
+                        ? 1 + tree.value(QStringLiteral("view_layer_names"))
+                                  .toArray().size() : 0) +
+                    (!tree.value(QStringLiteral("world_name")).toString().isEmpty()
+                        ? 1 : 0);
+                if (tree.value(QStringLiteral(
+                        "has_scene_collection_group")).toBool()) {
+                    ++count;
+                    count += countLibraryCollectionRows(
+                        countLibraryCollectionRows,
+                        tree.value(QStringLiteral("collection_tree")).toArray());
+                }
+                if (tree.value(QStringLiteral("has_objects_group")).toBool()) {
+                    ++count;
+                    count += countLibrarySceneObjectRows(
+                        countLibrarySceneObjectRows,
+                        tree.value(QStringLiteral("object_tree")).toArray());
+                }
+                return count;
+            };
             const auto countLibraryDataBlockRows = [
                 &findLibraryDataGroup, &countLibraryTreeRows,
-                &countLibraryCollectionRows](
+                &countLibraryCollectionRows, &countLibrarySceneTreeRows](
                 const OutlinerLibraryDataGroup::DataBlockTree &tree) {
                 qsizetype count = countLibraryTreeRows(
                     countLibraryTreeRows, tree.objectTree);
                 count += countLibraryCollectionRows(
                     countLibraryCollectionRows, tree.collectionTree);
+                count += countLibrarySceneTreeRows(tree.sceneTree);
                 count += countLibraryTreeRows(
                     countLibraryTreeRows, tree.armatureBoneTree);
                 count += countLibraryTreeRows(
@@ -3390,6 +3431,91 @@ void CollectionsPanel::refresh()
                         materialPath + QStringLiteral("/animation"));
                 }
             };
+            std::function<void(QTreeWidgetItem *, const QJsonArray &,
+                               const QString &)> appendLibrarySceneObjectTree;
+            appendLibrarySceneObjectTree = [
+                &appendLibraryContentRow, &appendReferencedIdChildren,
+                &appendLibraryObjectTree,
+                &appendLibrarySceneObjectTree](QTreeWidgetItem *parent,
+                    const QJsonArray &nodes, const QString &path) {
+                for (qsizetype index = 0; index < nodes.size(); ++index) {
+                    const QJsonObject node = nodes[index].toObject();
+                    const QString objectPath = path +
+                        QStringLiteral("/item-%1").arg(index);
+                    QTreeWidgetItem *objectRow = appendLibraryContentRow(
+                        parent, node.value(QStringLiteral("name")).toString(),
+                        objectPath, QStringLiteral("Object in Blender Scene"));
+                    appendReferencedIdChildren(objectRow, node, objectPath, false);
+                    appendLibraryObjectTree(
+                        appendLibraryObjectTree, objectRow,
+                        node.value(QStringLiteral("object_contents")).toArray(),
+                        objectPath + QStringLiteral("/object-contents"),
+                        appendReferencedIdChildren);
+                    appendLibrarySceneObjectTree(
+                        objectRow, node.value(QStringLiteral("children")).toArray(),
+                        objectPath + QStringLiteral("/children"));
+                }
+            };
+            const auto appendLibrarySceneTree = [
+                &appendLibraryContentRow, &appendLibraryAnimationByGroup,
+                &appendLibraryCollectionTree,
+                &appendLibrarySceneObjectTree,
+                &appendReferencedIdChildren](QTreeWidgetItem *parent,
+                    const QJsonObject &sceneTree, const QString &path) {
+                if (sceneTree.value(QStringLiteral(
+                        "has_view_layers_group")).toBool()) {
+                    const QString viewLayersPath = path +
+                        QStringLiteral("/view-layers");
+                    QTreeWidgetItem *viewLayersRow = appendLibraryContentRow(
+                        parent, QStringLiteral("View Layers"), viewLayersPath,
+                        QStringLiteral("Blender Scene view layers"));
+                    const QJsonArray names = sceneTree.value(
+                        QStringLiteral("view_layer_names")).toArray();
+                    for (qsizetype index = 0; index < names.size(); ++index) {
+                        appendLibraryContentRow(
+                            viewLayersRow, names[index].toString(),
+                            viewLayersPath + QStringLiteral("/item-%1").arg(index),
+                            QStringLiteral("Blender View Layer"));
+                    }
+                }
+                const QString worldName = sceneTree.value(
+                    QStringLiteral("world_name")).toString();
+                if (!worldName.isEmpty()) {
+                    const QString worldPath = path + QStringLiteral("/world");
+                    QTreeWidgetItem *worldRow = appendLibraryContentRow(
+                        parent, worldName, worldPath,
+                        QStringLiteral("Blender Scene World ID"));
+                    appendLibraryAnimationByGroup(
+                        worldRow, sceneTree.value(
+                            QStringLiteral("world_group_name")).toString(),
+                        worldName, worldPath + QStringLiteral("/animation"));
+                }
+                if (sceneTree.value(QStringLiteral(
+                        "has_scene_collection_group")).toBool()) {
+                    const QString collectionPath = path +
+                        QStringLiteral("/scene-collection");
+                    QTreeWidgetItem *collectionRow = appendLibraryContentRow(
+                        parent, QStringLiteral("Scene Collection"),
+                        collectionPath,
+                        QStringLiteral("Blender Scene collection hierarchy"));
+                    appendLibraryCollectionTree(
+                        appendLibraryCollectionTree, collectionRow,
+                        sceneTree.value(QStringLiteral(
+                            "collection_tree")).toArray(),
+                        collectionPath + QStringLiteral("/items"),
+                        appendReferencedIdChildren);
+                }
+                if (sceneTree.value(QStringLiteral("has_objects_group")).toBool()) {
+                    const QString objectsPath = path + QStringLiteral("/objects");
+                    QTreeWidgetItem *objectsRow = appendLibraryContentRow(
+                        parent, QStringLiteral("Objects"), objectsPath,
+                        QStringLiteral("Blender Scene objects"));
+                    appendLibrarySceneObjectTree(
+                        objectsRow, sceneTree.value(
+                            QStringLiteral("object_tree")).toArray(),
+                        objectsPath + QStringLiteral("/items"));
+                }
+            };
             QTreeWidgetItem *row = libraryRows.value(library.id);
             QTreeWidgetItem *parent = libraryRows.value(library.parentId);
             if (library.currentFile || parent == nullptr || parent == row) {
@@ -3444,6 +3570,8 @@ void CollectionsPanel::refresh()
                     dataRow->setFlags(Qt::ItemIsEnabled |
                                       Qt::ItemIsSelectable);
                     if (!idTypeFilter_.isEmpty()) {
+                        const bool isSceneId = sourceGroup.displayName ==
+                            QLatin1String("Scenes");
                         const QVector<OutlinerActionSlotEntry> actionSlots =
                             sourceGroup.actionSlotsByDataBlockName.value(
                                 dataBlockName);
@@ -3469,7 +3597,7 @@ void CollectionsPanel::refresh()
                         const auto animation =
                             sourceGroup.animationsByDataBlockName.constFind(
                                 dataBlockName);
-                        if (animation !=
+                        if (!isSceneId && animation !=
                             sourceGroup.animationsByDataBlockName.cend()) {
                             appendLibraryAnimation(
                                 dataRow, animation.value(),
@@ -3571,6 +3699,18 @@ void CollectionsPanel::refresh()
                                     materialName,
                                     materialPath + QStringLiteral("/animation"));
                             }
+                            if (isSceneId) {
+                                appendLibrarySceneTree(
+                                    dataRow, dataBlockTree->sceneTree,
+                                    treePath + QStringLiteral("/scene"));
+                            }
+                        }
+                        if (isSceneId && animation !=
+                            sourceGroup.animationsByDataBlockName.cend()) {
+                            appendLibraryAnimation(
+                                dataRow, animation.value(),
+                                dataPath + QStringLiteral("/item-%1/animation")
+                                    .arg(dataIndex));
                         }
                     }
                 }

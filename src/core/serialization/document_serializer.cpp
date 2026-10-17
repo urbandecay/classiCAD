@@ -533,6 +533,8 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         QStringLiteral("texture_image_name"));
                     const QJsonValue lineStyleTextureNames = subtree.value(
                         QStringLiteral("line_style_texture_names"));
+                    const QJsonValue sceneTreeValue = subtree.value(
+                        QStringLiteral("scene_tree"));
                     const QString dataBlockName = dataName.toString();
                     const QString shapeKeyName = shapeKeyDataName.toString();
                     if (!dataName.isString() || dataBlockName.size() > 4096 ||
@@ -557,7 +559,9 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                           textureImageName.toString().size() > 4096)) ||
                         (!lineStyleTextureNames.isUndefined() &&
                          (!lineStyleTextureNames.isArray() ||
-                          lineStyleTextureNames.toArray().size() > 1024))) {
+                          lineStyleTextureNames.toArray().size() > 1024)) ||
+                        (!sceneTreeValue.isUndefined() &&
+                         !sceneTreeValue.isObject())) {
                         return false;
                     }
                     subtreesByDataBlockName.insert(dataBlockName);
@@ -754,6 +758,142 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         if (!countObjectTree(countObjectTree, objectTree.toArray(),
                                              0, &objectRows, QString())) return false;
                         subtreeRows += objectRows;
+                    }
+                    if (!sceneTreeValue.isUndefined() &&
+                        !sceneTreeValue.toObject().isEmpty()) {
+                        const QJsonObject sceneTree = sceneTreeValue.toObject();
+                        const QJsonValue hasViewLayersGroup = sceneTree.value(
+                            QStringLiteral("has_view_layers_group"));
+                        const QJsonValue viewLayerNames = sceneTree.value(
+                            QStringLiteral("view_layer_names"));
+                        const QJsonValue worldName = sceneTree.value(
+                            QStringLiteral("world_name"));
+                        const QJsonValue worldGroupName = sceneTree.value(
+                            QStringLiteral("world_group_name"));
+                        const QJsonValue hasSceneCollectionGroup = sceneTree.value(
+                            QStringLiteral("has_scene_collection_group"));
+                        const QJsonValue sceneCollectionTree = sceneTree.value(
+                            QStringLiteral("collection_tree"));
+                        const QJsonValue hasObjectsGroup = sceneTree.value(
+                            QStringLiteral("has_objects_group"));
+                        const QJsonValue sceneObjectTree = sceneTree.value(
+                            QStringLiteral("object_tree"));
+                        if (!hasViewLayersGroup.isBool() ||
+                            !viewLayerNames.isArray() ||
+                            viewLayerNames.toArray().size() > 1024 ||
+                            !worldName.isString() || worldName.toString().size() > 4096 ||
+                            !worldGroupName.isString() ||
+                            worldGroupName.toString().size() > 256 ||
+                            !hasSceneCollectionGroup.isBool() ||
+                            !sceneCollectionTree.isArray() ||
+                            !hasObjectsGroup.isBool() ||
+                            !sceneObjectTree.isArray() ||
+                            (!hasViewLayersGroup.toBool() &&
+                             !viewLayerNames.toArray().isEmpty()) ||
+                            (!hasSceneCollectionGroup.toBool() &&
+                             !sceneCollectionTree.toArray().isEmpty()) ||
+                            (!hasObjectsGroup.toBool() &&
+                             !sceneObjectTree.toArray().isEmpty())) return false;
+                        int sceneRows =
+                            (hasViewLayersGroup.toBool() ?
+                                1 + viewLayerNames.toArray().size() : 0) +
+                            (!worldName.toString().isEmpty() ? 1 : 0) +
+                            (hasSceneCollectionGroup.toBool() ? 1 : 0) +
+                            (hasObjectsGroup.toBool() ? 1 : 0);
+                        for (const QJsonValue &viewLayerName :
+                             viewLayerNames.toArray()) {
+                            if (!viewLayerName.isString() ||
+                                viewLayerName.toString().size() > 4096) return false;
+                        }
+                        const auto countSceneCollectionTree =
+                            [&](const auto &self, const QJsonArray &nodes,
+                                int depth, int *rowCount) -> bool {
+                            if (nodes.isEmpty()) return true;
+                            if (depth >= 128 || rowCount == nullptr ||
+                                *rowCount + nodes.size() > 1024) return false;
+                            for (const QJsonValue &nodeValue : nodes) {
+                                if (!nodeValue.isObject()) return false;
+                                const QJsonObject node = nodeValue.toObject();
+                                const QJsonValue name = node.value(
+                                    QStringLiteral("name"));
+                                const QJsonValue kind = node.value(
+                                    QStringLiteral("kind"));
+                                const QJsonValue children = node.value(
+                                    QStringLiteral("children"));
+                                const QJsonValue idGroupName = node.value(
+                                    QStringLiteral("id_group_name"));
+                                const QString nodeKind = kind.toString();
+                                if (!name.isString() || name.toString().size() > 4096 ||
+                                    !kind.isString() || !children.isArray() ||
+                                    (nodeKind != QLatin1String("COLLECTION") &&
+                                     nodeKind != QLatin1String("OBJECT")) ||
+                                    (nodeKind == QLatin1String("OBJECT") &&
+                                     (!idGroupName.isString() ||
+                                      idGroupName.toString().size() > 256))) return false;
+                                ++(*rowCount);
+                                if (nodeKind == QLatin1String("COLLECTION")) {
+                                    if (!self(self, children.toArray(), depth + 1,
+                                              rowCount)) return false;
+                                } else if (!countObjectTree(
+                                               countObjectTree,
+                                               children.toArray(), 0,
+                                               rowCount, QString())) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        };
+                        int collectionRows = 0;
+                        if (hasSceneCollectionGroup.toBool() &&
+                            !countSceneCollectionTree(
+                                countSceneCollectionTree,
+                                sceneCollectionTree.toArray(), 0,
+                                &collectionRows)) return false;
+                        sceneRows += collectionRows;
+                        const auto countSceneObjects =
+                            [&](const auto &self, const QJsonArray &nodes,
+                                int depth, int *rowCount) -> bool {
+                            if (nodes.isEmpty()) return true;
+                            if (depth >= 128 || rowCount == nullptr ||
+                                *rowCount + nodes.size() > 1024) return false;
+                            for (const QJsonValue &nodeValue : nodes) {
+                                if (!nodeValue.isObject()) return false;
+                                const QJsonObject node = nodeValue.toObject();
+                                const QJsonValue name = node.value(
+                                    QStringLiteral("name"));
+                                const QJsonValue kind = node.value(
+                                    QStringLiteral("kind"));
+                                const QJsonValue idGroupName = node.value(
+                                    QStringLiteral("id_group_name"));
+                                const QJsonValue objectContents = node.value(
+                                    QStringLiteral("object_contents"));
+                                const QJsonValue children = node.value(
+                                    QStringLiteral("children"));
+                                if (!name.isString() || name.toString().size() > 4096 ||
+                                    !kind.isString() ||
+                                    kind.toString() != QLatin1String("OBJECT") ||
+                                    !idGroupName.isString() ||
+                                    idGroupName.toString().size() > 256 ||
+                                    !objectContents.isArray() || !children.isArray()) {
+                                    return false;
+                                }
+                                ++(*rowCount);
+                                if (!countObjectTree(countObjectTree,
+                                                     objectContents.toArray(), 0,
+                                                     rowCount, QString()) ||
+                                    !self(self, children.toArray(), depth + 1,
+                                          rowCount)) return false;
+                            }
+                            return true;
+                        };
+                        int objectRows = 0;
+                        if (hasObjectsGroup.toBool() &&
+                            !countSceneObjects(countSceneObjects,
+                                               sceneObjectTree.toArray(), 0,
+                                               &objectRows)) return false;
+                        sceneRows += objectRows;
+                        if (sceneRows > 1024) return false;
+                        subtreeRows += sceneRows;
                     }
                     if (!textureImageName.isUndefined() &&
                         !textureImageName.toString().isEmpty()) {
@@ -1005,7 +1145,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 54);
+    serialized.insert(QStringLiteral("version"), 55);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1461,7 +1601,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 54) {
+    if (version < 1 || version > 55) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

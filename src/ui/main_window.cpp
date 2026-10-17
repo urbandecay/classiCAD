@@ -3410,6 +3410,8 @@ private:
                             QStringLiteral("collection_tree")).toArray();
                         dataBlockTree.objectTree = subtree.value(
                             QStringLiteral("object_tree")).toArray();
+                        dataBlockTree.sceneTree = subtree.value(
+                            QStringLiteral("scene_tree")).toObject();
                         dataBlockTree.textureImageName = subtree.value(
                             QStringLiteral("texture_image_name")).toString();
                         for (const QJsonValue &textureName : subtree.value(

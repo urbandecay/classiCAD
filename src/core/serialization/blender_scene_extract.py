@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 62
+BRIDGE_FORMAT_VERSION = 63
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1204,7 +1204,7 @@ def outliner_library_tree():
                         "animation": animation,
                     })
             id_type = id_block.bl_rna.identifier
-            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object", "Texture"}
+            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object", "Texture", "FreestyleLineStyle"}
                     or "GreasePencil" in id_type):
                 subtree = {
                     "data_block_name": data_block_name,
@@ -1217,6 +1217,7 @@ def outliner_library_tree():
                     "collection_tree": [],
                     "object_tree": [],
                     "texture_image_name": "",
+                    "line_style_texture_names": [],
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -1314,6 +1315,21 @@ def outliner_library_tree():
                         if reserve_subtree_row():
                             subtree["texture_image_name"] = str(image.name)
 
+                if id_type == "FreestyleLineStyle":
+                    try:
+                        for texture_slot in getattr(id_block, "texture_slots", ()):
+                            if texture_slot is None:
+                                continue
+                            texture = getattr(texture_slot, "texture", None)
+                            if texture is None:
+                                continue
+                            if not reserve_subtree_row():
+                                break
+                            subtree["line_style_texture_names"].append(
+                                str(texture.name))
+                    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                        subtree_truncated[0] = True
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
@@ -1323,7 +1339,8 @@ def outliner_library_tree():
                         subtree["grease_pencil_layer_tree"] or
                         subtree["collection_tree"] or
                         subtree["object_tree"] or
-                        subtree["texture_image_name"]):
+                        subtree["texture_image_name"] or
+                        subtree["line_style_texture_names"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

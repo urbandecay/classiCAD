@@ -2842,7 +2842,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 56 && bridgeVersion != 57 &&
          bridgeVersion != 58 && bridgeVersion != 59 &&
          bridgeVersion != 60 && bridgeVersion != 61 &&
-         bridgeVersion != 62)) {
+         bridgeVersion != 62 && bridgeVersion != 63)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3334,6 +3334,8 @@ bool importBlenderScene(const QString &path,
                             QStringLiteral("object_tree"));
                         const QJsonValue textureImageNameValue = subtree.value(
                             QStringLiteral("texture_image_name"));
+                        const QJsonValue lineStyleTextureNamesValue = subtree.value(
+                            QStringLiteral("line_style_texture_names"));
                         const QString dataName = dataNameValue.toString();
                         const QString shapeKeyDataName =
                             shapeKeyDataNameValue.toString();
@@ -3357,7 +3359,10 @@ bool importBlenderScene(const QString &path,
                              !objectTreeValue.isArray()) ||
                             (bridgeVersion >= 62 &&
                              (!textureImageNameValue.isString() ||
-                              textureImageNameValue.toString().size() > 4096))) {
+                              textureImageNameValue.toString().size() > 4096)) ||
+                            (bridgeVersion >= 63 &&
+                             (!lineStyleTextureNamesValue.isArray() ||
+                              lineStyleTextureNamesValue.toArray().size() > 1024))) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library data-block subtree is invalid"));
                             return false;
@@ -3580,6 +3585,18 @@ bool importBlenderScene(const QString &path,
                         if (bridgeVersion >= 62 &&
                             !textureImageNameValue.toString().isEmpty()) {
                             ++subtreeRows;
+                        }
+                        if (bridgeVersion >= 63) {
+                            subtreeRows += lineStyleTextureNamesValue.toArray().size();
+                            for (const QJsonValue &textureName :
+                                 lineStyleTextureNamesValue.toArray()) {
+                                if (!textureName.isString() ||
+                                    textureName.toString().size() > 4096) {
+                                    setError(errorMessage,
+                                             QStringLiteral("A Blender Line Style texture name is invalid"));
+                                    return false;
+                                }
+                            }
                         }
                         if ((shapeKeyDataName.isEmpty() &&
                              !shapeKeyNamesValue.toArray().isEmpty()) ||

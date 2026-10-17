@@ -531,6 +531,8 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         QStringLiteral("object_tree"));
                     const QJsonValue textureImageName = subtree.value(
                         QStringLiteral("texture_image_name"));
+                    const QJsonValue lineStyleTextureNames = subtree.value(
+                        QStringLiteral("line_style_texture_names"));
                     const QString dataBlockName = dataName.toString();
                     const QString shapeKeyName = shapeKeyDataName.toString();
                     if (!dataName.isString() || dataBlockName.size() > 4096 ||
@@ -552,7 +554,10 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         (!objectTree.isUndefined() && !objectTree.isArray()) ||
                         (!textureImageName.isUndefined() &&
                          (!textureImageName.isString() ||
-                          textureImageName.toString().size() > 4096))) {
+                          textureImageName.toString().size() > 4096)) ||
+                        (!lineStyleTextureNames.isUndefined() &&
+                         (!lineStyleTextureNames.isArray() ||
+                          lineStyleTextureNames.toArray().size() > 1024))) {
                         return false;
                     }
                     subtreesByDataBlockName.insert(dataBlockName);
@@ -743,6 +748,14 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                     if (!textureImageName.isUndefined() &&
                         !textureImageName.toString().isEmpty()) {
                         ++subtreeRows;
+                    }
+                    if (!lineStyleTextureNames.isUndefined()) {
+                        subtreeRows += lineStyleTextureNames.toArray().size();
+                        for (const QJsonValue &textureName :
+                             lineStyleTextureNames.toArray()) {
+                            if (!textureName.isString() ||
+                                textureName.toString().size() > 4096) return false;
+                        }
                     }
                     if (subtreeRows > 3072 ||
                         totalSpecializedRows + subtreeRows > 20000) return false;
@@ -982,7 +995,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 52);
+    serialized.insert(QStringLiteral("version"), 53);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1438,7 +1451,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 52) {
+    if (version < 1 || version > 53) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

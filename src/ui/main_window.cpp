@@ -3412,6 +3412,13 @@ private:
                             QStringLiteral("object_tree")).toArray();
                         dataBlockTree.textureImageName = subtree.value(
                             QStringLiteral("texture_image_name")).toString();
+                        for (const QJsonValue &textureName : subtree.value(
+                                 QStringLiteral("line_style_texture_names")).toArray()) {
+                            const QString name = textureName.toString();
+                            if (!name.isEmpty()) {
+                                dataBlockTree.lineStyleTextureNames.append(name);
+                            }
+                        }
                         group.dataBlockTreesByName.insert(
                             dataBlockName, std::move(dataBlockTree));
                     }

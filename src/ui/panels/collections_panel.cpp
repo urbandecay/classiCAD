@@ -3193,6 +3193,16 @@ void CollectionsPanel::refresh()
                                     treePath + QStringLiteral("/texture-image"),
                                     QStringLiteral("Blender Texture image ID"));
                             }
+                            for (qsizetype textureIndex = 0;
+                                 textureIndex < dataBlockTree->lineStyleTextureNames.size();
+                                 ++textureIndex) {
+                                appendLibraryContentRow(
+                                    dataRow,
+                                    dataBlockTree->lineStyleTextureNames[textureIndex],
+                                    treePath + QStringLiteral("/line-style-texture-%1")
+                                        .arg(textureIndex),
+                                    QStringLiteral("Blender Line Style texture ID"));
+                            }
                             appendLibraryCollectionTree(
                                 appendLibraryCollectionTree, dataRow,
                                 dataBlockTree->collectionTree,

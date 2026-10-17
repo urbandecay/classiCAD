@@ -169,6 +169,7 @@ struct OutlinerLibraryDataGroup {
         QJsonArray collectionTree;
         QJsonArray objectTree;
         QString textureImageName;
+        QStringList lineStyleTextureNames;
     };
     QHash<QString, DataBlockTree> dataBlockTreesByName;
 };

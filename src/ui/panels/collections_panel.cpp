@@ -2152,6 +2152,37 @@ bool CollectionsPanel::activateObjectRow(
 void CollectionsPanel::showContextMenu(const QPoint &position)
 {
     QTreeWidgetItem *item = tree_ != nullptr ? tree_->itemAt(position) : nullptr;
+    if (item != nullptr && tree_ != nullptr) {
+        if (!item->isSelected()) {
+            tree_->clearSelection();
+            item->setSelected(true);
+        }
+        tree_->setCurrentItem(item, nameColumn,
+                              QItemSelectionModel::NoUpdate);
+        rangeAnchorItem_ = item;
+
+        if (item->data(nameColumn, itemKindRole).toInt() ==
+                static_cast<int>(OutlinerRowKind::Object) &&
+            callbacks_.setObjectSelection) {
+            QVector<ObjectId> selectedObjectIds;
+            for (QTreeWidgetItem *selected : tree_->selectedItems()) {
+                if (selected->data(nameColumn, itemKindRole).toInt() !=
+                    static_cast<int>(OutlinerRowKind::Object)) {
+                    continue;
+                }
+                const ObjectId selectedId = ObjectId::fromValue(
+                    selected->data(nameColumn, itemIdRole).toULongLong());
+                if (selectedId.isValid() &&
+                    !selectedObjectIds.contains(selectedId)) {
+                    selectedObjectIds.append(selectedId);
+                }
+            }
+            const ObjectId activeObjectId = ObjectId::fromValue(
+                item->data(nameColumn, itemIdRole).toULongLong());
+            callbacks_.setObjectSelection(selectedObjectIds,
+                                           activeObjectId);
+        }
+    }
     if (item == nullptr) {
         if (tree_ == nullptr) return;
         QMenu menu(this);
@@ -2938,42 +2969,42 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
              callbacks_.hasOutlinerObjectClipboard())) {
             menu.addSeparator();
         }
-        if (callbacks_.deleteObjectSelection) {
+        if (callbacks_.deleteObjectSelection &&
+            !objectTargetIds.isEmpty()) {
             QAction *deleteObjects = menu.addAction(QStringLiteral("Delete"));
             connect(deleteObjects, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.deleteObjectSelection(objectId, false);
+                    [this, objectTargetIds]() {
+                callbacks_.deleteObjectSelection(objectTargetIds, false);
             });
             QAction *deleteHierarchy = menu.addAction(
                 QStringLiteral("Delete Hierarchy"));
             connect(deleteHierarchy, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.deleteObjectSelection(objectId, true);
+                    [this, objectTargetIds]() {
+                callbacks_.deleteObjectSelection(objectTargetIds, true);
             });
             menu.addSeparator();
         }
-        if (callbacks_.setObjectSelection) {
+        if (callbacks_.selectOutlinerObjects &&
+            !objectTargetIds.isEmpty()) {
             QAction *select = menu.addAction(QStringLiteral("Select"));
-            connect(select, &QAction::triggered, this, [this, objectId]() {
-                if (callbacks_.canSelectObject &&
-                    !callbacks_.canSelectObject(objectId)) return;
-                callbacks_.setObjectSelection({objectId}, objectId);
+            connect(select, &QAction::triggered, this,
+                    [this, objectTargetIds]() {
+                callbacks_.selectOutlinerObjects(objectTargetIds);
             });
         }
         if (callbacks_.selectObjectHierarchy) {
             QAction *selectHierarchy = menu.addAction(
                 QStringLiteral("Select Hierarchy"));
             connect(selectHierarchy, &QAction::triggered, this,
-                    [this, objectId]() {
-                if (callbacks_.canSelectObject &&
-                    !callbacks_.canSelectObject(objectId)) return;
-                callbacks_.selectObjectHierarchy(objectId);
+                    [this, objectTargetIds]() {
+                callbacks_.selectObjectHierarchy(objectTargetIds);
             });
         }
         if (callbacks_.deselectSelectedObjects) {
             QAction *deselect = menu.addAction(QStringLiteral("Deselect"));
-            connect(deselect, &QAction::triggered, this, [this]() {
-                callbacks_.deselectSelectedObjects();
+            connect(deselect, &QAction::triggered, this,
+                    [this, objectTargetIds]() {
+                callbacks_.deselectSelectedObjects(objectTargetIds);
             });
         }
         if (callbacks_.renameObject) {

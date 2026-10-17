@@ -5087,6 +5087,28 @@ private:
                 session_.selection().setObjectIds(selectableIds, active);
                 session_.selection().setActiveObjectId(active);
             };
+        collectionCallbacks.selectOutlinerObjects =
+            [this](const QVector<ObjectId> &objectIds) {
+                SelectionModel &selection = session_.selection();
+                QVector<ObjectId> selectedIds = selection.objectIds();
+                const QVector<ObjectId> previousIds = selectedIds;
+                for (const ObjectId id : objectIds) {
+                    if (session_.document().isObjectEditable(id) &&
+                        !selectedIds.contains(id)) {
+                        selectedIds.append(id);
+                    }
+                }
+                if (selectedIds == previousIds) return;
+
+                const ObjectId previousActive = selection.activeObjectId();
+                ObjectId primary = selection.primaryObjectId();
+                if (!selectedIds.contains(primary)) {
+                    primary = selectedIds.isEmpty()
+                        ? ObjectId::invalid() : selectedIds.back();
+                }
+                selection.setObjectIds(selectedIds, primary);
+                selection.setActiveObjectId(previousActive);
+            };
         const auto linkedObjectDataUsers =
             [this](const QVector<ObjectId> &sourceIds) {
             QVector<ObjectId> users;
@@ -5196,10 +5218,12 @@ private:
                 session_.selection().setObjectIds(selectedIds, active);
                 session_.selection().setActiveObjectId(active);
             };
-        collectionCallbacks.deselectSelectedObjects = [this]() {
+        collectionCallbacks.deselectSelectedObjects =
+            [this](const QVector<ObjectId> &objectIds) {
             SelectionModel &selection = session_.selection();
-            if (selection.objectIds().isEmpty()) return;
-            selection.setObjectIds({}, ObjectId::invalid());
+            for (const ObjectId id : objectIds) {
+                selection.remove(id);
+            }
         };
         collectionCallbacks.createCollection =
             [this, activeSceneRecord](const QString &name,
@@ -7378,29 +7402,35 @@ private:
             return result;
         };
         collectionCallbacks.selectObjectHierarchy =
-            [this, objectHierarchyIds](ObjectId root) {
-                if (!session_.document().isObjectEditable(root)) return;
+            [this, objectHierarchyIds](const QVector<ObjectId> &roots) {
                 QVector<ObjectId> selectableIds;
-                for (const ObjectId id : objectHierarchyIds(root)) {
-                    const SceneObject *object = session_.document().object(id);
-                    if (object != nullptr &&
-                        !object->blenderLooseMeshEdgeCompanion &&
-                        session_.document().isObjectEditable(id)) {
-                        selectableIds.append(id);
+                ObjectId activeRoot = ObjectId::invalid();
+                for (const ObjectId root : roots) {
+                    if (!session_.document().isObjectEditable(root)) continue;
+                    for (const ObjectId id : objectHierarchyIds(root)) {
+                        const SceneObject *object =
+                            session_.document().object(id);
+                        if (object != nullptr &&
+                            !object->blenderLooseMeshEdgeCompanion &&
+                            session_.document().isObjectEditable(id) &&
+                            !selectableIds.contains(id)) {
+                            selectableIds.append(id);
+                        }
                     }
+                    if (selectableIds.contains(root)) activeRoot = root;
                 }
-                if (!selectableIds.contains(root)) return;
-                session_.selection().setObjectIds(selectableIds, root);
-                session_.selection().setActiveObjectId(root);
+                if (selectableIds.isEmpty()) return;
+                if (!selectableIds.contains(activeRoot)) {
+                    activeRoot = selectableIds.back();
+                }
+                session_.selection().setObjectIds(selectableIds, activeRoot);
+                session_.selection().setActiveObjectId(activeRoot);
             };
         collectionCallbacks.deleteObjectSelection =
-            [this, objectHierarchyIds](ObjectId contextObjectId,
+            [this, objectHierarchyIds](const QVector<ObjectId> &contextObjectIds,
                                        bool hierarchy) {
                 const Document &document = session_.document();
-                QVector<ObjectId> roots = session_.selection().objectIds();
-                if (roots.isEmpty() && contextObjectId.isValid()) {
-                    roots.append(contextObjectId);
-                }
+                const QVector<ObjectId> &roots = contextObjectIds;
 
                 const auto identityFor = [](const SceneObject &object) {
                     return object.blenderSourceObjectId.isEmpty()

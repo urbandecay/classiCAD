@@ -11461,3 +11461,17 @@ scene depth.
   scene membership and does not edit source library files. `cmake --build
   build -j4` and `git diff --check` passed; no matched Blender Outliner
   interaction comparison was run.
+- The hundred-tenth tree update follows Blender 5.2.2's [right-click row
+  activation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L3926-L4024),
+  [selected-object operation dispatch](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L927-L985),
+  and [selected-row deletion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L2948-L3020).
+  Right-clicking an unselected row now selects it alone before opening its
+  menu; right-clicking a selected row keeps the multi-selection and activates
+  that row. Object-row selection is synchronized to the viewport. Select adds
+  the selected Outliner objects, Select Hierarchy combines the selected roots
+  and their selectable descendants, Deselect removes only those objects while
+  preserving the active-object identity, and Delete operates on the selected
+  Outliner rows rather than unrelated viewport selections. This also corrects
+  the earlier global Deselect behavior. Deletion remains one undoable local
+  document edit. `cmake --build build -j4` and `git diff --check` passed; no
+  matched Blender Outliner interaction comparison was run.

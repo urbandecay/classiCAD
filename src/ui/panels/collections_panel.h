@@ -271,19 +271,20 @@ struct CollectionsPanelCallbacks {
     std::function<bool(ObjectId, const QString &)> objectVisibleInViewLayer;
     std::function<bool(ObjectId, const QString &)> objectSelectableInViewLayer;
     std::function<void(const QVector<ObjectId> &, ObjectId)> setObjectSelection;
+    std::function<void(const QVector<ObjectId> &)> selectOutlinerObjects;
     std::function<bool(ObjectId)> hasLinkedObjectData;
     std::function<void(const QVector<ObjectId> &)> selectLinkedObjectData;
     std::function<bool(const QString &)> hasLinkedMaterial;
     std::function<void(const QStringList &, ObjectId)> selectLinkedMaterial;
-    std::function<void(ObjectId)> selectObjectHierarchy;
-    std::function<void()> deselectSelectedObjects;
+    std::function<void(const QVector<ObjectId> &)> selectObjectHierarchy;
+    std::function<void(const QVector<ObjectId> &)> deselectSelectedObjects;
     std::function<bool()> hasOutlinerObjectClipboard;
     std::function<void(ObjectId)> copyOutlinerObject;
     std::function<void()> pasteOutlinerObjects;
     std::function<bool()> hasOutlinerCollectionClipboard;
     std::function<void(const QVector<CollectionId> &)> copyOutlinerCollection;
     std::function<void(CollectionId)> pasteOutlinerCollection;
-    std::function<void(ObjectId, bool)> deleteObjectSelection;
+    std::function<void(const QVector<ObjectId> &, bool)> deleteObjectSelection;
     std::function<void(const QVector<CollectionId> &, const QString &)>
         setCollectionColorTag;
     std::function<void(const QVector<CollectionId> &, bool)>

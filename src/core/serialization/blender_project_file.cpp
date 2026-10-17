@@ -2851,7 +2851,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 71 && bridgeVersion != 72 &&
          bridgeVersion != 73 && bridgeVersion != 74 &&
          bridgeVersion != 75 && bridgeVersion != 76 &&
-         bridgeVersion != 77 && bridgeVersion != 78 && bridgeVersion != 79)) {
+         bridgeVersion != 77 && bridgeVersion != 78 && bridgeVersion != 79 &&
+         bridgeVersion != 80)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -4482,6 +4483,8 @@ bool importBlenderScene(const QString &path,
     }
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
     QJsonArray importedSceneRecords;
+    int viewLayerBaseObjectIdCount = 0;
+    QSet<QString> validatedViewLayerKeys;
     if (activeSceneId.isEmpty() || activeViewLayerKey.isEmpty()) {
         for (const QJsonValue &sceneValue : sourceScenes) {
             const QJsonObject scene = sceneValue.toObject();
@@ -4507,6 +4510,64 @@ bool importBlenderScene(const QString &path,
             setError(errorMessage,
                      QStringLiteral("A Blender scene record is incomplete"));
             return false;
+        }
+        if (bridgeVersion >= 80) {
+            const QJsonArray viewLayers = scene.value(
+                QStringLiteral("view_layers")).toArray();
+            if (viewLayers.size() > 1024) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender scene has too many view layers"));
+                return false;
+            }
+            for (const QJsonValue &viewLayerValue : viewLayers) {
+                if (!viewLayerValue.isObject()) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender view-layer record is invalid"));
+                    return false;
+                }
+                const QJsonObject viewLayer = viewLayerValue.toObject();
+                const QJsonValue keyValue = viewLayer.value(
+                    QStringLiteral("key"));
+                const QJsonValue nameValue = viewLayer.value(
+                    QStringLiteral("name"));
+                const QJsonValue baseObjectIdsValue = viewLayer.value(
+                    QStringLiteral("base_object_ids"));
+                const QJsonValue baseObjectIdsCompleteValue = viewLayer.value(
+                    QStringLiteral("base_object_ids_complete"));
+                const QJsonValue activeObjectIdValue = viewLayer.value(
+                    QStringLiteral("active_object_id"));
+                if (!keyValue.isString() || keyValue.toString().isEmpty() ||
+                    keyValue.toString().size() > 512 ||
+                    validatedViewLayerKeys.contains(keyValue.toString()) ||
+                    !nameValue.isString() || nameValue.toString().size() > 4096 ||
+                    !baseObjectIdsValue.isArray() ||
+                    baseObjectIdsValue.toArray().size() > 200000 ||
+                    !baseObjectIdsCompleteValue.isBool() ||
+                    !activeObjectIdValue.isString() ||
+                    activeObjectIdValue.toString().size() > 4096 ||
+                    viewLayerBaseObjectIdCount +
+                            baseObjectIdsValue.toArray().size() > 200000) {
+                    setError(errorMessage,
+                             QStringLiteral("A Blender view-layer membership record is invalid"));
+                    return false;
+                }
+                validatedViewLayerKeys.insert(keyValue.toString());
+                viewLayerBaseObjectIdCount +=
+                    baseObjectIdsValue.toArray().size();
+                QSet<QString> baseObjectIds;
+                for (const QJsonValue &objectIdValue :
+                     baseObjectIdsValue.toArray()) {
+                    const QString objectId = objectIdValue.toString();
+                    if (!objectIdValue.isString() || objectId.isEmpty() ||
+                        objectId.size() > 4096 ||
+                        baseObjectIds.contains(objectId)) {
+                        setError(errorMessage,
+                                 QStringLiteral("A Blender view-layer membership ID is invalid"));
+                        return false;
+                    }
+                    baseObjectIds.insert(objectId);
+                }
+            }
         }
         if (bridgeVersion >= 74) {
             const QJsonValue keyingSetsValue = scene.value(

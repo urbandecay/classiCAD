@@ -11668,3 +11668,14 @@ scene depth.
   200,000-record cap. The extractor syntax check, `cmake --build build -j4`,
   and `git diff --check` passed. No matched Blender Outliner comparison has
   been run.
+- The hundred-twenty-fifth Outliner update retains each View Layer's Blender
+  Base membership and applies per-row selection state in All View Layers mode.
+  The Selected filter and row highlights now use the selection belonging to
+  that row's View Layer. The Active filter compares the row's Base with the
+  active Base in the current View Layer, while active-object styling follows
+  the shared object identity when that object has a Base in the row's layer.
+  With Collections hidden, the tree now lists objects from each layer's Base
+  membership rather than every scene object. Bridge v80 validates the bounded
+  Base ID snapshot; incomplete snapshots preserve a fallback for older or
+  unusually large files. `cmake --build build -j4` and `git diff --check`
+  passed; no matched Blender Outliner comparison was run.

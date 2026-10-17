@@ -2222,8 +2222,15 @@ void CollectionsPanel::applyNameFilter(const QString &text)
         ? callbacks_.activeObjectId() : ObjectId::invalid();
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
+    QHash<QString, OutlinerViewLayerEntry> viewLayerEntriesByKey;
+    if (callbacks_.viewLayers) {
+        for (const OutlinerViewLayerEntry &viewLayer : callbacks_.viewLayers()) {
+            viewLayerEntriesByKey.insert(viewLayer.key, viewLayer);
+        }
+    }
     const auto objectMatchesFilter = [this, &selectedValues, activeId,
-                                      activeViewLayerKey, viewLayerMode,
+                                      activeViewLayerKey,
+                                      &viewLayerEntriesByKey, viewLayerMode,
                                       overrideHierarchyFilterMode](
                                          const QTreeWidgetItem *item) {
         if (item == nullptr) return false;
@@ -2273,6 +2280,31 @@ void CollectionsPanel::applyNameFilter(const QString &text)
 
         const QString rowViewLayerKey = item->data(
             nameColumn, itemViewLayerKeyRole).toString();
+        const QString sourceObjectIdentity = entry.outlinerOnly
+            ? entry.sourceObjectId : entry.hierarchyIdentity;
+        const auto layerEntry = viewLayerEntriesByKey.constFind(
+            rowViewLayerKey);
+        const bool hasLayerEntry = layerEntry !=
+            viewLayerEntriesByKey.cend();
+        const bool localObject = sourceObjectIdentity.startsWith(
+            QLatin1String("classiCAD-local-object:"));
+        const bool sourceBasePresent = hasLayerEntry &&
+            !sourceObjectIdentity.isEmpty() &&
+            layerEntry->baseObjectSourceIds.contains(sourceObjectIdentity);
+        const bool baseMembershipKnown = sourceBasePresent ||
+            (hasLayerEntry && layerEntry->baseObjectSourceIdsComplete &&
+             !sourceObjectIdentity.isEmpty());
+        if (!overrideObject && viewLayerMode &&
+            objectStateFilter_ != OutlinerObjectStateFilter::All &&
+            !sourceObjectIdentity.isEmpty()) {
+            if (localObject) {
+                if (rowViewLayerKey != activeViewLayerKey) return false;
+            } else if (baseMembershipKnown && !sourceBasePresent) {
+                // Blender rejects rows without this View Layer's Base before
+                // applying the inverted state filter.
+                return false;
+            }
+        }
         bool visible = hasOverrideStateSnapshot
             ? item->data(nameColumn, itemOverrideObjectVisibleRole).toBool()
             : entry.visible;
@@ -2331,6 +2363,29 @@ void CollectionsPanel::applyNameFilter(const QString &text)
                     selectable = selectable && visible &&
                         ancestor->checkState(selectColumn) == Qt::Checked;
                 }
+            }
+        }
+        if (!overrideObject && viewLayerMode && hasLayerEntry &&
+            !sourceObjectIdentity.isEmpty()) {
+            if (objectStateFilter_ == OutlinerObjectStateFilter::Selected &&
+                layerEntry->selectedObjectSourceIdsAvailable) {
+                if (sourceBasePresent || !layerEntry->baseObjectSourceIdsComplete) {
+                    selected = layerEntry->selectedObjectSourceIds.contains(
+                        sourceObjectIdentity);
+                }
+            } else if (objectStateFilter_ == OutlinerObjectStateFilter::Active) {
+                active = rowViewLayerKey == activeViewLayerKey &&
+                    layerEntry->activeObjectSourceIdAvailable &&
+                    layerEntry->activeObjectSourceId == sourceObjectIdentity;
+            }
+        } else if (!overrideObject && viewLayerMode && localObject &&
+                   rowViewLayerKey == activeViewLayerKey) {
+            if (objectStateFilter_ == OutlinerObjectStateFilter::Selected) {
+                selected = entry.id.isValid() &&
+                    selectedValues.contains(objectValue);
+            } else if (objectStateFilter_ == OutlinerObjectStateFilter::Active) {
+                active = entry.id.isValid() && activeId.isValid() &&
+                    activeId.value() == objectValue;
             }
         }
 
@@ -5388,7 +5443,36 @@ void CollectionsPanel::refresh()
         });
         return roots;
     };
-    const auto populateSceneRoot = [this, &topLevelCollectionIndices](
+    const auto objectsForViewLayer = [&viewLayers, activeViewLayerKey](
+        const QVector<OutlinerObjectEntry> &objects,
+        const QString &viewLayerKey) {
+        const auto layer = std::find_if(
+            viewLayers.cbegin(), viewLayers.cend(),
+            [&viewLayerKey](const OutlinerViewLayerEntry &candidate) {
+                return candidate.key == viewLayerKey;
+            });
+        if (layer == viewLayers.cend()) return objects;
+
+        QVector<OutlinerObjectEntry> layerObjects;
+        layerObjects.reserve(objects.size());
+        for (const OutlinerObjectEntry &object : objects) {
+            const QString sourceId = object.outlinerOnly
+                ? object.sourceObjectId : object.hierarchyIdentity;
+            if (sourceId.startsWith(
+                    QLatin1String("classiCAD-local-object:"))) {
+                if (viewLayerKey == activeViewLayerKey) {
+                    layerObjects.append(object);
+                }
+            } else if (sourceId.isEmpty() ||
+                       layer->baseObjectSourceIds.contains(sourceId) ||
+                       !layer->baseObjectSourceIdsComplete) {
+                layerObjects.append(object);
+            }
+        }
+        return layerObjects;
+    };
+    const auto populateSceneRoot = [this, &topLevelCollectionIndices,
+                                    &objectsForViewLayer](
                                        QTreeWidgetItem *root,
                                        const QVector<CollectionPanelEntry> &entries,
                                        const QVector<OutlinerObjectEntry> &objects,
@@ -5411,7 +5495,9 @@ void CollectionsPanel::refresh()
                 }
             }
         } else {
-            for (const OutlinerObjectEntry &object : objects) {
+            const QVector<OutlinerObjectEntry> layerObjects =
+                objectsForViewLayer(objects, viewLayerKey);
+            for (const OutlinerObjectEntry &object : layerObjects) {
                 appendObject(root, object, {rootPath,
                                             QStringLiteral("root")},
                              CollectionId::invalid(), viewLayerKey);
@@ -7211,6 +7297,12 @@ void CollectionsPanel::syncSelection()
         ? callbacks_.activeObjectId() : ObjectId::invalid();
     const QString activeViewLayerKey = callbacks_.activeViewLayerKey
         ? callbacks_.activeViewLayerKey() : QString{};
+    QHash<QString, OutlinerViewLayerEntry> viewLayerEntriesByKey;
+    if (callbacks_.viewLayers) {
+        for (const OutlinerViewLayerEntry &viewLayer : callbacks_.viewLayers()) {
+            viewLayerEntriesByKey.insert(viewLayer.key, viewLayer);
+        }
+    }
 
     refreshing_ = true;
     const QSignalBlocker blocker(tree_);
@@ -7229,19 +7321,53 @@ void CollectionsPanel::syncSelection()
                 static_cast<int>(OutlinerRowKind::Object)) {
                 const quint64 value =
                     item->data(nameColumn, itemIdRole).toULongLong();
-                item->setSelected(selectedValues.contains(value));
+                const OutlinerObjectEntry objectEntry =
+                    objectEntries_.value(value);
+                const QString sourceObjectIdentity =
+                    objectEntry.hierarchyIdentity;
+                const QString rowViewLayerKey = item->data(
+                    nameColumn, itemViewLayerKeyRole).toString();
+                const auto layerEntry = viewLayerEntriesByKey.constFind(
+                    rowViewLayerKey);
+                const bool hasLayerEntry = layerEntry !=
+                    viewLayerEntriesByKey.cend();
+                const bool localObject = sourceObjectIdentity.startsWith(
+                    QLatin1String("classiCAD-local-object:"));
+                const bool sourceBasePresent = hasLayerEntry &&
+                    !sourceObjectIdentity.isEmpty() &&
+                    layerEntry->baseObjectSourceIds.contains(
+                        sourceObjectIdentity);
+                const bool sourceBaseMissing = hasLayerEntry &&
+                    layerEntry->baseObjectSourceIdsComplete &&
+                    !sourceObjectIdentity.isEmpty() && !localObject &&
+                    !sourceBasePresent;
+                const bool localObjectInThisLayer =
+                    !localObject || rowViewLayerKey == activeViewLayerKey;
+                bool rowSelected = selectedValues.contains(value);
+                if (sourceBaseMissing || !localObjectInThisLayer) {
+                    rowSelected = false;
+                } else if (rowViewLayerKey != activeViewLayerKey &&
+                           hasLayerEntry &&
+                           layerEntry->selectedObjectSourceIdsAvailable &&
+                           !sourceObjectIdentity.isEmpty()) {
+                    rowSelected = layerEntry->selectedObjectSourceIds.contains(
+                        sourceObjectIdentity);
+                }
+                item->setSelected(rowSelected);
                 QFont font = item->font(nameColumn);
-                font.setBold(activeId.isValid() && value == activeId.value());
+                const bool rowIsActive = !sourceBaseMissing &&
+                    localObjectInThisLayer && activeId.isValid() &&
+                    value == activeId.value();
+                font.setBold(rowIsActive);
                 item->setFont(nameColumn, font);
-                if (activeId.isValid() && value == activeId.value()) {
+                if (rowIsActive) {
                     if (currentItem == item) {
                         currentActiveItem = item;
                     }
                     if (anyActiveItem == nullptr) {
                         anyActiveItem = item;
                     }
-                    if (item->data(nameColumn, itemViewLayerKeyRole).toString() ==
-                            activeViewLayerKey &&
+                    if (rowViewLayerKey == activeViewLayerKey &&
                         activeLayerItem == nullptr) {
                         activeLayerItem = item;
                     }

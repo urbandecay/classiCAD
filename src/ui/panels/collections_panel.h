@@ -170,6 +170,12 @@ struct OutlinerObjectCollectionLink {
 struct OutlinerViewLayerEntry {
     QString key;
     QString displayName;
+    QSet<QString> baseObjectSourceIds;
+    QSet<QString> selectedObjectSourceIds;
+    QString activeObjectSourceId;
+    bool baseObjectSourceIdsComplete = false;
+    bool selectedObjectSourceIdsAvailable = false;
+    bool activeObjectSourceIdAvailable = false;
 };
 
 struct OutlinerSceneEntry {

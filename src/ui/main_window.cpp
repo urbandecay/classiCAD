@@ -3781,7 +3781,10 @@ private:
                         const QString layerName = layer.value(
                             QStringLiteral("name")).toString();
                         if (layerKey.isEmpty() || layerName.isEmpty()) continue;
-                        entry.viewLayers.append({layerKey, layerName});
+                        OutlinerViewLayerEntry viewLayerEntry;
+                        viewLayerEntry.key = layerKey;
+                        viewLayerEntry.displayName = layerName;
+                        entry.viewLayers.append(std::move(viewLayerEntry));
                         if (layer.value(
                                 QStringLiteral("is_active_view_layer")).toBool()) {
                             entry.activeViewLayerKey = layerKey;
@@ -4365,11 +4368,22 @@ private:
         collectionCallbacks.activeCollectionSourcePath = [this]() {
             return session_.document().activeCollectionSourcePath();
         };
-        collectionCallbacks.viewLayers = [activeSceneRecord]() {
+        collectionCallbacks.viewLayers = [this, activeSceneRecord]() {
             QVector<OutlinerViewLayerEntry> viewLayers;
             const QJsonObject scene = activeSceneRecord();
             const QString sceneName = scene.value(
                 QStringLiteral("name")).toString();
+            const QString activeLayerKey = session_.document().settings()
+                                               .activeViewLayerKey;
+            const auto sourceIdentityForObjectId = [this](ObjectId id) {
+                if (!id.isValid()) return QString{};
+                const SceneObject *object = session_.document().object(id);
+                if (object == nullptr) return QString{};
+                return object->blenderSourceObjectId.isEmpty()
+                    ? QStringLiteral("classiCAD-local-object:%1")
+                          .arg(id.value())
+                    : object->blenderSourceObjectId;
+            };
             for (const QJsonValue &layerValue : scene.value(
                      QStringLiteral("view_layers")).toArray()) {
                 const QJsonObject layer = layerValue.toObject();
@@ -4378,8 +4392,68 @@ private:
                 const QString name = layer.value(
                     QStringLiteral("name")).toString();
                 if (key.isEmpty() || name.isEmpty()) continue;
-                viewLayers.append({key, QStringLiteral("%1 / %2")
-                                            .arg(sceneName, name)});
+                OutlinerViewLayerEntry entry;
+                entry.key = key;
+                entry.displayName = QStringLiteral("%1 / %2")
+                                        .arg(sceneName, name);
+                entry.baseObjectSourceIdsComplete = layer.value(
+                    QStringLiteral("base_object_ids_complete")).toBool();
+                for (const QJsonValue &objectIdValue : layer.value(
+                         QStringLiteral("base_object_ids")).toArray()) {
+                    if (objectIdValue.isString() &&
+                        !objectIdValue.toString().isEmpty()) {
+                        entry.baseObjectSourceIds.insert(
+                            objectIdValue.toString());
+                    }
+                }
+                const QJsonValue selectedObjectIds = layer.value(
+                    QStringLiteral("selected_object_ids"));
+                entry.selectedObjectSourceIdsAvailable =
+                    selectedObjectIds.isArray();
+                for (const QJsonValue &objectIdValue :
+                     selectedObjectIds.toArray()) {
+                    if (objectIdValue.isString() &&
+                        !objectIdValue.toString().isEmpty()) {
+                        entry.selectedObjectSourceIds.insert(
+                            objectIdValue.toString());
+                    }
+                }
+                const QJsonValue activeObjectId = layer.value(
+                    QStringLiteral("active_object_id"));
+                entry.activeObjectSourceIdAvailable = activeObjectId.isString();
+                entry.activeObjectSourceId = activeObjectId.toString();
+
+                if (key == activeLayerKey) {
+                    entry.selectedObjectSourceIds.clear();
+                    for (const ObjectId id : session_.selection().objectIds()) {
+                        const QString sourceId =
+                            sourceIdentityForObjectId(id);
+                        if (!sourceId.isEmpty()) {
+                            entry.selectedObjectSourceIds.insert(sourceId);
+                        }
+                    }
+                    entry.selectedObjectSourceIdsAvailable = true;
+                    entry.activeObjectSourceId = sourceIdentityForObjectId(
+                        session_.selection().activeObjectId());
+                    entry.activeObjectSourceIdAvailable = true;
+                } else {
+                    const auto saved = viewLayerSelections_.constFind(key);
+                    if (saved != viewLayerSelections_.cend()) {
+                        entry.selectedObjectSourceIds.clear();
+                        for (const ObjectId id : saved->objectIds) {
+                            const QString sourceId =
+                                sourceIdentityForObjectId(id);
+                            if (!sourceId.isEmpty()) {
+                                entry.selectedObjectSourceIds.insert(sourceId);
+                            }
+                        }
+                        entry.selectedObjectSourceIdsAvailable = true;
+                        entry.activeObjectSourceId =
+                            sourceIdentityForObjectId(saved->activeObjectId);
+                        entry.activeObjectSourceIdAvailable = true;
+                    }
+                }
+                viewLayers.append(std::move(entry));
             }
             return viewLayers;
         };

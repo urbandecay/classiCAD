@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 79
+BRIDGE_FORMAT_VERSION = 80
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -53,6 +53,7 @@ MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID = 512
 MAX_OUTLINER_OVERRIDE_DEPTH = 128
 MAX_OUTLINER_OVERRIDE_RELATIONS_PER_ID = 2048
 MAX_OUTLINER_OVERRIDE_VIEW_LAYER_STATES = 200000
+MAX_OUTLINER_VIEW_LAYER_BASE_IDS = 200000
 MAX_OUTLINER_ACTION_SLOTS = 20000
 MAX_OUTLINER_LIBRARY_ANIMATION_ITEMS = 20000
 MAX_OUTLINER_LIBRARY_SPECIALIZED_ITEMS = 20000
@@ -3707,13 +3708,25 @@ def layer_collection_records(scene, view_layer):
     return records
 
 
-def view_layer_record(scene, view_layer, active_scene, active_view_layer):
+def view_layer_record(scene, view_layer, active_scene, active_view_layer,
+                      remaining_base_ids):
     collection_instances = layer_collection_records(scene, view_layer)
     active_collection_path = next(
         (record["path"] for record in collection_instances
          if record["active"]),
         [],
     )
+    base_object_ids = []
+    base_object_ids_complete = True
+    try:
+        for obj in view_layer.objects:
+            if remaining_base_ids[0] <= 0:
+                base_object_ids_complete = False
+                break
+            base_object_ids.append(stable_id(obj))
+            remaining_base_ids[0] -= 1
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        base_object_ids_complete = False
     return {
         "name": view_layer.name,
         "key": view_layer_key(scene, view_layer),
@@ -3728,6 +3741,8 @@ def view_layer_record(scene, view_layer, active_scene, active_view_layer):
             stable_id(view_layer.objects.active)
             if view_layer.objects.active is not None else ""
         ),
+        "base_object_ids": base_object_ids,
+        "base_object_ids_complete": base_object_ids_complete,
         "use_pass_combined": bool(view_layer.use_pass_combined),
         "use_pass_z": bool(view_layer.use_pass_z),
         "active_collection_path": active_collection_path,
@@ -4944,6 +4959,7 @@ def extract_scene(input_path, mode):
     font_mesh_count = 0
     volume_grid_count = 0
     packed_empty_image_payload_budget = {"bytes": 0}
+    remaining_view_layer_base_ids = [MAX_OUTLINER_VIEW_LAYER_BASE_IDS]
     collections_by_id = {stable_id(collection): collection
                          for collection in bpy.data.collections}
     scene_names_by_collection = {}
@@ -5031,7 +5047,8 @@ def extract_scene(input_path, mode):
             "view_layer_names": [view_layer.name for view_layer in scene.view_layers],
             "view_layers": [
                 view_layer_record(scene, view_layer, active_scene,
-                                  active_view_layer)
+                                  active_view_layer,
+                                  remaining_view_layer_base_ids)
                 for view_layer in scene.view_layers
             ],
             "collection_ids": sorted(

@@ -1305,9 +1305,12 @@ void CollectionsPanel::restoreTreeState()
         QTreeWidgetItem *item = pending.takeLast();
         const QString path = item->data(nameColumn, itemPathRole).toString();
         if (!path.isEmpty()) {
-            item->setExpanded(
-                expanded.contains(path) ||
-                (dataApiDisplayMode_ && isDataApiPointerStruct(item)));
+            const bool pointerStruct =
+                dataApiDisplayMode_ && isDataApiPointerStruct(item);
+            const bool explicitlyCollapsed = pointerStruct &&
+                dataApiCollapsedPaths_.contains(path);
+            item->setExpanded(!explicitlyCollapsed &&
+                (expanded.contains(path) || pointerStruct));
         }
         for (int index = 0; index < item->childCount(); ++index) {
             pending.append(item->child(index));
@@ -1376,7 +1379,10 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
             item->data(nameColumn, itemDataApiTypeRole).toString() ==
                 QLatin1String("POINTER");
         item->addChild(row);
-        if (pointerStruct && hasChildren) row->setExpanded(true);
+        if (hasChildren && !dataApiCollapsedPaths_.contains(path) &&
+            (dataApiExpandedPaths_.contains(path) || pointerStruct)) {
+            row->setExpanded(true);
+        }
     }
 
     if (item->data(nameColumn, itemDataApiTruncatedRole).toBool()) {
@@ -1402,6 +1408,7 @@ void CollectionsPanel::saveTreeState()
         return;
     }
     QStringList expandedPaths;
+    QStringList collapsedDataApiPaths;
     QVector<QTreeWidgetItem *> pending;
     for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
         pending.append(tree_->topLevelItem(index));
@@ -1412,12 +1419,25 @@ void CollectionsPanel::saveTreeState()
             const QString path = item->data(nameColumn, itemPathRole).toString();
             if (!path.isEmpty()) expandedPaths.append(path);
         }
+        if (dataApiDisplayMode_ && isDataApiPointerStruct(item) &&
+            !item->isExpanded()) {
+            const QString path = item->data(nameColumn, itemPathRole).toString();
+            if (!path.isEmpty()) collapsedDataApiPaths.append(path);
+        }
         for (int index = 0; index < item->childCount(); ++index) {
             pending.append(item->child(index));
         }
     }
     expandedPaths.sort(Qt::CaseSensitive);
     expandedPaths.removeDuplicates();
+    collapsedDataApiPaths.sort(Qt::CaseSensitive);
+    collapsedDataApiPaths.removeDuplicates();
+    if (dataApiDisplayMode_) {
+        dataApiExpandedPaths_ = QSet<QString>(expandedPaths.cbegin(),
+                                               expandedPaths.cend());
+        dataApiCollapsedPaths_ = QSet<QString>(
+            collapsedDataApiPaths.cbegin(), collapsedDataApiPaths.cend());
+    }
     if (scenesDisplayMode_ || librariesDisplayMode_ ||
         orphanDataDisplayMode_ || sequencerDisplayMode_ ||
         dataApiDisplayMode_ || libraryOverridesDisplayMode_) {
@@ -1448,6 +1468,12 @@ void CollectionsPanel::saveTreeState()
             QStringLiteral("outliner/%1/%2ExpandedPaths")
                 .arg(scopeHash, modeKey),
             expandedPaths);
+        if (dataApiDisplayMode_) {
+            settings.setValue(
+                QStringLiteral("outliner/%1/dataApiCollapsedPaths")
+                    .arg(scopeHash),
+                collapsedDataApiPaths);
+        }
     } else if (callbacks_.saveExpandedTreePaths) {
         callbacks_.saveExpandedTreePaths(expandedPaths);
     } else {
@@ -2481,6 +2507,28 @@ void CollectionsPanel::refresh()
     const bool overridePropertiesMode = libraryOverridesMode &&
                                          !overrideHierarchiesView_;
     const bool scenesMode = scenesDisplayMode_ && !scenes.isEmpty();
+    if (!dataApiMode) {
+        dataApiExpandedPaths_.clear();
+        dataApiCollapsedPaths_.clear();
+    } else if (!stateScopeKey.isEmpty()) {
+        dataApiExpandedPaths_.clear();
+        dataApiCollapsedPaths_.clear();
+        const QString scopeHash = QString::fromLatin1(
+            QCryptographicHash::hash(stateScopeKey.toUtf8(),
+                                     QCryptographicHash::Sha256)
+                .toHex());
+        QSettings settings;
+        const QStringList expandedDataApiPaths = settings.value(
+            QStringLiteral("outliner/%1/dataApiExpandedPaths")
+                .arg(scopeHash)).toStringList();
+        const QStringList collapsedPaths = settings.value(
+            QStringLiteral("outliner/%1/dataApiCollapsedPaths")
+                .arg(scopeHash)).toStringList();
+        dataApiExpandedPaths_ = QSet<QString>(
+            expandedDataApiPaths.cbegin(), expandedDataApiPaths.cend());
+        dataApiCollapsedPaths_ = QSet<QString>(collapsedPaths.cbegin(),
+                                                collapsedPaths.cend());
+    }
     libraryOverrideViewCombo_->setVisible(libraryOverridesMode);
     libraryOverrideViewCombo_->setEnabled(libraryOverridesMode);
     showSystemOverridesCheck_->setVisible(
@@ -4295,8 +4343,13 @@ void CollectionsPanel::refresh()
             if (saved != expandedPaths.cend()) {
                 item->setExpanded(saved.value());
             } else if (dataApiMode) {
-                item->setExpanded(path == QStringLiteral("data-api/main") ||
-                                   isDataApiPointerStruct(item));
+                const bool pointerStruct = isDataApiPointerStruct(item);
+                const bool explicitlyCollapsed = pointerStruct &&
+                    dataApiCollapsedPaths_.contains(path);
+                item->setExpanded(!explicitlyCollapsed &&
+                    (path == QStringLiteral("data-api/main") ||
+                     dataApiExpandedPaths_.contains(path) ||
+                     pointerStruct));
             } else if (libraryOverridesMode) {
                 const int kind = item->data(nameColumn, itemKindRole).toInt();
                 if (kind == static_cast<int>(OutlinerRowKind::Library)) {

@@ -319,6 +319,8 @@ private:
     QHash<QString, OutlinerObjectEntry> hierarchyEntries_;
     QHash<QString, OutlinerObjectEntry> sourceOnlyEntries_;
     QHash<QString, bool> expandedBeforeFilter_;
+    QSet<QString> dataApiExpandedPaths_;
+    QSet<QString> dataApiCollapsedPaths_;
     QString activeFilterText_;
     QString idTypeFilter_;
     QHash<QString, bool> objectTypeFilters_;

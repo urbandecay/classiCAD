@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 60
+BRIDGE_FORMAT_VERSION = 61
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -886,6 +886,151 @@ def outliner_grease_pencil_layer_tree(obj):
     return []
 
 
+def outliner_library_object_tree(obj, parent_budgets=None, truncated=None):
+    """Capture Blender Object ID's direct children in source order."""
+    local_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
+    budgets = list(parent_budgets or []) + [local_remaining]
+    if truncated is None:
+        truncated = [False]
+    rows = []
+
+    def reserve_row():
+        if any(budget[0] <= 0 for budget in budgets):
+            truncated[0] = True
+            return False
+        for budget in budgets:
+            budget[0] -= 1
+        return True
+
+    def add_leaf(name, kind):
+        if not name or not reserve_row():
+            return False
+        rows.append({"name": str(name), "kind": kind, "children": []})
+        return True
+
+    def add_group_to(parent_rows, name, kind, entries, child_kind):
+        group = None
+        try:
+            for entry in entries:
+                entry_name = str(entry.name)
+                if not entry_name:
+                    continue
+                if group is None:
+                    if any(budget[0] < 2 for budget in budgets):
+                        truncated[0] = True
+                        return
+                    if not reserve_row():
+                        return
+                    group = {"name": name, "kind": kind, "children": []}
+                    parent_rows.append(group)
+                if not reserve_row():
+                    return
+                group["children"].append({
+                    "name": entry_name, "kind": child_kind, "children": []
+                })
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            truncated[0] = True
+
+    def add_group(name, kind, entries, child_kind):
+        add_group_to(rows, name, kind, entries, child_kind)
+
+    try:
+        pose = getattr(obj, "pose", None)
+        if pose is not None and reserve_row():
+            pose_node = {"name": "Pose", "kind": "POSE", "children": []}
+            rows.append(pose_node)
+            if getattr(obj, "mode", "") == "POSE":
+                pose_bone_records = []
+                pose_bones = getattr(pose, "bones", ())
+                try:
+                    for bone in pose_bones:
+                        if not reserve_row():
+                            break
+                        name = str(bone.name)
+                        parent = getattr(bone, "parent", None)
+                        bone_node = {
+                            "name": name, "kind": "POSE_BONE", "children": []
+                        }
+                        add_group_to(
+                            bone_node["children"], "Constraints", "CONSTRAINTS",
+                            getattr(bone, "constraints", ()), "CONSTRAINT")
+                        pose_node["children"].append(bone_node)
+                        pose_bone_records.append({
+                            "name": name,
+                            "parent": str(parent.name) if parent is not None else "",
+                            "node": bone_node,
+                        })
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    truncated[0] = True
+
+                records_by_name = {
+                    record["name"]: record for record in pose_bone_records
+                }
+                for record in pose_bone_records:
+                    depth = 0
+                    parent_name = record["parent"]
+                    ancestry = {record["name"]}
+                    while parent_name in records_by_name:
+                        if parent_name in ancestry:
+                            truncated[0] = True
+                            depth = 125
+                            break
+                        ancestry.add(parent_name)
+                        depth += 1
+                        parent_name = records_by_name[parent_name]["parent"]
+                    if depth >= 124:
+                        truncated[0] = True
+                        continue
+                    parent_record = records_by_name.get(record["parent"])
+                    if parent_record is not None:
+                        pose_node["children"].remove(record["node"])
+                        parent_record["node"]["children"].append(record["node"])
+        data = getattr(obj, "data", None)
+        if data is not None:
+            add_leaf(getattr(data, "name", ""), "DATA_BLOCK")
+
+        try:
+            for slot in getattr(obj, "material_slots", ()):
+                material = getattr(slot, "material", None)
+                if material is not None and not add_leaf(
+                        getattr(material, "name", ""), "MATERIAL"):
+                    break
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            truncated[0] = True
+
+        add_group("Constraints", "CONSTRAINTS",
+                  getattr(obj, "constraints", ()), "CONSTRAINT")
+
+        def object_modifiers():
+            for property_name in ("modifiers", "grease_pencil_modifiers"):
+                try:
+                    for modifier in getattr(obj, property_name, ()):
+                        yield modifier
+                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                    truncated[0] = True
+
+        add_group("Modifiers", "MODIFIERS", object_modifiers(), "MODIFIER")
+
+        effects = getattr(obj, "shader_effects", None)
+        if effects is None:
+            effects = getattr(obj, "shader_fx", ())
+        add_group("Effects", "EFFECTS", effects, "EFFECT")
+
+        if getattr(obj, "type", "") in {"MESH", "LATTICE", "GREASEPENCIL"}:
+            add_group("Vertex Groups", "VERTEX_GROUPS",
+                      getattr(obj, "vertex_groups", ()), "VERTEX_GROUP")
+
+        instance_collection = getattr(obj, "instance_collection", None)
+        if (instance_collection is not None and
+                getattr(obj, "instance_type", "") == "COLLECTION"):
+            add_leaf(getattr(instance_collection, "name", ""),
+                     "COLLECTION_INSTANCE")
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        truncated[0] = True
+
+    return rows
+
+
 def outliner_library_collection_children(collection, remaining_rows,
                                          truncated_out=None):
     """Capture Collection ID children in Blender's collection-then-object order."""
@@ -930,9 +1075,15 @@ def outliner_library_collection_children(collection, remaining_rows,
             for obj in child.objects:
                 if not reserve_row():
                     break
-                node["children"].append({
-                    "name": str(obj.name), "kind": "OBJECT", "children": []
-                })
+                object_truncated = [False]
+                object_node = {
+                    "name": str(obj.name), "kind": "OBJECT",
+                    "children": outliner_library_object_tree(
+                        obj, budgets, object_truncated),
+                }
+                node["children"].append(object_node)
+                if object_truncated[0]:
+                    truncated[0] = True
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             truncated[0] = True
         return node
@@ -951,9 +1102,15 @@ def outliner_library_collection_children(collection, remaining_rows,
             for obj in collection.objects:
                 if not reserve_row():
                     break
-                children.append({
-                    "name": str(obj.name), "kind": "OBJECT", "children": []
-                })
+                object_truncated = [False]
+                object_node = {
+                    "name": str(obj.name), "kind": "OBJECT",
+                    "children": outliner_library_object_tree(
+                        obj, budgets, object_truncated),
+                }
+                children.append(object_node)
+                if object_truncated[0]:
+                    truncated[0] = True
     except (AttributeError, ReferenceError, RuntimeError, TypeError):
         truncated[0] = True
 
@@ -1047,7 +1204,7 @@ def outliner_library_tree():
                         "animation": animation,
                     })
             id_type = id_block.bl_rna.identifier
-            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection"}
+            if (id_type in {"Mesh", "Curve", "MetaBall", "Armature", "Collection", "Object"}
                     or "GreasePencil" in id_type):
                 subtree = {
                     "data_block_name": data_block_name,
@@ -1058,6 +1215,7 @@ def outliner_library_tree():
                     "bone_collection_tree": [],
                     "grease_pencil_layer_tree": [],
                     "collection_tree": [],
+                    "object_tree": [],
                 }
                 local_rows_remaining = [MAX_OUTLINER_HIERARCHY_ITEMS]
                 subtree_truncated = [False]
@@ -1140,6 +1298,15 @@ def outliner_library_tree():
                     if collection_tree_truncated == [True]:
                         subtree_truncated[0] = True
 
+                if id_type == "Object":
+                    object_tree_truncated = []
+                    subtree["object_tree"] = outliner_library_object_tree(
+                        id_block,
+                        [library_specialized_rows_remaining],
+                        object_tree_truncated)
+                    if object_tree_truncated == [True]:
+                        subtree_truncated[0] = True
+
                 if subtree_truncated[0]:
                     record["truncated"] = True
                 if (subtree["shape_key_data_name"] or
@@ -1147,7 +1314,8 @@ def outliner_library_tree():
                         subtree["armature_bone_tree"] or
                         subtree["bone_collection_tree"] or
                         subtree["grease_pencil_layer_tree"] or
-                        subtree["collection_tree"]):
+                        subtree["collection_tree"] or
+                        subtree["object_tree"]):
                     group["data_block_subtrees"].append(subtree)
             if id_block.bl_rna.identifier == "Action":
                 slots = []

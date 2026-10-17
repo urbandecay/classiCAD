@@ -527,6 +527,8 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         QStringLiteral("grease_pencil_layer_tree"));
                     const QJsonValue collectionTree = subtree.value(
                         QStringLiteral("collection_tree"));
+                    const QJsonValue objectTree = subtree.value(
+                        QStringLiteral("object_tree"));
                     const QString dataBlockName = dataName.toString();
                     const QString shapeKeyName = shapeKeyDataName.toString();
                     if (!dataName.isString() || dataBlockName.size() > 4096 ||
@@ -544,7 +546,8 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                         (!greasePencilLayerTree.isUndefined() &&
                          !greasePencilLayerTree.isArray()) ||
                         (!collectionTree.isUndefined() &&
-                         !collectionTree.isArray())) {
+                         !collectionTree.isArray()) ||
+                        (!objectTree.isUndefined() && !objectTree.isArray())) {
                         return false;
                     }
                     subtreesByDataBlockName.insert(dataBlockName);
@@ -613,6 +616,80 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                                                    0, &greasePencilRows)) return false;
                         subtreeRows += greasePencilRows;
                     }
+                    const auto countObjectTree =
+                        [&](const auto &self, const QJsonArray &nodes,
+                            int depth, int *nodeCount,
+                            const QString &parentKind) -> bool {
+                        if (nodes.isEmpty()) return true;
+                        if (depth >= 128 || nodeCount == nullptr ||
+                            *nodeCount + nodes.size() > 1024) return false;
+                        const QSet<QString> allowedKinds = {
+                            QStringLiteral("POSE"),
+                            QStringLiteral("POSE_BONE"),
+                            QStringLiteral("DATA_BLOCK"),
+                            QStringLiteral("MATERIAL"),
+                            QStringLiteral("CONSTRAINTS"),
+                            QStringLiteral("CONSTRAINT"),
+                            QStringLiteral("MODIFIERS"),
+                            QStringLiteral("MODIFIER"),
+                            QStringLiteral("EFFECTS"),
+                            QStringLiteral("EFFECT"),
+                            QStringLiteral("VERTEX_GROUPS"),
+                            QStringLiteral("VERTEX_GROUP"),
+                            QStringLiteral("COLLECTION_INSTANCE")
+                        };
+                        for (const QJsonValue &nodeValue : nodes) {
+                            if (!nodeValue.isObject()) return false;
+                            const QJsonObject node = nodeValue.toObject();
+                            const QJsonValue name = node.value(
+                                QStringLiteral("name"));
+                            const QJsonValue kind = node.value(
+                                QStringLiteral("kind"));
+                            const QJsonValue children = node.value(
+                                QStringLiteral("children"));
+                            const QString nodeKind = kind.toString();
+                            if (!name.isString() || name.toString().size() > 4096 ||
+                                !kind.isString() || !allowedKinds.contains(nodeKind) ||
+                                !children.isArray()) return false;
+                            if (!parentKind.isEmpty()) {
+                                const bool parentMatches =
+                                    (parentKind == QLatin1String("POSE") &&
+                                     nodeKind == QLatin1String("POSE_BONE")) ||
+                                    (parentKind == QLatin1String("POSE_BONE") &&
+                                     (nodeKind == QLatin1String("POSE_BONE") ||
+                                      nodeKind == QLatin1String("CONSTRAINTS"))) ||
+                                    (parentKind == QLatin1String("CONSTRAINTS") &&
+                                     nodeKind == QLatin1String("CONSTRAINT")) ||
+                                    (parentKind == QLatin1String("MODIFIERS") &&
+                                     nodeKind == QLatin1String("MODIFIER")) ||
+                                    (parentKind == QLatin1String("EFFECTS") &&
+                                     nodeKind == QLatin1String("EFFECT")) ||
+                                    (parentKind == QLatin1String("VERTEX_GROUPS") &&
+                                     nodeKind == QLatin1String("VERTEX_GROUP"));
+                                if (!parentMatches) return false;
+                            } else if (nodeKind == QLatin1String("POSE_BONE") ||
+                                       nodeKind == QLatin1String("CONSTRAINT") ||
+                                       nodeKind == QLatin1String("MODIFIER") ||
+                                       nodeKind == QLatin1String("EFFECT") ||
+                                       nodeKind == QLatin1String("VERTEX_GROUP")) {
+                                return false;
+                            }
+                            const bool hasChildren = !children.toArray().isEmpty();
+                            const bool allowsChildren =
+                                nodeKind == QLatin1String("POSE") ||
+                                nodeKind == QLatin1String("POSE_BONE") ||
+                                nodeKind == QLatin1String("CONSTRAINTS") ||
+                                nodeKind == QLatin1String("MODIFIERS") ||
+                                nodeKind == QLatin1String("EFFECTS") ||
+                                nodeKind == QLatin1String("VERTEX_GROUPS");
+                            if (hasChildren && !allowsChildren) return false;
+                            ++(*nodeCount);
+                            if (hasChildren &&
+                                !self(self, children.toArray(), depth + 1,
+                                      nodeCount, nodeKind)) return false;
+                        }
+                        return true;
+                    };
                     if (!collectionTree.isUndefined()) {
                         const auto countCollectionTree =
                             [&](const auto &self, const QJsonArray &nodes,
@@ -634,13 +711,15 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                                     !kind.isString() ||
                                     (nodeKind != QLatin1String("COLLECTION") &&
                                      nodeKind != QLatin1String("OBJECT")) ||
-                                    !children.isArray() ||
-                                    (nodeKind == QLatin1String("OBJECT") &&
-                                     !children.toArray().isEmpty())) return false;
+                                    !children.isArray()) return false;
                                 ++(*nodeCount);
                                 if (nodeKind == QLatin1String("COLLECTION") &&
                                     !self(self, children.toArray(), depth + 1,
                                           nodeCount)) return false;
+                                if (nodeKind == QLatin1String("OBJECT") &&
+                                    !countObjectTree(countObjectTree,
+                                                     children.toArray(), 0,
+                                                     nodeCount, QString())) return false;
                             }
                             return true;
                         };
@@ -649,6 +728,12 @@ bool isValidImportedBlenderLibraryRows(const QJsonValue &value)
                                                  collectionTree.toArray(), 0,
                                                  &collectionRows)) return false;
                         subtreeRows += collectionRows;
+                    }
+                    if (!objectTree.isUndefined()) {
+                        int objectRows = 0;
+                        if (!countObjectTree(countObjectTree, objectTree.toArray(),
+                                             0, &objectRows, QString())) return false;
+                        subtreeRows += objectRows;
                     }
                     if (subtreeRows > 3072 ||
                         totalSpecializedRows + subtreeRows > 20000) return false;
@@ -888,7 +973,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 50);
+    serialized.insert(QStringLiteral("version"), 51);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -1344,7 +1429,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 50) {
+    if (version < 1 || version > 51) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }

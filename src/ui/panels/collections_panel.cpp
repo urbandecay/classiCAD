@@ -2999,7 +2999,52 @@ void CollectionsPanel::refresh()
                     description);
             }
         };
-        const auto appendLibraryCollectionTree = [&appendLibraryContentRow](
+        const auto appendLibraryObjectTree = [&appendLibraryContentRow](
+            const auto &self, QTreeWidgetItem *parent,
+            const QJsonArray &nodes, const QString &path) -> void {
+            for (qsizetype index = 0; index < nodes.size(); ++index) {
+                const QJsonObject node = nodes[index].toObject();
+                const QString nodePath = path + QStringLiteral("/item-%1")
+                    .arg(index);
+                const QString kind = node.value(
+                    QStringLiteral("kind")).toString();
+                QString description;
+                if (kind == QLatin1String("POSE")) {
+                    description = QStringLiteral("Blender object pose");
+                } else if (kind == QLatin1String("POSE_BONE")) {
+                    description = QStringLiteral("Blender pose bone");
+                } else if (kind == QLatin1String("DATA_BLOCK")) {
+                    description = QStringLiteral("Blender object data block");
+                } else if (kind == QLatin1String("MATERIAL")) {
+                    description = QStringLiteral("Blender object material slot");
+                } else if (kind == QLatin1String("CONSTRAINTS")) {
+                    description = QStringLiteral("Blender object constraints");
+                } else if (kind == QLatin1String("CONSTRAINT")) {
+                    description = QStringLiteral("Blender object constraint");
+                } else if (kind == QLatin1String("MODIFIERS")) {
+                    description = QStringLiteral("Blender object modifiers");
+                } else if (kind == QLatin1String("MODIFIER")) {
+                    description = QStringLiteral("Blender object modifier");
+                } else if (kind == QLatin1String("EFFECTS")) {
+                    description = QStringLiteral("Blender Grease Pencil effects");
+                } else if (kind == QLatin1String("EFFECT")) {
+                    description = QStringLiteral("Blender Grease Pencil effect");
+                } else if (kind == QLatin1String("VERTEX_GROUPS")) {
+                    description = QStringLiteral("Blender object vertex groups");
+                } else if (kind == QLatin1String("VERTEX_GROUP")) {
+                    description = QStringLiteral("Blender object vertex group");
+                } else if (kind == QLatin1String("COLLECTION_INSTANCE")) {
+                    description = QStringLiteral("Blender instanced collection");
+                }
+                QTreeWidgetItem *row = appendLibraryContentRow(
+                    parent, node.value(QStringLiteral("name")).toString(),
+                    nodePath, description);
+                self(self, row, node.value(
+                    QStringLiteral("children")).toArray(), nodePath);
+            }
+        };
+        const auto appendLibraryCollectionTree = [
+            &appendLibraryContentRow, &appendLibraryObjectTree](
             const auto &self, QTreeWidgetItem *parent,
             const QJsonArray &nodes, const QString &path) -> void {
             for (qsizetype index = 0; index < nodes.size(); ++index) {
@@ -3017,6 +3062,11 @@ void CollectionsPanel::refresh()
                 if (isCollection) {
                     self(self, row, node.value(
                         QStringLiteral("children")).toArray(), nodePath);
+                } else {
+                    appendLibraryObjectTree(
+                        appendLibraryObjectTree, row,
+                        node.value(QStringLiteral("children")).toArray(),
+                        nodePath + QStringLiteral("/object-contents"));
                 }
             }
         };
@@ -3133,6 +3183,10 @@ void CollectionsPanel::refresh()
                             sourceGroup.dataBlockTreesByName.cend()) {
                             const QString treePath = dataPath +
                                 QStringLiteral("/item-%1").arg(dataIndex);
+                            appendLibraryObjectTree(
+                                appendLibraryObjectTree, dataRow,
+                                dataBlockTree->objectTree,
+                                treePath + QStringLiteral("/object-tree"));
                             appendLibraryCollectionTree(
                                 appendLibraryCollectionTree, dataRow,
                                 dataBlockTree->collectionTree,

@@ -2841,7 +2841,7 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 54 && bridgeVersion != 55 &&
          bridgeVersion != 56 && bridgeVersion != 57 &&
          bridgeVersion != 58 && bridgeVersion != 59 &&
-         bridgeVersion != 60)) {
+         bridgeVersion != 60 && bridgeVersion != 61)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -3329,6 +3329,8 @@ bool importBlenderScene(const QString &path,
                             QStringLiteral("grease_pencil_layer_tree"));
                         const QJsonValue collectionTreeValue = subtree.value(
                             QStringLiteral("collection_tree"));
+                        const QJsonValue objectTreeValue = subtree.value(
+                            QStringLiteral("object_tree"));
                         const QString dataName = dataNameValue.toString();
                         const QString shapeKeyDataName =
                             shapeKeyDataNameValue.toString();
@@ -3347,7 +3349,9 @@ bool importBlenderScene(const QString &path,
                             (bridgeVersion >= 59 &&
                              !greasePencilLayerTreeValue.isArray()) ||
                             (bridgeVersion >= 60 &&
-                             !collectionTreeValue.isArray())) {
+                             !collectionTreeValue.isArray()) ||
+                            (bridgeVersion >= 61 &&
+                             !objectTreeValue.isArray())) {
                             setError(errorMessage,
                                      QStringLiteral("A Blender library data-block subtree is invalid"));
                             return false;
@@ -3431,6 +3435,80 @@ bool importBlenderScene(const QString &path,
                             }
                             subtreeRows += greasePencilRows;
                         }
+                        const auto countObjectTree =
+                            [&](const auto &self, const QJsonArray &nodes,
+                                int depth, int *nodeCount,
+                                const QString &parentKind) -> bool {
+                            if (nodes.isEmpty()) return true;
+                            if (depth >= 128 || nodeCount == nullptr ||
+                                *nodeCount + nodes.size() > 1024) return false;
+                            const QSet<QString> allowedKinds = {
+                                QStringLiteral("POSE"),
+                                QStringLiteral("POSE_BONE"),
+                                QStringLiteral("DATA_BLOCK"),
+                                QStringLiteral("MATERIAL"),
+                                QStringLiteral("CONSTRAINTS"),
+                                QStringLiteral("CONSTRAINT"),
+                                QStringLiteral("MODIFIERS"),
+                                QStringLiteral("MODIFIER"),
+                                QStringLiteral("EFFECTS"),
+                                QStringLiteral("EFFECT"),
+                                QStringLiteral("VERTEX_GROUPS"),
+                                QStringLiteral("VERTEX_GROUP"),
+                                QStringLiteral("COLLECTION_INSTANCE")
+                            };
+                            for (const QJsonValue &nodeValue : nodes) {
+                                if (!nodeValue.isObject()) return false;
+                                const QJsonObject node = nodeValue.toObject();
+                                const QJsonValue name = node.value(
+                                    QStringLiteral("name"));
+                                const QJsonValue kind = node.value(
+                                    QStringLiteral("kind"));
+                                const QJsonValue children = node.value(
+                                    QStringLiteral("children"));
+                                const QString nodeKind = kind.toString();
+                                if (!name.isString() || name.toString().size() > 4096 ||
+                                    !kind.isString() || !allowedKinds.contains(nodeKind) ||
+                                    !children.isArray()) return false;
+                                if (!parentKind.isEmpty()) {
+                                    const bool parentMatches =
+                                        (parentKind == QLatin1String("POSE") &&
+                                         nodeKind == QLatin1String("POSE_BONE")) ||
+                                        (parentKind == QLatin1String("POSE_BONE") &&
+                                         (nodeKind == QLatin1String("POSE_BONE") ||
+                                          nodeKind == QLatin1String("CONSTRAINTS"))) ||
+                                        (parentKind == QLatin1String("CONSTRAINTS") &&
+                                         nodeKind == QLatin1String("CONSTRAINT")) ||
+                                        (parentKind == QLatin1String("MODIFIERS") &&
+                                         nodeKind == QLatin1String("MODIFIER")) ||
+                                        (parentKind == QLatin1String("EFFECTS") &&
+                                         nodeKind == QLatin1String("EFFECT")) ||
+                                        (parentKind == QLatin1String("VERTEX_GROUPS") &&
+                                         nodeKind == QLatin1String("VERTEX_GROUP"));
+                                    if (!parentMatches) return false;
+                                } else if (nodeKind == QLatin1String("POSE_BONE") ||
+                                           nodeKind == QLatin1String("CONSTRAINT") ||
+                                           nodeKind == QLatin1String("MODIFIER") ||
+                                           nodeKind == QLatin1String("EFFECT") ||
+                                           nodeKind == QLatin1String("VERTEX_GROUP")) {
+                                    return false;
+                                }
+                                const bool hasChildren = !children.toArray().isEmpty();
+                                const bool allowsChildren =
+                                    nodeKind == QLatin1String("POSE") ||
+                                    nodeKind == QLatin1String("POSE_BONE") ||
+                                    nodeKind == QLatin1String("CONSTRAINTS") ||
+                                    nodeKind == QLatin1String("MODIFIERS") ||
+                                    nodeKind == QLatin1String("EFFECTS") ||
+                                    nodeKind == QLatin1String("VERTEX_GROUPS");
+                                if (hasChildren && !allowsChildren) return false;
+                                ++(*nodeCount);
+                                if (hasChildren &&
+                                    !self(self, children.toArray(), depth + 1,
+                                          nodeCount, nodeKind)) return false;
+                            }
+                            return true;
+                        };
                         if (bridgeVersion >= 60) {
                             const auto countCollectionTree =
                                 [&](const auto &self, const QJsonArray &nodes,
@@ -3454,6 +3532,7 @@ bool importBlenderScene(const QString &path,
                                          nodeKind != QLatin1String("OBJECT")) ||
                                         !children.isArray() ||
                                         (nodeKind == QLatin1String("OBJECT") &&
+                                         bridgeVersion < 61 &&
                                          !children.toArray().isEmpty())) {
                                         return false;
                                     }
@@ -3461,6 +3540,13 @@ bool importBlenderScene(const QString &path,
                                     if (nodeKind == QLatin1String("COLLECTION") &&
                                         !self(self, children.toArray(), depth + 1,
                                               nodeCount)) return false;
+                                    if (nodeKind == QLatin1String("OBJECT") &&
+                                        bridgeVersion >= 61 &&
+                                        !countObjectTree(countObjectTree,
+                                                         children.toArray(), 0,
+                                                         nodeCount, QString())) {
+                                        return false;
+                                    }
                                 }
                                 return true;
                             };
@@ -3473,6 +3559,17 @@ bool importBlenderScene(const QString &path,
                                 return false;
                             }
                             subtreeRows += collectionRows;
+                        }
+                        if (bridgeVersion >= 61) {
+                            int objectRows = 0;
+                            if (!countObjectTree(countObjectTree,
+                                                 objectTreeValue.toArray(), 0,
+                                                 &objectRows, QString())) {
+                                setError(errorMessage,
+                                         QStringLiteral("A Blender library object tree is invalid"));
+                                return false;
+                            }
+                            subtreeRows += objectRows;
                         }
                         if ((shapeKeyDataName.isEmpty() &&
                              !shapeKeyNamesValue.toArray().isEmpty()) ||

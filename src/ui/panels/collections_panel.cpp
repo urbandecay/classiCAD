@@ -2518,21 +2518,20 @@ void CollectionsPanel::refresh()
     }
     tree_->headerItem()->setText(
         viewportColumn,
-        (dataApiMode || overridePropertiesMode)
-            ? (dataApiMode ? QStringLiteral("Value")
-                           : QStringLiteral("Value / Operation"))
-            : QStringLiteral("Viewport"));
+        overridePropertiesMode ? QStringLiteral("Value / Operation")
+                               : QStringLiteral("Viewport"));
     tree_->headerItem()->setToolTip(
         viewportColumn,
-        dataApiMode ? QStringLiteral("Read-only Blender RNA property value")
-            : (overridePropertiesMode
-                   ? QStringLiteral("Read-only value and operation from Blender's library override")
-                   : QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants; Ctrl-click on a collection isolates it.")));
+        overridePropertiesMode
+            ? QStringLiteral("Read-only value and operation from Blender's library override")
+            : QStringLiteral("Hide globally in the viewport. Shift-click applies to descendants; Ctrl-click on a collection isolates it."));
     tree_->setColumnHidden(
         viewportColumn,
-        (dataApiMode || overridePropertiesMode) ? false
-                    : (librariesMode || orphanDataMode || sequencerMode ||
-                       overrideHierarchiesMode || !showViewportColumn_));
+        dataApiMode ||
+            (overridePropertiesMode
+                 ? false
+                 : (librariesMode || orphanDataMode || sequencerMode ||
+                    overrideHierarchiesMode || !showViewportColumn_)));
     tree_->setColumnHidden(renderColumn,
                            librariesMode || orphanDataMode || sequencerMode ||
                            dataApiMode || libraryOverridesMode ||
@@ -2634,8 +2633,6 @@ void CollectionsPanel::refresh()
                 auto *row = new QTreeWidgetItem(parent);
                 row->setText(nameColumn, child.value(
                     QStringLiteral("name")).toString());
-                row->setText(viewportColumn, child.value(
-                    QStringLiteral("value")).toString());
                 row->setData(nameColumn, itemKindRole,
                              static_cast<int>(OutlinerRowKind::DataApi));
                 row->setData(nameColumn, itemPathRole, path);

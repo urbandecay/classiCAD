@@ -11097,14 +11097,13 @@ scene depth.
   [`tree_display_data.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_data.cc)
   and RNA struct/property expansion in
   [`tree_element_rna.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc).
-  Data API mode now shows the `bpy.data` RNA property tree, pointer and
-  collection contents, numeric array components, and scalar values in a
-  separate Value column. The root opens by default while its child rows stay
-  collapsed. Blender bridge version 53 and native document version 43 retain
-  a read-only import snapshot; the capture is capped at 20,000 rows, 32
-  struct levels, and 128 entries per collection. Blender builds this tree
-  lazily and allows property edits/keying-set operations; classiCAD captures
-  it at import and does not edit the source Blender data. `cmake --build
+  Data API mode shows the `bpy.data` RNA property tree, pointer and collection
+  contents, and numeric array components. The root opens by default while its
+  child rows stay collapsed. Blender bridge version 53 and native document
+  version 43 retain a read-only import snapshot; the capture is capped at
+  20,000 rows, 32 struct levels, and 128 entries per collection. Blender builds
+  this tree lazily and allows property edits/keying-set operations; classiCAD
+  captures it at import and does not edit the source Blender data. `cmake --build
   build -j4`, Python syntax parsing, and `git diff --check` passed; no matched
   Blender Outliner UI comparison was run.
 - The fortieth tree update follows Blender 5.2.2's Library Overrides
@@ -11167,12 +11166,14 @@ scene depth.
 - The fifty-second tree update follows Blender 5.2.2's [Scene ID expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id_scene.cc), [View Layer rows](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_view_layer.cc), [Collection tree](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_collection.cc), [Scene Objects rows](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_scene_objects.cc), [generic ID Animation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_id.cc), and [object-parent hierarchy](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/common.cc). Expanded Scene IDs now show View Layers, World, Scene Collection, parented Scene Objects with their object contents, then Scene Animation in Blender's order. The extractor records the Scene-specific tree and ID type groups; bridge version 65 and native document version 55 validate and preserve it, while older bridge/native records remain loadable. Scene rows are bounded to 1,024 per Scene and 20,000 specialized rows per library, and remain read-only. No matched Blender Outliner UI comparison was run. `cmake --build build -j4`, Python syntax parsing, and `git diff --check` passed.
 - The fifty-third tree update follows Blender 5.2.2's [Sequencer selection synchronization](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_sync.cc#L232-L335), alongside the [Sequencer strip tree](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_seq.cc). Imported strips now carry stable hierarchy IDs and the active-strip flag. Clicking, Ctrl-clicking, or range-selecting strips updates the active/selected state in the classiCAD copy of the imported Outliner data and saves it with the document. Blender bridge version 66 and native document version 56 validate and preserve those flags; legacy records without strip IDs remain loadable. classiCAD has no live Sequencer editor or Blender runtime, so this does not update a Blender timeline. The Data API remains a read-only import snapshot, and no matched Blender Outliner interaction comparison was run. `cmake --build build -j4`, Python syntax parsing, and `git diff --check` passed.
 - The fifty-fourth tree update follows Blender 5.2.2's [RNA array component naming](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_access.cc#L1286-L1315). Data API arrays now use Blender's quaternion order (`W`, `X`, `Y`, `Z`), vector and color component names for the supported RNA subtypes, and one-based numeric labels for other arrays. Bridge version 67 carries the corrected labels, and native document version 57 accepts and retains the snapshot; older versions remain loadable. These rows are still read-only snapshots, and no matched Blender Outliner UI comparison was run. `cmake --build build -j4`, Python syntax parsing, and `git diff --check` passed.
-- Remaining Outliner scope is Data API property editing/keying-set actions and a
-  matched Blender/classiCAD interaction comparison. Generic ID dispatch was
-  checked against Blender 5.2.2's full `TreeElementID::create_from_id()` switch;
-  its remaining ID types use the already-ported generic Animation expansion.
-  Do not mark this port complete until the remaining items have been reviewed
-  against pinned Blender source.
+- The fifty-fifth tree update follows Blender 5.2.2's [RNA tree drawing](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_draw.cc#L3259-L3311) and [Data API header](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L73-L88). Blender draws RNA property/component names without a separate value column. New imports now leave the compatibility `value` fields empty, and classiCAD hides its Value column in Data API mode; old snapshots continue to load. This matches the visible tree rows but does not provide Blender's live RNA property controls or keying-set and driver actions. Bridge version 67 and native document version 57 keep the existing metadata shape. `cmake --build build -j4`, Python syntax parsing, and `git diff --check` passed; no matched Blender Outliner UI comparison was run.
+- Remaining Outliner scope is live Data API property/keying-set/driver operations and a
+  matched Blender/classiCAD interaction comparison. Those operations require a
+  live Blender RNA database and animation context, which classiCAD does not own.
+  Generic ID dispatch was checked against Blender 5.2.2's full
+  `TreeElementID::create_from_id()` switch; its remaining ID types use the
+  already-ported generic Animation expansion. Do not mark this port complete
+  until the remaining items have been reviewed against pinned Blender source.
 - Follow-up: the single-sample resolve's dense-wire correction also treated
   every recorded fragment in the expanded stroke quad as opaque, including
   the antialias fringe. A geometric-core gate alone was insufficient for

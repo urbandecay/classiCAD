@@ -2193,14 +2193,6 @@ def outliner_data_api_tree():
         "children": [],
     }
 
-    def display_value(value):
-        if value is None:
-            return ""
-        if isinstance(value, (str, bool, int, float)):
-            text = str(value)
-            return text[:4096]
-        return ""
-
     def array_component_name(subtype, index):
         """Match Blender RNA_property_array_item_char() labels."""
         if index < 4:
@@ -2329,13 +2321,10 @@ def outliner_data_api_tree():
                     array_key = str(index)
                     array_name = array_component_name(subtype, index)
                     array_node = reserve_node(
-                        "ARRAY_ELEM", array_key, array_name, prop_type,
-                        display_value(element))
+                        "ARRAY_ELEM", array_key, array_name, prop_type)
                     if array_node is None:
                         break
                     property_node["children"].append(array_node)
-            else:
-                property_node["value"] = display_value(property_value)
             node["children"].append(property_node)
 
     ancestry = {identity(bpy.data)}
@@ -2392,13 +2381,10 @@ def outliner_data_api_tree():
             for index, element in enumerate(values):
                 array_name = array_component_name(subtype, index)
                 array_node = reserve_node(
-                    "ARRAY_ELEM", str(index), array_name, prop_type,
-                    display_value(element))
+                    "ARRAY_ELEM", str(index), array_name, prop_type)
                 if array_node is None:
                     break
                 property_node["children"].append(array_node)
-        else:
-            property_node["value"] = display_value(property_value)
         root["children"].append(property_node)
 
     pending_index = 0

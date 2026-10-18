@@ -6614,8 +6614,24 @@ void CollectionsPanel::refresh()
                             QStringLiteral("path")).toString();
                         const bool pathValid = property.value(
                             QStringLiteral("valid")).toBool();
-                        const bool removable = pathValid &&
+                        const QJsonValue removableValue = property.value(
+                            QStringLiteral("can_remove"));
+                        bool removable = pathValid &&
                             !property.value(QStringLiteral("system")).toBool();
+                        if (removableValue.isBool()) {
+                            removable = removableValue.toBool();
+                        } else {
+                            for (const QJsonValue &operationValue : property.value(
+                                     QStringLiteral("operations")).toArray()) {
+                                const QString operationType = operationValue.toObject()
+                                    .value(QStringLiteral("type")).toString();
+                                if (operationType == QLatin1String("INSERT_AFTER") ||
+                                    operationType == QLatin1String("INSERT_BEFORE")) {
+                                    removable = false;
+                                    break;
+                                }
+                            }
+                        }
                         if (removable && !operationPath.isEmpty()) {
                             for (QTreeWidgetItem *pathNode : pathNodes) {
                                 QStringList propertyPaths = pathNode->data(

@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 82
+BRIDGE_FORMAT_VERSION = 83
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -1765,7 +1765,11 @@ def outliner_library_overrides_tree():
                 valid = False
 
             operations = []
-            for operation in list(getattr(source_property, "operations", ()))[:64]:
+            try:
+                source_operations = list(getattr(source_property, "operations", ()))
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                source_operations = []
+            for operation in source_operations[:64]:
                 try:
                     operation_type = str(operation.operation)
                     label = str(getattr(operation, "label", "") or "")
@@ -1786,12 +1790,31 @@ def outliner_library_overrides_tree():
                 })
             system_property = is_system_override_property(
                 id_block, path, source_property, final_property, value)
+            property_type = str(getattr(final_property, "type", ""))
+            has_insert_operation = any(
+                str(getattr(operation, "operation", "")) in
+                {"INSERT_AFTER", "INSERT_BEFORE"}
+                for operation in source_operations
+            )
+            pointer_value_supported = (
+                property_type != "POINTER" or value is None or
+                isinstance(value, bpy.types.ID)
+            )
             rows.append({
                 "path": path[:4096],
                 "name": (segments[-1]["name"] if segments
                          else path.rsplit(".", 1)[-1])[:4096],
                 "valid": valid,
                 "system": system_property,
+                "property_type": property_type[:128],
+                "can_remove": (
+                    valid and not system_property and
+                    property_type != "COLLECTION" and
+                    pointer_value_supported and
+                    property_type in {"BOOLEAN", "INT", "FLOAT", "STRING",
+                                      "ENUM", "POINTER"} and
+                    not has_insert_operation
+                ),
                 "value": display_value(value),
                 "segments": segments[:MAX_OUTLINER_OVERRIDE_DEPTH],
                 "operations": operations,

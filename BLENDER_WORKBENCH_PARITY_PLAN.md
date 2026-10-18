@@ -12000,3 +12000,15 @@ scene depth.
   and the [Library Override property collection API](https://docs.blender.org/api/5.2/bpy.types.IDOverrideLibraryProperties.html).
   Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
   passed. No matched Outliner comparison was run.
+- The hundred-sixty-second Library Override audit follows Blender's
+  `outliner_liboverride_property_remove_do()` implementation: property removal
+  first copies the linked reference value into the local override, then removes
+  the override record. The preceding update removed only the record; this
+  correction now restores supported scalar, enum, ID-pointer, and numeric-array
+  values before removal. Collection values, custom property groups, unsupported
+  pointers, and `INSERT_AFTER` / `INSERT_BEFORE` operations are disabled because
+  classiCAD does not yet reproduce Blender's specialized collection-item copy
+  path. Bridge version 83 records whether each property can be removed. See
+  Blender 5.2.2's [property removal implementation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L1998-L2094).
+  Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
+  passed. No matched Outliner comparison was run.

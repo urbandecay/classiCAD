@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import math
 import os
+import re
 import shutil
 import struct
 import sys
@@ -2553,6 +2554,100 @@ def purge_project_orphans(source_path, staged_path, report_path,
         )
 
 
+def _resolve_override_rna_path_target(id_block, path):
+    token_pattern = re.compile(
+        r'(?P<property>[A-Za-z_][A-Za-z0-9_]*)|'
+        r'\[(?P<index>[0-9]+)\]|'
+        r'\[(?P<key>"(?:\\.|[^"\\])*")\]'
+    )
+    tokens = []
+    previous_end = 0
+    for match in token_pattern.finditer(path):
+        separator = path[previous_end:match.start()]
+        if separator not in {"", "."}:
+            raise ValueError("Blender override RNA path has invalid separators")
+        if match.group("property") is not None:
+            tokens.append(("property", match.group("property")))
+        elif match.group("index") is not None:
+            tokens.append(("index", int(match.group("index"))))
+        else:
+            try:
+                key = json.loads(match.group("key"))
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "Blender override RNA path has an invalid item key") from error
+            tokens.append(("key", key))
+        previous_end = match.end()
+    if not tokens or previous_end != len(path):
+        raise ValueError("Blender override RNA path could not be parsed")
+
+    def read(owner, token):
+        kind, value = token
+        if kind == "property":
+            return getattr(owner, value)
+        if kind == "index":
+            return owner[value]
+        getter = getattr(owner, "get", None)
+        if callable(getter):
+            marker = object()
+            item = getter(value, marker)
+            if item is not marker:
+                return item
+        return owner[value]
+
+    override_owner = id_block
+    reference_owner = id_block.override_library.reference
+    for token in tokens[:-1]:
+        override_owner = read(override_owner, token)
+        reference_owner = read(reference_owner, token)
+        if override_owner is None or reference_owner is None:
+            raise ValueError(
+                "Blender override RNA path does not resolve on both IDs")
+    return override_owner, reference_owner, tokens[-1]
+
+
+def _restore_override_rna_path(id_block, path):
+    override_owner, reference_owner, final_token = \
+        _resolve_override_rna_path_target(id_block, path)
+    kind, value = final_token
+    if kind == "property":
+        rna = getattr(override_owner, "bl_rna", None)
+        rna_property = rna.properties.get(value) if rna is not None else None
+        property_type = (str(getattr(rna_property, "type", ""))
+                         if rna_property is not None else "")
+        if property_type not in {"BOOLEAN", "INT", "FLOAT", "STRING",
+                                 "ENUM", "POINTER"}:
+            raise ValueError(
+                "Blender Outliner cannot safely remove this override property type")
+        source_value = getattr(reference_owner, value)
+        if (source_value is None or isinstance(
+                source_value, (bpy.types.ID, str, bytes, bytearray,
+                               bool, int, float))):
+            restored_value = source_value
+        else:
+            try:
+                restored_value = tuple(source_value)
+            except (TypeError, ReferenceError, RuntimeError):
+                restored_value = source_value
+        setattr(override_owner, value, restored_value)
+    else:
+        source_value = reference_owner[value]
+        if (source_value is None or isinstance(
+                source_value, (bpy.types.ID, str, bytes, bytearray,
+                               bool, int, float))):
+            restored_value = source_value
+        else:
+            if callable(getattr(source_value, "keys", None)):
+                raise ValueError(
+                    "Blender Outliner cannot safely remove a custom property group")
+            try:
+                restored_value = tuple(source_value)
+            except (TypeError, ReferenceError, RuntimeError):
+                raise ValueError(
+                    "Blender Outliner cannot safely remove this override item")
+        override_owner[value] = restored_value
+
+
 def remove_library_override_properties(source_path, staged_path, request_path,
                                       report_path, extractor_script_path):
     with open(request_path, "r", encoding="utf-8") as request_file:
@@ -2632,15 +2727,24 @@ def remove_library_override_properties(source_path, staged_path, request_path,
     changed_property_count = 0
     for id_block, paths in normalized_targets:
         override_properties = id_block.override_library.properties
-        available_by_path = {
-            str(override_property.rna_path): override_property
-            for override_property in list(override_properties)
-        }
         for path in paths:
-            override_property = available_by_path.get(path)
+            override_property = next((candidate for candidate in
+                list(override_properties)
+                if str(candidate.rna_path) == path), None)
             if override_property is None:
                 continue
-            override_properties.remove(override_property)
+            operation_types = {
+                str(operation.operation)
+                for operation in list(override_property.operations)
+            }
+            if operation_types.intersection({"INSERT_AFTER", "INSERT_BEFORE"}):
+                continue
+            _restore_override_rna_path(id_block, path)
+            refreshed_property = next((candidate for candidate in
+                list(override_properties)
+                if str(candidate.rna_path) == path), None)
+            if refreshed_property is not None:
+                override_properties.remove(refreshed_property)
             changed_property_count += 1
 
     if changed_property_count:

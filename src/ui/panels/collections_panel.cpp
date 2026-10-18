@@ -1488,6 +1488,16 @@ void CollectionsPanel::createLayout()
     removeKeyingSetPathsButton_->setToolTip(QStringLiteral(
         "Remove selected animatable properties from the active Keying Set in the original Blender file. A verified backup is created first."));
     keyingSetRow->addWidget(removeKeyingSetPathsButton_);
+    insertKeyframesButton_ = new QToolButton(this);
+    insertKeyframesButton_->setText(QStringLiteral("K+"));
+    insertKeyframesButton_->setToolTip(QStringLiteral(
+        "Insert keyframes for every path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+    keyingSetRow->addWidget(insertKeyframesButton_);
+    deleteKeyframesButton_ = new QToolButton(this);
+    deleteKeyframesButton_->setText(QStringLiteral("K−"));
+    deleteKeyframesButton_->setToolTip(QStringLiteral(
+        "Delete keyframes for every path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+    keyingSetRow->addWidget(deleteKeyframesButton_);
     addDataApiDriverButton_ = new QToolButton(this);
     addDataApiDriverButton_->setText(QStringLiteral("D+"));
     addDataApiDriverButton_->setToolTip(QStringLiteral(
@@ -2278,6 +2288,18 @@ void CollectionsPanel::createLayout()
             [this]() { editSelectedDataApiKeyingSetPaths(true); });
     connect(removeKeyingSetPathsButton_, &QToolButton::clicked, this,
             [this]() { editSelectedDataApiKeyingSetPaths(false); });
+    connect(insertKeyframesButton_, &QToolButton::clicked, this, [this]() {
+        if (callbacks_.editDataApiKeyframes) {
+            callbacks_.editDataApiKeyframes(
+                dataApiKeyingSetCombo_->currentData().toString(), true);
+        }
+    });
+    connect(deleteKeyframesButton_, &QToolButton::clicked, this, [this]() {
+        if (callbacks_.editDataApiKeyframes) {
+            callbacks_.editDataApiKeyframes(
+                dataApiKeyingSetCombo_->currentData().toString(), false);
+        }
+    });
     connect(addDataApiDriverButton_, &QToolButton::clicked, this,
             [this]() { editSelectedDataApiDriverPaths(true); });
     connect(removeDataApiDriverButton_, &QToolButton::clicked, this,
@@ -2984,6 +3006,8 @@ void CollectionsPanel::updateDataApiAnimationControls()
     dataApiKeyingSetCombo_->setVisible(visible);
     addKeyingSetPathsButton_->setVisible(visible);
     removeKeyingSetPathsButton_->setVisible(visible);
+    insertKeyframesButton_->setVisible(false);
+    deleteKeyframesButton_->setVisible(false);
     addDataApiDriverButton_->setVisible(visible);
     removeDataApiDriverButton_->setVisible(visible);
     const bool canEditKeyingSetPaths = callbacks_.canEditKeyingSetPaths &&
@@ -2999,6 +3023,7 @@ void CollectionsPanel::updateDataApiAnimationControls()
         ? callbacks_.activeSceneRecord() : QJsonObject{};
     const QString activeKey = scene.value(
         QStringLiteral("active_keying_set_key")).toString();
+    QJsonObject activeKeyingSet;
     const QSignalBlocker blocker(dataApiKeyingSetCombo_);
     dataApiKeyingSetCombo_->clear();
     for (const QJsonValue &keyingSetValue : scene.value(
@@ -3007,6 +3032,7 @@ void CollectionsPanel::updateDataApiAnimationControls()
         const QJsonObject keyingSet = keyingSetValue.toObject();
         const QString key = keyingSet.value(QStringLiteral("key")).toString();
         if (key.isEmpty()) continue;
+        if (key == activeKey) activeKeyingSet = keyingSet;
         QString name = keyingSet.value(QStringLiteral("name")).toString();
         if (name.isEmpty()) name = QStringLiteral("Keying Set");
         dataApiKeyingSetCombo_->addItem(name, key);
@@ -3026,6 +3052,30 @@ void CollectionsPanel::updateDataApiAnimationControls()
         static_cast<bool>(callbacks_.setActiveKeyingSet));
     removeKeyingSetPathsButton_->setEnabled(
         visible && canEditKeyingSetPaths);
+    const bool hasActiveAbsoluteKeyingSet = !activeKeyingSet.isEmpty() &&
+        activeKeyingSet.value(QStringLiteral("is_absolute")).toBool();
+    const bool keyframeMetadataComplete = !scene.value(
+        QStringLiteral("keying_sets_truncated")).toBool();
+    const bool canEditKeyframes = hasActiveAbsoluteKeyingSet &&
+        keyframeMetadataComplete && callbacks_.canEditDataApiKeyframes &&
+        callbacks_.canEditDataApiKeyframes() &&
+        static_cast<bool>(callbacks_.editDataApiKeyframes);
+    const bool showKeyframeButtons = visible && !activeKeyingSet.isEmpty();
+    if (!hasActiveAbsoluteKeyingSet && !activeKeyingSet.isEmpty()) {
+        const QString unsupportedTooltip = QStringLiteral(
+            "Relative Keying Sets need Blender's interactive keying context");
+        insertKeyframesButton_->setToolTip(unsupportedTooltip);
+        deleteKeyframesButton_->setToolTip(unsupportedTooltip);
+    } else {
+        insertKeyframesButton_->setToolTip(QStringLiteral(
+            "Insert keyframes for every path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+        deleteKeyframesButton_->setToolTip(QStringLiteral(
+            "Delete keyframes for every path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+    }
+    insertKeyframesButton_->setVisible(showKeyframeButtons);
+    deleteKeyframesButton_->setVisible(showKeyframeButtons);
+    insertKeyframesButton_->setEnabled(canEditKeyframes);
+    deleteKeyframesButton_->setEnabled(canEditKeyframes);
 }
 
 void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)

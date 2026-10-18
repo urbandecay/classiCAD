@@ -1596,15 +1596,21 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
         request = json.load(request_file)
     if not isinstance(request, dict):
         raise ValueError("Keying Set edit request must be an object")
+    edit_mode = request.get("edit_mode", "paths")
     scene_name = request.get("scene_name", "")
     keying_set_request = request.get("keying_set")
     paths = request.get("paths")
     add = request.get("add")
+    insert_keyframes = request.get("insert_keyframes")
     if (not isinstance(scene_name, str) or not scene_name or
             len(scene_name) > 4096 or
             not isinstance(keying_set_request, dict) or
-            not isinstance(paths, list) or len(paths) > 20000 or
-            not isinstance(add, bool)):
+            edit_mode not in {"paths", "keyframes"} or
+            (edit_mode == "paths" and
+             (not isinstance(paths, list) or len(paths) > 20000 or
+              not isinstance(add, bool))) or
+            (edit_mode == "keyframes" and
+             not isinstance(insert_keyframes, bool))):
         raise ValueError("Keying Set edit request is invalid")
 
     result = bpy.ops.wm.open_mainfile(
@@ -1664,60 +1670,154 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
     collection.active_index = set_index
     absolute = bool(keying_set.is_path_absolute)
 
-    normalized_paths = []
-    for path in paths:
-        if not isinstance(path, dict):
-            raise ValueError("Keying Set path must be an object")
-        data_path = path.get("data_path", "")
-        array_index = path.get("array_index", 0)
-        entire_array = path.get("use_entire_array", False)
-        group = path.get("group", "")
-        group_method = path.get("group_method", "KEYINGSET")
-        if (not isinstance(data_path, str) or not data_path or
-                len(data_path) > 4096 or isinstance(array_index, bool) or
-                not isinstance(array_index, int) or
-                array_index < 0 or array_index > 32766 or
-                not isinstance(entire_array, bool) or
-                not isinstance(group, str) or len(group) > 4096 or
-                group_method not in {"NAMED", "NONE", "KEYINGSET"}):
-            raise ValueError("Keying Set path metadata is invalid")
-        id_block = resolve_outliner_data_id(path)
-        try:
-            id_block.path_resolve(data_path)
-        except (AttributeError, ReferenceError, RuntimeError, TypeError,
-                ValueError) as error:
-            raise ValueError(
-                "Keying Set RNA path could not be resolved: " + data_path
-            ) from error
-        normalized_paths.append((path, id_block, data_path, array_index,
-                                 entire_array, group, group_method))
+    changed_path_count = 0
+    if edit_mode == "paths":
+        normalized_paths = []
+        for path in paths:
+            if not isinstance(path, dict):
+                raise ValueError("Keying Set path must be an object")
+            data_path = path.get("data_path", "")
+            array_index = path.get("array_index", 0)
+            entire_array = path.get("use_entire_array", False)
+            group = path.get("group", "")
+            group_method = path.get("group_method", "KEYINGSET")
+            if (not isinstance(data_path, str) or not data_path or
+                    len(data_path) > 4096 or isinstance(array_index, bool) or
+                    not isinstance(array_index, int) or
+                    array_index < 0 or array_index > 32766 or
+                    not isinstance(entire_array, bool) or
+                    not isinstance(group, str) or len(group) > 4096 or
+                    group_method not in {"NAMED", "NONE", "KEYINGSET"}):
+                raise ValueError("Keying Set path metadata is invalid")
+            id_block = resolve_outliner_data_id(path)
+            try:
+                id_block.path_resolve(data_path)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                    ValueError) as error:
+                raise ValueError(
+                    "Keying Set RNA path could not be resolved: " + data_path
+                ) from error
+            normalized_paths.append((path, id_block, data_path, array_index,
+                                     entire_array, group, group_method))
 
-    for path, id_block, data_path, array_index, entire_array, group, group_method in normalized_paths:
-        id_type = str(path.get("id_type", ""))
-        if not id_type or len(id_type) > 256:
-            raise ValueError("Keying Set path has an invalid ID type")
-        matches = []
-        for existing in keying_set.paths:
-            same_id = existing.id == id_block
-            if (same_id and existing.data_path == data_path and
-                    int(existing.array_index) == array_index):
-                matches.append(existing)
-        if add:
-            if matches:
-                continue
-            keying_path = keying_set.paths.add(
-                id_block, data_path, index=array_index,
-                group_method=group_method, group_name=group,
-            )
-            if keying_path is None:
-                raise RuntimeError(
-                    "Blender could not add the selected path to the Keying Set")
-            keying_path.use_entire_array = entire_array
-            changed = True
-        else:
-            for existing in matches:
-                keying_set.paths.remove(existing)
+        for path, id_block, data_path, array_index, entire_array, group, group_method in normalized_paths:
+            id_type = str(path.get("id_type", ""))
+            if not id_type or len(id_type) > 256:
+                raise ValueError("Keying Set path has an invalid ID type")
+            matches = []
+            for existing in keying_set.paths:
+                same_id = existing.id == id_block
+                if (same_id and existing.data_path == data_path and
+                        int(existing.array_index) == array_index):
+                    matches.append(existing)
+            if add:
+                if matches:
+                    continue
+                keying_path = keying_set.paths.add(
+                    id_block, data_path, index=array_index,
+                    group_method=group_method, group_name=group,
+                )
+                if keying_path is None:
+                    raise RuntimeError(
+                        "Blender could not add the selected path to the Keying Set")
+                keying_path.use_entire_array = entire_array
                 changed = True
+                changed_path_count += 1
+            else:
+                for existing in matches:
+                    keying_set.paths.remove(existing)
+                    changed = True
+                    changed_path_count += 1
+    else:
+        if not absolute:
+            raise ValueError(
+                "Relative Keying Sets need Blender's interactive keying context")
+        if len(keying_set.paths) > 20000:
+            raise ValueError("The active Keying Set has too many paths to edit safely")
+
+        # Resolve and validate every target before changing animation data.
+        # The staged project is discarded if any keying operation fails.
+        resolved_paths = []
+        for source_path in keying_set.paths:
+            id_block = source_path.id
+            data_path = str(source_path.data_path)
+            if not isinstance(id_block, bpy.types.ID):
+                raise ValueError("A Keying Set path has no target data block")
+            if not bool(getattr(id_block, "is_editable", False)):
+                raise ValueError(
+                    "Keying Set target %s is read-only" % id_block.name_full)
+            if not data_path or len(data_path) > 4096:
+                raise ValueError("A Keying Set path has an invalid RNA path")
+            try:
+                id_block.path_resolve(data_path)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                    ValueError) as error:
+                raise ValueError(
+                    "Keying Set RNA path could not be resolved: " + data_path
+                ) from error
+            index = (-1 if bool(source_path.use_entire_array)
+                     else int(source_path.array_index))
+            if index < -1 or index > 32766:
+                raise ValueError("A Keying Set path has an invalid array index")
+            group_method = str(source_path.group_method)
+            if group_method == "NONE":
+                group = ""
+            elif group_method == "KEYINGSET":
+                group = str(keying_set.bl_label)
+            elif group_method == "NAMED":
+                group = str(source_path.group)
+            else:
+                raise ValueError("A Keying Set path has an unsupported group mode")
+            resolved_paths.append((source_path, id_block, data_path, index, group))
+
+        frame = float(scene.frame_current_final)
+        if not math.isfinite(frame):
+            raise ValueError("The active scene frame is invalid")
+
+        preferences = bpy.context.preferences.edit
+        tool_settings = scene.tool_settings
+        base_needed = bool(getattr(
+            preferences, "use_keyframe_insert_needed", False))
+        base_visual = bool(getattr(preferences, "use_visual_keying", False))
+        base_cycle_aware = bool(getattr(
+            tool_settings, "use_keyframe_cycle_aware", False))
+        key_type = str(tool_settings.keyframe_type)
+
+        def effective_keying_flag(base_value, keying_set_value,
+                                  keying_set_override, path_value,
+                                  path_override):
+            value = (bool(keying_set_value) if keying_set_override
+                     else base_value)
+            return bool(path_value) if path_override else value
+
+        for source_path, id_block, data_path, index, group in resolved_paths:
+            options = set()
+            if effective_keying_flag(
+                    base_needed, keying_set.use_insertkey_needed,
+                    keying_set.use_insertkey_override_needed,
+                    source_path.use_insertkey_needed,
+                    source_path.use_insertkey_override_needed):
+                options.add("INSERTKEY_NEEDED")
+            if effective_keying_flag(
+                    base_visual, keying_set.use_insertkey_visual,
+                    keying_set.use_insertkey_override_visual,
+                    source_path.use_insertkey_visual,
+                    source_path.use_insertkey_override_visual):
+                options.add("INSERTKEY_VISUAL")
+            if base_cycle_aware:
+                options.add("INSERTKEY_CYCLE_AWARE")
+
+            if insert_keyframes:
+                changed_path = id_block.keyframe_insert(
+                    data_path, index=index, frame=frame, group=group,
+                    options=options, keytype=key_type)
+            else:
+                changed_path = id_block.keyframe_delete(
+                    data_path, index=index, frame=frame, group=group)
+            if changed_path:
+                changed_path_count += 1
+
+        changed = changed or changed_path_count > 0
 
     records, active_key, truncated = outliner_keying_set_records(scene)
     if not active_key:
@@ -1735,7 +1835,10 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
              "keying_sets": records,
              "active_keying_set_key": active_key,
              "keying_sets_truncated": truncated,
-             "changed": changed},
+             "changed": changed,
+             "frame": (float(scene.frame_current_final)
+                       if edit_mode == "keyframes" else None),
+             "changed_path_count": changed_path_count},
             report_file,
             ensure_ascii=False,
             separators=(",", ":"),

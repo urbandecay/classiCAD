@@ -110,6 +110,8 @@ struct BlenderKeyingSetEditResult {
     bool keyingSetsTruncated = false;
     QString backupPath;
     QByteArray sourceSha256;
+    int changedPathCount = 0;
+    double frame = 0.0;
 };
 
 // Hashes Blender project bytes without loading them into memory at once.
@@ -133,6 +135,16 @@ bool editBlenderKeyingSetPaths(const QString &sourcePath,
                                bool add,
                                BlenderKeyingSetEditResult *result,
                                QString *errorMessage = nullptr);
+
+// Inserts or deletes the active absolute Keying Set's paths at the source
+// scene's current frame, then backs up and atomically replaces the .blend.
+bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
+                                   const QByteArray &expectedSourceSha256,
+                                   const QString &sceneName,
+                                   const QJsonObject &keyingSet,
+                                   bool insert,
+                                   BlenderKeyingSetEditResult *result,
+                                   QString *errorMessage = nullptr);
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.
 // Returned meshes, curves, and surfaces retain their authoritative geometry;

@@ -3022,6 +3022,259 @@ bool editBlenderKeyingSetPaths(const QString &sourcePath,
     return true;
 }
 
+bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
+                                  const QByteArray &expectedSourceSha256,
+                                  const QString &sceneName,
+                                  const QJsonObject &keyingSet,
+                                  bool insert,
+                                  BlenderKeyingSetEditResult *result,
+                                  QString *errorMessage)
+{
+    const QString key = keyingSet.value(QStringLiteral("key")).toString();
+    const QString name = keyingSet.value(QStringLiteral("name")).toString();
+    if (result == nullptr || sourcePath.trimmed().isEmpty() ||
+        expectedSourceSha256.size() != 64 || sceneName.trimmed().isEmpty() ||
+        key.isEmpty() || name.trimmed().isEmpty() ||
+        !keyingSet.value(QStringLiteral("is_absolute")).toBool()) {
+        setError(errorMessage,
+                 QStringLiteral("An imported Blender file and an active absolute Keying Set are required"));
+        return false;
+    }
+
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile() || sourceInfo.isSymLink() ||
+        sourceInfo.suffix().compare(QStringLiteral("blend"),
+                                    Qt::CaseInsensitive) != 0) {
+        setError(errorMessage,
+                 QStringLiteral("Keyframe editing is available only for a direct ordinary Blender .blend file"));
+        return false;
+    }
+    const QString absoluteSourcePath = sourceInfo.absoluteFilePath();
+    const QFileInfo absoluteSourceInfo(absoluteSourcePath);
+    const QByteArray sourceBeforeEdit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeEdit.isEmpty()) return false;
+    if (sourceBeforeEdit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed after it was imported. Reopen it before editing keyframes."));
+        return false;
+    }
+
+    QTemporaryDir adapterOutputDirectory;
+    if (!adapterOutputDirectory.isValid()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create temporary keyframe report data"));
+        return false;
+    }
+    const QString requestPath = adapterOutputDirectory.filePath(
+        QStringLiteral("keyframe-request.json"));
+    const QString reportPath = adapterOutputDirectory.filePath(
+        QStringLiteral("keyframe-report.json"));
+    QJsonObject request;
+    request.insert(QStringLiteral("scene_name"), sceneName);
+    QJsonObject keyingSetIdentity = keyingSet;
+    keyingSetIdentity.remove(QStringLiteral("paths"));
+    request.insert(QStringLiteral("keying_set"), keyingSetIdentity);
+    request.insert(QStringLiteral("edit_mode"), QStringLiteral("keyframes"));
+    request.insert(QStringLiteral("insert_keyframes"), insert);
+    const QByteArray requestBytes = QJsonDocument(request).toJson(
+        QJsonDocument::Compact);
+    if (requestBytes.size() > kBlenderExtractionJsonByteLimit ||
+        !writeFile(requestPath, requestBytes, errorMessage)) {
+        if (errorMessage != nullptr && errorMessage->isEmpty()) {
+            setError(errorMessage,
+                     QStringLiteral("The keyframe edit request is too large"));
+        }
+        return false;
+    }
+
+    QTemporaryFile stagedFile(absoluteSourceInfo.dir().filePath(
+        QStringLiteral(".classiCAD-keyframes-XXXXXX")));
+    stagedFile.setAutoRemove(true);
+    if (!stagedFile.open()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create a staged Blender file beside the source: %1")
+                     .arg(stagedFile.errorString()));
+        return false;
+    }
+    const QString stagedPath = stagedFile.fileName();
+    stagedFile.close();
+    if (!QFile::remove(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not prepare the staged Blender file"));
+        return false;
+    }
+
+    if (!runBlenderAdapter(QStringLiteral("keying_set_paths"),
+                           absoluteSourcePath,
+                           stagedPath,
+                           errorMessage,
+                           reportPath,
+                           requestPath)) {
+        return false;
+    }
+    if (!hasBlenderFileHeader(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not produce a valid staged project after editing keyframes"));
+        return false;
+    }
+
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::ReadOnly) || reportFile.size() < 0 ||
+        reportFile.size() > kBlenderExtractionJsonByteLimit) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not return updated keyframe information"));
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument reportDocument = QJsonDocument::fromJson(
+        reportFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError ||
+        !reportDocument.isObject()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid keyframe information: %1")
+                     .arg(parseError.errorString()));
+        return false;
+    }
+    const QJsonObject report = reportDocument.object();
+    const QJsonValue reportSceneName = report.value(
+        QStringLiteral("scene_name"));
+    const QJsonValue keyingSetsValue = report.value(
+        QStringLiteral("keying_sets"));
+    const QJsonValue activeKeyValue = report.value(
+        QStringLiteral("active_keying_set_key"));
+    const QJsonValue truncatedValue = report.value(
+        QStringLiteral("keying_sets_truncated"));
+    const QJsonValue changedValue = report.value(QStringLiteral("changed"));
+    const QJsonValue frameValue = report.value(QStringLiteral("frame"));
+    const QJsonValue changedPathCountValue = report.value(
+        QStringLiteral("changed_path_count"));
+    if (!reportSceneName.isString() || reportSceneName.toString() != sceneName ||
+        !keyingSetsValue.isArray() || keyingSetsValue.toArray().size() > 1024 ||
+        !activeKeyValue.isString() || activeKeyValue.toString() != key ||
+        !truncatedValue.isBool() || truncatedValue.toBool() ||
+        !changedValue.isBool() || !frameValue.isDouble() ||
+        !std::isfinite(frameValue.toDouble()) ||
+        !changedPathCountValue.isDouble() ||
+        changedPathCountValue.toInt(-1) < 0 ||
+        changedPathCountValue.toInt(-1) > 20000) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid or incomplete keyframe metadata"));
+        return false;
+    }
+    const QJsonArray keyingSets = keyingSetsValue.toArray();
+    bool activeKeyExists = false;
+    for (const QJsonValue &keyingSetValue : keyingSets) {
+        if (!keyingSetValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid Keying Set row"));
+            return false;
+        }
+        const QJsonObject row = keyingSetValue.toObject();
+        const QJsonValue rowKey = row.value(QStringLiteral("key"));
+        const QJsonValue rowName = row.value(QStringLiteral("name"));
+        const QJsonValue rowPaths = row.value(QStringLiteral("paths"));
+        const QJsonValue rowAbsolute = row.value(QStringLiteral("is_absolute"));
+        if (!rowKey.isString() || rowKey.toString().isEmpty() ||
+            !rowName.isString() || rowName.toString().size() > 4096 ||
+            !rowPaths.isArray() || rowPaths.toArray().size() > 20000 ||
+            !rowAbsolute.isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned invalid Keying Set metadata"));
+            return false;
+        }
+        for (const QJsonValue &pathValue : rowPaths.toArray()) {
+            if (!pathValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("Blender returned an invalid Keying Set path"));
+                return false;
+            }
+        }
+        if (rowKey == activeKeyValue) activeKeyExists = true;
+    }
+    if (!activeKeyExists) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not return the active Keying Set"));
+        return false;
+    }
+
+    const auto storeResult = [&](const QByteArray &sha256,
+                                 const QString &backupPath) {
+        result->keyingSets = keyingSets;
+        result->activeKeyingSetKey = activeKeyValue.toString();
+        result->keyingSetsTruncated = false;
+        result->backupPath = backupPath;
+        result->sourceSha256 = sha256;
+        result->changedPathCount = changedPathCountValue.toInt();
+        result->frame = frameValue.toDouble();
+    };
+    if (!changedValue.toBool()) {
+        const QByteArray currentSha256 =
+            fileSha256(absoluteSourcePath, errorMessage);
+        if (currentSha256.isEmpty()) return false;
+        if (currentSha256 != expectedSourceSha256) {
+            setError(errorMessage,
+                     QStringLiteral("The original Blender file changed while keyframes were being checked. The original was left untouched."));
+            return false;
+        }
+        storeResult(currentSha256, {});
+        return true;
+    }
+
+    const QByteArray stagedSha256 = fileSha256(stagedPath, errorMessage);
+    if (stagedSha256.isEmpty()) return false;
+    const QByteArray sourceBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeCommit.isEmpty()) return false;
+    if (sourceBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed while keyframes were being edited. The original was left untouched."));
+        return false;
+    }
+
+    const QString backupPath = uniqueBlenderBackupPath(absoluteSourcePath);
+    if (backupPath.isEmpty() || !QFile::copy(absoluteSourcePath, backupPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create the safety backup beside the Blender file"));
+        return false;
+    }
+    const QByteArray backupSha256 = fileSha256(backupPath, errorMessage);
+    if (backupSha256 != expectedSourceSha256) {
+        QFile::remove(backupPath);
+        setError(errorMessage,
+                 QStringLiteral("The Blender safety backup could not be verified; the original was left untouched."));
+        return false;
+    }
+    const QByteArray sourceImmediatelyBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceImmediatelyBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed before replacement. The safety backup was kept at %1.")
+                     .arg(backupPath));
+        return false;
+    }
+    if (!commitStagedFile(stagedPath, absoluteSourcePath, errorMessage)) {
+        return false;
+    }
+    const QByteArray committedSha256 =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (committedSha256 != stagedSha256) {
+        QString restoreError;
+        if (!commitStagedFile(backupPath, absoluteSourcePath, &restoreError)) {
+            setError(errorMessage,
+                     QStringLiteral("The edited file did not verify and restoring its backup also failed. Restore the backup at %1. %2")
+                         .arg(backupPath, restoreError));
+        } else {
+            setError(errorMessage,
+                     QStringLiteral("The edited file did not verify, so the original was restored from its backup."));
+        }
+        return false;
+    }
+
+    storeResult(committedSha256, backupPath);
+    return true;
+}
+
 bool saveVignolaDocument(const QString &path,
                          const Document &document,
                          QString *errorMessage)

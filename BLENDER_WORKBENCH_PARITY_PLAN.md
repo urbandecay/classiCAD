@@ -11764,3 +11764,20 @@ scene depth.
   `cmake --build build -j4`, Python syntax parsing, and `git diff --check`
   passed. No GUI or matched Outliner interaction comparison was run; actual
   keyframe insertion and deletion remain a separate animation category.
+- The hundred-forty-fifth Outliner update adds Insert/Delete Keyframes buttons
+  beside the Data API Keying Set controls. For the active absolute set, the
+  Blender adapter applies every stored path at the source scene's current
+  frame through Blender's `ID.keyframe_insert` or `ID.keyframe_delete` API. It
+  carries Blender's Needed/Visual flags and overrides, cycle-aware preference,
+  key type, array handling, and group selection into the operation. Relative
+  Keying Sets remain disabled because their paths depend on Blender's live
+  interactive context. A direct `.blend` edit is staged, backed up, and
+  verified before replacing the source. This writes animation into the Blender
+  file; classiCAD still does not evaluate or play those animated values in its
+  own document. Blender's Outliner operators require an active UI area, so this
+  headless file operation uses the corresponding Blender ID APIs instead.
+  Blender's keying-set controls and dispatch are documented in
+  [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L73-L88)
+  and [`keyframing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/keyframing.cc#L147-L219).
+  `cmake --build build -j4`, Python syntax parsing, and `git diff --check`
+  passed. No GUI or matched keyframe interaction comparison was run.

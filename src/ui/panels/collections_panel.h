@@ -267,6 +267,8 @@ struct CollectionsPanelCallbacks {
     std::function<bool()> canEditKeyingSetPaths;
     std::function<QString(const QString &, const QJsonArray &, bool)>
         editKeyingSetPaths;
+    std::function<bool()> canEditDataApiKeyframes;
+    std::function<QString(const QString &, bool)> editDataApiKeyframes;
     std::function<void(const QJsonArray &, bool)> editDataApiDriverPaths;
     std::function<QJsonObject()> libraryOverrides;
     std::function<QString()> activeSceneKey;
@@ -452,6 +454,8 @@ private:
     QComboBox *dataApiKeyingSetCombo_ = nullptr;
     QToolButton *addKeyingSetPathsButton_ = nullptr;
     QToolButton *removeKeyingSetPathsButton_ = nullptr;
+    QToolButton *insertKeyframesButton_ = nullptr;
+    QToolButton *deleteKeyframesButton_ = nullptr;
     QToolButton *addDataApiDriverButton_ = nullptr;
     QToolButton *removeDataApiDriverButton_ = nullptr;
     QComboBox *libraryOverrideViewCombo_ = nullptr;

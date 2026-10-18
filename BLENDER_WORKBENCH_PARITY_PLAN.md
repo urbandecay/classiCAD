@@ -11235,12 +11235,18 @@ scene depth.
 - The ninety-sixth tree update follows Blender's [ViewLayer active collection](https://docs.blender.org/api/5.2/bpy.types.ViewLayer.html), which is now captured per view layer by bridge version 73 and saved in native document version 64. Clicking a collection row activates its exact nested path; the active row is bolded. New CAD shapes, Outliner object paste, and Instance to Scene now use that active collection when it is editable and belongs to the active scene, with the existing root-collection fallback when no safe destination is available. This follows Blender's [object linking example](https://docs.blender.org/api/5.2/bpy.types.Object.html), which links new objects through `view_layer.active_layer_collection.collection`. Collection paths are checked against the current hierarchy so a stale path falls back safely. `cmake --build build -j4` and `git diff --check` passed; no matched Blender Outliner UI comparison was run.
 - The ninety-seventh tree update adds rotation and scale to classiCAD's local Instance to Scene objects. Each instance now stores a persistent affine transform; Rotate and Scale previews and commits update that transform, and viewport snapshots apply it to linked geometry and compose it through nested instances. NURBS curves, surfaces, and solids retain their exact control data under affine transforms; mesh transforms compose with their existing local-to-world matrices. Native document version 65 stores the matrix, and the Outliner clipboard carries it with its collection reference; older documents and clipboard entries default to identity. Imported Blender collection instances still use the existing expanded-geometry import path. `cmake --build build -j4` and `git diff --check` passed; no matched Blender interaction or visual comparison was run.
 - The ninety-eighth tree update follows Blender 5.2.2's [default 3D cursor key binding](https://github.com/blender/blender/blob/v5.2.2/scripts/presets/keyconfig/keymap_data/blender_default.py#L150-L161) and [cursor placement operator](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_view3d/view3d_edit.cc#L799-L839). Shift+right-click now positions the scene cursor on the nearest visible NURBS surface, solid, picture, or imported polygon-mesh face, and falls back to the plane facing the current view when no face is hit. A screen-facing red/white cursor mark is drawn while viewport overlays are enabled and follows Blender's saved per-view `show_cursor` flag. Imported cursor positions remain scene-specific; edits are saved in a separate scene-keyed editor-state map so geometry undo does not move the cursor. Native document version 66 stores that map, and older files default to imported scene metadata or the origin. The cursor's Blender rotation and a matched live-app interaction/visual comparison remain unverified. `cmake --build build -j4` and `git diff --check` passed.
-- The Data API tree is a bounded snapshot captured from the source `.blend`;
-  classiCAD builds its visible Qt rows lazily, but it does not query live RNA
-  after import. Keying Set path add/remove, keyframe insert/delete, and driver
-  add/remove run through headless Blender against the original ordinary
-  `.blend`, with staged writes, a verified backup, and atomic replacement.
-  They do not edit a live Blender session or apply to classiCAD-native
+- The Data API tree starts as a bounded snapshot captured from the source
+  `.blend`. Expanding a top-level or nested RNA branch from a directly opened,
+  unchanged ordinary `.blend` launches pinned headless Blender to read that
+  branch on demand; the result replaces the bounded snapshot branch. This
+  reads the file through a background process and does not connect to a live
+  Blender session. Branch results remain capped at 20,000 rows and 64 path
+  segments; custom IDProperty groups and arrays are not independently fetched,
+  and native classiCAD `.vignola` files without their source `.blend` keep only
+  the captured snapshot. Keying Set path add/remove, keyframe insert/delete,
+  and driver add/remove run through headless Blender against the original
+  ordinary `.blend`, with staged writes, a verified backup, and atomic
+  replacement. They do not edit a live Blender session or apply to native
   `.vignola` files; the original source path and digest are session-only.
   Keyframe operations use the source scene's saved current frame. classiCAD
   still does not evaluate or play back Blender animation or drivers. Blender's
@@ -11974,3 +11980,9 @@ scene depth.
   the opened file's project namespace so refreshed rows keep stable IDs. No
   matched Outliner comparison was run. Python syntax parsing,
   `cmake --build build -j4`, and `git diff --check` passed.
+- The hundred-sixtieth Outliner update corrects the Data API root tooltip and
+  parity notes to say that expanding an ordinary imported `.blend` fetches the
+  requested RNA branch through headless Blender on demand. This is file-backed
+  loading, not a live Blender session; native `.vignola` files without their
+  source retain their bounded snapshot. `cmake --build build -j4` and
+  `git diff --check` passed. No GUI comparison was run.

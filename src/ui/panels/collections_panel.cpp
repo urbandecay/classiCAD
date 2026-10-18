@@ -6420,7 +6420,7 @@ void CollectionsPanel::refresh()
                       dataApi.value(QStringLiteral("truncated")).toBool());
         root->setToolTip(
             nameColumn,
-            QStringLiteral("Blender RNA Data API captured at import; selected property paths can be added to the active Keying Set"));
+            QStringLiteral("Blender RNA Data API; expanded branches load from the original .blend, and selected property paths can be added to the active Keying Set"));
         root->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         auto *placeholder = new QTreeWidgetItem(root);
         placeholder->setData(nameColumn, itemDataApiPlaceholderRole, true);

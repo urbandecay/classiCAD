@@ -82,18 +82,82 @@ void OutlinerPanel::refresh()
     }
 
     const QVector<ViewportObjectInfo> infos = callbacks_.objectInfos();
+    const QTreeWidgetItem *previousCurrentItem = tree_->currentItem();
+    const ObjectId previousCurrentId = itemObjectId(previousCurrentItem);
+    const bool previousCurrentWasContainer =
+        previousCurrentItem != nullptr &&
+        previousCurrentItem->data(0, ContainerRowRole).toBool();
     refreshing_ = true;
-    tree_->clear();
     QHash<quint64, QTreeWidgetItem *> containerItems;
     QHash<quint64, QTreeWidgetItem *> geometryItems;
+
+    QVector<const ViewportObjectInfo *> containers;
+    for (const ViewportObjectInfo &info : infos) {
+        if (info.id == info.containerId) {
+            containers.append(&info);
+        }
+    }
+    bool structureMatches = tree_->topLevelItemCount() == containers.size();
+    for (int containerIndex = 0;
+         structureMatches && containerIndex < containers.size();
+         ++containerIndex) {
+        const ViewportObjectInfo &containerInfo = *containers[containerIndex];
+        QTreeWidgetItem *containerItem = tree_->topLevelItem(containerIndex);
+        if (itemObjectId(containerItem) != containerInfo.containerId ||
+            !containerItem->data(0, ContainerRowRole).toBool()) {
+            structureMatches = false;
+            break;
+        }
+        int expectedChildIndex = 0;
+        for (const ViewportObjectInfo &info : infos) {
+            if (info.containerId != containerInfo.containerId) {
+                continue;
+            }
+            QTreeWidgetItem *geometryItem =
+                containerItem->child(expectedChildIndex++);
+            if (geometryItem == nullptr ||
+                itemObjectId(geometryItem) != info.id ||
+                geometryItem->data(0, ContainerRowRole).toBool()) {
+                structureMatches = false;
+                break;
+            }
+        }
+        if (structureMatches &&
+            containerItem->childCount() != expectedChildIndex) {
+            structureMatches = false;
+        }
+    }
+    if (!structureMatches) {
+        tree_->clear();
+    }
+
+    if (structureMatches) {
+        for (int containerIndex = 0;
+             containerIndex < tree_->topLevelItemCount(); ++containerIndex) {
+            QTreeWidgetItem *containerItem = tree_->topLevelItem(containerIndex);
+            containerItems.insert(itemObjectId(containerItem).value(),
+                                  containerItem);
+            for (int childIndex = 0;
+                 childIndex < containerItem->childCount(); ++childIndex) {
+                QTreeWidgetItem *geometryItem =
+                    containerItem->child(childIndex);
+                geometryItems.insert(itemObjectId(geometryItem).value(),
+                                     geometryItem);
+            }
+        }
+    }
+
     QHash<quint64, ObjectId> firstSelectedGeometry;
     ObjectId firstSelectedContainer = ObjectId::invalid();
     ObjectId primarySelectedContainer = ObjectId::invalid();
     ObjectId primarySelectedObject = ObjectId::invalid();
     hasSelectedObject_ = false;
 
-    for (const ViewportObjectInfo &info : infos) {
-        if (info.id == info.containerId) {
+    if (!structureMatches) {
+        for (const ViewportObjectInfo &info : infos) {
+            if (info.id != info.containerId) {
+                continue;
+            }
             auto *containerItem = new QTreeWidgetItem(tree_);
             containerItem->setText(0, info.containerName);
             containerItem->setData(0, ObjectIdRole,
@@ -102,20 +166,43 @@ void OutlinerPanel::refresh()
             containerItem->setExpanded(true);
             containerItems.insert(info.containerId.value(), containerItem);
         }
+
+        for (const ViewportObjectInfo &info : infos) {
+            QTreeWidgetItem *containerItem =
+                containerItems.value(info.containerId.value(), nullptr);
+            if (containerItem == nullptr) {
+                continue;
+            }
+            auto *geometryItem = new QTreeWidgetItem(containerItem);
+            geometryItem->setText(0, info.geometryName);
+            geometryItem->setData(0, ObjectIdRole,
+                                  QVariant::fromValue<qulonglong>(info.id.value()));
+            geometryItem->setData(0, ContainerRowRole, false);
+            geometryItems.insert(info.id.value(), geometryItem);
+        }
     }
 
     for (const ViewportObjectInfo &info : infos) {
-        QTreeWidgetItem *containerItem =
-            containerItems.value(info.containerId.value(), nullptr);
-        if (containerItem == nullptr) {
-            continue;
+        if (info.id == info.containerId) {
+            QTreeWidgetItem *containerItem =
+                containerItems.value(info.containerId.value(), nullptr);
+            if (containerItem != nullptr) {
+                containerItem->setText(0, info.containerName);
+                containerItem->setData(
+                    0, ObjectIdRole,
+                    QVariant::fromValue<qulonglong>(info.containerId.value()));
+                containerItem->setData(0, ContainerRowRole, true);
+            }
         }
-        auto *geometryItem = new QTreeWidgetItem(containerItem);
-        geometryItem->setText(0, info.geometryName);
-        geometryItem->setData(0, ObjectIdRole,
-                              QVariant::fromValue<qulonglong>(info.id.value()));
-        geometryItem->setData(0, ContainerRowRole, false);
-        geometryItems.insert(info.id.value(), geometryItem);
+        QTreeWidgetItem *geometryItem =
+            geometryItems.value(info.id.value(), nullptr);
+        if (geometryItem != nullptr) {
+            geometryItem->setText(0, info.geometryName);
+            geometryItem->setData(
+                0, ObjectIdRole,
+                QVariant::fromValue<qulonglong>(info.id.value()));
+            geometryItem->setData(0, ContainerRowRole, false);
+        }
         if (info.selected && !firstSelectedGeometry.contains(info.containerId.value())) {
             firstSelectedGeometry.insert(info.containerId.value(), info.id);
             if (!firstSelectedContainer.isValid()) {
@@ -139,7 +226,13 @@ void OutlinerPanel::refresh()
     }
 
     QTreeWidgetItem *currentItem = nullptr;
-    if (editMode_) {
+    if (previousCurrentId.isValid() &&
+        previousCurrentId == primarySelectedObject) {
+        currentItem = previousCurrentWasContainer
+                          ? containerItems.value(previousCurrentId.value(), nullptr)
+                          : geometryItems.value(previousCurrentId.value(), nullptr);
+    }
+    if (currentItem == nullptr && editMode_) {
         ObjectId selectedId = ObjectId::invalid();
         if (primarySelectedContainer == activeObjectId_) {
             selectedId = primarySelectedObject;
@@ -150,11 +243,16 @@ void OutlinerPanel::refresh()
         if (currentItem == nullptr) {
             currentItem = containerItems.value(activeObjectId_.value(), nullptr);
         }
-    } else if (hasSelectedObject_) {
-        const ObjectId selectedContainer = primarySelectedContainer.isValid()
-                                               ? primarySelectedContainer
-                                               : firstSelectedContainer;
-        currentItem = containerItems.value(selectedContainer.value(), nullptr);
+    } else if (currentItem == nullptr && hasSelectedObject_) {
+        if (primarySelectedObject.isValid()) {
+            currentItem = geometryItems.value(primarySelectedObject.value(), nullptr);
+        }
+        if (currentItem == nullptr) {
+            const ObjectId selectedContainer = primarySelectedContainer.isValid()
+                                                   ? primarySelectedContainer
+                                                   : firstSelectedContainer;
+            currentItem = containerItems.value(selectedContainer.value(), nullptr);
+        }
     }
     if (currentItem != nullptr) {
         tree_->setCurrentItem(currentItem, 0,

@@ -1625,7 +1625,7 @@ public:
             return;
         }
         activeContainerObjectId_ = document_.containerId(objectId);
-        if (selectContainer || !objectEditMode_) {
+        if (selectContainer) {
             selection_.setObjectIds(document_.objectIdsInContainer(objectId),
                                     activeContainerObjectId_);
         } else {
@@ -1634,7 +1634,6 @@ public:
         selection_.clearActiveControlPoint();
         clearComponentSelections();
         session_.notifySelectionChanged();
-        notifyObjectStateChanged();
         update();
     }
 
@@ -8462,7 +8461,10 @@ protected:
                     ViewportSceneStroke edgeCage;
                     edgeCage.shape = nullptr;
                     const bool hasComponentSelection =
-                        selected && !objectVertexSelection.isEmpty();
+                        activeEditGeometry &&
+                        componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex &&
+                        !objectVertexSelection.isEmpty();
                     edgeCage.color = activeEditGeometry
                                          ? QColor(Qt::black)
                                          : selected && !hasComponentSelection
@@ -8475,41 +8477,36 @@ protected:
                     edgeCage.cacheableGeometry = renderObject.cacheable;
                     edgeCage.worldOffset = renderObject.placementTranslation;
                     edgeCage.preparedDepthGeometry = cage;
-                    if (hasComponentSelection &&
-                        componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                        edgeCage.color = Qt::white;
+                    if (hasComponentSelection) {
+                        // Keep the edit-wire fade: selected CVs color their
+                        // incident control-net edges from orange at the CV to
+                        // black at an unselected endpoint. Resolve by control
+                        // vertex index, not coincident world-space positions.
+                        const auto edgeVertices =
+                            selectedSurfaceControlNetEdgeVertexIndices(
+                                visibleShape);
+                        QVector<QVector4D> edgeColors;
+                        edgeColors.reserve(edgeVertices.size() * 2);
                         const QColor selectedVertexColor(
-                            QStringLiteral("#ff9900"));
+                            QStringLiteral("#ff7a00"));
                         const QColor wireColor(Qt::black);
-                        for (int edgeVertex = 0;
-                             edgeVertex + 1 < cage->lineVertices.size();
-                             edgeVertex += 2) {
-                            const QVector3D &first =
-                                cage->lineVertices[edgeVertex];
-                            const QVector3D &second =
-                                cage->lineVertices[edgeVertex + 1];
-                            const auto isSelectedVertex =
-                                [&](const QVector3D &endpoint) {
-                                    for (int vertex = 0;
-                                         vertex < cage->pointVertices.size();
-                                         ++vertex) {
-                                        if ((cage->pointVertices[vertex] - endpoint)
-                                                .lengthSquared() <= 1.0e-12f &&
-                                            objectVertexSelection.contains(vertex)) {
-                                            return true;
-                                        }
-                                    }
-                                    return false;
-                                };
-                            const QColor firstColor = isSelectedVertex(first)
-                                ? selectedVertexColor : wireColor;
-                            const QColor secondColor = isSelectedVertex(second)
-                                ? selectedVertexColor : wireColor;
-                            edgeCage.lineVertexColors
-                                << QVector4D(firstColor.redF(), firstColor.greenF(),
-                                             firstColor.blueF(), 1.0f)
-                                << QVector4D(secondColor.redF(), secondColor.greenF(),
-                                             secondColor.blueF(), 1.0f);
+                        const auto colorVector = [](const QColor &color) {
+                            return QVector4D(color.redF(), color.greenF(),
+                                             color.blueF(), color.alphaF());
+                        };
+                        for (const QPair<int, int> &endpoints : edgeVertices) {
+                            const bool firstSelected =
+                                objectVertexSelection.contains(endpoints.first);
+                            const bool secondSelected =
+                                objectVertexSelection.contains(endpoints.second);
+                            edgeColors.append(colorVector(
+                                firstSelected ? selectedVertexColor : wireColor));
+                            edgeColors.append(colorVector(
+                                secondSelected ? selectedVertexColor : wireColor));
+                        }
+                        if (edgeColors.size() == cage->lineVertices.size()) {
+                            edgeCage.color = Qt::white;
+                            edgeCage.lineVertexColors = std::move(edgeColors);
                         }
                     }
                     // In Edit Mode show the active object's edge cage even
@@ -8539,7 +8536,7 @@ protected:
                     // Component highlights remain visible independently from
                     // the optional base control cage. This preserves the
                     // faded links for explicitly selected surface vertices.
-                    if (activeEditGeometry && selected &&
+                    if (activeEditGeometry &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex
                              ? !objectVertexSelection.isEmpty()
                              : !objectComponentSelection.isEmpty())) {
@@ -15172,6 +15169,8 @@ private:
     {
         pendingPoints_.clear();
         selection_.clear();
+        clearComponentSelections();
+        componentSelectionObject_ = ObjectId::invalid();
         resetSelectionBoxState();
         clearSelectionDragState();
         dragHistoryRecorded_ = false;

@@ -12570,10 +12570,10 @@ protected:
         if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
             activeTool_ == Tool::PointExtrude) {
             const auto *keyEvent = static_cast<const QKeyEvent *>(event);
-            if (keyEvent->key() == Qt::Key_W &&
+            if ((keyEvent->key() == Qt::Key_W || keyEvent->key() == Qt::Key_M) &&
                 keyEvent->modifiers() == Qt::NoModifier) {
-                // W toggles the active extrusion's weld option. Claim it
-                // before the main-window Weld shortcut can replace the tool.
+                // Extrusion owns its option keys before the main-window Weld
+                // or Mirror shortcuts can replace the active tool.
                 event->accept();
                 return true;
             }

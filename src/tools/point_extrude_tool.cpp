@@ -114,8 +114,6 @@ void PointExtrudeTool::begin(ToolContext &context)
     lastInput_ = {};
     constraintAxisKey_ = 0;
     normalConstraint_ = false;
-    weldEnabled_ = false;
-    manifoldEnabled_ = false;
     hasLastInput_ = false;
     hasCursorPoint_ = false;
     snap_ = {};
@@ -364,11 +362,11 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
         return true;
     }
     if (input.key == Qt::Key_W) {
-        toggleWeld(context);
+        if (!input.autoRepeat) toggleWeld(context);
         return true;
     }
     if (input.key == Qt::Key_M) {
-        toggleManifold(context);
+        if (!input.autoRepeat) toggleManifold(context);
         return true;
     }
     if (input.key == Qt::Key_X || input.key == Qt::Key_Y ||

@@ -671,5 +671,18 @@ int main(int argc, char **argv)
                         history.undo() && document.size() == 2 &&
                         history.redo() && document.size() == 3,
                     "mixed extrusion commits and undoes atomically");
+
+    PointExtrudeTool persistentOptionsTool;
+    persistentOptionsTool.begin(context);
+    persistentOptionsTool.toggleWeld(context);
+    persistentOptionsTool.begin(context);
+    passed &= check(persistentOptionsTool.weldEnabled() &&
+                        !persistentOptionsTool.manifoldEnabled(),
+                    "Weld setting must persist when Extrude starts again");
+    persistentOptionsTool.toggleManifold(context);
+    persistentOptionsTool.begin(context);
+    passed &= check(persistentOptionsTool.weldEnabled() &&
+                        persistentOptionsTool.manifoldEnabled(),
+                    "Manifold and its required Weld setting must persist when Extrude starts again");
     return passed ? 0 : 1;
 }

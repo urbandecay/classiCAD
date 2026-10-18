@@ -308,6 +308,56 @@ QString openGlRendererName(ViewportGpuSurface *surface)
 
 } // namespace
 
+bool verifyCoincidentVertexBoxSelection(QApplication &application)
+{
+    if (QApplication::platformName() != QStringLiteral("xcb")) {
+        return check(false, "coincident vertex selection requires the native GPU backend");
+    }
+    ViewportGpuSurface surface;
+    surface.resize(640, 480);
+    surface.setDrawCallback([&](QPainter &painter, BlenderGridRenderer &grid,
+                                ViewportSceneRenderer &, ViewportSceneRenderer &,
+                                ViewportControlPointRenderer &, ViewportSurfaceRenderer &) {
+        painter.beginNativePainting();
+        grid.renderBackgroundToCurrentFramebuffer(surface.size(), surface.devicePixelRatioF());
+        painter.endNativePainting();
+    });
+    surface.show();
+    application.processEvents();
+    surface.grabFramebuffer();
+    if (!check(surface.isValid(), "coincident vertex fixture must create a GPU context"))
+        return false;
+
+    ViewportRenderObject occludingFace;
+    occludingFace.shape.geometryType = GeometryType::NurbsSurface;
+    auto &face = occludingFace.shape.nurbsSurface;
+    face.controlVertexCountU = face.controlVertexCountV = 2;
+    face.controlPoints = {{-8, -8, 0}, {-8, 8, 0}, {8, -8, 0}, {8, 8, 0}};
+    face.weights = {1, 1, 1, 1};
+    face.knotsU = face.knotsV = {0, 1};
+    ViewportTransform projection;
+    projection.setViewPreset(ViewportViewPreset::Top);
+    QPointF center;
+    projection.worldPointToScreen({0, 0, 0}, surface.size(), &center);
+    QVector<ViewportComponentPickCandidate> candidates(4);
+    candidates[0].first = {0, 0, 0};
+    candidates[0].shapeIndex = 0;
+    candidates[1].first = {0, 0, 0};
+    candidates[1].shapeIndex = 1;
+    candidates[2].first = {0, 0, -2};
+    candidates[3].first = {6, 0, 0};
+    QVector<int> picked;
+    bool passed = check(surface.pickComponentElementsInRect(
+                            QRectF(center - QPointF(4, 4), QSizeF(8, 8)),
+                            projection, surface.size(), {occludingFace},
+                            candidates, true, &picked),
+                        "native vertex rectangle picking must succeed");
+    passed &= check(picked == QVector<int>({0, 1}),
+                    "box selection must include both coincident surface vertices, "
+                    "exclude the occluded vertex, and exclude vertices outside the box");
+    return passed;
+}
+
 bool verifyVertexComponentSelection(QApplication &application)
 {
     bool passed = true;
@@ -327,6 +377,7 @@ bool verifyVertexComponentSelection(QApplication &application)
         return count;
     };
     if (QApplication::platformName() == QStringLiteral("xcb")) {
+        passed &= verifyCoincidentVertexBoxSelection(application);
         QTemporaryDir directory;
         Document source;
         Shape face;
@@ -2210,6 +2261,9 @@ bool verifySolidFaceSelection(QApplication &application)
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_COINCIDENT_VERTEX_BOX_ONLY")) {
+        return verifyCoincidentVertexBoxSelection(application) ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_SOLID_FACE_SELECTION_ONLY")) {
         return verifySolidFaceSelection(application) ? 0 : 1;
     }

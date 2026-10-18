@@ -16,10 +16,12 @@
 #include <QVector4D>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 
 namespace classiCAD {
 namespace {
@@ -1074,6 +1076,8 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
     };
     QVector<PickVertex> vertices;
     vertices.reserve(candidates.size());
+    std::map<std::array<float, 3>, int> pointRepresentatives;
+    QHash<int, QVector<int>> coincidentCandidates;
     for (int index = 0; index < candidates.size(); ++index) {
         const ViewportComponentPickCandidate &candidate = candidates[index];
         if (candidate.edge) {
@@ -1083,7 +1087,18 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
         vertex.x = static_cast<float>(candidate.first.x);
         vertex.y = static_cast<float>(candidate.first.y);
         vertex.z = static_cast<float>(candidate.first.z);
-        const quint32 id = static_cast<quint32>(index) + 1u;
+        if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) ||
+            !std::isfinite(vertex.z)) {
+            continue;
+        }
+        // A rectangle selects every visible vertex at a shared position.
+        // Distinct IDs at identical GPU coordinates overwrite one another,
+        // leaving only the last surface's vertex selected. Share the pick ID
+        // and expand it back to the original independent component IDs below.
+        const auto representative = pointRepresentatives.emplace(
+            std::array<float, 3>{vertex.x, vertex.y, vertex.z}, index).first;
+        coincidentCandidates[representative->second].append(index);
+        const quint32 id = static_cast<quint32>(representative->second) + 1u;
         vertex.color[0] = static_cast<std::uint8_t>(id & 0xffu);
         vertex.color[1] = static_cast<std::uint8_t>((id >> 8u) & 0xffu);
         vertex.color[2] = static_cast<std::uint8_t>((id >> 16u) & 0xffu);
@@ -1247,7 +1262,7 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
         }
         candidateIndices->reserve(foundIndices.size());
         for (int index : foundIndices) {
-            candidateIndices->append(index);
+            *candidateIndices += coincidentCandidates.value(index);
         }
         std::sort(candidateIndices->begin(), candidateIndices->end());
     }

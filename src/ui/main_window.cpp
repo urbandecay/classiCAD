@@ -9202,7 +9202,8 @@ private:
                 pruneOutlinerSelection();
             };
         const auto setCollectionViewLayerStates =
-            [this, objectsInCollections, collectionBelongsToActiveScene](
+            [this, objectsInCollections, collectionBelongsToActiveScene,
+             collectionRelationIds](
                 const QVector<OutlinerCollectionContext> &requestedTargets,
                 const QString &stateKey, bool value, bool recursive,
                 bool isolate, bool directRootClick) {
@@ -9212,6 +9213,7 @@ private:
                     QSet<quint64> ancestors;
                     bool excluded = false;
                     bool targetRoot = false;
+                    bool currentStateValue = false;
                 };
                 const auto stateForPath = [](
                     const DocumentCollection &collection,
@@ -9282,10 +9284,25 @@ private:
                         }
                         return false;
                     };
+                const auto isInTargetSubtree =
+                    [&targets, &isPrefix](const QStringList &path) {
+                        for (const OutlinerCollectionContext &target : targets) {
+                            if (isPrefix(target.sourcePath, path)) return true;
+                        }
+                        return false;
+                    };
+                const auto isTargetRootPath = [&targets](
+                    const QStringList &path) {
+                    return std::any_of(
+                        targets.cbegin(), targets.cend(),
+                        [&path](const OutlinerCollectionContext &target) {
+                            return target.sourcePath == path;
+                        });
+                };
                 const bool cascadeExclude =
                     stateKey == QStringLiteral("exclude");
 
-                if (isolate && !cascadeExclude) {
+                if (isolate) {
                     QVector<LayerCollectionPath> allPaths;
                     QSet<QString> allPathKeys;
                     const QVector<DocumentCollection> collections =
@@ -9300,28 +9317,115 @@ private:
                                 continue;
                             }
                             QStringList path;
+                            bool validPath = true;
                             for (const QJsonValue &part : state.value(
                                      QStringLiteral("path")).toArray()) {
-                                if (!part.isString()) {
-                                    path.clear();
+                                if (!part.isString() || part.toString().isEmpty()) {
+                                    validPath = false;
                                     break;
                                 }
                                 path.append(part.toString());
                             }
-                            if (path.isEmpty()) continue;
+                            if (!validPath || path.isEmpty() ||
+                                path.back() != collection.sourceId) {
+                                continue;
+                            }
                             const QString key = pathKey(collection.id, path);
                             if (allPathKeys.contains(key)) continue;
+
+                            CollectionId previousId = CollectionId::invalid();
+                            QStringList prefix;
+                            bool excludedOnPath = false;
+                            bool currentStateValue = false;
+                            bool resolvedPath = true;
+                            for (qsizetype pathIndex = 0;
+                                 pathIndex < path.size(); ++pathIndex) {
+                                prefix.append(path[pathIndex]);
+                                const DocumentCollection *prefixCollection =
+                                    nullptr;
+                                QJsonObject prefixState;
+                                for (const DocumentCollection &candidate :
+                                     collections) {
+                                    if (candidate.sourceId != prefix.back() ||
+                                        (previousId.isValid() &&
+                                         !candidate.parentIds.contains(
+                                             previousId)) ||
+                                        (pathIndex + 1 == path.size() &&
+                                         candidate.id != collection.id)) {
+                                        continue;
+                                    }
+                                    const QJsonObject candidateState =
+                                        stateForPath(candidate, viewLayerKey,
+                                                     prefix);
+                                    if (candidateState.isEmpty()) continue;
+                                    prefixCollection = &candidate;
+                                    prefixState = candidateState;
+                                    break;
+                                }
+                                if (prefixCollection == nullptr) {
+                                    resolvedPath = false;
+                                    break;
+                                }
+
+                                bool nodeExcluded = prefixState.value(
+                                    QStringLiteral("exclude")).toBool();
+                                bool nodeStateValue = prefixState.value(
+                                    stateKey).toBool();
+                                if (cascadeExclude &&
+                                    isInTargetSubtree(prefix)) {
+                                    // Blender's checkbox RNA update runs before
+                                    // the Ctrl callback. Exclude first captures
+                                    // descendant states, then cascades the new
+                                    // value through this clicked branch.
+                                    if (value) {
+                                        nodeExcluded = true;
+                                        nodeStateValue = true;
+                                    } else if (isTargetRootPath(prefix)) {
+                                        nodeExcluded = false;
+                                        nodeStateValue = false;
+                                    } else {
+                                        nodeExcluded = prefixState.value(
+                                            QStringLiteral(
+                                                "previously_excluded"))
+                                                           .toBool();
+                                        nodeStateValue = nodeExcluded;
+                                    }
+                                }
+                                // Blender compares the current LayerCollection
+                                // even when it is excluded, then stops before
+                                // visiting that node's children. Track only
+                                // excluded ancestors here so this path still
+                                // participates in the comparison.
+                                if (pathIndex + 1 < path.size()) {
+                                    excludedOnPath = excludedOnPath ||
+                                        nodeExcluded;
+                                }
+                                if (pathIndex + 1 == path.size()) {
+                                    currentStateValue = nodeStateValue;
+                                }
+                                previousId = prefixCollection->id;
+                            }
+                            if (!resolvedPath) continue;
+
                             allPathKeys.insert(key);
                             LayerCollectionPath entry;
                             entry.id = collection.id;
                             entry.sourcePath = path;
+                            entry.excluded = excludedOnPath;
+                            entry.currentStateValue = currentStateValue;
                             allPaths.append(entry);
                         }
                     }
-                    QSet<QString> targetCollectionPaths;
+                    QSet<quint64> targetCollectionIds;
+                    QSet<quint64> targetRelatedCollectionIds;
                     for (const OutlinerCollectionContext &target : targets) {
-                        targetCollectionPaths.insert(pathKey(
-                            target.collectionId, target.sourcePath));
+                        targetCollectionIds.insert(
+                            target.collectionId.value());
+                        for (const CollectionId relatedId :
+                             collectionRelationIds(target.collectionId)) {
+                            targetRelatedCollectionIds.insert(
+                                relatedId.value());
+                        }
                     }
                     const bool isHideState =
                         stateKey == QStringLiteral("exclude") ||
@@ -9331,17 +9435,22 @@ private:
                         for (const LayerCollectionPath &path : allPaths) {
                             const DocumentCollection *collection =
                                 session_.document().collection(path.id);
-                            if (collection == nullptr ||
-                                targetCollectionPaths.contains(pathKey(
-                                    path.id, path.sourcePath))) {
+                            if (path.excluded || collection == nullptr ||
+                                collection->isSceneMaster ||
+                                targetCollectionIds.contains(
+                                    path.id.value())) {
                                 continue;
                             }
-                            const QJsonObject current = stateForPath(
-                                *collection, viewLayerKey, path.sourcePath);
-                            const bool expectedValue = isInTargetBranch(
-                                path.sourcePath) ? !isHideState : isHideState;
-                            if (current.value(stateKey).toBool() !=
-                                expectedValue) {
+                            const bool expectedValue =
+                                targetRelatedCollectionIds.contains(
+                                    path.id.value())
+                                    ? !isHideState : isHideState;
+                            const bool currentValue = cascadeExclude
+                                ? path.currentStateValue
+                                : stateForPath(*collection, viewLayerKey,
+                                               path.sourcePath)
+                                      .value(stateKey).toBool();
+                            if (currentValue != expectedValue) {
                                 alreadyIsolated = false;
                                 break;
                             }
@@ -9350,10 +9459,38 @@ private:
 
                     DocumentTransaction transaction = session_.beginTransaction();
                     bool changed = false;
+                    if (cascadeExclude && value) {
+                        for (const LayerCollectionPath &path : allPaths) {
+                            if (!isInTargetSubtree(path.sourcePath)) continue;
+                            const DocumentCollection *collection =
+                                session_.document().collection(path.id);
+                            if (collection == nullptr) continue;
+                            const QJsonObject current = stateForPath(
+                                *collection, viewLayerKey, path.sourcePath);
+                            const bool previouslyExcluded =
+                                isTargetRootPath(path.sourcePath)
+                                    ? false
+                                    : current.value(QStringLiteral("exclude"))
+                                          .toBool();
+                            if (current.value(QStringLiteral(
+                                    "previously_excluded")).isBool() &&
+                                current.value(QStringLiteral(
+                                    "previously_excluded")).toBool() ==
+                                    previouslyExcluded) {
+                                continue;
+                            }
+                            changed = transaction.setCollectionViewLayerState(
+                                          path.id, viewLayerKey,
+                                          path.sourcePath,
+                                          QStringLiteral(
+                                              "previously_excluded"),
+                                          previouslyExcluded) || changed;
+                        }
+                    }
                     for (const LayerCollectionPath &path : allPaths) {
                         const DocumentCollection *collection =
                             session_.document().collection(path.id);
-                        if (collection == nullptr) {
+                        if (collection == nullptr || collection->isSceneMaster) {
                             continue;
                         }
                         const QJsonObject current = stateForPath(

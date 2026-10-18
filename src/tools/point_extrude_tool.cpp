@@ -859,12 +859,10 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
             const qreal alignmentTolerance =
                 std::max<qreal>(1.0e-20,
                                 displacementLength * outwardLength * 1.0e-8);
-            // The stored extrusion solid can continue exactly along its
-            // outward axis. Reject sideways or inward sweeps instead of
-            // replacing it with a disconnected cap-only solid.
+            // Keep the cap motion on its normal axis. Motion toward the
+            // opposite cap shortens the solid; motion away from it extends it.
             if (displacementLength <= 1.0e-12 ||
                 outwardLength <= 1.0e-12 ||
-                dot(displacement, outward) <= 0.0 ||
                 length(cross) > alignmentTolerance) {
                 return {};
             }
@@ -882,7 +880,14 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
                 line.nurbsSolid.displacement = subtract(
                     line.nurbsSolid.displacement, displacement);
             }
-            if (!validateNurbsSolid(line.nurbsSolid)) {
+            const qreal capSide = source.solidCapIndex == 1 ? 1.0 : -1.0;
+            const qreal remainingCapSeparation = capSide * dot(
+                line.nurbsSolid.displacement, source.workPlaneFrame.normal);
+            // Do not let a cap pass through the opposite cap and invert the
+            // solid's extrusion direction. Solid validation rejects a
+            // zero-volume or near-zero-height result.
+            if (remainingCapSeparation <= 0.0 ||
+                !validateNurbsSolid(line.nurbsSolid)) {
                 return {};
             }
             lines.append(line);
@@ -923,9 +928,9 @@ void PointExtrudeTool::updateStatus()
                    })) {
         status_.text = constraintAxisKey_ != 0
             ? QStringLiteral(
-                  "Extrude: this solid can only continue along its cap normal")
+                  "Extrude: move this cap along its normal")
             : QStringLiteral(
-                  "Extrude: move outward along the cap normal to continue the solid");
+                  "Extrude: move along the cap normal to extend or shorten the solid");
     } else {
         status_.text = QStringLiteral("Extrude: move endpoint to set the shared offset");
     }

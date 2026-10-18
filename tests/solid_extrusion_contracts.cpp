@@ -213,6 +213,62 @@ int main(int argc, char **argv)
     passed &= check(makeNurbsExtrusionSolid(rectangleFace,{0,0,3},&rectangularSolid) &&
                         nurbsSolidFaces(rectangularSolid).size()==6,
                     "rectangular extrusion must expose two caps and four exact wall faces");
+
+    // Moving a top cap back toward the base must shorten the existing solid.
+    {
+        Shape sourceSolid;
+        sourceSolid.geometryType = GeometryType::NurbsSolid;
+        sourceSolid.nurbsSolid = rectangularSolid;
+        Document capDocument;
+        const ObjectId capObject = capDocument.append(sourceSolid);
+        SelectionModel capSelection;
+        History capHistory(capDocument);
+        ViewportTransform capTransform;
+        capTransform.zoom() = 24.0;
+        capTransform.setViewPreset(ViewportViewPreset::Top);
+        CurveSampler capSampler;
+        CurveHitTester capHitTester;
+        SnapEngine capSnaps;
+        SnapSettings capSnapSettings;
+        capSnapSettings.enabled = false;
+        capSnaps.setSettings(capSnapSettings);
+        ToolContext capContext(capDocument, capSelection, capHistory,
+                               capTransform, capSampler, capHitTester,
+                               capSnaps);
+        PointExtrudeTool capTool;
+        PointExtrudeTool::SolidCapSource capSource;
+        capSource.objectId = capObject;
+        capSource.solid = rectangularSolid;
+        capSource.capIndex = 1;
+        capSource.worldPoint = rectangleFace.controlPoints.first();
+        capSource.worldPoint.z += rectangularSolid.displacement.z;
+        capSource.workPlaneFrame = makeWorkPlaneFrameFromNormal(
+            capSource.worldPoint, {0,0,1}, {1,0,0});
+        capTool.setSolidCapSources({capSource});
+        capTool.begin(capContext);
+        ToolInput downward;
+        downward.viewportSize = size;
+        downward.workPlaneFrame = capSource.workPlaneFrame;
+        capTransform.worldPointToScreenUnclipped(
+            capSource.worldPoint, size, &downward.screenPosition);
+        downward.screenPosition.ry() += 12.0;
+        capTool.handleMouseMove(downward, capContext);
+        const auto shortenedPreview = capTool.preview();
+        passed &= check(capTool.status().canCommit &&
+                            shortenedPreview.shapes.size() == 1 &&
+                            shortenedPreview.shapes.first().nurbsSolid.displacement.z > 0.0 &&
+                            shortenedPreview.shapes.first().nurbsSolid.displacement.z <
+                                rectangularSolid.displacement.z,
+                        "dragging a top cap inward must preview a shorter valid solid");
+        capTool.commit(capContext);
+        const Shape *shortened = capDocument.shape(capObject);
+        passed &= check(shortened != nullptr &&
+                            shortened->geometryType == GeometryType::NurbsSolid &&
+                            shortened->nurbsSolid.displacement.z > 0.0 &&
+                            shortened->nurbsSolid.displacement.z <
+                                rectangularSolid.displacement.z,
+                        "inward cap extrusion must commit by moving the cap toward the base");
+    }
     const auto rectangleFaces = nurbsSolidFaces(rectangularSolid);
     Point3D solidCenter;
     for (const auto &point : rectangleFace.controlPoints) {

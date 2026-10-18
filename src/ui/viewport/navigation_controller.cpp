@@ -1,5 +1,6 @@
 #include "navigation_controller.h"
 
+#include <QApplication>
 #include <QToolTip>
 #include <QVariantAnimation>
 #include <QWidget>
@@ -12,7 +13,6 @@ namespace classiCAD {
 namespace {
 
 constexpr qint64 rightPanActivationDelayMs = 110;
-constexpr qreal panDragThresholdPixels = 3.0;
 
 qreal directionDot(const Point3D &first, const Point3D &second)
 {
@@ -325,7 +325,8 @@ bool NavigationController::handlePanMove(const QPointF &screenPosition,
     const QPoint current = screenPosition.toPoint();
     const QPoint delta = current - lastPosition_.toPoint();
     const QPoint totalDelta = current - panStartPosition_;
-    if (std::hypot(totalDelta.x(), totalDelta.y()) >= panDragThresholdPixels) {
+    if (std::hypot(totalDelta.x(), totalDelta.y()) >=
+        QApplication::startDragDistance()) {
         panMoved_ = true;
     }
     if (delayedRightPan_) {

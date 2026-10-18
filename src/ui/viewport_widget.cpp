@@ -1058,7 +1058,7 @@ public:
             });
         toolContext_.setSelectionInteractionCallbacks(
             [this](const QPointF &screenPosition, bool includeControlPoint) {
-                if (includeControlPoint &&
+                if (objectEditMode_ && includeControlPoint &&
                     (controlPointsVisible_ ||
                      componentSelectionMode_ == ComponentSelectionMode::Vertex)) {
                     int shapeIndex = -1;
@@ -1090,12 +1090,16 @@ public:
                                              shape.nurbs.controlPoints.size() == 5
                                          ? QStringLiteral("handle0<->cv4")
                                          : QStringLiteral("none")));
-                        return SelectionHit{shapes_.objectIdAt(shapeIndex),
-                                            controlPointIndex};
+                        const SelectionHit hit{
+                            shapes_.objectIdAt(shapeIndex), controlPointIndex};
+                        recordRightButtonSelectionHit(hit);
+                        return hit;
                     }
                 }
                 const int shapeIndex = hitTestShape(screenPosition);
-                return SelectionHit{shapes_.objectIdAt(shapeIndex), -1};
+                const SelectionHit hit{shapes_.objectIdAt(shapeIndex), -1};
+                recordRightButtonSelectionHit(hit);
+                return hit;
             },
             [this](SelectionGestureKind gesture,
                    const ToolInput &input,
@@ -10246,6 +10250,9 @@ protected:
             !duplicateTool_.isActive() && !subdivisionTool_.isActive() &&
             !joinTool_.isActive()) {
             rightButtonSelectionGestureActive_ = true;
+            beginRightButtonSelectionDiagnostic(
+                screenPosition, event->modifiers(),
+                QStringLiteral("direct-rmb-select"));
             dispatchSyntheticMouseEvent(QEvent::MouseButtonPress,
                                         screenPosition,
                                         Qt::LeftButton,
@@ -10643,7 +10650,8 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton &&
-            activeTool_ == Tool::Select && !syntheticSelectionInput_ &&
+            activeTool_ == Tool::Select && objectEditMode_ &&
+            !syntheticSelectionInput_ &&
             (controlPointsVisible_ ||
              componentSelectionMode_ == ComponentSelectionMode::Vertex) &&
             !event->modifiers().testFlag(Qt::ShiftModifier)) {
@@ -10702,7 +10710,16 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton &&
-            activeTool_ == Tool::Select && !syntheticSelectionInput_) {
+            activeTool_ == Tool::Select && !syntheticSelectionInput_ &&
+            !objectEditMode_) {
+            dispatchObjectSelectionPress(translatedInput, screenPosition);
+            event->accept();
+            return;
+        }
+
+        if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::Select && !syntheticSelectionInput_ &&
+            objectEditMode_) {
             const int hitShapeIndex = hitTestShape(screenPosition);
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                 componentSelectionMode_ == ComponentSelectionMode::Edge ||
@@ -10736,7 +10753,16 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton &&
-            activeTool_ == Tool::Select && syntheticSelectionInput_) {
+            activeTool_ == Tool::Select && syntheticSelectionInput_ &&
+            !objectEditMode_) {
+            dispatchObjectSelectionPress(translatedInput, screenPosition);
+            event->accept();
+            return;
+        }
+
+        if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::Select && syntheticSelectionInput_ &&
+            objectEditMode_) {
             int componentShapeIndex = -1;
             const int componentIndex = hitTestComponent(screenPosition,
                                                        &componentShapeIndex);
@@ -10749,6 +10775,8 @@ protected:
             if (componentIndex >= 0 && componentShapeIndex >= 0) {
                 const ObjectId componentObject =
                     shapes_.objectIdAt(componentShapeIndex);
+                recordRightButtonSelectionHit(
+                    SelectionHit{componentObject, componentIndex});
                 const bool additive =
                     event->modifiers().testFlag(Qt::ShiftModifier);
                 if (!additive) {
@@ -10789,6 +10817,8 @@ protected:
                 return;
             }
             const int hitShapeIndex = hitTestShape(screenPosition);
+            recordRightButtonSelectionHit(
+                SelectionHit{shapes_.objectIdAt(hitShapeIndex), -1});
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                 componentSelectionMode_ == ComponentSelectionMode::Edge) {
                 // A component box searches all editable component geometry;
@@ -11745,6 +11775,7 @@ protected:
                                         Qt::LeftButton,
                                         Qt::NoButton,
                                         event->modifiers());
+            finishRightButtonSelectionDiagnostic(eventPosition(event));
             event->accept();
             return;
         }
@@ -11761,6 +11792,7 @@ protected:
             event->button() == Qt::RightButton &&
             !navigationController_.panMoved() &&
             activeTool_ == Tool::Select;
+        const bool navigationPanMoved = navigationController_.panMoved();
 
         DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 clickSelect=%6")
                                        .arg(inputButtonName(event->button()))
@@ -11795,6 +11827,9 @@ protected:
         }
 
         if (rightPanClickSelect) {
+            beginRightButtonSelectionDiagnostic(
+                eventPosition(event), event->modifiers(),
+                QStringLiteral("rmb-pan-click-select"));
             dispatchSyntheticMouseEvent(QEvent::MouseButtonPress,
                                         eventPosition(event),
                                         Qt::LeftButton,
@@ -11805,8 +11840,16 @@ protected:
                                         Qt::LeftButton,
                                         Qt::NoButton,
                                         event->modifiers());
+            finishRightButtonSelectionDiagnostic(eventPosition(event));
             event->accept();
             return;
+        }
+
+        if (event->button() == Qt::RightButton && activeTool_ == Tool::Select &&
+            navigationWasActive && navigationPanMoved) {
+            DebugLog::instance().write(
+                QStringLiteral("rightClickSelect result=not-attempted reason=pan-moved screen=%1")
+                    .arg(pointText(releaseScreenPosition)));
         }
 
         if (eraseTool_.strokeActive() && event->button() == Qt::LeftButton) {
@@ -12376,6 +12419,195 @@ protected:
     }
 
 private:
+    void dispatchObjectSelectionPress(const ToolInput &input,
+                                      const QPointF &screenPosition)
+    {
+        clearComponentSelections();
+        selectionDragViewPlaneAnchorValid_ = false;
+        dragSnapViewPlaneAnchorValid_ = false;
+        rawCursorWorld_ = input.rawWorldPosition;
+        cursorWorld_ = input.rawWorldPosition;
+        lastWorldPosition_ = input.rawWorldPosition;
+        cursorValid_ = true;
+
+        InteractionTool *selectionTool = activeToolController_ != nullptr
+                                             ? activeToolController_
+                                             : toolRegistry_.find(Tool::Select);
+        if (selectionTool == nullptr ||
+            selectionTool->dispatchMousePress(input, toolContext_) !=
+                InteractionTool::EventResult::Handled) {
+            return;
+        }
+        if (objectSelectionDragActive()) {
+            beginSelectionViewPlaneDrag(selectionDraggedObjectIds(),
+                                        screenPosition);
+        }
+        update();
+        emitCoordinateUpdate();
+    }
+
+    QString rightClickObjectLabel(ObjectId objectId) const
+    {
+        if (!objectId.isValid()) {
+            return QStringLiteral("none");
+        }
+        for (const ViewportObjectInfo &info : objectInfos()) {
+            if (info.id == objectId) {
+                return QStringLiteral("%1/%2[id=%3]")
+                    .arg(info.containerName, info.geometryName)
+                    .arg(objectId.value());
+            }
+        }
+        return QStringLiteral("unknown[id=%1]").arg(objectId.value());
+    }
+
+    QString rightClickObjectIdList(const QVector<ObjectId> &objectIds) const
+    {
+        QStringList labels;
+        labels.reserve(objectIds.size());
+        for (const ObjectId objectId : objectIds) {
+            labels.append(rightClickObjectLabel(objectId));
+        }
+        return QStringLiteral("[%1]").arg(labels.join(QStringLiteral(", ")));
+    }
+
+    static QString rightClickComponentList(const QSet<int> &components)
+    {
+        QVector<int> sortedComponents = components.values().toVector();
+        std::sort(sortedComponents.begin(), sortedComponents.end());
+        QStringList labels;
+        labels.reserve(sortedComponents.size());
+        for (const int component : sortedComponents) {
+            labels.append(QString::number(component));
+        }
+        return QStringLiteral("[%1]").arg(labels.join(QStringLiteral(",")));
+    }
+
+    void beginRightButtonSelectionDiagnostic(
+        const QPointF &screenPosition,
+        Qt::KeyboardModifiers modifiers,
+        const QString &source)
+    {
+        rightButtonSelectionDiagnosticActive_ = true;
+        rightButtonSelectionDiagnosticSource_ = source;
+        rightButtonSelectionDiagnosticScreen_ = screenPosition;
+        rightButtonSelectionDiagnosticHit_ = SelectionHit{};
+        rightButtonSelectionBeforeObjectIds_ = selection_.objectIds();
+        rightButtonSelectionBeforePrimary_ = selection_.primaryObjectId();
+        rightButtonSelectionBeforeControlPoint_ =
+            selection_.activeControlPoint();
+        rightButtonSelectionBeforeHitComponents_.clear();
+        rightButtonSelectionBeforeHitActiveComponent_ = -1;
+        DebugLog::instance().write(
+            QStringLiteral("rightClickSelect begin source=%1 screen=%2 modifiers=0x%3 mode=%4 componentMode=%5")
+                .arg(source)
+                .arg(pointText(screenPosition))
+                .arg(static_cast<int>(modifiers), 0, 16)
+                .arg(objectEditMode_ ? QStringLiteral("edit")
+                                     : QStringLiteral("object"))
+                .arg(componentModeDiagnosticName(componentSelectionMode_)));
+    }
+
+    void recordRightButtonSelectionHit(const SelectionHit &hit)
+    {
+        if (!rightButtonSelectionDiagnosticActive_) {
+            return;
+        }
+        rightButtonSelectionDiagnosticHit_ = hit;
+        rightButtonSelectionBeforeHitComponents_ =
+            hit.objectId.isValid() ? componentSelectionForObject(hit.objectId)
+                                   : QSet<int>{};
+        rightButtonSelectionBeforeHitActiveComponent_ = activeComponentIndex();
+    }
+
+    void finishRightButtonSelectionDiagnostic(const QPointF &releasePosition)
+    {
+        if (!rightButtonSelectionDiagnosticActive_) {
+            return;
+        }
+
+        const SelectionHit hit = rightButtonSelectionDiagnosticHit_;
+        const bool targetExists = document_.object(hit.objectId) != nullptr;
+        const bool targetSelectedAfter =
+            targetExists && selection_.contains(hit.objectId);
+        const bool targetWasSelected =
+            rightButtonSelectionBeforeObjectIds_.contains(hit.objectId);
+        const QSet<int> componentsAfter =
+            targetExists ? componentSelectionForObject(hit.objectId)
+                         : QSet<int>{};
+        const ControlPointReference activeControlPointAfter =
+            selection_.activeControlPoint();
+        const bool activeControlPointChanged =
+            rightButtonSelectionBeforeControlPoint_.objectId !=
+                activeControlPointAfter.objectId ||
+            rightButtonSelectionBeforeControlPoint_.index !=
+                activeControlPointAfter.index;
+        const bool selectionChanged =
+            rightButtonSelectionBeforeObjectIds_ != selection_.objectIds() ||
+            rightButtonSelectionBeforePrimary_ !=
+                selection_.primaryObjectId() ||
+            activeControlPointChanged ||
+            rightButtonSelectionBeforeHitComponents_ != componentsAfter ||
+            (hit.objectId.isValid() &&
+             rightButtonSelectionBeforeHitActiveComponent_ !=
+                 activeComponentIndex());
+
+        QString result = QStringLiteral("miss");
+        if (targetExists && targetSelectedAfter) {
+            if (hit.controlPointIndex >= 0 &&
+                activeControlPointAfter.objectId == hit.objectId &&
+                activeControlPointAfter.index == hit.controlPointIndex) {
+                result = QStringLiteral("control-point-selected");
+            } else if (objectEditMode_ && hit.controlPointIndex >= 0) {
+                result = QStringLiteral("component-selected");
+            } else if (!targetWasSelected) {
+                result = QStringLiteral("selected");
+            } else if (selectionChanged) {
+                result = QStringLiteral("activated");
+            } else {
+                result = QStringLiteral("already-selected");
+            }
+        } else if (targetExists && targetWasSelected) {
+            result = QStringLiteral("deselected");
+        } else if (targetExists) {
+            result = QStringLiteral("hit-not-selected");
+        }
+
+        const QString activeControlPointText =
+            activeControlPointAfter.isValid()
+                ? QStringLiteral("%1:cp%2")
+                      .arg(rightClickObjectLabel(
+                          activeControlPointAfter.objectId))
+                      .arg(activeControlPointAfter.index)
+                : QStringLiteral("none");
+        DebugLog::instance().write(
+            QStringLiteral("rightClickSelect result=%1 source=%2 screen=%3->%4 hit=%5 hitElementIndex=%6 selectedAfter=%7 selectionChanged=%8 primaryAfter=%9 activeControlPointAfter=%10 componentMode=%11 componentsBefore=%12 componentsAfter=%13 selectedObjectsAfter=%14")
+                .arg(result)
+                .arg(rightButtonSelectionDiagnosticSource_)
+                .arg(pointText(rightButtonSelectionDiagnosticScreen_))
+                .arg(pointText(releasePosition))
+                .arg(rightClickObjectLabel(hit.objectId))
+                .arg(hit.controlPointIndex)
+                .arg(targetSelectedAfter)
+                .arg(selectionChanged)
+                .arg(rightClickObjectLabel(selection_.primaryObjectId()))
+                .arg(activeControlPointText)
+                .arg(componentModeDiagnosticName(componentSelectionMode_))
+                .arg(rightClickComponentList(
+                    rightButtonSelectionBeforeHitComponents_))
+                .arg(rightClickComponentList(componentsAfter))
+                .arg(rightClickObjectIdList(selection_.objectIds())));
+
+        rightButtonSelectionDiagnosticActive_ = false;
+        rightButtonSelectionDiagnosticSource_.clear();
+        rightButtonSelectionDiagnosticHit_ = SelectionHit{};
+        rightButtonSelectionBeforeObjectIds_.clear();
+        rightButtonSelectionBeforePrimary_ = ObjectId::invalid();
+        rightButtonSelectionBeforeControlPoint_ = ControlPointReference{};
+        rightButtonSelectionBeforeHitComponents_.clear();
+        rightButtonSelectionBeforeHitActiveComponent_ = -1;
+    }
+
     void configureCommandRouter()
     {
         CommandRouter::Handlers handlers;
@@ -22046,6 +22278,15 @@ private:
     static constexpr int maxSubdivisionSections = 10000;
     ToolId activeTool_ = ToolId::Select;
     bool rightButtonSelectionGestureActive_ = false;
+    bool rightButtonSelectionDiagnosticActive_ = false;
+    QString rightButtonSelectionDiagnosticSource_;
+    QPointF rightButtonSelectionDiagnosticScreen_;
+    SelectionHit rightButtonSelectionDiagnosticHit_;
+    QVector<ObjectId> rightButtonSelectionBeforeObjectIds_;
+    ObjectId rightButtonSelectionBeforePrimary_ = ObjectId::invalid();
+    ControlPointReference rightButtonSelectionBeforeControlPoint_;
+    QSet<int> rightButtonSelectionBeforeHitComponents_;
+    int rightButtonSelectionBeforeHitActiveComponent_ = -1;
     bool syntheticSelectionInput_ = false;
     bool leftSelectionBoxStartedOnObject_ = false;
     bool controlPointsVisible_ = false;

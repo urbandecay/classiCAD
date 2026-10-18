@@ -3022,6 +3022,268 @@ bool editBlenderKeyingSetPaths(const QString &sourcePath,
     return true;
 }
 
+bool editBlenderDataApiDrivers(
+    const QString &sourcePath,
+    const QByteArray &expectedSourceSha256,
+    const QJsonArray &paths,
+    bool add,
+    BlenderDataApiDriverEditResult *result,
+    QString *errorMessage)
+{
+    if (result == nullptr || sourcePath.trimmed().isEmpty() ||
+        expectedSourceSha256.size() != 64 || paths.isEmpty() ||
+        paths.size() > 20000) {
+        setError(errorMessage,
+                 QStringLiteral("A Blender source file and a valid driver path list are required"));
+        return false;
+    }
+
+    for (const QJsonValue &pathValue : paths) {
+        if (!pathValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender driver path is invalid"));
+            return false;
+        }
+        const QJsonObject path = pathValue.toObject();
+        int arrayIndex = -1;
+        const QJsonValue libraryPath = path.value(
+            QStringLiteral("library_path"));
+        if (!path.value(QStringLiteral("id_type")).isString() ||
+            path.value(QStringLiteral("id_type")).toString().isEmpty() ||
+            path.value(QStringLiteral("id_type")).toString().size() > 256 ||
+            !path.value(QStringLiteral("id_name")).isString() ||
+            path.value(QStringLiteral("id_name")).toString().isEmpty() ||
+            path.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+            (!libraryPath.isUndefined() &&
+             (!libraryPath.isString() || libraryPath.toString().size() > 4096)) ||
+            !path.value(QStringLiteral("data_path")).isString() ||
+            path.value(QStringLiteral("data_path")).toString().isEmpty() ||
+            path.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+            !jsonInteger(path.value(QStringLiteral("array_index")),
+                         &arrayIndex) ||
+            arrayIndex < 0 || arrayIndex > 32766) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender driver path has invalid identity or component data"));
+            return false;
+        }
+    }
+
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile() || sourceInfo.isSymLink() ||
+        sourceInfo.suffix().compare(QStringLiteral("blend"),
+                                    Qt::CaseInsensitive) != 0) {
+        setError(errorMessage,
+                 QStringLiteral("Driver editing is available only for a direct ordinary Blender .blend file"));
+        return false;
+    }
+    const QString absoluteSourcePath = sourceInfo.absoluteFilePath();
+    const QFileInfo absoluteSourceInfo(absoluteSourcePath);
+    const QByteArray sourceBeforeEdit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeEdit.isEmpty()) return false;
+    if (sourceBeforeEdit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed after it was imported. Reopen it before editing drivers."));
+        return false;
+    }
+
+    QTemporaryDir adapterOutputDirectory;
+    if (!adapterOutputDirectory.isValid()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create temporary driver report data"));
+        return false;
+    }
+    const QString requestPath = adapterOutputDirectory.filePath(
+        QStringLiteral("driver-request.json"));
+    const QString reportPath = adapterOutputDirectory.filePath(
+        QStringLiteral("driver-report.json"));
+    QJsonObject request;
+    request.insert(QStringLiteral("paths"), paths);
+    request.insert(QStringLiteral("add"), add);
+    const QByteArray requestBytes = QJsonDocument(request).toJson(
+        QJsonDocument::Compact);
+    if (requestBytes.size() > kBlenderExtractionJsonByteLimit ||
+        !writeFile(requestPath, requestBytes, errorMessage)) {
+        if (errorMessage != nullptr && errorMessage->isEmpty()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender driver edit request is too large"));
+        }
+        return false;
+    }
+
+    QTemporaryFile stagedFile(absoluteSourceInfo.dir().filePath(
+        QStringLiteral(".classiCAD-drivers-XXXXXX")));
+    stagedFile.setAutoRemove(true);
+    if (!stagedFile.open()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create a staged Blender file beside the source: %1")
+                     .arg(stagedFile.errorString()));
+        return false;
+    }
+    const QString stagedPath = stagedFile.fileName();
+    stagedFile.close();
+    if (!QFile::remove(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not prepare the staged Blender file"));
+        return false;
+    }
+
+    if (!runBlenderAdapter(QStringLiteral("data_api_drivers"),
+                           absoluteSourcePath, stagedPath, errorMessage,
+                           reportPath, requestPath)) {
+        return false;
+    }
+    if (!hasBlenderFileHeader(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not produce a valid staged project after editing drivers"));
+        return false;
+    }
+
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::ReadOnly) || reportFile.size() < 0 ||
+        reportFile.size() > kBlenderExtractionJsonByteLimit) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not return updated driver information"));
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument reportDocument = QJsonDocument::fromJson(
+        reportFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError ||
+        !reportDocument.isObject()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid driver information: %1")
+                     .arg(parseError.errorString()));
+        return false;
+    }
+    const QJsonObject report = reportDocument.object();
+    const QJsonValue changedValue = report.value(QStringLiteral("changed"));
+    const QJsonValue driverPathsValue = report.value(
+        QStringLiteral("driver_paths"));
+    const QJsonValue truncatedValue = report.value(
+        QStringLiteral("driver_paths_truncated"));
+    int changedPathCount = -1;
+    int changedFCurveCount = -1;
+    if (!changedValue.isBool() || !driverPathsValue.isArray() ||
+        driverPathsValue.toArray().size() > 20000 ||
+        !truncatedValue.isBool() ||
+        !jsonInteger(report.value(QStringLiteral("changed_path_count")),
+                     &changedPathCount) ||
+        changedPathCount < 0 || changedPathCount > paths.size() ||
+        !jsonInteger(report.value(QStringLiteral("changed_fcurve_count")),
+                     &changedFCurveCount) ||
+        changedFCurveCount != changedPathCount ||
+        changedValue.toBool() != (changedPathCount > 0)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid or incomplete driver metadata"));
+        return false;
+    }
+    for (const QJsonValue &driverPathValue : driverPathsValue.toArray()) {
+        if (!driverPathValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid driver row"));
+            return false;
+        }
+        const QJsonObject driverPath = driverPathValue.toObject();
+        const QJsonValue libraryPath = driverPath.value(
+            QStringLiteral("library_path"));
+        int arrayIndex = -1;
+        if (!driverPath.value(QStringLiteral("id_type")).isString() ||
+            driverPath.value(QStringLiteral("id_type")).toString().isEmpty() ||
+            driverPath.value(QStringLiteral("id_type")).toString().size() > 256 ||
+            !driverPath.value(QStringLiteral("id_name")).isString() ||
+            driverPath.value(QStringLiteral("id_name")).toString().isEmpty() ||
+            driverPath.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+            !libraryPath.isString() || libraryPath.toString().size() > 4096 ||
+            !driverPath.value(QStringLiteral("data_path")).isString() ||
+            driverPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
+            driverPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+            !jsonInteger(driverPath.value(QStringLiteral("array_index")),
+                         &arrayIndex) ||
+            arrayIndex < 0 || arrayIndex > 32766) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid driver path"));
+            return false;
+        }
+    }
+
+    const QByteArray sourceAfterEdit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceAfterEdit.isEmpty()) return false;
+    if (sourceAfterEdit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed while drivers were being edited. The original was left untouched."));
+        return false;
+    }
+    if (!changedValue.toBool()) {
+        result->driverPaths = driverPathsValue.toArray();
+        result->driverPathsTruncated = truncatedValue.toBool();
+        result->sourceSha256 = sourceAfterEdit;
+        result->changedPathCount = 0;
+        result->changedFCurveCount = 0;
+        result->backupPath.clear();
+        return true;
+    }
+
+    const QByteArray stagedSha256 = fileSha256(stagedPath, errorMessage);
+    if (stagedSha256.isEmpty()) return false;
+    const QByteArray sourceBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeCommit.isEmpty()) return false;
+    if (sourceBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed while drivers were being edited. The original was left untouched."));
+        return false;
+    }
+
+    const QString backupPath = uniqueBlenderBackupPath(absoluteSourcePath);
+    if (backupPath.isEmpty() || !QFile::copy(absoluteSourcePath, backupPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create the safety backup beside the Blender file"));
+        return false;
+    }
+    const QByteArray backupSha256 = fileSha256(backupPath, errorMessage);
+    if (backupSha256 != expectedSourceSha256) {
+        QFile::remove(backupPath);
+        setError(errorMessage,
+                 QStringLiteral("The Blender safety backup could not be verified; the original was left untouched."));
+        return false;
+    }
+    const QByteArray sourceImmediatelyBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceImmediatelyBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed before replacement. The safety backup was kept at %1.")
+                     .arg(backupPath));
+        return false;
+    }
+    if (!commitStagedFile(stagedPath, absoluteSourcePath, errorMessage)) {
+        return false;
+    }
+    const QByteArray committedSha256 =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (committedSha256 != stagedSha256) {
+        QString restoreError;
+        if (!commitStagedFile(backupPath, absoluteSourcePath, &restoreError)) {
+            setError(errorMessage,
+                     QStringLiteral("The edited file did not verify and restoring its backup also failed. Restore the backup at %1. %2")
+                         .arg(backupPath, restoreError));
+        } else {
+            setError(errorMessage,
+                     QStringLiteral("The edited file did not verify, so the original was restored from its backup."));
+        }
+        return false;
+    }
+
+    result->driverPaths = driverPathsValue.toArray();
+    result->driverPathsTruncated = truncatedValue.toBool();
+    result->sourceSha256 = committedSha256;
+    result->backupPath = backupPath;
+    result->changedPathCount = changedPathCount;
+    result->changedFCurveCount = changedFCurveCount;
+    return true;
+}
+
 bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
                                   const QByteArray &expectedSourceSha256,
                                   const QString &sceneName,
@@ -4916,6 +5178,8 @@ bool importBlenderScene(const QString &path,
                 if (!animationPathValue.isUndefined()) {
                     const QJsonObject animationPath =
                         animationPathValue.toObject();
+                    const QJsonValue animationLibraryPath = animationPath.value(
+                        QStringLiteral("library_path"));
                     int arrayIndex = -1;
                     if (!animationPathValue.isObject() ||
                         !animationPath.value(QStringLiteral("id_type")).isString() ||
@@ -4926,6 +5190,9 @@ bool importBlenderScene(const QString &path,
                         !animationPath.value(QStringLiteral("data_path")).isString() ||
                         animationPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
                         animationPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||
+                        (!animationLibraryPath.isUndefined() &&
+                         (!animationLibraryPath.isString() ||
+                          animationLibraryPath.toString().size() > 4096)) ||
                         !jsonInteger(animationPath.value(QStringLiteral("array_index")),
                                      &arrayIndex) ||
                         arrayIndex < 0 || arrayIndex > 32766 ||
@@ -4967,6 +5234,8 @@ bool importBlenderScene(const QString &path,
                     return false;
                 }
                 const QJsonObject driverPath = driverPathValue.toObject();
+                const QJsonValue libraryPath = driverPath.value(
+                    QStringLiteral("library_path"));
                 int arrayIndex = -1;
                 if (!driverPath.value(QStringLiteral("id_type")).isString() ||
                     driverPath.value(QStringLiteral("id_type")).toString().isEmpty() ||
@@ -4974,6 +5243,9 @@ bool importBlenderScene(const QString &path,
                     !driverPath.value(QStringLiteral("id_name")).isString() ||
                     driverPath.value(QStringLiteral("id_name")).toString().isEmpty() ||
                     driverPath.value(QStringLiteral("id_name")).toString().size() > 4096 ||
+                    (!libraryPath.isUndefined() &&
+                     (!libraryPath.isString() ||
+                      libraryPath.toString().size() > 4096)) ||
                     !driverPath.value(QStringLiteral("data_path")).isString() ||
                     driverPath.value(QStringLiteral("data_path")).toString().isEmpty() ||
                     driverPath.value(QStringLiteral("data_path")).toString().size() > 4096 ||

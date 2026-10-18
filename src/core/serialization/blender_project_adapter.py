@@ -1903,6 +1903,322 @@ def _apply_keying_set_keyframes(scene, keying_set, paths, insert_keyframes):
     return frame, changed_path_count
 
 
+def _data_api_driver_path_records():
+    paths = []
+    truncated = False
+    for id_block in outliner_data_ids():
+        try:
+            animation_data = id_block.animation_data
+            drivers = animation_data.drivers if animation_data else ()
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            continue
+        for fcurve in drivers:
+            if len(paths) >= 20000:
+                truncated = True
+                return paths, truncated
+            try:
+                data_path = str(fcurve.data_path)
+                array_index = int(fcurve.array_index)
+                if (not data_path or len(data_path) > 4096 or
+                        array_index < 0 or array_index > 32766):
+                    continue
+                library = getattr(id_block, "library", None)
+                paths.append({
+                    "id_type": str(id_block.id_type)[:256],
+                    "id_name": str(id_block.name_full)[:4096],
+                    "library_path": str(library.filepath)[:4096]
+                        if library is not None else "",
+                    "data_path": data_path,
+                    "array_index": array_index,
+                })
+            except (AttributeError, ReferenceError, RuntimeError,
+                    TypeError, ValueError):
+                continue
+    return paths, truncated
+
+
+def _split_outliner_rna_path(data_path):
+    """Find the last RNA separator without splitting quoted bracket keys."""
+    quote = None
+    escaped = False
+    bracket_depth = 0
+    last_separator = -1
+    for index, character in enumerate(data_path):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in ("'", '"') and bracket_depth > 0:
+            quote = character
+        elif character == "[":
+            bracket_depth += 1
+        elif character == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif character == "." and bracket_depth == 0:
+            last_separator = index
+    return data_path[:last_separator], data_path[last_separator + 1:]
+
+
+def _outliner_custom_property_type(value):
+    try:
+        from idprop.types import IDPropertyArray
+    except ImportError:
+        IDPropertyArray = ()
+    if isinstance(value, bool):
+        return "BOOLEAN"
+    if isinstance(value, int):
+        return "INT"
+    if isinstance(value, float):
+        return "FLOAT"
+    if isinstance(value, IDPropertyArray):
+        type_by_code = {"b": "BOOLEAN", "i": "INT",
+                        "f": "FLOAT", "d": "FLOAT"}
+        return type_by_code.get(value.typecode, "OTHER")
+    return "OTHER"
+
+
+def _driver_expression_for_outliner_property(prop, value, array_index,
+                                             custom_property=False):
+    """Match ANIM_add_driver()'s default expression for Outliner rows."""
+    if custom_property:
+        value_type = _outliner_custom_property_type(value)
+        is_array = value_type in {"BOOLEAN", "INT", "FLOAT"} and not isinstance(
+            value, (bool, int, float))
+    else:
+        value_type = prop.type
+        is_array = bool(prop.is_array)
+    if value_type == "BOOLEAN":
+        current = value[array_index] if is_array else value
+        return "var + %s" % ("True" if bool(current) else "False")
+    if value_type == "INT":
+        current = value[array_index] if is_array else value
+        return "var + %d" % int(current)
+    if value_type == "FLOAT":
+        current = value[array_index] if is_array else value
+        formatted = ("%.3f" % float(current)).rstrip("0").rstrip(".")
+        return "var + " + formatted
+    return "var"
+
+
+def _add_outliner_driver(id_block, data_path, prop, value, array_index,
+                         custom_property=False):
+    # Blender's Outliner calls ANIM_add_driver() with
+    # CREATEDRIVER_WITH_DEFAULT_DVAR and DRIVER_TYPE_PYTHON. ID.driver_add()
+    # creates the same F-Curve, but the RNA wrapper omits that UI default flag,
+    # so restore its expression and Transform Channel variable here.
+    fcurve = id_block.driver_add(data_path, array_index)
+    if isinstance(fcurve, (list, tuple)):
+        curves = list(fcurve)
+        if len(curves) != 1:
+            raise RuntimeError("Blender created an unexpected number of driver curves")
+        fcurve = curves[0]
+    driver = fcurve.driver
+    driver.type = "SCRIPTED"
+    driver.expression = _driver_expression_for_outliner_property(
+        prop, value, array_index, custom_property)
+    variable = driver.variables.new()
+    variable.type = "TRANSFORMS"
+
+
+def edit_data_api_drivers(source_path, staged_path, request_path, report_path):
+    with open(request_path, "r", encoding="utf-8") as request_file:
+        request = json.load(request_file)
+    if not isinstance(request, dict):
+        raise ValueError("Driver edit request must be an object")
+    paths = request.get("paths")
+    add = request.get("add")
+    if (not isinstance(paths, list) or not paths or len(paths) > 20000 or
+            not isinstance(add, bool)):
+        raise ValueError("Driver edit request has an invalid path list or operation")
+
+    normalized_paths = []
+    seen_paths = set()
+    for path in paths:
+        if not isinstance(path, dict):
+            raise ValueError("Driver path must be an object")
+        id_type = path.get("id_type", "")
+        id_name = path.get("id_name", "")
+        library_path = path.get("library_path", "")
+        data_path = path.get("data_path", "")
+        array_index = path.get("array_index", -1)
+        owner_path = path.get("owner_path")
+        property_identifier = path.get("property_identifier")
+        custom_property = path.get("custom_property", False)
+        if (not isinstance(id_type, str) or not id_type or len(id_type) > 256 or
+                not isinstance(id_name, str) or not id_name or len(id_name) > 4096 or
+                not isinstance(library_path, str) or len(library_path) > 4096 or
+                not isinstance(data_path, str) or not data_path or len(data_path) > 4096 or
+                isinstance(array_index, bool) or not isinstance(array_index, int) or
+                array_index < 0 or array_index > 32766 or
+                (owner_path is not None and
+                 (not isinstance(owner_path, str) or len(owner_path) > 4096)) or
+                (property_identifier is not None and
+                 (not isinstance(property_identifier, str) or
+                  not property_identifier or len(property_identifier) > 4096)) or
+                not isinstance(custom_property, bool)):
+            raise ValueError("Driver path metadata is invalid")
+        if owner_path is None or property_identifier is None:
+            owner_path, property_identifier = _split_outliner_rna_path(
+                data_path)
+        identity = (id_type, id_name, library_path, data_path, array_index)
+        if identity in seen_paths:
+            continue
+        seen_paths.add(identity)
+        normalized_paths.append({
+            "id_type": id_type,
+            "id_name": id_name,
+            "library_path": library_path,
+            "data_path": data_path,
+            "owner_path": owner_path,
+            "property_identifier": property_identifier,
+            "custom_property": custom_property,
+            "array_index": array_index,
+        })
+
+    result = bpy.ops.wm.open_mainfile(
+        filepath=os.path.abspath(source_path),
+        load_ui=True,
+        use_scripts=False,
+    )
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender did not finish opening the source project")
+    if any(scene.get("classiCAD_format") == PROJECT_FORMAT
+           for scene in bpy.data.scenes):
+        raise RuntimeError(
+            "Driver editing cannot edit a classiCAD-native Blender project")
+
+    changed_path_count = 0
+    changed_fcurve_count = 0
+    for path in normalized_paths:
+        id_block = resolve_outliner_data_id(path)
+        if not bool(getattr(id_block, "is_editable", False)):
+            raise ValueError(
+                "Blender driver target %s is read-only" % id_block.name_full)
+        data_path = path["data_path"]
+        array_index = path["array_index"]
+        try:
+            value = id_block.path_resolve(data_path)
+            owner_path = path["owner_path"]
+            identifier = path["property_identifier"]
+            custom_property = path["custom_property"]
+            owner = (id_block.path_resolve(owner_path)
+                     if owner_path else id_block)
+            prop = None if custom_property else owner.bl_rna.properties.get(
+                identifier)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError) as error:
+            raise ValueError(
+                "Blender driver RNA path could not be resolved: " + data_path
+            ) from error
+        if custom_property:
+            expected_path = owner_path + '["%s"]' % bpy.utils.escape_identifier(
+                identifier)
+            if data_path != expected_path:
+                raise ValueError(
+                    "Blender custom-property driver path does not match its selected key: " +
+                    data_path)
+            try:
+                value = owner[identifier]
+            except (AttributeError, KeyError, ReferenceError, RuntimeError,
+                    TypeError, ValueError) as error:
+                raise ValueError(
+                    "Blender custom-property driver key could not be resolved: " +
+                    data_path) from error
+            custom_type = _outliner_custom_property_type(value)
+            custom_array = custom_type in {"BOOLEAN", "INT", "FLOAT"} and not isinstance(
+                value, (bool, int, float))
+            if add and custom_type == "OTHER":
+                raise ValueError(
+                    "Blender custom-property drivers require a numeric value: " +
+                    data_path)
+            if custom_array and len(value) == 0:
+                raise ValueError(
+                    "Blender custom-property array has no driver components: " +
+                    data_path)
+        elif prop is None or not bool(getattr(prop, "is_animatable", False)):
+            raise ValueError(
+                "Blender driver path is not an animatable property: " + data_path)
+        readonly_check = getattr(owner, "is_property_readonly", None)
+        if callable(readonly_check):
+            try:
+                if bool(readonly_check(identifier)):
+                    raise ValueError(
+                        "Blender driver property is read-only: " + data_path)
+            except (AttributeError, ReferenceError, RuntimeError, TypeError) as error:
+                raise ValueError(
+                    "Blender could not check driver editability: " + data_path
+                ) from error
+        elif not custom_property or getattr(
+                id_block, "override_library", None) is not None:
+            raise ValueError(
+                "Blender could not check driver editability: " + data_path)
+
+        animation_data = id_block.animation_data
+        action = animation_data.action if animation_data is not None else None
+        if action is not None and (
+                not bool(action.is_editable) or
+                getattr(action, "override_library", None) is not None):
+            raise ValueError(
+                "Blender driver target %s has a read-only Action" % id_block.name_full)
+        is_array = (custom_array if custom_property else
+                    bool(getattr(prop, "is_array", False)))
+        if is_array:
+            try:
+                component_count = len(value)
+            except TypeError as error:
+                raise ValueError(
+                    "Blender array driver path has no component values: " + data_path
+                ) from error
+            if array_index >= component_count:
+                raise ValueError(
+                    "Blender driver array index is out of range: " + data_path)
+        elif array_index != 0:
+            raise ValueError(
+                "Blender scalar driver path has a nonzero array index: " + data_path)
+
+        if add:
+            _add_outliner_driver(
+                id_block, data_path, prop, value, array_index,
+                custom_property)
+            changed_path_count += 1
+            changed_fcurve_count += 1
+        else:
+            try:
+                changed = bool(id_block.driver_remove(data_path, array_index))
+            except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                    ValueError) as error:
+                raise ValueError(
+                    "Blender could not remove the driver for: " + data_path
+                ) from error
+            if changed:
+                changed_path_count += 1
+                changed_fcurve_count += 1
+
+    driver_paths, driver_paths_truncated = _data_api_driver_path_records()
+    save_result = bpy.ops.wm.save_as_mainfile(
+        filepath=os.path.abspath(staged_path),
+        check_existing=False,
+        compress=True,
+    )
+    if "FINISHED" not in save_result:
+        raise RuntimeError("Blender did not finish saving the edited drivers")
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        json.dump(
+            {"changed": bool(changed_path_count),
+             "changed_path_count": changed_path_count,
+             "changed_fcurve_count": changed_fcurve_count,
+             "driver_paths": driver_paths,
+             "driver_paths_truncated": driver_paths_truncated},
+            report_file,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
 def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
     with open(request_path, "r", encoding="utf-8") as request_file:
         request = json.load(request_file)
@@ -2181,6 +2497,10 @@ def main():
         return
     if operation == "keying_set_paths" and len(arguments) == 5:
         edit_keying_set_paths(
+            arguments[1], arguments[2], arguments[3], arguments[4])
+        return
+    if operation == "data_api_drivers" and len(arguments) == 5:
+        edit_data_api_drivers(
             arguments[1], arguments[2], arguments[3], arguments[4])
         return
     raise RuntimeError("invalid classiCAD adapter arguments")

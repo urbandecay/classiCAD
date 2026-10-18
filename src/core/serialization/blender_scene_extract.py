@@ -2402,7 +2402,7 @@ def outliner_data_api_tree():
 
             owner_path = "" if owner is id_block else str(
                 owner.path_from_id())
-            data_path = ((owner_path + ".") if owner_path else "") + identifier
+            data_path = str(owner.path_from_id(identifier))
             if not data_path or len(data_path) > 4096:
                 return None
             return {
@@ -2410,12 +2410,170 @@ def outliner_data_api_tree():
                 "id_name": str(id_block.name_full)[:4096],
                 "library_path": source_library_path(id_block)[:4096],
                 "data_path": data_path,
+                "owner_path": owner_path,
+                "property_identifier": identifier,
+                "custom_property": False,
                 "array_index": int(array_index),
                 "use_entire_array": bool(is_array),
             }
         except (AttributeError, ReferenceError, RuntimeError, TypeError,
                 ValueError):
             return None
+
+    def custom_property_value_type(value):
+        try:
+            from idprop.types import IDPropertyArray, IDPropertyGroup
+        except ImportError:
+            IDPropertyArray = ()
+            IDPropertyGroup = ()
+        if isinstance(value, IDPropertyGroup):
+            return "GROUP"
+        if isinstance(value, IDPropertyArray):
+            return "ARRAY"
+        if isinstance(value, bool):
+            return "BOOLEAN"
+        if isinstance(value, int):
+            return "INT"
+        if isinstance(value, float):
+            return "FLOAT"
+        if isinstance(value, str):
+            return "STRING"
+        return "OTHER"
+
+    def custom_property_animation_path(id_block, owner, owner_path,
+                                       identifier, data_path, value,
+                                       array_index=0):
+        try:
+            if not isinstance(id_block, bpy.types.ID) or not bool(
+                    getattr(id_block, "is_editable", False)):
+                return None
+            value_type = custom_property_value_type(value)
+            is_array = value_type == "ARRAY"
+            if not is_array and value_type not in {"BOOLEAN", "INT", "FLOAT"}:
+                return None
+            if is_array:
+                if len(value) <= 0 or value.typecode not in {"b", "i", "f", "d"}:
+                    return None
+            readonly_check = getattr(owner, "is_property_readonly", None)
+            if callable(readonly_check):
+                try:
+                    if bool(readonly_check(identifier)):
+                        return None
+                except (AttributeError, ReferenceError, RuntimeError,
+                        TypeError, ValueError):
+                    return None
+            elif getattr(id_block, "override_library", None) is not None:
+                # IDPropertyGroup has no Python read-only query. Keep nested
+                # paths on local IDs; for overrides, do not guess per-path
+                # editability without Blender's RNA property callback.
+                return None
+
+            animation_data = id_block.animation_data
+            action = animation_data.action if animation_data is not None else None
+            if action is not None and (
+                    not bool(action.is_editable) or
+                    getattr(action, "override_library", None) is not None):
+                return None
+            if not data_path or len(data_path) > 4096:
+                return None
+            return {
+                "id_type": str(id_block.id_type)[:256],
+                "id_name": str(id_block.name_full)[:4096],
+                "library_path": source_library_path(id_block)[:4096],
+                "data_path": data_path,
+                "owner_path": owner_path,
+                "property_identifier": identifier,
+                "custom_property": True,
+                "array_index": int(array_index),
+                "use_entire_array": bool(is_array),
+            }
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError):
+            return None
+
+    def add_custom_property_nodes(parent, owner, id_block, owner_path,
+                                  depth, ancestry):
+        try:
+            keys = list(owner.keys())
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return
+        try:
+            rna_properties = getattr(getattr(owner, "bl_rna", None),
+                                     "properties", ())
+            find_rna_property = getattr(rna_properties, "get", None)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            find_rna_property = None
+        for raw_key in keys:
+            if remaining[0] <= 0:
+                truncated[0] = True
+                break
+            try:
+                identifier = str(raw_key)
+                if (not identifier or identifier == "_RNA_UI" or
+                        len(identifier) > 4096):
+                    continue
+                property_rna = (find_rna_property(identifier)
+                                if callable(find_rna_property) else None)
+                # Runtime RNA properties backed by ID properties are already
+                # present in the regular RNA walk and use their unbracketed path.
+                if property_rna is not None and bool(getattr(
+                        property_rna, "is_runtime", False)):
+                    continue
+                property_value = owner[raw_key]
+                escaped_key = bpy.utils.escape_identifier(identifier)
+                segment = '["%s"]' % escaped_key
+                data_path = owner_path + segment
+                value_type = custom_property_value_type(property_value)
+                display_name = identifier
+                if not isinstance(owner, type(None)) and hasattr(
+                        owner, "id_properties_ui"):
+                    try:
+                        display_name = str(owner.id_properties_ui(
+                            identifier).as_dict().get("name") or identifier)
+                    except (AttributeError, ReferenceError, RuntimeError,
+                            TypeError, ValueError):
+                        display_name = identifier
+            except (AttributeError, KeyError, ReferenceError, RuntimeError,
+                    TypeError, ValueError):
+                continue
+
+            property_node = reserve_node(
+                "PROPERTY", "idprop:" + identifier, display_name,
+                "IDPROPERTY_" + value_type)
+            if property_node is None:
+                break
+            if value_type in {"BOOLEAN", "INT", "FLOAT", "ARRAY"}:
+                path_record = custom_property_animation_path(
+                    id_block, owner, owner_path, identifier, data_path,
+                    property_value)
+                if path_record is not None:
+                    property_node["animation_path"] = path_record
+
+            if value_type == "GROUP":
+                if depth + 1 >= MAX_OUTLINER_DATA_API_DEPTH:
+                    if len(property_value):
+                        truncated[0] = True
+                elif id(property_value) in ancestry:
+                    truncated[0] = True
+                else:
+                    add_custom_property_nodes(
+                        property_node, property_value, id_block, data_path,
+                        depth + 1, ancestry | {id(property_value)})
+            elif value_type == "ARRAY":
+                for index, _element in enumerate(property_value):
+                    array_node = reserve_node(
+                        "ARRAY_ELEM", str(index), str(index + 1),
+                        "IDPROPERTY_ELEMENT")
+                    if array_node is None:
+                        break
+                    whole_array_path = property_node.get("animation_path")
+                    if whole_array_path is not None:
+                        element_path = dict(whole_array_path)
+                        element_path["array_index"] = index
+                        element_path["use_entire_array"] = False
+                        array_node["animation_path"] = element_path
+                    property_node["children"].append(array_node)
+            parent["children"].append(property_node)
 
     def capture_driver_paths(value):
         if not isinstance(value, bpy.types.ID):
@@ -2443,6 +2601,7 @@ def outliner_data_api_tree():
                     driver_paths.append({
                         "id_type": str(value.id_type)[:256],
                         "id_name": str(value.name_full)[:4096],
+                        "library_path": source_library_path(value)[:4096],
                         "data_path": data_path,
                         "array_index": array_index,
                     })
@@ -2545,6 +2704,18 @@ def outliner_data_api_tree():
                         array_node["animation_path"] = element_path
                     property_node["children"].append(array_node)
             node["children"].append(property_node)
+
+        id_block = value if isinstance(value, bpy.types.ID) else getattr(
+            value, "id_data", None)
+        if isinstance(id_block, bpy.types.ID):
+            try:
+                custom_owner_path = "" if value is id_block else str(
+                    value.path_from_id())
+            except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                    ValueError):
+                custom_owner_path = ""
+            add_custom_property_nodes(
+                node, value, id_block, custom_owner_path, depth, ancestry)
 
     ancestry = {identity(bpy.data)}
     for prop in properties_of(bpy.data):

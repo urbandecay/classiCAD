@@ -115,6 +115,15 @@ struct BlenderKeyingSetEditResult {
     double frame = 0.0;
 };
 
+struct BlenderDataApiDriverEditResult {
+    QJsonArray driverPaths;
+    bool driverPathsTruncated = false;
+    QString backupPath;
+    QByteArray sourceSha256;
+    int changedPathCount = 0;
+    int changedFCurveCount = 0;
+};
+
 // Hashes Blender project bytes without loading them into memory at once.
 QByteArray blenderProjectSha256(const QString &path,
                                 QString *errorMessage = nullptr);
@@ -150,6 +159,17 @@ bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
                                    bool insert,
                                    BlenderKeyingSetEditResult *result,
                                    QString *errorMessage = nullptr);
+
+// Adds or removes Blender drivers for selected Data API properties in an
+// ordinary .blend file, stages the change, verifies a backup, then replaces
+// the source file atomically.
+bool editBlenderDataApiDrivers(
+    const QString &sourcePath,
+    const QByteArray &expectedSourceSha256,
+    const QJsonArray &paths,
+    bool add,
+    BlenderDataApiDriverEditResult *result,
+    QString *errorMessage = nullptr);
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.
 // Returned meshes, curves, and surfaces retain their authoritative geometry;

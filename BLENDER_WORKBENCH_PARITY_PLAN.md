@@ -11801,3 +11801,25 @@ scene depth.
   [Keying Set path operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L2083-L2246),
   [relative-set validation and application](https://github.com/blender/blender/blob/v5.2.2/source/blender/animrig/intern/keyingsets.cc),
   and [built-in generators](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/keyingsets_builtins.py).
+- The hundred-forty-seventh Outliner update replaces the Data API D+/D−
+  metadata-only behavior with edits to real Blender driver F-Curves. Selected
+  RNA properties and numeric custom properties are resolved by Blender ID type,
+  full name, linked-library path, owner path, property key, and component
+  index. Custom-property keys use Blender's escaped bracket-path convention,
+  including names containing dots or quotes; numeric custom-property arrays
+  expose component rows. The adapter rejects paths Blender treats as
+  non-animatable or read-only. Nested custom properties on library overrides
+  are omitted when Python cannot query their per-property editability. Driver
+  creation follows Blender 5.2.2's default scripted driver setup, including the
+  current-value expression, Transform Channel variable, and default F-Curve
+  setup. The updated driver list is read back from Blender after the edits. The
+  adapter stages the file, checks its digest before replacement, verifies a
+  sibling backup, and replaces the source atomically. Because classiCAD edits
+  through a headless file save, the operation has a backup but does not
+  participate in Blender's in-session undo stack; classiCAD also does not
+  evaluate these Blender drivers itself. See Blender's [Outliner driver
+  operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1929-L2065)
+  and [driver creation/removal
+  logic](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/animation/drivers.cc#L360-L506).
+  Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
+  passed. No matched Outliner interaction comparison was run.

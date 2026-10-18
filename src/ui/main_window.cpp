@@ -4715,87 +4715,84 @@ private:
         collectionCallbacks.editDataApiDriverPaths =
             [this](const QJsonArray &paths, bool add) {
                 if (paths.isEmpty()) return;
+                if (importedBlenderSourcePath_.isEmpty() ||
+                    importedBlenderSourceSha256_.size() != 64) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Driver edits need the original Blender .blend file to be open"),
+                        5000);
+                    return;
+                }
                 DocumentSettings settings = session_.document().settings();
                 QJsonObject dataApi = settings.importedBlenderDataApi;
                 if (!dataApi.value(QStringLiteral("root")).isObject()) return;
-                QJsonArray driverPaths = dataApi.value(
-                    QStringLiteral("driver_paths")).toArray();
-                if (driverPaths.size() > 20000) return;
-                const auto samePath = [](const QJsonObject &left,
-                                         const QJsonObject &right) {
-                    return left.value(QStringLiteral("id_type")) ==
-                               right.value(QStringLiteral("id_type")) &&
-                           left.value(QStringLiteral("id_name")) ==
-                               right.value(QStringLiteral("id_name")) &&
-                           left.value(QStringLiteral("data_path")) ==
-                               right.value(QStringLiteral("data_path")) &&
-                           left.value(QStringLiteral("array_index")) ==
-                               right.value(QStringLiteral("array_index"));
-                };
-                bool changed = false;
-                if (add) {
-                    for (const QJsonValue &candidateValue : paths) {
-                        if (!candidateValue.isObject() ||
-                            driverPaths.size() >= 20000) {
-                            continue;
-                        }
-                        const QJsonObject candidate = candidateValue.toObject();
-                        const bool exists = std::any_of(
-                            driverPaths.cbegin(), driverPaths.cend(),
-                            [&candidate, &samePath](const QJsonValue &value) {
-                                return value.isObject() && samePath(
-                                    value.toObject(), candidate);
-                            });
-                        if (exists) continue;
-                        QJsonObject driverPath;
-                        driverPath.insert(QStringLiteral("id_type"),
-                            candidate.value(QStringLiteral("id_type")));
-                        driverPath.insert(QStringLiteral("id_name"),
-                            candidate.value(QStringLiteral("id_name")));
-                        driverPath.insert(QStringLiteral("data_path"),
-                            candidate.value(QStringLiteral("data_path")));
-                        driverPath.insert(QStringLiteral("array_index"),
-                            candidate.value(QStringLiteral("array_index")));
-                        driverPaths.append(driverPath);
-                        changed = true;
-                    }
-                } else {
-                    QJsonArray remainingPaths;
-                    for (const QJsonValue &existingValue : driverPaths) {
-                        bool remove = false;
-                        if (existingValue.isObject()) {
-                            for (const QJsonValue &candidateValue : paths) {
-                                if (candidateValue.isObject() && samePath(
-                                        existingValue.toObject(),
-                                        candidateValue.toObject())) {
-                                    remove = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (remove) changed = true;
-                        else remainingPaths.append(existingValue);
-                    }
-                    driverPaths = remainingPaths;
-                }
-                if (!changed) return;
-                dataApi.insert(QStringLiteral("driver_paths"), driverPaths);
-                if (dataApi.value(QStringLiteral("driver_paths_truncated")).isUndefined()) {
-                    dataApi.insert(QStringLiteral("driver_paths_truncated"), false);
-                }
-                settings.importedBlenderDataApi = dataApi;
-                DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setSettings(settings) ||
-                    !session_.commitTransaction(transaction)) {
-                    statusBar()->showMessage(
-                        QStringLiteral("Could not edit Blender driver paths"),
-                        4000);
+                const QString sourcePath = importedBlenderSourcePath_;
+                const QString operation = add
+                    ? QStringLiteral("Add Blender Drivers")
+                    : QStringLiteral("Remove Blender Drivers");
+                const QString action = add
+                    ? QStringLiteral("create real Blender drivers for")
+                    : QStringLiteral("remove Blender drivers from");
+                const QMessageBox::StandardButton answer = QMessageBox::warning(
+                    this,
+                    operation,
+                    QStringLiteral(
+                        "This will %1 the selected Data API properties in the original Blender file. classiCAD creates and verifies a backup beside it.\n\n%2\n\nContinue?")
+                        .arg(action, sourcePath),
+                    QMessageBox::Yes | QMessageBox::Cancel,
+                    QMessageBox::Cancel);
+                if (answer != QMessageBox::Yes) return;
+
+                BlenderDataApiDriverEditResult editResult;
+                QString errorMessage;
+                if (!editBlenderDataApiDrivers(
+                        sourcePath, importedBlenderSourceSha256_, paths, add,
+                        &editResult, &errorMessage)) {
+                    QMessageBox::critical(
+                        this,
+                        QStringLiteral("Could Not Edit Blender Drivers"),
+                        errorMessage.isEmpty()
+                            ? QStringLiteral("Blender could not edit the selected drivers.")
+                            : errorMessage);
                     return;
                 }
-                statusBar()->showMessage(
-                    add ? QStringLiteral("Blender driver paths added to the imported Data API metadata")
-                        : QStringLiteral("Blender driver paths removed from the imported Data API metadata"),
-                    3000);
+
+                const QJsonObject originalDataApi = dataApi;
+                dataApi.insert(QStringLiteral("driver_paths"),
+                               editResult.driverPaths);
+                dataApi.insert(QStringLiteral("driver_paths_truncated"),
+                               editResult.driverPathsTruncated);
+                settings.importedBlenderDataApi = dataApi;
+                importedBlenderSourceSha256_ = editResult.sourceSha256;
+                if (dataApi != originalDataApi) {
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    if (!transaction.setSettings(settings) ||
+                        !session_.commitTransaction(transaction)) {
+                        if (!session_.document().setSettings(settings)) {
+                            importedBlenderSourcePath_.clear();
+                            importedBlenderSourceSha256_.clear();
+                            QMessageBox::critical(
+                                this,
+                                QStringLiteral("Drivers Changed, Refresh Failed"),
+                                QStringLiteral(
+                                    "The Blender file was changed and backed up at %1, but classiCAD could not refresh its driver list.")
+                                    .arg(editResult.backupPath));
+                            return;
+                        }
+                    }
+                    markDocumentModified();
+                }
+                refreshCollections();
+                QString message = QStringLiteral("%1 Blender driver curve(s) across %2 selected path(s)")
+                    .arg(QString::number(editResult.changedFCurveCount),
+                         QString::number(editResult.changedPathCount));
+                if (editResult.driverPathsTruncated) {
+                    message += QStringLiteral(". The imported driver list is truncated");
+                }
+                if (!editResult.backupPath.isEmpty()) {
+                    message += QStringLiteral(". Backup: %1")
+                                   .arg(editResult.backupPath);
+                }
+                statusBar()->showMessage(message, 10000);
             };
         collectionCallbacks.activeViewLayerKey = [this]() {
             return session_.document().settings().activeViewLayerKey;

@@ -1501,12 +1501,12 @@ void CollectionsPanel::createLayout()
     addDataApiDriverButton_ = new QToolButton(this);
     addDataApiDriverButton_->setText(QStringLiteral("D+"));
     addDataApiDriverButton_->setToolTip(QStringLiteral(
-        "Add driver paths for selected animatable properties. classiCAD stores the paths but does not evaluate Blender drivers."));
+        "Create Blender drivers for the selected animatable properties in the original .blend file."));
     keyingSetRow->addWidget(addDataApiDriverButton_);
     removeDataApiDriverButton_ = new QToolButton(this);
     removeDataApiDriverButton_->setText(QStringLiteral("D−"));
     removeDataApiDriverButton_->setToolTip(QStringLiteral(
-        "Remove driver paths for selected animatable properties. classiCAD stores the paths but does not evaluate Blender drivers."));
+        "Remove Blender drivers from the selected animatable properties in the original .blend file."));
     keyingSetRow->addWidget(removeDataApiDriverButton_);
     layout->addLayout(keyingSetRow);
     auto *outlinerTree = new OutlinerTreeWidget(this);
@@ -3161,19 +3161,28 @@ void CollectionsPanel::editSelectedDataApiDriverPaths(bool add)
     const auto appendPath = [&paths, &uniquePaths](QJsonObject path) {
         const QJsonValue idType = path.value(QStringLiteral("id_type"));
         const QJsonValue idName = path.value(QStringLiteral("id_name"));
+        const QJsonValue libraryPath = path.value(
+            QStringLiteral("library_path"));
         const QJsonValue dataPath = path.value(QStringLiteral("data_path"));
         const QJsonValue arrayIndex = path.value(QStringLiteral("array_index"));
         if (!idType.isString() || idType.toString().isEmpty() ||
             !idName.isString() || idName.toString().isEmpty() ||
+            (!libraryPath.isUndefined() &&
+             (!libraryPath.isString() || libraryPath.toString().size() > 4096)) ||
             !dataPath.isString() || dataPath.toString().isEmpty() ||
             !arrayIndex.isDouble() || arrayIndex.toInt(-1) < 0 ||
             arrayIndex.toInt(-1) > 32766) {
             return;
         }
+        if (libraryPath.isUndefined()) {
+            path.insert(QStringLiteral("library_path"), QString());
+        }
         path.insert(QStringLiteral("use_entire_array"), false);
         const QString identity = idType.toString() + QLatin1Char('\x1f') +
-            idName.toString() + QLatin1Char('\x1f') + dataPath.toString() +
-            QLatin1Char('\x1f') + QString::number(arrayIndex.toInt());
+            idName.toString() + QLatin1Char('\x1f') +
+            path.value(QStringLiteral("library_path")).toString() +
+            QLatin1Char('\x1f') + dataPath.toString() + QLatin1Char('\x1f') +
+            QString::number(arrayIndex.toInt());
         if (uniquePaths.contains(identity)) return;
         uniquePaths.insert(identity);
         paths.append(path);

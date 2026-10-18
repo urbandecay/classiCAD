@@ -7756,32 +7756,6 @@ private:
                 }
                 pruneOutlinerSelection();
             };
-        const auto collectionHierarchyIds =
-            [this, collectionBelongsToActiveScene](CollectionId root) {
-            QVector<CollectionId> result;
-            const DocumentCollection *rootCollection =
-                session_.document().collection(root);
-            if (rootCollection == nullptr ||
-                !collectionBelongsToActiveScene(*rootCollection)) {
-                return result;
-            }
-            result.append(root);
-            QSet<quint64> visited{root.value()};
-            const QVector<DocumentCollection> collections =
-                session_.document().collections();
-            for (qsizetype index = 0; index < result.size(); ++index) {
-                const CollectionId parentId = result[index];
-                for (const DocumentCollection &candidate : collections) {
-                    if (collectionBelongsToActiveScene(candidate) &&
-                        candidate.parentIds.contains(parentId) &&
-                        !visited.contains(candidate.id.value())) {
-                        visited.insert(candidate.id.value());
-                        result.append(candidate.id);
-                    }
-                }
-            }
-            return result;
-        };
         const auto setCollectionsObjectSelection =
             [this, collectionBelongsToActiveScene](
                 const QVector<OutlinerCollectionContext> &targets,
@@ -8165,12 +8139,27 @@ private:
                         5000);
                 }
             };
-        const auto collectionRelationIds =
-            [this, collectionHierarchyIds,
-             collectionBelongsToActiveScene](CollectionId root) {
-                QVector<CollectionId> result = collectionHierarchyIds(root);
+        const auto collectionRelationIds = [this](CollectionId root) {
+                QVector<CollectionId> result;
+                if (!root.isValid() ||
+                    session_.document().collection(root) == nullptr) {
+                    return result;
+                }
                 QSet<quint64> visited;
-                for (const CollectionId id : result) visited.insert(id.value());
+                result.append(root);
+                visited.insert(root.value());
+                const QVector<DocumentCollection> collections =
+                    session_.document().collections();
+                for (qsizetype index = 0; index < result.size(); ++index) {
+                    const CollectionId parentId = result[index];
+                    for (const DocumentCollection &candidate : collections) {
+                        if (candidate.parentIds.contains(parentId) &&
+                            !visited.contains(candidate.id.value())) {
+                            visited.insert(candidate.id.value());
+                            result.append(candidate.id);
+                        }
+                    }
+                }
                 QVector<CollectionId> pending{root};
                 for (qsizetype index = 0; index < pending.size(); ++index) {
                     const DocumentCollection *collection =
@@ -8180,56 +8169,13 @@ private:
                         if (visited.contains(parentId.value())) continue;
                         const DocumentCollection *parent =
                             session_.document().collection(parentId);
-                        if (parent == nullptr ||
-                            !collectionBelongsToActiveScene(*parent)) {
-                            continue;
-                        }
+                        if (parent == nullptr) continue;
                         visited.insert(parentId.value());
                         result.append(parentId);
                         pending.append(parentId);
                     }
                 }
                 return result;
-            };
-        const auto collectionIsolationPlan =
-            [this, collectionRelationIds, collectionBelongsToActiveScene](
-                CollectionId root,
-                bool clickedHidden,
-                const std::function<bool(const DocumentCollection &)> &flagValue) {
-                const QVector<DocumentCollection> collections =
-                    session_.document().collections();
-                const QVector<CollectionId> relatedIds =
-                    collectionRelationIds(root);
-                QSet<quint64> related;
-                for (const CollectionId id : relatedIds) {
-                    related.insert(id.value());
-                }
-
-                bool alreadyIsolated = clickedHidden && !related.isEmpty();
-                if (alreadyIsolated) {
-                    for (const DocumentCollection &candidate : collections) {
-                        if (!collectionBelongsToActiveScene(candidate) ||
-                            candidate.id == root ||
-                            !candidate.libraryPath.isEmpty()) {
-                            continue;
-                        }
-                        const bool expectedHidden =
-                            !related.contains(candidate.id.value());
-                        if (flagValue(candidate) != expectedHidden) {
-                            alreadyIsolated = false;
-                            break;
-                        }
-                    }
-                }
-
-                QHash<quint64, bool> plan;
-                for (const DocumentCollection &candidate : collections) {
-                    if (!collectionBelongsToActiveScene(candidate)) continue;
-                    const bool hidden = alreadyIsolated
-                        ? false : !related.contains(candidate.id.value());
-                    plan.insert(candidate.id.value(), hidden);
-                }
-                return plan;
             };
         const auto objectsInCollections = [this](
             const QVector<CollectionId> &collectionIds) {
@@ -8352,7 +8298,8 @@ private:
             QVector<ObjectId> objectIds;
         };
         const auto layerCollectionBranchTargets = [this](
-            const OutlinerCollectionContext &target) {
+            const OutlinerCollectionContext &target,
+            bool includeObjects) {
             CollectionRestrictionTargets result;
             if (!target.hasViewLayerContext || target.viewLayerKey.isEmpty() ||
                 target.sourcePath.isEmpty()) {
@@ -8438,9 +8385,12 @@ private:
             QSet<quint64> visitedCollections;
             QSet<quint64> visitedObjects;
             QHash<quint64, QVector<ObjectId>> objectIdsByCollection;
-            for (const SceneObject &object : document.objects()) {
-                for (const CollectionId collectionId : object.collectionIds) {
-                    objectIdsByCollection[collectionId.value()].append(object.id);
+            if (includeObjects) {
+                for (const SceneObject &object : document.objects()) {
+                    for (const CollectionId collectionId : object.collectionIds) {
+                        objectIdsByCollection[collectionId.value()].append(
+                            object.id);
+                    }
                 }
             }
 
@@ -8481,7 +8431,8 @@ private:
                 // Blender updates the shared Collection ID at each LayerCollection
                 // occurrence, but skips direct Object changes only when this
                 // occurrence itself is excluded. Descendants are still visited.
-                if (!currentState.value(QStringLiteral("exclude")).toBool()) {
+                if (includeObjects &&
+                    !currentState.value(QStringLiteral("exclude")).toBool()) {
                     for (const ObjectId objectId :
                          objectIdsByCollection.value(current.id.value())) {
                         if (visitedObjects.contains(objectId.value())) continue;
@@ -8511,23 +8462,314 @@ private:
             }
             return result;
         };
+        struct LayerCollectionPathState {
+            CollectionId id = CollectionId::invalid();
+            QStringList sourcePath;
+            bool excludedOnPath = false;
+            bool editableOnPath = true;
+        };
+        const auto layerCollectionTreePaths = [this](
+            const QString &viewLayerKey) {
+            QVector<LayerCollectionPathState> result;
+            if (viewLayerKey.isEmpty()) return result;
+
+            const QVector<DocumentCollection> collections =
+                session_.document().collections();
+            QHash<QString, QVector<const DocumentCollection *>> bySourceId;
+            for (const DocumentCollection &collection : collections) {
+                if (!collection.sourceId.isEmpty()) {
+                    bySourceId[collection.sourceId].append(&collection);
+                }
+            }
+            const auto stateForPath = [viewLayerKey](
+                const DocumentCollection &collection,
+                const QStringList &path,
+                QJsonObject *state) {
+                for (const QJsonValue &value : collection.viewLayerStates) {
+                    const QJsonObject candidate = value.toObject();
+                    if (candidate.value(QStringLiteral("view_layer_key"))
+                            .toString() != viewLayerKey) {
+                        continue;
+                    }
+                    const QJsonArray storedPath = candidate.value(
+                        QStringLiteral("path")).toArray();
+                    if (storedPath.size() != path.size()) continue;
+                    bool matches = true;
+                    for (qsizetype index = 0; index < path.size(); ++index) {
+                        if (!storedPath[index].isString() ||
+                            storedPath[index].toString() != path[index]) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+                    if (state != nullptr) *state = candidate;
+                    return true;
+                }
+                return false;
+            };
+
+            QSet<QString> visitedPaths;
+            for (const DocumentCollection &collection : collections) {
+                if (collection.sourceId.isEmpty()) continue;
+                for (const QJsonValue &value : collection.viewLayerStates) {
+                    const QJsonObject state = value.toObject();
+                    if (state.value(QStringLiteral("view_layer_key"))
+                            .toString() != viewLayerKey) {
+                        continue;
+                    }
+                    QStringList path;
+                    bool validPath = true;
+                    for (const QJsonValue &part : state.value(
+                             QStringLiteral("path")).toArray()) {
+                        if (!part.isString() || part.toString().isEmpty()) {
+                            validPath = false;
+                            break;
+                        }
+                        path.append(part.toString());
+                    }
+                    if (!validPath || path.isEmpty() ||
+                        path.back() != collection.sourceId) {
+                        continue;
+                    }
+                    const QString pathKey =
+                        QString::number(collection.id.value()) +
+                        QLatin1Char('\x1f') +
+                        path.join(QLatin1Char('\x1e'));
+                    if (visitedPaths.contains(pathKey)) continue;
+
+                    CollectionId previousId = CollectionId::invalid();
+                    QStringList prefix;
+                    bool excludedOnPath = false;
+                    bool editableOnPath = true;
+                    bool resolved = true;
+                    for (qsizetype index = 0; index < path.size(); ++index) {
+                        prefix.append(path[index]);
+                        const auto candidates = bySourceId.constFind(
+                            prefix.back());
+                        if (candidates == bySourceId.cend()) {
+                            resolved = false;
+                            break;
+                        }
+                        const DocumentCollection *matched = nullptr;
+                        QJsonObject prefixState;
+                        for (const DocumentCollection *candidate :
+                             candidates.value()) {
+                            if (candidate == nullptr ||
+                                (previousId.isValid() &&
+                                 !candidate->parentIds.contains(previousId)) ||
+                                (index + 1 == path.size() &&
+                                 candidate->id != collection.id) ||
+                                !stateForPath(*candidate, prefix,
+                                              &prefixState)) {
+                                continue;
+                            }
+                            matched = candidate;
+                            break;
+                        }
+                        if (matched == nullptr) {
+                            resolved = false;
+                            break;
+                        }
+                        excludedOnPath = excludedOnPath ||
+                            prefixState.value(QStringLiteral("exclude"))
+                                .toBool();
+                        editableOnPath = editableOnPath &&
+                            matched->libraryPath.isEmpty();
+                        previousId = matched->id;
+                    }
+                    if (!resolved) continue;
+                    visitedPaths.insert(pathKey);
+                    result.append({collection.id, path, excludedOnPath,
+                                   editableOnPath});
+                }
+            }
+            return result;
+        };
+        const auto sceneCollectionTreeIds = [this,
+                                              collectionBelongsToActiveScene]() {
+            const QVector<DocumentCollection> collections =
+                session_.document().collections();
+            QHash<quint64, const DocumentCollection *> byId;
+            QHash<quint64, QVector<CollectionId>> childrenByParent;
+            QVector<CollectionId> roots;
+            for (const DocumentCollection &collection : collections) {
+                byId.insert(collection.id.value(), &collection);
+                if (!collectionBelongsToActiveScene(collection)) continue;
+                if (collection.isSceneMaster) {
+                    roots.append(collection.id);
+                }
+                for (const CollectionId parentId : collection.parentIds) {
+                    childrenByParent[parentId.value()].append(collection.id);
+                }
+            }
+            if (roots.isEmpty()) {
+                for (const DocumentCollection &collection : collections) {
+                    if (!collectionBelongsToActiveScene(collection)) continue;
+                    const bool hasActiveParent = std::any_of(
+                        collection.parentIds.cbegin(),
+                        collection.parentIds.cend(),
+                        [&byId, &collectionBelongsToActiveScene](
+                            CollectionId parentId) {
+                            const auto parent = byId.constFind(
+                                parentId.value());
+                            return parent != byId.cend() &&
+                                collectionBelongsToActiveScene(*parent.value());
+                        });
+                    if (!hasActiveParent) roots.append(collection.id);
+                }
+            }
+
+            QVector<CollectionId> result;
+            QVector<CollectionId> pending = roots;
+            QSet<quint64> visited;
+            for (qsizetype index = 0; index < pending.size(); ++index) {
+                const CollectionId id = pending[index];
+                if (visited.contains(id.value())) continue;
+                visited.insert(id.value());
+                const auto collection = byId.constFind(id.value());
+                if (collection == byId.cend() ||
+                    !collectionBelongsToActiveScene(*collection.value()) ||
+                    !collection.value()->libraryPath.isEmpty()) {
+                    continue;
+                }
+                result.append(id);
+                for (const CollectionId childId :
+                     childrenByParent.value(id.value())) {
+                    pending.append(childId);
+                }
+            }
+            return result;
+        };
+        const auto collectionIsolationWrites =
+            [this, collectionRelationIds, layerCollectionBranchTargets,
+             layerCollectionTreePaths,
+             sceneCollectionTreeIds](
+                const OutlinerCollectionContext &target,
+                bool clickedHidden,
+                const std::function<bool(const DocumentCollection &)> &flagValue) {
+                QHash<quint64, bool> writes;
+                const Document &document = session_.document();
+                const DocumentCollection *root =
+                    document.collection(target.collectionId);
+                if (root == nullptr || !root->libraryPath.isEmpty()) {
+                    return writes;
+                }
+
+                QSet<quint64> related;
+                for (const CollectionId id :
+                     collectionRelationIds(target.collectionId)) {
+                    related.insert(id.value());
+                }
+                if (!target.hasViewLayerContext) {
+                    bool alreadyIsolated = clickedHidden && !related.isEmpty();
+                    const QVector<CollectionId> treeIds =
+                        sceneCollectionTreeIds();
+                    for (const CollectionId id : treeIds) {
+                        const DocumentCollection *candidate =
+                            document.collection(id);
+                        if (candidate == nullptr || candidate->isSceneMaster ||
+                            id == target.collectionId) {
+                            continue;
+                        }
+                        const bool expectedHidden =
+                            !related.contains(id.value());
+                        if (flagValue(*candidate) != expectedHidden) {
+                            alreadyIsolated = false;
+                            break;
+                        }
+                    }
+
+                    // Blender's Scenes callback passes no LayerCollection to
+                    // its recursive setter. That setter returns immediately;
+                    // the clicked property has already changed, and only the
+                    // first parent chain is explicitly made visible.
+                    writes.insert(target.collectionId.value(), clickedHidden);
+                    if (!alreadyIsolated) {
+                        QSet<quint64> visited{target.collectionId.value()};
+                        const DocumentCollection *child = root;
+                        while (child != nullptr && !child->parentIds.isEmpty()) {
+                            const CollectionId parentId =
+                                child->parentIds.front();
+                            if (visited.contains(parentId.value())) break;
+                            visited.insert(parentId.value());
+                            const DocumentCollection *parent =
+                                document.collection(parentId);
+                            if (parent == nullptr || parent->isSceneMaster) break;
+                            writes.insert(parentId.value(), false);
+                            child = parent;
+                        }
+                    }
+                    return writes;
+                }
+
+                const QVector<LayerCollectionPathState> paths =
+                    layerCollectionTreePaths(target.viewLayerKey);
+                if (paths.isEmpty()) return writes;
+                bool alreadyIsolated = clickedHidden && !related.isEmpty();
+                for (const LayerCollectionPathState &path : paths) {
+                    if (!path.editableOnPath || path.excludedOnPath ||
+                        path.id == target.collectionId) {
+                        continue;
+                    }
+                    const DocumentCollection *candidate =
+                        document.collection(path.id);
+                    if (candidate == nullptr || candidate->isSceneMaster) {
+                        continue;
+                    }
+                    const bool expectedHidden =
+                        !related.contains(path.id.value());
+                    if (flagValue(*candidate) != expectedHidden) {
+                        alreadyIsolated = false;
+                        break;
+                    }
+                }
+                for (const LayerCollectionPathState &path : paths) {
+                    if (path.editableOnPath) {
+                        writes.insert(path.id.value(), alreadyIsolated
+                            ? false : true);
+                    }
+                }
+                if (alreadyIsolated) return writes;
+
+                const CollectionRestrictionTargets branch =
+                    layerCollectionBranchTargets(target, false);
+                for (const CollectionId id : branch.collectionIds) {
+                    writes.insert(id.value(), false);
+                }
+                QStringList prefix;
+                for (qsizetype index = 0;
+                     index + 1 < target.sourcePath.size(); ++index) {
+                    prefix.append(target.sourcePath[index]);
+                    const auto ancestor = std::find_if(
+                        paths.cbegin(), paths.cend(),
+                        [&prefix](const LayerCollectionPathState &candidate) {
+                            return candidate.sourcePath == prefix;
+                        });
+                    if (ancestor != paths.cend()) {
+                        writes.insert(ancestor->id.value(), false);
+                    }
+                }
+                return writes;
+            };
         collectionCallbacks.setViewportVisibility =
-            [this, layerCollectionBranchTargets,
-             collectionIsolationPlan, collectionBelongsToActiveScene](
+            [this, layerCollectionBranchTargets, collectionIsolationWrites,
+             collectionBelongsToActiveScene](
                 const OutlinerCollectionContext &target,
                 bool hideViewport, bool recursive,
                 bool isolate) {
                 const CollectionId id = target.collectionId;
                 if (isolate) {
-                    const QHash<quint64, bool> plan = collectionIsolationPlan(
-                        id, hideViewport, [](const DocumentCollection &entry) {
+                    const QHash<quint64, bool> plan = collectionIsolationWrites(
+                        target, hideViewport, [](const DocumentCollection &entry) {
                             return entry.hideViewport;
                         });
                     DocumentTransaction transaction = session_.beginTransaction();
                     bool changed = false;
                     for (const DocumentCollection &entry :
                          session_.document().collections()) {
-                        if (!collectionBelongsToActiveScene(entry) ||
+                        if ((!target.hasViewLayerContext &&
+                             !collectionBelongsToActiveScene(entry)) ||
                             !entry.libraryPath.isEmpty() ||
                             !plan.contains(entry.id.value())) {
                             continue;
@@ -8550,7 +8792,7 @@ private:
                 QVector<ObjectId> objectIds;
                 if (recursive && target.hasViewLayerContext) {
                     const CollectionRestrictionTargets branchTargets =
-                        layerCollectionBranchTargets(target);
+                        layerCollectionBranchTargets(target, true);
                     collectionIds = branchTargets.collectionIds;
                     objectIds = branchTargets.objectIds;
                 }
@@ -8675,22 +8917,23 @@ private:
                 }
             };
         collectionCallbacks.setCollectionRenderVisibility =
-            [this, layerCollectionBranchTargets,
-             collectionIsolationPlan, collectionBelongsToActiveScene](
+            [this, layerCollectionBranchTargets, collectionIsolationWrites,
+             collectionBelongsToActiveScene](
                 const OutlinerCollectionContext &target,
                 bool hideRender, bool recursive,
                 bool isolate) {
                 const CollectionId id = target.collectionId;
                 if (isolate) {
-                    const QHash<quint64, bool> plan = collectionIsolationPlan(
-                        id, hideRender, [](const DocumentCollection &entry) {
+                    const QHash<quint64, bool> plan = collectionIsolationWrites(
+                        target, hideRender, [](const DocumentCollection &entry) {
                             return entry.hideRender;
                         });
                     DocumentTransaction transaction = session_.beginTransaction();
                     bool changed = false;
                     for (const DocumentCollection &entry :
                          session_.document().collections()) {
-                        if (!collectionBelongsToActiveScene(entry) ||
+                        if ((!target.hasViewLayerContext &&
+                             !collectionBelongsToActiveScene(entry)) ||
                             !entry.libraryPath.isEmpty() ||
                             !plan.contains(entry.id.value())) {
                             continue;
@@ -8711,7 +8954,7 @@ private:
                 QVector<ObjectId> objectIds;
                 if (recursive && target.hasViewLayerContext) {
                     const CollectionRestrictionTargets branchTargets =
-                        layerCollectionBranchTargets(target);
+                        layerCollectionBranchTargets(target, true);
                     collectionIds = branchTargets.collectionIds;
                     objectIds = branchTargets.objectIds;
                 }
@@ -8748,22 +8991,23 @@ private:
                 }
             };
         collectionCallbacks.setCollectionSelectability =
-            [this, layerCollectionBranchTargets,
-             collectionIsolationPlan, collectionBelongsToActiveScene](
+            [this, layerCollectionBranchTargets, collectionIsolationWrites,
+             collectionBelongsToActiveScene](
                 const OutlinerCollectionContext &target,
                 bool hideSelect, bool recursive,
                 bool isolate) {
                 const CollectionId id = target.collectionId;
                 if (isolate) {
-                    const QHash<quint64, bool> plan = collectionIsolationPlan(
-                        id, hideSelect, [](const DocumentCollection &entry) {
+                    const QHash<quint64, bool> plan = collectionIsolationWrites(
+                        target, hideSelect, [](const DocumentCollection &entry) {
                             return entry.hideSelect;
                         });
                     DocumentTransaction transaction = session_.beginTransaction();
                     bool changed = false;
                     for (const DocumentCollection &entry :
                          session_.document().collections()) {
-                        if (!collectionBelongsToActiveScene(entry) ||
+                        if ((!target.hasViewLayerContext &&
+                             !collectionBelongsToActiveScene(entry)) ||
                             !entry.libraryPath.isEmpty() ||
                             !plan.contains(entry.id.value())) {
                             continue;
@@ -8786,7 +9030,7 @@ private:
                 QVector<ObjectId> objectIds;
                 if (recursive && target.hasViewLayerContext) {
                     const CollectionRestrictionTargets branchTargets =
-                        layerCollectionBranchTargets(target);
+                        layerCollectionBranchTargets(target, true);
                     collectionIds = branchTargets.collectionIds;
                     objectIds = branchTargets.objectIds;
                 }

@@ -2132,7 +2132,7 @@ void CollectionsPanel::createLayout()
             CollectionId::fromValue(value),
             CollectionId::fromValue(parentCollectionValue),
             hasLayerCollectionContext ? viewLayerKey : QString{},
-            hasLayerCollectionContext ? sourcePath : QStringList{},
+            sourcePath,
             hasLayerCollectionContext};
         const Qt::KeyboardModifiers modifiers =
             static_cast<OutlinerTreeWidget *>(tree_)

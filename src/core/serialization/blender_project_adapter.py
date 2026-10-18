@@ -5,6 +5,7 @@ import atexit
 from array import array
 import base64
 import hashlib
+import importlib.util
 import math
 import os
 import shutil
@@ -2480,9 +2481,31 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
         )
 
 
+def capture_outliner_refresh(extractor_script_path):
+    if (not isinstance(extractor_script_path, str) or
+            not extractor_script_path or
+            not os.path.isfile(extractor_script_path)):
+        raise RuntimeError("The Blender Outliner extractor is unavailable")
+    spec = importlib.util.spec_from_file_location(
+        "classiCAD_blender_scene_extract", extractor_script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load the Blender Outliner extractor")
+    extractor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(extractor)
+    extractor.require_pinned_blender()
+    extractor.SOURCE_PROJECT_NAMESPACE = extractor.source_project_namespace(
+        bpy.data.filepath)
+    return {
+        "libraries": extractor.outliner_library_tree(),
+        "orphans": extractor.outliner_orphan_groups(),
+        "data_api": extractor.outliner_data_api_tree(),
+        "library_overrides": extractor.outliner_library_overrides_tree(),
+    }
+
+
 def purge_project_orphans(source_path, staged_path, report_path,
                           do_local_ids=True, do_linked_ids=True,
-                          do_recursive=True):
+                          do_recursive=True, extractor_script_path=""):
     result = bpy.ops.wm.open_mainfile(
         filepath=os.path.abspath(source_path),
         load_ui=False,
@@ -2510,6 +2533,10 @@ def purge_project_orphans(source_path, staged_path, report_path,
                 separators=(",", ":"),
             )
         return
+    if not extractor_script_path:
+        raise RuntimeError(
+            "The Blender Outliner extractor is required after a successful purge")
+    refreshed = capture_outliner_refresh(extractor_script_path)
     result = bpy.ops.wm.save_as_mainfile(
         filepath=os.path.abspath(staged_path),
         check_existing=False,
@@ -2519,7 +2546,7 @@ def purge_project_orphans(source_path, staged_path, report_path,
         raise RuntimeError("Blender did not finish saving the purged project")
     with open(report_path, "w", encoding="utf-8") as report_file:
         json.dump(
-            {"removed_count": int(removed_count), "orphans": remaining_orphans},
+            {"removed_count": int(removed_count), **refreshed},
             report_file,
             ensure_ascii=False,
             separators=(",", ":"),
@@ -2538,19 +2565,23 @@ def main():
     if operation == "load" and len(arguments) == 3:
         load_project(arguments[1], arguments[2])
         return
-    if operation == "purge" and len(arguments) in {4, 7}:
+    if operation == "purge" and len(arguments) in {4, 7, 8}:
         purge_options = arguments[4:]
-        if purge_options and any(value not in {"0", "1"}
-                                 for value in purge_options):
+        flags = purge_options[:3]
+        extractor_script_path = (
+            purge_options[3] if len(purge_options) == 4 else "")
+        if len(purge_options) not in {0, 3, 4} or any(
+                value not in {"0", "1"} for value in flags):
             raise ValueError("Orphan purge options must be zero or one")
-        if purge_options:
+        if flags:
             do_local_ids, do_linked_ids, do_recursive = (
-                value == "1" for value in purge_options)
+                value == "1" for value in flags)
         else:
             do_local_ids = do_linked_ids = do_recursive = True
         purge_project_orphans(
             arguments[1], arguments[2], arguments[3],
-            do_local_ids, do_linked_ids, do_recursive)
+            do_local_ids, do_linked_ids, do_recursive,
+            extractor_script_path)
         return
     if operation == "keying_set_paths" and len(arguments) == 5:
         edit_keying_set_paths(

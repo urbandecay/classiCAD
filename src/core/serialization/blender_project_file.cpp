@@ -568,6 +568,22 @@ bool runBlenderAdapter(const QString &operation,
     if (!writeFile(adapterPath, adapterResource.readAll(), errorMessage)) {
         return false;
     }
+    QString sceneExtractorPath;
+    if (operation == QLatin1String("purge")) {
+        QFile extractorResource(
+            QStringLiteral(":/classiCAD/serialization/blender_scene_extract.py"));
+        if (!extractorResource.open(QIODevice::ReadOnly)) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender scene extractor is missing from this build"));
+            return false;
+        }
+        sceneExtractorPath = adapterDirectory.filePath(
+            QStringLiteral("blender_scene_extract.py"));
+        if (!writeFile(sceneExtractorPath, extractorResource.readAll(),
+                       errorMessage)) {
+            return false;
+        }
+    }
 
     QProcess process;
     process.setProgram(executable);
@@ -582,6 +598,7 @@ bool runBlenderAdapter(const QString &operation,
     if (!requestPath.isEmpty()) arguments.append(requestPath);
     if (!reportPath.isEmpty()) arguments.append(reportPath);
     arguments.append(additionalArguments);
+    if (!sceneExtractorPath.isEmpty()) arguments.append(sceneExtractorPath);
     process.setArguments(arguments);
     process.setProcessChannelMode(QProcess::SeparateChannels);
     process.start();
@@ -750,6 +767,49 @@ bool isValidDataApiSectionNode(const QJsonObject &node,
         }
     }
     return true;
+}
+
+bool isBoundedOutlinerJsonValue(const QJsonValue &value,
+                                int depth,
+                                int *nodeCount)
+{
+    constexpr int maximumDepth = 128;
+    constexpr int maximumNodes = 2000000;
+    constexpr int maximumContainerItems = 200000;
+    constexpr int maximumStringLength = 8192;
+    if (nodeCount == nullptr || depth > maximumDepth ||
+        ++(*nodeCount) > maximumNodes) {
+        return false;
+    }
+    if (value.isString()) {
+        return value.toString().size() <= maximumStringLength;
+    }
+    if (value.isDouble()) {
+        return std::isfinite(value.toDouble());
+    }
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        if (array.size() > maximumContainerItems) return false;
+        for (const QJsonValue &child : array) {
+            if (!isBoundedOutlinerJsonValue(child, depth + 1, nodeCount)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        if (object.size() > maximumContainerItems) return false;
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+            if (it.key().size() > maximumStringLength ||
+                !isBoundedOutlinerJsonValue(it.value(), depth + 1,
+                                            nodeCount)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return value.isBool() || value.isNull();
 }
 
 class BlenderDataApiSectionExtractionJob final : public QObject {
@@ -3004,6 +3064,138 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
         return true;
     }
 
+    const QJsonValue librariesValue = report.value(
+        QStringLiteral("libraries"));
+    const QJsonValue dataApiValue = report.value(QStringLiteral("data_api"));
+    const QJsonValue libraryOverridesValue = report.value(
+        QStringLiteral("library_overrides"));
+    int outlinerNodeCount = 0;
+    if (!librariesValue.isArray() ||
+        librariesValue.toArray().size() > 1024 ||
+        !dataApiValue.isObject() || !libraryOverridesValue.isObject() ||
+        !isBoundedOutlinerJsonValue(librariesValue, 0,
+                                    &outlinerNodeCount) ||
+        !isBoundedOutlinerJsonValue(dataApiValue, 0,
+                                    &outlinerNodeCount) ||
+        !isBoundedOutlinerJsonValue(libraryOverridesValue, 0,
+                                    &outlinerNodeCount)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid refreshed Outliner data"));
+        return false;
+    }
+
+    const QJsonArray remainingLibraries = librariesValue.toArray();
+    for (const QJsonValue &libraryValue : remainingLibraries) {
+        if (!libraryValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid Libraries row"));
+            return false;
+        }
+        const QJsonObject library = libraryValue.toObject();
+        const QJsonValue dataBlocksValue = library.value(
+            QStringLiteral("data_blocks"));
+        if (!library.value(QStringLiteral("id")).isString() ||
+            !library.value(QStringLiteral("name")).isString() ||
+            !library.value(QStringLiteral("filepath")).isString() ||
+            !library.value(QStringLiteral("parent_library_id")).isString() ||
+            !library.value(QStringLiteral("is_current_file")).isBool() ||
+            !dataBlocksValue.isArray() ||
+            dataBlocksValue.toArray().size() > 20000 ||
+            !library.value(QStringLiteral("truncated")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned invalid Libraries metadata"));
+            return false;
+        }
+    }
+
+    const QJsonObject refreshedDataApi = dataApiValue.toObject();
+    const QJsonValue dataApiRootValue = refreshedDataApi.value(
+        QStringLiteral("root"));
+    const QJsonValue driverPathsValue = refreshedDataApi.value(
+        QStringLiteral("driver_paths"));
+    int dataApiNodeCount = 0;
+    if (!dataApiRootValue.isObject() ||
+        !refreshedDataApi.value(QStringLiteral("truncated")).isBool() ||
+        !driverPathsValue.isArray() ||
+        driverPathsValue.toArray().size() > 20000 ||
+        !refreshedDataApi.value(
+            QStringLiteral("driver_paths_truncated")).isBool() ||
+        !refreshedDataApi.value(
+            QStringLiteral("object_type_filter_availability")).isObject() ||
+        !isValidDataApiSectionNode(dataApiRootValue.toObject(), 0,
+                                   &dataApiNodeCount)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid refreshed Data API metadata"));
+        return false;
+    }
+    const QJsonObject dataApiRoot = dataApiRootValue.toObject();
+    if (dataApiRoot.value(QStringLiteral("kind")).toString() !=
+            QLatin1String("STRUCT") ||
+        dataApiRoot.value(QStringLiteral("key")).toString() !=
+            QLatin1String("main")) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned an invalid refreshed Data API root"));
+        return false;
+    }
+    for (const QJsonValue &driverPathValue : driverPathsValue.toArray()) {
+        if (!driverPathValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid Data API driver path"));
+            return false;
+        }
+        const QJsonObject driverPath = driverPathValue.toObject();
+        const QJsonValue arrayIndexValue = driverPath.value(
+            QStringLiteral("array_index"));
+        if (!driverPath.value(QStringLiteral("id_type")).isString() ||
+            !driverPath.value(QStringLiteral("id_name")).isString() ||
+            !driverPath.value(QStringLiteral("library_path")).isString() ||
+            !driverPath.value(QStringLiteral("data_path")).isString() ||
+            !arrayIndexValue.isDouble() || arrayIndexValue.toInt(-1) < 0) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned invalid Data API driver path metadata"));
+            return false;
+        }
+    }
+    const QJsonObject refreshedLibraryOverrides =
+        libraryOverridesValue.toObject();
+    const QJsonValue overridePropertiesValue =
+        refreshedLibraryOverrides.value(QStringLiteral("properties"));
+    const QJsonValue overrideHierarchiesValue =
+        refreshedLibraryOverrides.value(QStringLiteral("hierarchies"));
+    if (!overridePropertiesValue.isObject() ||
+        !overrideHierarchiesValue.isArray() ||
+        overrideHierarchiesValue.toArray().size() > 1024 ||
+        !refreshedLibraryOverrides.value(QStringLiteral("truncated")).isBool() ||
+        !refreshedLibraryOverrides.value(QStringLiteral("has_libraries")).isBool()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid refreshed Library Overrides metadata"));
+        return false;
+    }
+    const QJsonObject overrideProperties = overridePropertiesValue.toObject();
+    if (!overrideProperties.value(QStringLiteral("groups")).isArray() ||
+        !overrideProperties.value(QStringLiteral("truncated")).isBool()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid refreshed Library Override properties"));
+        return false;
+    }
+    for (const QJsonValue &hierarchyValue : overrideHierarchiesValue.toArray()) {
+        if (!hierarchyValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid Library Override hierarchy"));
+            return false;
+        }
+        const QJsonObject hierarchy = hierarchyValue.toObject();
+        if (!hierarchy.value(QStringLiteral("id")).isString() ||
+            !hierarchy.value(QStringLiteral("name")).isString() ||
+            !hierarchy.value(QStringLiteral("current_file")).isBool() ||
+            !hierarchy.value(QStringLiteral("groups")).isArray() ||
+            !hierarchy.value(QStringLiteral("truncated")).isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned invalid Library Override hierarchy metadata"));
+            return false;
+        }
+    }
+
     if (!hasBlenderFileHeader(stagedPath)) {
         setError(errorMessage,
                  QStringLiteral("Blender did not produce a valid staged project after purging"));
@@ -3063,6 +3255,9 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
     }
 
     result->remainingOrphans = remainingOrphans;
+    result->remainingLibraries = remainingLibraries;
+    result->refreshedDataApi = refreshedDataApi;
+    result->refreshedLibraryOverrides = refreshedLibraryOverrides;
     result->backupPath = backupPath;
     result->sourceSha256 = committedSha256;
     result->removedDataBlockCount = removedDataBlockCount;

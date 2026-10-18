@@ -11964,3 +11964,13 @@ scene depth.
   and [purge operator](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L2339-L2509).
   Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
   passed; no GUI comparison was run.
+- The hundred-fifty-ninth Outliner update refreshes the Libraries, Data API,
+  and Library Overrides snapshots after Blender successfully purges orphan
+  data, alongside the refreshed Orphan Data groups. Blender captures those
+  trees from the post-purge file state before writing the staged `.blend`, and
+  classiCAD validates the bounded report before replacing the source or
+  updating the document settings. A purge that removes nothing still avoids a
+  save and leaves every snapshot unchanged. The background extractor receives
+  the opened file's project namespace so refreshed rows keep stable IDs. No
+  matched Outliner comparison was run. Python syntax parsing,
+  `cmake --build build -j4`, and `git diff --check` passed.

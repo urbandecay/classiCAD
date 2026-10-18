@@ -103,6 +103,9 @@ struct BlenderSceneImportReport {
 
 struct BlenderOrphanPurgeResult {
     QJsonArray remainingOrphans;
+    QJsonArray remainingLibraries;
+    QJsonObject refreshedDataApi;
+    QJsonObject refreshedLibraryOverrides;
     QString backupPath;
     QByteArray sourceSha256;
     int removedDataBlockCount = 0;

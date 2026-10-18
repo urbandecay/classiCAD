@@ -1117,7 +1117,11 @@ private:
 
         importedBlenderSourceSha256_ = purgeResult.sourceSha256;
         DocumentSettings settings = session_.document().settings();
+        settings.importedBlenderLibraries = purgeResult.remainingLibraries;
         settings.importedBlenderOrphans = purgeResult.remainingOrphans;
+        settings.importedBlenderDataApi = purgeResult.refreshedDataApi;
+        settings.importedBlenderLibraryOverrides =
+            purgeResult.refreshedLibraryOverrides;
         bool settingsCommitted = false;
         {
             DocumentTransaction transaction = session_.beginTransaction();
@@ -1131,7 +1135,7 @@ private:
                 QMessageBox::critical(
                     this,
                     QStringLiteral("Purge Finished, Refresh Failed"),
-                    QStringLiteral("Blender purged the original file and saved a backup at %1, but classiCAD could not refresh its Orphan Data list.")
+                    QStringLiteral("Blender purged the original file and saved a backup at %1, but classiCAD could not refresh its Outliner data.")
                         .arg(purgeResult.backupPath));
                 return;
             }

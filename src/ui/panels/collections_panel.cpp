@@ -1481,12 +1481,12 @@ void CollectionsPanel::createLayout()
     addKeyingSetPathsButton_ = new QToolButton(this);
     addKeyingSetPathsButton_->setText(QStringLiteral("+"));
     addKeyingSetPathsButton_->setToolTip(QStringLiteral(
-        "Add selected animatable properties to the active Keying Set"));
+        "Add selected animatable properties to the active Keying Set in the original Blender file. A verified backup is created first."));
     keyingSetRow->addWidget(addKeyingSetPathsButton_);
     removeKeyingSetPathsButton_ = new QToolButton(this);
     removeKeyingSetPathsButton_->setText(QStringLiteral("−"));
     removeKeyingSetPathsButton_->setToolTip(QStringLiteral(
-        "Remove selected animatable properties from the active Keying Set"));
+        "Remove selected animatable properties from the active Keying Set in the original Blender file. A verified backup is created first."));
     keyingSetRow->addWidget(removeKeyingSetPathsButton_);
     addDataApiDriverButton_ = new QToolButton(this);
     addDataApiDriverButton_->setText(QStringLiteral("D+"));
@@ -2986,8 +2986,10 @@ void CollectionsPanel::updateDataApiAnimationControls()
     removeKeyingSetPathsButton_->setVisible(visible);
     addDataApiDriverButton_->setVisible(visible);
     removeDataApiDriverButton_->setVisible(visible);
-    addKeyingSetPathsButton_->setEnabled(
-        visible && static_cast<bool>(callbacks_.editKeyingSetPaths));
+    const bool canEditKeyingSetPaths = callbacks_.canEditKeyingSetPaths &&
+        callbacks_.canEditKeyingSetPaths() &&
+        static_cast<bool>(callbacks_.editKeyingSetPaths);
+    addKeyingSetPathsButton_->setEnabled(visible && canEditKeyingSetPaths);
     addDataApiDriverButton_->setEnabled(
         visible && static_cast<bool>(callbacks_.editDataApiDriverPaths));
     removeDataApiDriverButton_->setEnabled(
@@ -3023,7 +3025,7 @@ void CollectionsPanel::updateDataApiAnimationControls()
         visible && dataApiKeyingSetCombo_->count() > 1 &&
         static_cast<bool>(callbacks_.setActiveKeyingSet));
     removeKeyingSetPathsButton_->setEnabled(
-        visible && static_cast<bool>(callbacks_.editKeyingSetPaths));
+        visible && canEditKeyingSetPaths);
 }
 
 void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
@@ -3047,6 +3049,8 @@ void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
         QJsonObject path = animationPathValue.toObject();
         const QJsonValue idType = path.value(QStringLiteral("id_type"));
         const QJsonValue idName = path.value(QStringLiteral("id_name"));
+        const QJsonValue libraryPath = path.value(
+            QStringLiteral("library_path"));
         const QJsonValue dataPath = path.value(QStringLiteral("data_path"));
         const QJsonValue arrayIndex = path.value(
             QStringLiteral("array_index"));
@@ -3054,6 +3058,8 @@ void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
             QStringLiteral("use_entire_array"));
         if (!idType.isString() || idType.toString().isEmpty() ||
             !idName.isString() || !dataPath.isString() ||
+            (!libraryPath.isUndefined() && !libraryPath.isString()) ||
+            libraryPath.toString().size() > 4096 ||
             dataPath.toString().isEmpty() || !arrayIndex.isDouble() ||
             arrayIndex.toInt(-1) < 0 || arrayIndex.toInt(-1) > 32766 ||
             !entireArray.isBool()) {
@@ -3065,6 +3071,8 @@ void CollectionsPanel::editSelectedDataApiKeyingSetPaths(bool add)
         const QString identity = path.value(QStringLiteral("id_type")).toString() +
             QLatin1Char('\x1f') +
             path.value(QStringLiteral("id_name")).toString() +
+            QLatin1Char('\x1f') +
+            path.value(QStringLiteral("library_path")).toString() +
             QLatin1Char('\x1f') +
             path.value(QStringLiteral("data_path")).toString() +
             QLatin1Char('\x1f') +

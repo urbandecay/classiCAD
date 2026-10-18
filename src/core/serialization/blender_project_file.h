@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QByteArray>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QVector>
 
 #include "core/document/scene_object.h"
@@ -103,6 +104,14 @@ struct BlenderOrphanPurgeResult {
     int removedDataBlockCount = 0;
 };
 
+struct BlenderKeyingSetEditResult {
+    QJsonArray keyingSets;
+    QString activeKeyingSetKey;
+    bool keyingSetsTruncated = false;
+    QString backupPath;
+    QByteArray sourceSha256;
+};
+
 // Hashes Blender project bytes without loading them into memory at once.
 QByteArray blenderProjectSha256(const QString &path,
                                 QString *errorMessage = nullptr);
@@ -113,6 +122,17 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
                             const QByteArray &expectedSourceSha256,
                             BlenderOrphanPurgeResult *result,
                             QString *errorMessage = nullptr);
+
+// Applies a Data API Keying Set path edit to an ordinary Blender source file,
+// stages the change, verifies a backup, and atomically replaces the source.
+bool editBlenderKeyingSetPaths(const QString &sourcePath,
+                               const QByteArray &expectedSourceSha256,
+                               const QString &sceneName,
+                               const QJsonObject &keyingSet,
+                               const QJsonArray &paths,
+                               bool add,
+                               BlenderKeyingSetEditResult *result,
+                               QString *errorMessage = nullptr);
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.
 // Returned meshes, curves, and surfaces retain their authoritative geometry;

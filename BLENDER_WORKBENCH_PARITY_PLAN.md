@@ -11748,3 +11748,19 @@ scene depth.
   and [Outliner activation handling](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L3926-L3950).
   `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
   Outliner comparison was run.
+- The hundred-forty-fourth Outliner update ports the Data API Add/Remove
+  Selected to Keying Set behavior from Blender 5.2.2's
+  [operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L2083-L2246).
+  The selected RNA property is resolved to its Blender ID, full name, library
+  path, RNA path, and array index; the active scene Keying Set is activated and
+  its paths are changed in the original `.blend` through Blender's adapter.
+  When there is no scene Keying Set, the operation creates Blender's absolute
+  scene set. Keying Set labels use Blender's `bl_label`, and path additions
+  pass the required target ID and reject failed additions. The edit uses a
+  source digest check, staged save, verified timestamped backup, and atomic
+  replacement; the Outliner metadata refreshes from Blender afterward. The
+  control is disabled without an imported ordinary `.blend`. Blender's
+  header-only active-set change is synced when a path operation is invoked.
+  `cmake --build build -j4`, Python syntax parsing, and `git diff --check`
+  passed. No GUI or matched Outliner interaction comparison was run; actual
+  keyframe insertion and deletion remain a separate animation category.

@@ -4194,6 +4194,10 @@ private:
             return session_.document().settings().importedBlenderLibraryOverrides;
         };
         collectionCallbacks.activeSceneRecord = activeSceneRecord;
+        collectionCallbacks.canEditKeyingSetPaths = [this]() {
+            return !importedBlenderSourcePath_.isEmpty() &&
+                   importedBlenderSourceSha256_.size() == 64;
+        };
         collectionCallbacks.activeSceneKey = [activeSceneRecord]() {
             return activeSceneRecord().value(
                 QStringLiteral("scene_id")).toString();
@@ -4247,11 +4251,11 @@ private:
                                       bool add) -> QString {
                 DocumentSettings settings = session_.document().settings();
                 QJsonArray scenes = settings.importedBlenderScenes;
+                const QJsonArray originalScenes = scenes;
                 const QString sceneId = activeSceneRecord().value(
                     QStringLiteral("scene_id")).toString();
                 if (sceneId.isEmpty()) return requestedKey;
                 QString activeKey = requestedKey;
-                bool changed = false;
                 for (qsizetype sceneIndex = 0; sceneIndex < scenes.size();
                      ++sceneIndex) {
                     QJsonObject scene = scenes[sceneIndex].toObject();
@@ -4297,7 +4301,6 @@ private:
                         keyingSet.insert(QStringLiteral("paths"), QJsonArray{});
                         keyingSets.append(keyingSet);
                         keyingSetIndex = keyingSets.size() - 1;
-                        changed = true;
                     }
 
                     QJsonObject keyingSet = keyingSets[keyingSetIndex].toObject();
@@ -4309,6 +4312,7 @@ private:
                         static const QStringList keys{
                             QStringLiteral("id_type"),
                             QStringLiteral("id_name"),
+                            QStringLiteral("library_path"),
                             QStringLiteral("data_path"),
                             QStringLiteral("array_index")};
                         for (const QString &key : keys) {
@@ -4351,29 +4355,128 @@ private:
                     if (updatedPaths != previousPaths) {
                         keyingSet.insert(QStringLiteral("paths"), updatedPaths);
                         keyingSets[keyingSetIndex] = keyingSet;
-                        changed = true;
                     }
                     if (scene.value(QStringLiteral("active_keying_set_key"))
                             .toString() != activeKey) {
                         scene.insert(QStringLiteral("active_keying_set_key"),
                                      activeKey);
-                        changed = true;
                     }
                     scene.insert(QStringLiteral("keying_sets"), keyingSets);
                     scenes[sceneIndex] = scene;
                     break;
                 }
-                if (!changed) return activeKey;
-                settings.importedBlenderScenes = scenes;
-                DocumentTransaction transaction = session_.beginTransaction();
-                if (!transaction.setSettings(settings) ||
-                    !session_.commitTransaction(transaction)) {
+                if (importedBlenderSourcePath_.isEmpty() ||
+                    importedBlenderSourceSha256_.size() != 64) {
                     statusBar()->showMessage(
-                        QStringLiteral("Could not edit the active Keying Set"),
-                        4000);
+                        QStringLiteral("Keying Set paths can be edited only for an imported ordinary Blender file"),
+                        5000);
                     return requestedKey;
                 }
-                return activeKey;
+                QJsonObject editedScene;
+                QJsonObject editedKeyingSet;
+                for (const QJsonValue &sceneValue : scenes) {
+                    const QJsonObject scene = sceneValue.toObject();
+                    if (scene.value(QStringLiteral("scene_id")).toString() !=
+                        sceneId) {
+                        continue;
+                    }
+                    editedScene = scene;
+                    for (const QJsonValue &keyingSetValue : scene.value(
+                             QStringLiteral("keying_sets")).toArray()) {
+                        const QJsonObject keyingSet = keyingSetValue.toObject();
+                        if (keyingSet.value(QStringLiteral("key")).toString() ==
+                            activeKey) {
+                            editedKeyingSet = keyingSet;
+                            break;
+                        }
+                    }
+                    break;
+                }
+                const QString sceneName = editedScene.value(
+                    QStringLiteral("name")).toString();
+                if (sceneName.isEmpty() || editedKeyingSet.isEmpty()) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not resolve the active Blender scene or Keying Set"),
+                        5000);
+                    return requestedKey;
+                }
+
+                const QString sourcePath = importedBlenderSourcePath_;
+                const QMessageBox::StandardButton answer = QMessageBox::warning(
+                    this,
+                    QStringLiteral("Edit Blender Keying Set Paths"),
+                    QStringLiteral(
+                        "This can update the original Blender file. If a change is needed, classiCAD creates and verifies a backup beside it.\n\n%1\n\nContinue?")
+                        .arg(sourcePath),
+                    QMessageBox::Yes | QMessageBox::Cancel,
+                    QMessageBox::Cancel);
+                if (answer != QMessageBox::Yes) return requestedKey;
+
+                BlenderKeyingSetEditResult editResult;
+                QString errorMessage;
+                if (!editBlenderKeyingSetPaths(
+                        sourcePath, importedBlenderSourceSha256_, sceneName,
+                        editedKeyingSet, paths, add, &editResult,
+                        &errorMessage)) {
+                    QMessageBox::critical(
+                        this,
+                        QStringLiteral("Could Not Edit Blender Keying Set"),
+                        errorMessage.isEmpty()
+                            ? QStringLiteral("Blender could not edit the Keying Set paths.")
+                            : errorMessage);
+                    return requestedKey;
+                }
+
+                for (qsizetype sceneIndex = 0; sceneIndex < scenes.size();
+                     ++sceneIndex) {
+                    QJsonObject scene = scenes[sceneIndex].toObject();
+                    if (scene.value(QStringLiteral("scene_id")).toString() !=
+                        sceneId) {
+                        continue;
+                    }
+                    scene.insert(QStringLiteral("keying_sets"),
+                                 editResult.keyingSets);
+                    scene.insert(QStringLiteral("keying_sets_truncated"),
+                                 editResult.keyingSetsTruncated);
+                    scene.insert(QStringLiteral("active_keying_set_key"),
+                                 editResult.activeKeyingSetKey);
+                    scenes[sceneIndex] = scene;
+                    break;
+                }
+                settings.importedBlenderScenes = scenes;
+                importedBlenderSourceSha256_ = editResult.sourceSha256;
+                const bool importedScenesChanged =
+                    settings.importedBlenderScenes != originalScenes;
+                if (importedScenesChanged) {
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    if (!transaction.setSettings(settings) ||
+                        !session_.commitTransaction(transaction)) {
+                        if (!session_.document().setSettings(settings)) {
+                            importedBlenderSourcePath_.clear();
+                            importedBlenderSourceSha256_.clear();
+                            const QString sourceResult =
+                                editResult.backupPath.isEmpty()
+                                    ? QStringLiteral("The Blender file was unchanged.")
+                                    : QStringLiteral("The Blender file was changed and backed up at %1.")
+                                          .arg(editResult.backupPath);
+                            QMessageBox::critical(
+                                this,
+                                QStringLiteral("Keying Set Changed, Refresh Failed"),
+                                QStringLiteral("%1 classiCAD could not refresh its Keying Set list.")
+                                    .arg(sourceResult));
+                            return editResult.activeKeyingSetKey;
+                        }
+                    }
+                    markDocumentModified();
+                }
+                refreshCollections();
+                statusBar()->showMessage(
+                    editResult.backupPath.isEmpty()
+                        ? QStringLiteral("Keying Set paths already match Blender")
+                        : QStringLiteral("Keying Set paths updated. Backup: %1")
+                              .arg(editResult.backupPath),
+                    10000);
+                return editResult.activeKeyingSetKey;
             };
         collectionCallbacks.editDataApiDriverPaths =
             [this](const QJsonArray &paths, bool add) {

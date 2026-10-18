@@ -264,6 +264,7 @@ struct CollectionsPanelCallbacks {
     std::function<QJsonObject()> dataApi;
     std::function<QJsonObject()> activeSceneRecord;
     std::function<void(const QString &)> setActiveKeyingSet;
+    std::function<bool()> canEditKeyingSetPaths;
     std::function<QString(const QString &, const QJsonArray &, bool)>
         editKeyingSetPaths;
     std::function<void(const QJsonArray &, bool)> editDataApiDriverPaths;

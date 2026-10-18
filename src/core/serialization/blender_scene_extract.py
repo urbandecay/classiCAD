@@ -2387,6 +2387,7 @@ def outliner_data_api_tree():
             return {
                 "id_type": str(id_block.id_type)[:256],
                 "id_name": str(id_block.name_full)[:4096],
+                "library_path": source_library_path(id_block)[:4096],
                 "data_path": data_path,
                 "array_index": int(array_index),
                 "use_entire_array": bool(is_array),
@@ -2651,7 +2652,7 @@ def outliner_scene_keying_sets(scene):
             truncated = True
             break
         try:
-            name = str(keying_set.name)[:4096]
+            name = str(keying_set.bl_label)[:4096]
             key = "keying-set:%d:%s" % (index, name)
             is_absolute = bool(keying_set.is_path_absolute)
             source_paths = keying_set.paths
@@ -2668,6 +2669,9 @@ def outliner_scene_keying_sets(scene):
                     "id_type": str(source_path.id_type)[:256],
                     "id_name": (str(id_block.name_full)[:4096]
                                 if isinstance(id_block, bpy.types.ID) else ""),
+                    "library_path": (
+                        source_library_path(id_block)[:4096]
+                        if isinstance(id_block, bpy.types.ID) else ""),
                     "data_path": str(source_path.data_path)[:4096],
                     "array_index": int(source_path.array_index),
                     "use_entire_array": bool(

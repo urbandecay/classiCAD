@@ -1490,6 +1490,258 @@ def outliner_orphan_groups():
     return groups
 
 
+def outliner_data_ids():
+    seen = set()
+    for property_rna in bpy.data.bl_rna.properties:
+        if getattr(property_rna, "type", "") != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, property_rna.identifier)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            continue
+        for id_block in collection:
+            if not isinstance(id_block, bpy.types.ID):
+                continue
+            pointer = id_block.as_pointer()
+            if pointer in seen:
+                continue
+            seen.add(pointer)
+            yield id_block
+
+
+def normalized_library_path(path):
+    if not path:
+        return ""
+    return os.path.normcase(os.path.realpath(bpy.path.abspath(path)))
+
+
+def resolve_outliner_data_id(path):
+    id_type = path.get("id_type", "")
+    id_name = path.get("id_name", "")
+    library_path = path.get("library_path", "")
+    if not isinstance(id_type, str) or not id_type or len(id_type) > 256:
+        raise ValueError("Keying Set path has an invalid ID type")
+    if not isinstance(id_name, str) or len(id_name) > 4096:
+        raise ValueError("Keying Set path has an invalid ID name")
+    if not isinstance(library_path, str) or len(library_path) > 4096:
+        raise ValueError("Keying Set path has an invalid library path")
+    if not id_name:
+        raise ValueError("Keying Set path has no target data block")
+
+    expected_library = normalized_library_path(library_path)
+    matches = []
+    for id_block in outliner_data_ids():
+        if (str(id_block.id_type) != id_type or
+                str(id_block.name_full) != id_name):
+            continue
+        actual_library = normalized_library_path(
+            getattr(getattr(id_block, "library", None), "filepath", ""))
+        if actual_library == expected_library:
+            matches.append(id_block)
+    if len(matches) != 1:
+        raise ValueError(
+            "Could not resolve Keying Set target %s (%s) uniquely" %
+            (id_name, id_type))
+    return matches[0]
+
+
+def outliner_keying_set_records(scene):
+    records = []
+    active_key = ""
+    truncated = False
+    collection = scene.keying_sets
+    active = collection.active
+    if len(collection) > 1024:
+        raise ValueError("Scene has too many Keying Sets to edit safely")
+    remaining_paths = 20000
+    for index, keying_set in enumerate(collection):
+        paths = []
+        for source_path in keying_set.paths:
+            if remaining_paths <= 0:
+                truncated = True
+                break
+            id_block = source_path.id
+            paths.append({
+                "id_type": str(source_path.id_type)[:256],
+                "id_name": (str(id_block.name_full)[:4096]
+                            if isinstance(id_block, bpy.types.ID) else ""),
+                "library_path": (
+                    str(getattr(getattr(id_block, "library", None), "filepath", ""))[:4096]
+                    if isinstance(id_block, bpy.types.ID) else ""),
+                "data_path": str(source_path.data_path)[:4096],
+                "array_index": int(source_path.array_index),
+                "use_entire_array": bool(source_path.use_entire_array),
+                "group": str(source_path.group)[:4096],
+                "group_method": str(source_path.group_method)[:128],
+            })
+            remaining_paths -= 1
+        name = str(keying_set.bl_label)
+        key = "keying-set:%d:%s" % (index, name)
+        records.append({
+            "key": key,
+            "name": name[:4096],
+            "is_absolute": bool(keying_set.is_path_absolute),
+            "paths": paths,
+        })
+        if keying_set == active:
+            active_key = key
+        if remaining_paths <= 0 and len(keying_set.paths) > len(paths):
+            truncated = True
+            break
+    return records, active_key, truncated
+
+
+def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
+    with open(request_path, "r", encoding="utf-8") as request_file:
+        request = json.load(request_file)
+    if not isinstance(request, dict):
+        raise ValueError("Keying Set edit request must be an object")
+    scene_name = request.get("scene_name", "")
+    keying_set_request = request.get("keying_set")
+    paths = request.get("paths")
+    add = request.get("add")
+    if (not isinstance(scene_name, str) or not scene_name or
+            len(scene_name) > 4096 or
+            not isinstance(keying_set_request, dict) or
+            not isinstance(paths, list) or len(paths) > 20000 or
+            not isinstance(add, bool)):
+        raise ValueError("Keying Set edit request is invalid")
+
+    result = bpy.ops.wm.open_mainfile(
+        filepath=os.path.abspath(source_path),
+        load_ui=True,
+        use_scripts=False,
+    )
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender did not finish opening the source project")
+    if any(scene.get("classiCAD_format") == PROJECT_FORMAT
+           for scene in bpy.data.scenes):
+        raise RuntimeError(
+            "Keying Set editing cannot edit a classiCAD-native Blender project")
+
+    scene_matches = [scene for scene in bpy.data.scenes
+                     if scene.name_full == scene_name]
+    if len(scene_matches) != 1:
+        raise ValueError("Could not resolve the imported Blender scene uniquely")
+    scene = scene_matches[0]
+    collection = scene.keying_sets
+    key = keying_set_request.get("key", "")
+    name = keying_set_request.get("name", "")
+    if (not isinstance(key, str) or not key or len(key) > 8192 or
+            not isinstance(name, str) or not name or len(name) > 4096):
+        raise ValueError("Active Keying Set identity is invalid")
+
+    keying_set = None
+    if key.startswith("keying-set:"):
+        encoded_index_and_name = key[len("keying-set:"):]
+        index_text, separator, encoded_name = encoded_index_and_name.partition(":")
+        if not separator:
+            raise ValueError("Imported Keying Set identity is invalid")
+        try:
+            index = int(index_text)
+        except ValueError as error:
+            raise ValueError("Imported Keying Set index is invalid") from error
+        if (index < 0 or index >= len(collection) or
+                collection[index].bl_label != encoded_name or
+                encoded_name != name):
+            raise ValueError(
+                "The active Keying Set no longer matches the imported Blender file")
+        keying_set = collection[index]
+    else:
+        if not key.startswith("classiCAD-keying-set:"):
+            raise ValueError("Unsupported Keying Set identity")
+        if any(existing.bl_label == name for existing in collection):
+            raise ValueError("A Blender Keying Set with this name already exists")
+        keying_set = collection.new(idname="KeyingSet", name=name)
+
+    # Blender's Outliner creates a scene-owned absolute set when there is no
+    # active scene Keying Set (for example, when a built-in set is active).
+    set_index = next((index for index, candidate in enumerate(collection)
+                      if candidate == keying_set), -1)
+    if set_index < 0:
+        raise RuntimeError("Blender could not activate the edited Keying Set")
+    changed = int(collection.active_index) != set_index
+    collection.active_index = set_index
+    absolute = bool(keying_set.is_path_absolute)
+
+    normalized_paths = []
+    for path in paths:
+        if not isinstance(path, dict):
+            raise ValueError("Keying Set path must be an object")
+        data_path = path.get("data_path", "")
+        array_index = path.get("array_index", 0)
+        entire_array = path.get("use_entire_array", False)
+        group = path.get("group", "")
+        group_method = path.get("group_method", "KEYINGSET")
+        if (not isinstance(data_path, str) or not data_path or
+                len(data_path) > 4096 or isinstance(array_index, bool) or
+                not isinstance(array_index, int) or
+                array_index < 0 or array_index > 32766 or
+                not isinstance(entire_array, bool) or
+                not isinstance(group, str) or len(group) > 4096 or
+                group_method not in {"NAMED", "NONE", "KEYINGSET"}):
+            raise ValueError("Keying Set path metadata is invalid")
+        id_block = resolve_outliner_data_id(path)
+        try:
+            id_block.path_resolve(data_path)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError) as error:
+            raise ValueError(
+                "Keying Set RNA path could not be resolved: " + data_path
+            ) from error
+        normalized_paths.append((path, id_block, data_path, array_index,
+                                 entire_array, group, group_method))
+
+    for path, id_block, data_path, array_index, entire_array, group, group_method in normalized_paths:
+        id_type = str(path.get("id_type", ""))
+        if not id_type or len(id_type) > 256:
+            raise ValueError("Keying Set path has an invalid ID type")
+        matches = []
+        for existing in keying_set.paths:
+            same_id = existing.id == id_block
+            if (same_id and existing.data_path == data_path and
+                    int(existing.array_index) == array_index):
+                matches.append(existing)
+        if add:
+            if matches:
+                continue
+            keying_path = keying_set.paths.add(
+                id_block, data_path, index=array_index,
+                group_method=group_method, group_name=group,
+            )
+            if keying_path is None:
+                raise RuntimeError(
+                    "Blender could not add the selected path to the Keying Set")
+            keying_path.use_entire_array = entire_array
+            changed = True
+        else:
+            for existing in matches:
+                keying_set.paths.remove(existing)
+                changed = True
+
+    records, active_key, truncated = outliner_keying_set_records(scene)
+    if not active_key:
+        raise RuntimeError("Blender did not retain the active Keying Set")
+    result = bpy.ops.wm.save_as_mainfile(
+        filepath=os.path.abspath(staged_path),
+        check_existing=False,
+        compress=True,
+    )
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender did not finish saving the edited Keying Set")
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        json.dump(
+            {"scene_name": scene.name_full,
+             "keying_sets": records,
+             "active_keying_set_key": active_key,
+             "keying_sets_truncated": truncated,
+             "changed": changed},
+            report_file,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
 def purge_project_orphans(source_path, staged_path, report_path):
     result = bpy.ops.wm.open_mainfile(
         filepath=os.path.abspath(source_path),
@@ -1539,6 +1791,10 @@ def main():
         return
     if operation == "purge" and len(arguments) == 4:
         purge_project_orphans(arguments[1], arguments[2], arguments[3])
+        return
+    if operation == "keying_set_paths" and len(arguments) == 5:
+        edit_keying_set_paths(
+            arguments[1], arguments[2], arguments[3], arguments[4])
         return
     raise RuntimeError("invalid classiCAD adapter arguments")
 

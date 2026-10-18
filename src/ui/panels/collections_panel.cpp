@@ -8079,9 +8079,20 @@ void CollectionsPanel::syncSelection()
                 }
                 item->setSelected(rowSelected);
                 QFont font = item->font(nameColumn);
-                const bool rowIsActive = !sourceBaseMissing &&
-                    localObjectInThisLayer && activeId.isValid() &&
-                    value == activeId.value();
+                bool rowIsActive = false;
+                if (!sourceBaseMissing && localObjectInThisLayer) {
+                    const bool hasLayerActiveObject = hasLayerEntry &&
+                        layerEntry->activeObjectSourceIdAvailable;
+                    if (hasLayerActiveObject && !localObject &&
+                        !sourceObjectIdentity.isEmpty()) {
+                        rowIsActive = layerEntry->activeObjectSourceId ==
+                            sourceObjectIdentity;
+                    } else if (!hasLayerActiveObject ||
+                               rowViewLayerKey == activeViewLayerKey) {
+                        rowIsActive = activeId.isValid() &&
+                            value == activeId.value();
+                    }
+                }
                 font.setBold(rowIsActive);
                 item->setFont(nameColumn, font);
                 if (rowIsActive) {
@@ -8103,8 +8114,16 @@ void CollectionsPanel::syncSelection()
             }
         }
     }
-    activeItem = activeLayerItem != nullptr ? activeLayerItem
-        : (currentActiveItem != nullptr ? currentActiveItem : anyActiveItem);
+    const auto activeLayerEntry = viewLayerEntriesByKey.constFind(
+        activeViewLayerKey);
+    const bool activeLayerObjectIsKnown = activeLayerEntry !=
+            viewLayerEntriesByKey.cend() &&
+        activeLayerEntry->activeObjectSourceIdAvailable;
+    activeItem = activeLayerItem;
+    if (activeItem == nullptr && !activeLayerObjectIsKnown) {
+        activeItem = currentActiveItem != nullptr
+            ? currentActiveItem : anyActiveItem;
+    }
     if (activeItem != nullptr) {
         tree_->setCurrentItem(activeItem, nameColumn,
                               QItemSelectionModel::NoUpdate);

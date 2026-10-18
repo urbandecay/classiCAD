@@ -11897,3 +11897,14 @@ scene depth.
   and [Object context menu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L300-L334).
   `cmake --build build -j4` and `git diff --check` passed. No GUI or matched
   Outliner interaction comparison was run.
+- The hundred-fifty-fourth Outliner selection update uses each View Layer's
+  captured active-object identity when bolding rows and choosing the current
+  row in All View Layers mode. Previously the active object's global ID marked
+  the same object active in every layer where it appeared. The current active
+  layer and local-object fallback still use classiCAD's live active selection
+  when per-layer Blender identity is unavailable. Blender stores an active
+  Base on each ViewLayer (`basact`); if the active layer explicitly reports no
+  active object, the current Outliner row is left in place instead of jumping
+  to another layer's active row. See Blender's [5.2.2 layer data definition](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesdna/DNA_layer_types.h#L223-L235).
+  `cmake --build build -j4` and `git diff --check` passed. No GUI or matched
+  Outliner comparison was run.

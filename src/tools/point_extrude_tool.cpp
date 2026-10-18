@@ -114,7 +114,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     lastInput_ = {};
     constraintAxisKey_ = 0;
     normalConstraint_ = false;
-    weldEnabled_ = true;
+    weldEnabled_ = false;
     hasLastInput_ = false;
     hasCursorPoint_ = false;
     snap_ = {};

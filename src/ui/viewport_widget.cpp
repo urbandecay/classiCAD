@@ -140,6 +140,72 @@ constexpr qreal kDragSnapBreakawayPixels = 36.0;
 
 enum class ComponentSelectionMode { Vertex, Edge, Face };
 
+enum class ControlPointWeldDomain { None, Point, Curve, Surface };
+
+bool isCurveGeometryType(GeometryType type)
+{
+    switch (type) {
+    case GeometryType::Line:
+    case GeometryType::Arc:
+    case GeometryType::Bezier:
+    case GeometryType::Nurbs:
+    case GeometryType::Rectangle:
+    case GeometryType::Circle:
+    case GeometryType::PolyCurve:
+    case GeometryType::Ellipse:
+    case GeometryType::Polygon:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isCurveOrPointGeometryType(GeometryType type)
+{
+    return type == GeometryType::Point || isCurveGeometryType(type);
+}
+
+ControlPointWeldDomain controlPointWeldDomain(GeometryType type)
+{
+    if (type == GeometryType::Point) {
+        return ControlPointWeldDomain::Point;
+    }
+    if (isCurveGeometryType(type)) {
+        return ControlPointWeldDomain::Curve;
+    }
+    if (type == GeometryType::NurbsSurface ||
+        type == GeometryType::NurbsSolid) {
+        return ControlPointWeldDomain::Surface;
+    }
+    return ControlPointWeldDomain::None;
+}
+
+bool controlPointWeldDomainsCompatible(ControlPointWeldDomain first,
+                                       ControlPointWeldDomain second)
+{
+    if (first == ControlPointWeldDomain::None ||
+        second == ControlPointWeldDomain::None) {
+        return false;
+    }
+    return first == second ||
+           (first == ControlPointWeldDomain::Point &&
+            second == ControlPointWeldDomain::Curve) ||
+           (first == ControlPointWeldDomain::Curve &&
+            second == ControlPointWeldDomain::Point);
+}
+
+QString outlinerGeometryName(const Shape &shape)
+{
+    if (shape.geometryType == GeometryType::Nurbs) {
+        if (validateNurbsCurve(shape.nurbs) && shape.nurbs.degree == 1 &&
+            shape.nurbs.controlPoints.size() == 2) {
+            return QStringLiteral("Edge");
+        }
+        return QStringLiteral("NURBS Curve");
+    }
+    return geometryTypeName(shape.geometryType);
+}
+
 struct ComponentPickCycleState {
     bool valid = false;
     QPointF position;
@@ -1489,7 +1555,7 @@ public:
             info.containerId = document_.containerId(sceneObject.id);
             info.containerName = containerNames.value(
                 info.containerId.value(), QStringLiteral("Object"));
-            info.geometryName = geometryTypeName(sceneObject.geometry.geometryType);
+            info.geometryName = outlinerGeometryName(sceneObject.geometry);
             const QString geometryKey =
                 QStringLiteral("%1:%2")
                     .arg(info.containerId.value())
@@ -3649,7 +3715,7 @@ public:
 
         const QHash<quint64, QSet<int>> &selected =
             componentSelections_[static_cast<int>(ComponentSelectionMode::Vertex)];
-        QSet<quint64> selectedWeldGroups;
+        QHash<int, QSet<quint64>> selectedWeldGroupsByDomain;
         for (auto selection = selected.cbegin(); selection != selected.cend();
              ++selection) {
             const ObjectId objectId = ObjectId::fromValue(selection.key());
@@ -3658,6 +3724,8 @@ public:
                 !document_.isObjectEditable(objectId)) {
                 continue;
             }
+            const ControlPointWeldDomain weldDomain =
+                controlPointWeldDomain(shape->geometryType);
 
             int pointCount = 0;
             if (shape->geometryType == GeometryType::Point) {
@@ -3681,8 +3749,10 @@ public:
                     if (index < shape->controlPointWeldGroups.size()) {
                         const quint64 group =
                             shape->controlPointWeldGroups[index];
-                        if (group != 0) {
-                            selectedWeldGroups.insert(group);
+                        if (group != 0 &&
+                            weldDomain != ControlPointWeldDomain::None) {
+                            selectedWeldGroupsByDomain[
+                                static_cast<int>(weldDomain)].insert(group);
                         }
                     }
                 }
@@ -3692,7 +3762,7 @@ public:
             }
         }
 
-        if (!selectedWeldGroups.isEmpty()) {
+        if (!selectedWeldGroupsByDomain.isEmpty()) {
             for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
                 const ObjectId objectId = document_.objectIdAt(shapeIndex);
                 const Shape *shape = document_.shape(objectId);
@@ -3701,16 +3771,33 @@ public:
                     shape->controlPointWeldGroups.isEmpty()) {
                     continue;
                 }
-                QSet<int> &objectTargets = targets[objectId.value()];
+                const ControlPointWeldDomain weldDomain =
+                    controlPointWeldDomain(shape->geometryType);
+                QSet<quint64> groups;
+                for (auto selectedGroups =
+                         selectedWeldGroupsByDomain.cbegin();
+                     selectedGroups != selectedWeldGroupsByDomain.cend();
+                     ++selectedGroups) {
+                    if (controlPointWeldDomainsCompatible(
+                            static_cast<ControlPointWeldDomain>(
+                                selectedGroups.key()),
+                            weldDomain)) {
+                        groups.unite(selectedGroups.value());
+                    }
+                }
+                if (groups.isEmpty()) {
+                    continue;
+                }
+                QSet<int> objectTargets = targets.value(objectId.value());
                 for (int index = 0;
                      index < shape->controlPointWeldGroups.size(); ++index) {
-                    if (selectedWeldGroups.contains(
+                    if (groups.contains(
                             shape->controlPointWeldGroups[index])) {
                         objectTargets.insert(index);
                     }
                 }
-                if (objectTargets.isEmpty()) {
-                    targets.remove(objectId.value());
+                if (!objectTargets.isEmpty()) {
+                    targets.insert(objectId.value(), std::move(objectTargets));
                 }
             }
         }
@@ -4357,12 +4444,13 @@ public:
             }
         }
         if (!selectedCurveWeldGroups.isEmpty()) {
-            // Only an explicit Weld group links control points across curves.
+            // Only an explicit Weld group links compatible curve/point controls.
             // Equal world coordinates alone do not establish connectivity.
             for (int index = 0; index < document_.size(); ++index) {
                 const ObjectId objectId = document_.objectIdAt(index);
                 const Shape *shape = document_.shape(objectId);
                 if (shape == nullptr ||
+                    !isCurveOrPointGeometryType(shape->geometryType) ||
                     !document_.isObjectVisible(objectId) ||
                     !document_.isObjectEditable(objectId) ||
                     shape->controlPointWeldGroups.isEmpty()) {
@@ -19796,7 +19884,8 @@ private:
         QSet<quint64> selectedWeldGroups;
         for (const ObjectId objectId : selectedObjects) {
             const Shape *shape = document_.shape(objectId);
-            if (shape == nullptr) {
+            if (shape == nullptr ||
+                !isCurveOrPointGeometryType(shape->geometryType)) {
                 continue;
             }
             const QSet<int> &indices = objectId == sourceObjectId
@@ -19823,6 +19912,7 @@ private:
                 const ObjectId objectId = document_.objectIdAt(index);
                 const Shape *shape = document_.shape(objectId);
                 if (shape == nullptr ||
+                    !isCurveOrPointGeometryType(shape->geometryType) ||
                     !document_.isObjectVisible(objectId) ||
                     !document_.isObjectEditable(objectId) ||
                     shape->controlPointWeldGroups.isEmpty()) {

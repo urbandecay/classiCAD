@@ -83,7 +83,7 @@ private:
     ToolInput lastInput_;
     int constraintAxisKey_ = 0;
     bool normalConstraint_ = false;
-    bool weldEnabled_ = true;
+    bool weldEnabled_ = false;
     bool hasLastInput_ = false;
     bool hasCursorPoint_ = false;
     SnapResult snap_;

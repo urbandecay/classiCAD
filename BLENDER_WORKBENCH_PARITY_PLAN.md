@@ -11769,15 +11769,35 @@ scene depth.
   Blender adapter applies every stored path at the source scene's current
   frame through Blender's `ID.keyframe_insert` or `ID.keyframe_delete` API. It
   carries Blender's Needed/Visual flags and overrides, cycle-aware preference,
-  key type, array handling, and group selection into the operation. Relative
-  Keying Sets remain disabled because their paths depend on Blender's live
-  interactive context. A direct `.blend` edit is staged, backed up, and
-  verified before replacing the source. This writes animation into the Blender
-  file; classiCAD still does not evaluate or play those animated values in its
-  own document. Blender's Outliner operators require an active UI area, so this
-  headless file operation uses the corresponding Blender ID APIs instead.
+  key type, array handling, and group selection into the operation. This first
+  version disabled relative Keying Sets; the following entry records the
+  bounded object-set support added afterward. A direct `.blend` edit is staged,
+  backed up, and verified before replacing the source. This writes animation
+  into the Blender file; classiCAD still does not evaluate or play those
+  animated values in its own document. Blender's Outliner operators require an
+  active UI area, so this headless file operation uses the corresponding
+  Blender ID APIs instead.
   Blender's keying-set controls and dispatch are documented in
   [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L73-L88)
-  and [`keyframing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/keyframing.cc#L147-L219).
+  and [`keyframing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/animation/keyframing.cc#L163-L221).
   `cmake --build build -j4`, Python syntax parsing, and `git diff --check`
   passed. No GUI or matched keyframe interaction comparison was run.
+- The hundred-forty-sixth Outliner update captures Blender's active built-in
+  relative Keying Set from `scene.keying_sets_all`, which the Data API header
+  can use even though its picker lists only scene-owned sets. For supported
+  object-mode built-ins, the adapter calls Blender's registered
+  `KeyingSetInfo.poll` and `iterator` callbacks with the imported classiCAD
+  selection and active object represented in an Outliner context. This covers
+  the object transform, visual transform, delta transform, and Available
+  built-ins; pose-bone and B-Bone sets stay disabled because classiCAD does not
+  capture Blender's pose-bone selection. The built-in visual-keying flag is
+  retained when applying generated paths. Add/Remove Selected while a built-in
+  is active follows Blender's `verify_active_keyingset()` fallback and creates
+  a scene-owned absolute set before editing. The source is staged, backed up,
+  and verified before replacement. Python syntax parsing, the required C++
+  build, and `git diff --check` passed. No GUI or matched Blender interaction
+  comparison was run. See Blender 5.2.2's
+  [Data API header](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L1428-L1515),
+  [Keying Set path operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L2083-L2246),
+  [relative-set validation and application](https://github.com/blender/blender/blob/v5.2.2/source/blender/animrig/intern/keyingsets.cc),
+  and [built-in generators](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/keyingsets_builtins.py).

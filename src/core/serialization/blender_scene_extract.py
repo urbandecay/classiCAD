@@ -25,7 +25,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 81
+BRIDGE_FORMAT_VERSION = 82
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -46,6 +46,27 @@ MAX_OUTLINER_DATA_API_DEPTH = 32
 MAX_OUTLINER_DATA_API_DRIVER_PATHS = 20000
 MAX_OUTLINER_KEYING_SETS = 1024
 MAX_OUTLINER_KEYING_SET_PATHS = 20000
+SUPPORTED_OBJECT_RELATIVE_KEYING_SET_IDS = frozenset({
+    "Available",
+    "Location",
+    "Rotation",
+    "Scaling",
+    "BUILTIN_KSI_LocRot",
+    "LocRotScale",
+    "LocRotScaleCProp",
+    "BUILTIN_KSI_LocScale",
+    "BUILTIN_KSI_RotScale",
+    "BUILTIN_KSI_DeltaLocation",
+    "BUILTIN_KSI_DeltaRotation",
+    "BUILTIN_KSI_DeltaScale",
+    "BUILTIN_KSI_VisualLoc",
+    "BUILTIN_KSI_VisualRot",
+    "BUILTIN_KSI_VisualScaling",
+    "BUILTIN_KSI_VisualLocRot",
+    "BUILTIN_KSI_VisualLocScale",
+    "BUILTIN_KSI_VisualLocRotScale",
+    "BUILTIN_KSI_VisualRotScale",
+})
 # Blender's RNA Outliner stores collection indices in a signed short.
 MAX_OUTLINER_DATA_API_COLLECTION_ITEMS = 32767
 MAX_OUTLINER_OVERRIDE_ITEMS = 20000
@@ -2646,9 +2667,14 @@ def outliner_scene_keying_sets(scene):
     except (AttributeError, ReferenceError, RuntimeError, TypeError):
         return records, active_key, truncated
 
+    active_is_scene_set = active is not None and any(
+        keying_set == active for keying_set in collection)
+    scene_set_limit = (MAX_OUTLINER_KEYING_SETS
+                       if active_is_scene_set or active is None
+                       else MAX_OUTLINER_KEYING_SETS - 1)
     remaining_paths = MAX_OUTLINER_KEYING_SET_PATHS
     for index, keying_set in enumerate(collection):
-        if index >= MAX_OUTLINER_KEYING_SETS:
+        if index >= scene_set_limit:
             truncated = True
             break
         try:
@@ -2656,6 +2682,14 @@ def outliner_scene_keying_sets(scene):
             key = "keying-set:%d:%s" % (index, name)
             is_absolute = bool(keying_set.is_path_absolute)
             source_paths = keying_set.paths
+            type_info = keying_set.type_info
+            relative_keying_set_type_id = (
+                str(type_info.bl_idname) if not is_absolute and
+                type_info is not None else "")
+            relative_keyframe_supported = bool(
+                relative_keying_set_type_id in
+                SUPPORTED_OBJECT_RELATIVE_KEYING_SET_IDS and
+                callable(type_info.poll) and callable(type_info.iterator))
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             continue
         paths = []
@@ -2687,12 +2721,38 @@ def outliner_scene_keying_sets(scene):
             "key": key,
             "name": name,
             "is_absolute": is_absolute,
+            "is_builtin": False,
+            "relative_keyframe_supported": relative_keyframe_supported,
             "paths": paths,
         })
         if keying_set == active:
             active_key = key
-    if keying_set_count > MAX_OUTLINER_KEYING_SETS:
+    if keying_set_count > scene_set_limit:
         truncated = True
+
+    if active is not None and not any(
+            keying_set == active for keying_set in collection):
+        try:
+            is_absolute = bool(active.is_path_absolute)
+            type_info = active.type_info
+            type_id = (str(type_info.bl_idname)
+                       if not is_absolute and type_info is not None else "")
+            if type_id:
+                name = str(active.bl_label)[:4096]
+                active_key = "keying-set-info:" + type_id
+                records.append({
+                    "key": active_key,
+                    "name": name,
+                    "is_absolute": False,
+                    "is_builtin": True,
+                    "relative_keyframe_supported": bool(
+                        type_id in SUPPORTED_OBJECT_RELATIVE_KEYING_SET_IDS and
+                        callable(type_info.poll) and
+                        callable(type_info.iterator)),
+                    "paths": [],
+                })
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            pass
     return records, active_key, truncated
 
 

@@ -3052,25 +3052,36 @@ void CollectionsPanel::updateDataApiAnimationControls()
         static_cast<bool>(callbacks_.setActiveKeyingSet));
     removeKeyingSetPathsButton_->setEnabled(
         visible && canEditKeyingSetPaths);
-    const bool hasActiveAbsoluteKeyingSet = !activeKeyingSet.isEmpty() &&
+    const bool hasActiveKeyingSet = !activeKeyingSet.isEmpty();
+    const bool activeKeyingSetAbsolute = hasActiveKeyingSet &&
         activeKeyingSet.value(QStringLiteral("is_absolute")).toBool();
+    const bool activeRelativeKeyingSetSupported = hasActiveKeyingSet &&
+        activeKeyingSet.value(
+            QStringLiteral("relative_keyframe_supported")).toBool();
+    const bool hasSupportedActiveKeyingSet = activeKeyingSetAbsolute ||
+        activeRelativeKeyingSetSupported;
     const bool keyframeMetadataComplete = !scene.value(
         QStringLiteral("keying_sets_truncated")).toBool();
-    const bool canEditKeyframes = hasActiveAbsoluteKeyingSet &&
+    const bool canEditKeyframes = hasSupportedActiveKeyingSet &&
         keyframeMetadataComplete && callbacks_.canEditDataApiKeyframes &&
         callbacks_.canEditDataApiKeyframes() &&
         static_cast<bool>(callbacks_.editDataApiKeyframes);
-    const bool showKeyframeButtons = visible && !activeKeyingSet.isEmpty();
-    if (!hasActiveAbsoluteKeyingSet && !activeKeyingSet.isEmpty()) {
+    const bool showKeyframeButtons = visible && hasActiveKeyingSet;
+    if (hasActiveKeyingSet && !hasSupportedActiveKeyingSet) {
         const QString unsupportedTooltip = QStringLiteral(
-            "Relative Keying Sets need Blender's interactive keying context");
+            "Blender has no path generator for this relative Keying Set, so keyframe editing is unavailable");
         insertKeyframesButton_->setToolTip(unsupportedTooltip);
         deleteKeyframesButton_->setToolTip(unsupportedTooltip);
+    } else if (activeKeyingSetAbsolute) {
+        insertKeyframesButton_->setToolTip(QStringLiteral(
+            "Insert keyframes for every stored path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+        deleteKeyframesButton_->setToolTip(QStringLiteral(
+            "Delete keyframes for every stored path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
     } else {
         insertKeyframesButton_->setToolTip(QStringLiteral(
-            "Insert keyframes for every path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+            "Insert keyframes for the active relative Keying Set's paths generated from selected imported Blender objects at the current frame. A verified backup is created first."));
         deleteKeyframesButton_->setToolTip(QStringLiteral(
-            "Delete keyframes for every path in the active absolute Keying Set at the Blender scene's current frame. A verified backup is created first."));
+            "Delete keyframes for the active relative Keying Set's paths generated from selected imported Blender objects at the current frame. A verified backup is created first."));
     }
     insertKeyframesButton_->setVisible(showKeyframeButtons);
     deleteKeyframesButton_->setVisible(showKeyframeButtons);

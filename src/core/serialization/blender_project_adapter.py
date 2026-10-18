@@ -12,6 +12,7 @@ import struct
 import sys
 import tempfile
 import traceback
+from types import SimpleNamespace
 
 import bpy
 from mathutils import Matrix, Quaternion, Vector
@@ -25,6 +26,28 @@ ROOT_COLLECTION_NAME = "classiCAD"
 MAX_PROXY_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_PROXY_IMAGE_PIXELS = MAX_PROXY_IMAGE_BYTES // 16
 MAX_OUTLINER_ORPHAN_ITEMS = 20000
+MAX_RELATIVE_KEYING_SET_OBJECTS = 2000
+SUPPORTED_OBJECT_RELATIVE_KEYING_SET_IDS = frozenset({
+    "Available",
+    "Location",
+    "Rotation",
+    "Scaling",
+    "BUILTIN_KSI_LocRot",
+    "LocRotScale",
+    "LocRotScaleCProp",
+    "BUILTIN_KSI_LocScale",
+    "BUILTIN_KSI_RotScale",
+    "BUILTIN_KSI_DeltaLocation",
+    "BUILTIN_KSI_DeltaRotation",
+    "BUILTIN_KSI_DeltaScale",
+    "BUILTIN_KSI_VisualLoc",
+    "BUILTIN_KSI_VisualRot",
+    "BUILTIN_KSI_VisualScaling",
+    "BUILTIN_KSI_VisualLocRot",
+    "BUILTIN_KSI_VisualLocScale",
+    "BUILTIN_KSI_VisualLocRotScale",
+    "BUILTIN_KSI_VisualRotScale",
+})
 TEMPORARY_PROXY_IMAGE_PATHS = []
 
 
@@ -1545,6 +1568,30 @@ def resolve_outliner_data_id(path):
     return matches[0]
 
 
+def relative_keying_set_type_id(keying_set):
+    try:
+        if keying_set.is_path_absolute:
+            return ""
+        type_info = keying_set.type_info
+        if type_info is None:
+            return ""
+        type_id = str(type_info.bl_idname)
+        return type_id if type_id else ""
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        return ""
+
+
+def relative_keying_set_supported(keying_set):
+    type_id = relative_keying_set_type_id(keying_set)
+    if type_id not in SUPPORTED_OBJECT_RELATIVE_KEYING_SET_IDS:
+        return False
+    try:
+        type_info = keying_set.type_info
+        return bool(callable(type_info.poll) and callable(type_info.iterator))
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
+        return False
+
+
 def outliner_keying_set_records(scene):
     records = []
     active_key = ""
@@ -1553,8 +1600,14 @@ def outliner_keying_set_records(scene):
     active = collection.active
     if len(collection) > 1024:
         raise ValueError("Scene has too many Keying Sets to edit safely")
+    active_is_scene_set = active is not None and any(
+        candidate == active for candidate in collection)
+    scene_set_limit = 1024 if active_is_scene_set or active is None else 1023
     remaining_paths = 20000
     for index, keying_set in enumerate(collection):
+        if index >= scene_set_limit:
+            truncated = True
+            break
         paths = []
         for source_path in keying_set.paths:
             if remaining_paths <= 0:
@@ -1577,10 +1630,13 @@ def outliner_keying_set_records(scene):
             remaining_paths -= 1
         name = str(keying_set.bl_label)
         key = "keying-set:%d:%s" % (index, name)
+        relative_keyframe_supported = relative_keying_set_supported(keying_set)
         records.append({
             "key": key,
             "name": name[:4096],
             "is_absolute": bool(keying_set.is_path_absolute),
+            "is_builtin": False,
+            "relative_keyframe_supported": relative_keyframe_supported,
             "paths": paths,
         })
         if keying_set == active:
@@ -1588,7 +1644,263 @@ def outliner_keying_set_records(scene):
         if remaining_paths <= 0 and len(keying_set.paths) > len(paths):
             truncated = True
             break
+
+    # Blender's Outliner reads scene.keying_sets.active, which can refer to a
+    # built-in relative Keying Set stored in scene.keying_sets_all rather than
+    # in the scene-owned collection shown by its picker.
+    if active is not None and not any(
+            keying_set == active for keying_set in collection):
+        type_id = relative_keying_set_type_id(active)
+        if type_id:
+            name = str(active.bl_label)[:4096]
+            records.append({
+                "key": "keying-set-info:" + type_id,
+                "name": name,
+                "is_absolute": False,
+                "is_builtin": True,
+                "relative_keyframe_supported": relative_keying_set_supported(
+                    active),
+                "paths": [],
+            })
+            active_key = "keying-set-info:" + type_id
+    if len(collection) > scene_set_limit:
+        truncated = True
     return records, active_key, truncated
+
+
+def _keying_set_path_record(source_path):
+    return {
+        "id": source_path.id,
+        "id_type": str(source_path.id_type),
+        "data_path": str(source_path.data_path),
+        "array_index": int(source_path.array_index),
+        "use_entire_array": bool(source_path.use_entire_array),
+        "group": str(source_path.group),
+        "group_method": str(source_path.group_method),
+        "use_insertkey_needed": bool(source_path.use_insertkey_needed),
+        "use_insertkey_override_needed": bool(
+            source_path.use_insertkey_override_needed),
+        "use_insertkey_visual": bool(source_path.use_insertkey_visual),
+        "use_insertkey_override_visual": bool(
+            source_path.use_insertkey_override_visual),
+    }
+
+
+def _restore_keying_set_paths(keying_set, paths):
+    for existing in list(keying_set.paths):
+        keying_set.paths.remove(existing)
+    for path in paths:
+        restored = keying_set.paths.add(
+            path["id"], path["data_path"], index=path["array_index"],
+            group_method=path["group_method"], group_name=path["group"],
+        )
+        if restored is None:
+            raise RuntimeError("Blender could not restore a relative Keying Set path")
+        if path["id"] is None:
+            restored.id_type = path["id_type"]
+        restored.use_entire_array = path["use_entire_array"]
+        restored.use_insertkey_needed = path["use_insertkey_needed"]
+        restored.use_insertkey_override_needed = path[
+            "use_insertkey_override_needed"]
+        restored.use_insertkey_visual = path["use_insertkey_visual"]
+        restored.use_insertkey_override_visual = path[
+            "use_insertkey_override_visual"]
+
+
+def _relative_keying_set_paths(scene, keying_set,
+                               selected_source_object_ids,
+                               active_source_object_id,
+                               view_layer_name):
+    if not selected_source_object_ids:
+        raise ValueError(
+            "Select one or more imported Blender objects before using a relative Keying Set")
+    if len(selected_source_object_ids) > MAX_RELATIVE_KEYING_SET_OBJECTS:
+        raise ValueError("Too many selected objects for a relative Keying Set")
+    if len(keying_set.paths) > 20000:
+        raise ValueError("The relative Keying Set has too many paths to edit safely")
+
+    if not relative_keying_set_supported(keying_set):
+        raise ValueError(
+            "This relative Keying Set needs a Blender context classiCAD does not represent")
+    type_info = keying_set.type_info
+
+    normalized_filepath = os.path.normcase(
+        os.path.realpath(os.path.abspath(bpy.data.filepath)))
+    project_namespace = hashlib.sha256(
+        normalized_filepath.encode("utf-8")).hexdigest()
+
+    def source_object_id(obj):
+        library = getattr(obj, "library", None)
+        library_path = library.filepath if library is not None else ""
+        return (project_namespace + "::" + library_path + "::" +
+                obj.name_full)
+
+    objects_by_source_id = {
+        source_object_id(obj): obj for obj in bpy.data.objects
+    }
+    selected_objects = []
+    for source_id in selected_source_object_ids:
+        obj = objects_by_source_id.get(source_id)
+        if obj is None:
+            raise ValueError(
+                "A selected classiCAD object no longer exists in the Blender file")
+        if not bool(getattr(obj, "is_editable", False)):
+            raise ValueError(
+                "Selected Blender object %s is read-only" % obj.name_full)
+        if obj.mode != "OBJECT":
+            raise ValueError(
+                "Relative object Keying Sets need Blender Object mode; pose-bone keying is not represented by the imported object selection")
+        if obj not in selected_objects:
+            selected_objects.append(obj)
+
+    if not isinstance(view_layer_name, str) or not view_layer_name:
+        raise ValueError("The active Blender View Layer is unavailable")
+    view_layer = scene.view_layers.get(view_layer_name)
+    if view_layer is None:
+        raise ValueError("The active Blender View Layer no longer exists")
+    layer_objects = list(view_layer.objects)
+    if any(obj not in layer_objects for obj in selected_objects):
+        raise ValueError(
+            "A selected Blender object is outside the active View Layer")
+
+    active_object = objects_by_source_id.get(active_source_object_id)
+    if active_object not in selected_objects:
+        active_object = selected_objects[-1]
+
+    type_info = keying_set.type_info
+    context = SimpleNamespace(
+        area=SimpleNamespace(type="OUTLINER"),
+        scene=scene,
+        view_layer=view_layer,
+        active_object=active_object,
+        selected_objects=selected_objects,
+        active_pose_bone=None,
+        selected_pose_bones=[],
+        active_strip=None,
+        selected_strips=[],
+    )
+    previous_paths = [_keying_set_path_record(path)
+                      for path in keying_set.paths]
+    if any(not isinstance(path["id"], bpy.types.ID)
+           for path in previous_paths):
+        raise ValueError(
+            "Blender cannot safely regenerate this relative Keying Set because one of its stored paths has no target ID")
+    try:
+        # Call Blender's registered KeyingSetInfo poll and iterator callbacks
+        # with the imported selection represented as a headless OUTLINER
+        # context. The supported built-ins use these context fields and their
+        # own Blender path generators.
+        _restore_keying_set_paths(keying_set, [])
+        if not type_info.poll(context):
+            raise ValueError(
+                "Blender's relative Keying Set does not apply to the selected objects")
+        type_info.iterator(context, keying_set)
+
+        if len(keying_set.paths) > 20000:
+            raise ValueError(
+                "The relative Keying Set generated too many paths to edit safely")
+        if not keying_set.paths:
+            raise ValueError(
+                "Blender's relative Keying Set generated no animation paths for the selected objects")
+        generated_paths = [_keying_set_path_record(path)
+                           for path in keying_set.paths]
+    finally:
+        _restore_keying_set_paths(keying_set, previous_paths)
+    return generated_paths
+
+
+def _apply_keying_set_keyframes(scene, keying_set, paths, insert_keyframes):
+    resolved_paths = []
+    for source_path in paths:
+        id_block = source_path["id"]
+        data_path = source_path["data_path"]
+        if not isinstance(id_block, bpy.types.ID):
+            raise ValueError("A Keying Set path has no target data block")
+        if not bool(getattr(id_block, "is_editable", False)):
+            raise ValueError(
+                "Keying Set target %s is read-only" % id_block.name_full)
+        if not isinstance(data_path, str) or not data_path or len(data_path) > 4096:
+            raise ValueError("A Keying Set path has an invalid RNA path")
+        try:
+            id_block.path_resolve(data_path)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError) as error:
+            raise ValueError(
+                "Keying Set RNA path could not be resolved: " + data_path
+            ) from error
+        array_index = source_path["array_index"]
+        index = (-1 if source_path["use_entire_array"]
+                 else array_index)
+        if index < -1 or index > 32766:
+            raise ValueError("A Keying Set path has an invalid array index")
+        group_method = source_path["group_method"]
+        if group_method == "NONE":
+            group = ""
+        elif group_method == "KEYINGSET":
+            group = str(keying_set.bl_label)
+        elif group_method == "NAMED":
+            group = source_path["group"]
+        else:
+            raise ValueError("A Keying Set path has an unsupported group mode")
+        resolved_paths.append((source_path, id_block, data_path, index, group))
+
+    frame = float(scene.frame_current_final)
+    if not math.isfinite(frame):
+        raise ValueError("The active scene frame is invalid")
+
+    preferences = bpy.context.preferences.edit
+    tool_settings = scene.tool_settings
+    base_needed = bool(getattr(
+        preferences, "use_keyframe_insert_needed", False))
+    base_visual = bool(getattr(preferences, "use_visual_keying", False))
+    type_info = getattr(keying_set, "type_info", None)
+    if type_info is not None:
+        try:
+            base_visual = base_visual or (
+                "INSERTKEY_VISUAL" in set(type_info.bl_options))
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            pass
+    base_cycle_aware = bool(getattr(
+        tool_settings, "use_keyframe_cycle_aware", False))
+    key_type = str(tool_settings.keyframe_type)
+
+    def effective_keying_flag(base_value, keying_set_value,
+                              keying_set_override, path_value,
+                              path_override):
+        value = (bool(keying_set_value) if keying_set_override
+                 else base_value)
+        return bool(path_value) if path_override else value
+
+    changed_path_count = 0
+    for (source_path, id_block, data_path, index,
+         group) in resolved_paths:
+        options = set()
+        if effective_keying_flag(
+                base_needed, keying_set.use_insertkey_needed,
+                keying_set.use_insertkey_override_needed,
+                source_path["use_insertkey_needed"],
+                source_path["use_insertkey_override_needed"]):
+            options.add("INSERTKEY_NEEDED")
+        if effective_keying_flag(
+                base_visual, keying_set.use_insertkey_visual,
+                keying_set.use_insertkey_override_visual,
+                source_path["use_insertkey_visual"],
+                source_path["use_insertkey_override_visual"]):
+            options.add("INSERTKEY_VISUAL")
+        if base_cycle_aware:
+            options.add("INSERTKEY_CYCLE_AWARE")
+
+        if insert_keyframes:
+            changed_path = id_block.keyframe_insert(
+                data_path, index=index, frame=frame, group=group,
+                options=options, keytype=key_type)
+        else:
+            changed_path = id_block.keyframe_delete(
+                data_path, index=index, frame=frame, group=group)
+        if changed_path:
+            changed_path_count += 1
+
+    return frame, changed_path_count
 
 
 def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
@@ -1602,6 +1914,10 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
     paths = request.get("paths")
     add = request.get("add")
     insert_keyframes = request.get("insert_keyframes")
+    selected_source_object_ids = request.get(
+        "selected_source_object_ids", [])
+    active_source_object_id = request.get("active_source_object_id", "")
+    view_layer_name = request.get("view_layer_name", "")
     if (not isinstance(scene_name, str) or not scene_name or
             len(scene_name) > 4096 or
             not isinstance(keying_set_request, dict) or
@@ -1610,7 +1926,16 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
              (not isinstance(paths, list) or len(paths) > 20000 or
               not isinstance(add, bool))) or
             (edit_mode == "keyframes" and
-             not isinstance(insert_keyframes, bool))):
+             (not isinstance(insert_keyframes, bool) or
+              not isinstance(selected_source_object_ids, list) or
+              len(selected_source_object_ids) >
+                  MAX_RELATIVE_KEYING_SET_OBJECTS or
+              any(not isinstance(value, str) or not value or len(value) > 8192
+                  for value in selected_source_object_ids) or
+              not isinstance(active_source_object_id, str) or
+              len(active_source_object_id) > 8192 or
+              not isinstance(view_layer_name, str) or
+              len(view_layer_name) > 4096))):
         raise ValueError("Keying Set edit request is invalid")
 
     result = bpy.ops.wm.open_mainfile(
@@ -1638,7 +1963,20 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
         raise ValueError("Active Keying Set identity is invalid")
 
     keying_set = None
-    if key.startswith("keying-set:"):
+    is_builtin_request = False
+    if key.startswith("keying-set-info:"):
+        type_id = key[len("keying-set-info:"):]
+        if (not type_id or len(type_id) > 256 or
+                not bool(keying_set_request.get("is_builtin", False))):
+            raise ValueError("Imported built-in Keying Set identity is invalid")
+        matches = [candidate for candidate in scene.keying_sets_all
+                   if relative_keying_set_type_id(candidate) == type_id]
+        if len(matches) != 1 or str(matches[0].bl_label) != name:
+            raise ValueError(
+                "The active built-in Keying Set no longer matches the imported Blender file")
+        keying_set = matches[0]
+        is_builtin_request = True
+    elif key.startswith("keying-set:"):
         encoded_index_and_name = key[len("keying-set:"):]
         index_text, separator, encoded_name = encoded_index_and_name.partition(":")
         if not separator:
@@ -1664,10 +2002,33 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
     # active scene Keying Set (for example, when a built-in set is active).
     set_index = next((index for index, candidate in enumerate(collection)
                       if candidate == keying_set), -1)
-    if set_index < 0:
+    if set_index >= 0:
+        changed = int(collection.active_index) != set_index
+        collection.active_index = set_index
+    elif is_builtin_request:
+        changed = collection.active != keying_set
+        scene.keying_sets_all.active = keying_set
+    else:
         raise RuntimeError("Blender could not activate the edited Keying Set")
-    changed = int(collection.active_index) != set_index
-    collection.active_index = set_index
+
+    # Blender's Outliner path-edit operators call verify_active_keyingset().
+    # A built-in active set has a negative scene active index, so those
+    # operators create a scene-owned absolute set before editing paths.
+    if edit_mode == "paths" and is_builtin_request:
+        set_name = "KeyingSet"
+        suffix = 1
+        existing_names = {candidate.bl_label for candidate in collection}
+        while set_name in existing_names:
+            set_name = "KeyingSet.%03d" % suffix
+            suffix += 1
+        keying_set = collection.new(idname="KeyingSet", name=set_name)
+        set_index = len(collection) - 1
+        if set_index < 0 or collection[set_index] != keying_set:
+            raise RuntimeError(
+                "Blender could not create a scene Keying Set for the Outliner path operation")
+        collection.active_index = set_index
+        changed = True
+
     absolute = bool(keying_set.is_path_absolute)
 
     changed_path_count = 0
@@ -1729,94 +2090,17 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
                     changed = True
                     changed_path_count += 1
     else:
-        if not absolute:
-            raise ValueError(
-                "Relative Keying Sets need Blender's interactive keying context")
-        if len(keying_set.paths) > 20000:
-            raise ValueError("The active Keying Set has too many paths to edit safely")
-
-        # Resolve and validate every target before changing animation data.
-        # The staged project is discarded if any keying operation fails.
-        resolved_paths = []
-        for source_path in keying_set.paths:
-            id_block = source_path.id
-            data_path = str(source_path.data_path)
-            if not isinstance(id_block, bpy.types.ID):
-                raise ValueError("A Keying Set path has no target data block")
-            if not bool(getattr(id_block, "is_editable", False)):
-                raise ValueError(
-                    "Keying Set target %s is read-only" % id_block.name_full)
-            if not data_path or len(data_path) > 4096:
-                raise ValueError("A Keying Set path has an invalid RNA path")
-            try:
-                id_block.path_resolve(data_path)
-            except (AttributeError, ReferenceError, RuntimeError, TypeError,
-                    ValueError) as error:
-                raise ValueError(
-                    "Keying Set RNA path could not be resolved: " + data_path
-                ) from error
-            index = (-1 if bool(source_path.use_entire_array)
-                     else int(source_path.array_index))
-            if index < -1 or index > 32766:
-                raise ValueError("A Keying Set path has an invalid array index")
-            group_method = str(source_path.group_method)
-            if group_method == "NONE":
-                group = ""
-            elif group_method == "KEYINGSET":
-                group = str(keying_set.bl_label)
-            elif group_method == "NAMED":
-                group = str(source_path.group)
-            else:
-                raise ValueError("A Keying Set path has an unsupported group mode")
-            resolved_paths.append((source_path, id_block, data_path, index, group))
-
-        frame = float(scene.frame_current_final)
-        if not math.isfinite(frame):
-            raise ValueError("The active scene frame is invalid")
-
-        preferences = bpy.context.preferences.edit
-        tool_settings = scene.tool_settings
-        base_needed = bool(getattr(
-            preferences, "use_keyframe_insert_needed", False))
-        base_visual = bool(getattr(preferences, "use_visual_keying", False))
-        base_cycle_aware = bool(getattr(
-            tool_settings, "use_keyframe_cycle_aware", False))
-        key_type = str(tool_settings.keyframe_type)
-
-        def effective_keying_flag(base_value, keying_set_value,
-                                  keying_set_override, path_value,
-                                  path_override):
-            value = (bool(keying_set_value) if keying_set_override
-                     else base_value)
-            return bool(path_value) if path_override else value
-
-        for source_path, id_block, data_path, index, group in resolved_paths:
-            options = set()
-            if effective_keying_flag(
-                    base_needed, keying_set.use_insertkey_needed,
-                    keying_set.use_insertkey_override_needed,
-                    source_path.use_insertkey_needed,
-                    source_path.use_insertkey_override_needed):
-                options.add("INSERTKEY_NEEDED")
-            if effective_keying_flag(
-                    base_visual, keying_set.use_insertkey_visual,
-                    keying_set.use_insertkey_override_visual,
-                    source_path.use_insertkey_visual,
-                    source_path.use_insertkey_override_visual):
-                options.add("INSERTKEY_VISUAL")
-            if base_cycle_aware:
-                options.add("INSERTKEY_CYCLE_AWARE")
-
-            if insert_keyframes:
-                changed_path = id_block.keyframe_insert(
-                    data_path, index=index, frame=frame, group=group,
-                    options=options, keytype=key_type)
-            else:
-                changed_path = id_block.keyframe_delete(
-                    data_path, index=index, frame=frame, group=group)
-            if changed_path:
-                changed_path_count += 1
-
+        if absolute:
+            paths_to_apply = [
+                _keying_set_path_record(source_path)
+                for source_path in keying_set.paths
+            ]
+        else:
+            paths_to_apply = _relative_keying_set_paths(
+                scene, keying_set, selected_source_object_ids,
+                active_source_object_id, view_layer_name)
+        frame, changed_path_count = _apply_keying_set_keyframes(
+            scene, keying_set, paths_to_apply, insert_keyframes)
         changed = changed or changed_path_count > 0
 
     records, active_key, truncated = outliner_keying_set_records(scene)

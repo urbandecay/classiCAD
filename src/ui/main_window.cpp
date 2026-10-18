@@ -4499,6 +4499,7 @@ private:
 
                 QJsonObject editedScene;
                 QJsonObject editedKeyingSet;
+                QString viewLayerName;
                 for (qsizetype sceneIndex = 0; sceneIndex < scenes.size();
                      ++sceneIndex) {
                     QJsonObject scene = scenes[sceneIndex].toObject();
@@ -4527,12 +4528,30 @@ private:
                             5000);
                         return requestedKey;
                     }
-                    if (!editedKeyingSet.value(
-                            QStringLiteral("is_absolute")).toBool()) {
+                    const bool absolute = editedKeyingSet.value(
+                        QStringLiteral("is_absolute")).toBool();
+                    if (!absolute && !editedKeyingSet.value(
+                            QStringLiteral("relative_keyframe_supported")).toBool()) {
                         statusBar()->showMessage(
-                            QStringLiteral("Relative Keying Sets need Blender's interactive keying context"),
+                            QStringLiteral("This relative Keying Set needs Blender context that classiCAD does not represent"),
                             5000);
                         return requestedKey;
+                    }
+                    const QString activeLayerKey = settings.activeViewLayerKey;
+                    const QJsonArray viewLayers = scene.value(
+                        QStringLiteral("view_layers")).toArray();
+                    for (const QJsonValue &layerValue : viewLayers) {
+                        const QJsonObject layer = layerValue.toObject();
+                        if (layer.value(QStringLiteral("key")).toString() ==
+                            activeLayerKey) {
+                            viewLayerName = layer.value(
+                                QStringLiteral("name")).toString();
+                            break;
+                        }
+                    }
+                    if (viewLayerName.isEmpty() && viewLayers.size() == 1) {
+                        viewLayerName = viewLayers.first().toObject().value(
+                            QStringLiteral("name")).toString();
                     }
                     scene.insert(QStringLiteral("active_keying_set_key"),
                                  requestedKey);
@@ -4557,17 +4576,62 @@ private:
                     return requestedKey;
                 }
 
+                QStringList selectedSourceObjectIds;
+                QString activeSourceObjectId;
+                if (!editedKeyingSet.value(
+                        QStringLiteral("is_absolute")).toBool()) {
+                    for (const ObjectId objectId :
+                         session_.selection().objectIds()) {
+                        const SceneObject *object =
+                            session_.document().object(objectId);
+                        if (object == nullptr ||
+                            object->blenderSourceObjectId.isEmpty() ||
+                            selectedSourceObjectIds.contains(
+                                object->blenderSourceObjectId)) {
+                            continue;
+                        }
+                        selectedSourceObjectIds.append(
+                            object->blenderSourceObjectId);
+                    }
+                    const SceneObject *activeObject =
+                        session_.document().object(
+                            session_.selection().activeObjectId());
+                    if (activeObject != nullptr) {
+                        activeSourceObjectId =
+                            activeObject->blenderSourceObjectId;
+                    }
+                    if (selectedSourceObjectIds.isEmpty()) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Select an imported Blender object before using this relative Keying Set"),
+                            5000);
+                        return requestedKey;
+                    }
+                    if (viewLayerName.isEmpty()) {
+                        statusBar()->showMessage(
+                            QStringLiteral("Could not resolve the active Blender View Layer"),
+                            5000);
+                        return requestedKey;
+                    }
+                }
+
                 const QString sourcePath = importedBlenderSourcePath_;
                 const QString operation = insert
                     ? QStringLiteral("Insert Blender Keyframes")
                     : QStringLiteral("Delete Blender Keyframes");
+                const bool absolute = editedKeyingSet.value(
+                    QStringLiteral("is_absolute")).toBool();
+                const QString targetDescription = absolute
+                    ? QStringLiteral("every stored path in the active absolute Keying Set")
+                    : QStringLiteral("the active relative Keying Set paths generated for %1 selected Blender object(s)")
+                          .arg(selectedSourceObjectIds.size());
                 const QMessageBox::StandardButton answer = QMessageBox::warning(
                     this,
                     operation,
                     QStringLiteral(
-                        "%1 every path in the active Keying Set at the source scene's current frame? This updates the original Blender file. classiCAD creates and verifies a backup beside it.\n\n%2")
+                        "%1 %2 at the source scene's current frame? This updates the original Blender file. classiCAD creates and verifies a backup beside it.\n\n%3")
                         .arg(insert ? QStringLiteral("Insert keys for")
                                     : QStringLiteral("Delete keys for"),
+                             targetDescription,
                              sourcePath),
                     QMessageBox::Yes | QMessageBox::Cancel,
                     QMessageBox::Cancel);
@@ -4577,7 +4641,9 @@ private:
                 QString errorMessage;
                 if (!editBlenderKeyingSetKeyframes(
                         sourcePath, importedBlenderSourceSha256_, sceneName,
-                        editedKeyingSet, insert, &editResult, &errorMessage)) {
+                        editedKeyingSet, selectedSourceObjectIds,
+                        activeSourceObjectId, viewLayerName, insert,
+                        &editResult, &errorMessage)) {
                     QMessageBox::critical(
                         this,
                         QStringLiteral("Could Not Edit Blender Keyframes"),

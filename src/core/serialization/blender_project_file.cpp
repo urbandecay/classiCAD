@@ -3026,18 +3026,28 @@ bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
                                   const QByteArray &expectedSourceSha256,
                                   const QString &sceneName,
                                   const QJsonObject &keyingSet,
+                                  const QStringList &selectedSourceObjectIds,
+                                  const QString &activeSourceObjectId,
+                                  const QString &viewLayerName,
                                   bool insert,
                                   BlenderKeyingSetEditResult *result,
                                   QString *errorMessage)
 {
     const QString key = keyingSet.value(QStringLiteral("key")).toString();
     const QString name = keyingSet.value(QStringLiteral("name")).toString();
+    const bool absolute = keyingSet.value(
+        QStringLiteral("is_absolute")).toBool();
+    const bool relativeSupported = keyingSet.value(
+        QStringLiteral("relative_keyframe_supported")).toBool();
     if (result == nullptr || sourcePath.trimmed().isEmpty() ||
         expectedSourceSha256.size() != 64 || sceneName.trimmed().isEmpty() ||
         key.isEmpty() || name.trimmed().isEmpty() ||
-        !keyingSet.value(QStringLiteral("is_absolute")).toBool()) {
+        (!absolute && !relativeSupported) ||
+        (!absolute && (selectedSourceObjectIds.isEmpty() ||
+                       selectedSourceObjectIds.size() > 2000 ||
+                       viewLayerName.trimmed().isEmpty()))) {
         setError(errorMessage,
-                 QStringLiteral("An imported Blender file and an active absolute Keying Set are required"));
+                 QStringLiteral("An imported Blender file and an active supported Keying Set are required"));
         return false;
     }
 
@@ -3077,6 +3087,15 @@ bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
     request.insert(QStringLiteral("keying_set"), keyingSetIdentity);
     request.insert(QStringLiteral("edit_mode"), QStringLiteral("keyframes"));
     request.insert(QStringLiteral("insert_keyframes"), insert);
+    QJsonArray selectedObjectIds;
+    for (const QString &objectId : selectedSourceObjectIds) {
+        selectedObjectIds.append(objectId);
+    }
+    request.insert(QStringLiteral("selected_source_object_ids"),
+                   selectedObjectIds);
+    request.insert(QStringLiteral("active_source_object_id"),
+                   activeSourceObjectId);
+    request.insert(QStringLiteral("view_layer_name"), viewLayerName);
     const QByteArray requestBytes = QJsonDocument(request).toJson(
         QJsonDocument::Compact);
     if (requestBytes.size() > kBlenderExtractionJsonByteLimit ||
@@ -3610,7 +3629,8 @@ bool importBlenderScene(const QString &path,
          bridgeVersion != 73 && bridgeVersion != 74 &&
          bridgeVersion != 75 && bridgeVersion != 76 &&
          bridgeVersion != 77 && bridgeVersion != 78 && bridgeVersion != 79 &&
-         bridgeVersion != 80 && bridgeVersion != 81)) {
+         bridgeVersion != 80 && bridgeVersion != 81 &&
+         bridgeVersion != 82)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

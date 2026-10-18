@@ -5,6 +5,7 @@
 #include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QStringList>
 #include <QVector>
 
 #include "core/document/scene_object.h"
@@ -136,12 +137,16 @@ bool editBlenderKeyingSetPaths(const QString &sourcePath,
                                BlenderKeyingSetEditResult *result,
                                QString *errorMessage = nullptr);
 
-// Inserts or deletes the active absolute Keying Set's paths at the source
-// scene's current frame, then backs up and atomically replaces the .blend.
+// Inserts or deletes the active Keying Set at the source scene's current
+// frame, then backs up and atomically replaces the .blend. Relative sets use
+// the supplied imported Blender selection and active View Layer.
 bool editBlenderKeyingSetKeyframes(const QString &sourcePath,
                                    const QByteArray &expectedSourceSha256,
                                    const QString &sceneName,
                                    const QJsonObject &keyingSet,
+                                   const QStringList &selectedSourceObjectIds,
+                                   const QString &activeSourceObjectId,
+                                   const QString &viewLayerName,
                                    bool insert,
                                    BlenderKeyingSetEditResult *result,
                                    QString *errorMessage = nullptr);

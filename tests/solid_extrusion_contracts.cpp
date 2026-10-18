@@ -211,8 +211,35 @@ int main(int argc, char **argv)
     rectangleFace.trimLoops.clear();
     NurbsExtrusionSolid3D rectangularSolid;
     passed &= check(makeNurbsExtrusionSolid(rectangleFace,{0,0,3},&rectangularSolid) &&
-                        nurbsSolidFaces(rectangularSolid).size()==3,
-                    "untrimmed rectangular plane must close with a perimeter wall");
+                        nurbsSolidFaces(rectangularSolid).size()==6,
+                    "rectangular extrusion must expose two caps and four exact wall faces");
+    const auto rectangleFaces = nurbsSolidFaces(rectangularSolid);
+    Point3D solidCenter;
+    for (const auto &point : rectangleFace.controlPoints) {
+        solidCenter.x += point.x / 4.0;
+        solidCenter.y += point.y / 4.0;
+        solidCenter.z += point.z / 4.0;
+    }
+    solidCenter.z += 1.5;
+    for (int index = 0; index < rectangleFaces.size(); ++index) {
+        const auto &panel = rectangleFaces[index];
+        const auto &a = panel.controlPoints[0];
+        const auto &b = panel.controlPoints[2];
+        const auto &c = panel.controlPoints[1];
+        Point3D normal{(b.y-a.y)*(c.z-a.z)-(b.z-a.z)*(c.y-a.y),
+                       (b.z-a.z)*(c.x-a.x)-(b.x-a.x)*(c.z-a.z),
+                       (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)};
+        const double sign = nurbsSolidFaceReversed(rectangularSolid,index) ? -1.0 : 1.0;
+        passed &= check(sign * (normal.x*(a.x-solidCenter.x) +
+                                normal.y*(a.y-solidCenter.y) +
+                                normal.z*(a.z-solidCenter.z)) > 0,
+                        "each derived rectangular face must retain outward orientation");
+        if (index >= 2) {
+            passed &= check(panel.controlVertexCountU==2 && panel.controlVertexCountV==2 &&
+                                panel.knotsU==QVector<double>{double(index-2),double(index-1)},
+                            "linear wall panels must preserve their exact NURBS span domains");
+        }
+    }
     auto holedFace = face;
     {
         Shape edited;
@@ -473,9 +500,11 @@ int main(int argc, char **argv)
                         preview.shapes[0].nurbsSolid.displacement.z > 0,
                     "face extrusion defaults to its normal, including a top view drag");
     tool.commit(context);
-    passed &= check(document.size() == 4 && history.undoCount() == 1 &&
+    // Face extrusion replaces its source; curve extrusion adds a sheet while
+    // retaining the source curve. Both changes share one history operation.
+    passed &= check(document.size() == 3 && history.undoCount() == 1 &&
                         history.undo() && document.size() == 2 &&
-                        history.redo() && document.size() == 4,
+                        history.redo() && document.size() == 3,
                     "mixed extrusion commits and undoes atomically");
     return passed ? 0 : 1;
 }

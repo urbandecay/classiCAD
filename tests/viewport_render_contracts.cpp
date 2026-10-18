@@ -310,11 +310,23 @@ int main(int argc, char *argv[])
                     "cube display comparison must create an exact NURBS extrusion solid");
     const ViewportDepthGeometry cubeDepthGeometry =
         buildViewportDepthGeometry(cubeShape);
-    passed &= check(cubeDepthGeometry.surfaceNormals.size() >= 12 &&
-                        cubeDepthGeometry.surfaceNormals[0].z() < -0.99f &&
-                        cubeDepthGeometry.surfaceNormals[
-                            cubeDepthGeometry.surfaceNormals.size() / 2]
-                                .z() > 0.99f,
+    bool sawBottomCap = false;
+    bool sawTopCap = false;
+    bool outwardCaps = true;
+    for (int i = 0; i + 2 < cubeDepthGeometry.surfaceVertices.size(); i += 3) {
+        bool bottom = true;
+        bool top = true;
+        for (int j = 0; j < 3; ++j) {
+            const float z = cubeDepthGeometry.surfaceVertices[i+j].z();
+            bottom &= std::abs(z + 1.0f) < 1.0e-6f;
+            top &= std::abs(z - 1.0f) < 1.0e-6f;
+        }
+        sawBottomCap |= bottom;
+        sawTopCap |= top;
+        if (bottom) outwardCaps &= cubeDepthGeometry.surfaceNormals[i].z() < -0.99f;
+        if (top) outwardCaps &= cubeDepthGeometry.surfaceNormals[i].z() > 0.99f;
+    }
+    passed &= check(sawBottomCap && sawTopCap && outwardCaps,
                     "NURBS extrusion cube cap normals must face outward on both ends");
     ViewportTransform surfaceTransform;
     surfaceTransform.zoom() = 32.0;

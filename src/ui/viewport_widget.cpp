@@ -378,27 +378,11 @@ SurfaceDiagnosticCounts surfaceDiagnosticCounts(const Shape &shape)
     if (shape.geometryType != GeometryType::NurbsSolid) {
         return {};
     }
-    if (!shape.nurbsSolid.boundaryFaces.isEmpty()) {
-        SurfaceDiagnosticCounts counts;
-        counts.faces = int(shape.nurbsSolid.boundaryFaces.size());
-        for (const NurbsSurface3D &face : shape.nurbsSolid.boundaryFaces) {
-            counts.controlPoints += int(face.controlPoints.size());
-        }
-        return counts;
-    }
-
-    const NurbsSurface3D &base = shape.nurbsSolid.baseSurface;
-    const int wallCount = std::max(1, int(base.trimLoops.size()));
     SurfaceDiagnosticCounts counts;
-    counts.faces = 2 + wallCount;
-    counts.controlPoints = 2 * int(base.controlPoints.size());
-    if (base.trimLoops.isEmpty()) {
-        counts.controlPoints += 10; // The derived rectangular wall has five CV pairs.
-    } else {
-        for (const NurbsSurfaceTrimLoop &loop : base.trimLoops) {
-            counts.controlPoints += 2 * int(loop.curve.controlPoints.size());
-        }
-    }
+    const auto faces = shapeSurfaceFaces(shape);
+    counts.faces = int(faces.size());
+    for (const auto &face : faces)
+        counts.controlPoints += int(face.controlPoints.size());
     return counts;
 }
 
@@ -627,6 +611,31 @@ ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
         appendUvBoundary(right, false);
         appendUvBoundary(top, false);
         appendUvBoundary(left, false);
+        if (shape.geometryType == GeometryType::NurbsSolid) {
+            // A solid wall can wrap an entire polygon in one NURBS patch.
+            // Its domain boundary omits the longitudinal edges at polygon
+            // corners. Full-multiplicity interior knots identify those creases.
+            for (int knot = 0; knot < face.knotsU.size();) {
+                const qreal parameter = face.knotsU[knot];
+                int end = knot + 1;
+                while (end < face.knotsU.size() &&
+                       face.knotsU[end] == parameter) {
+                    ++end;
+                }
+                if (parameter > u0 && parameter < u1 &&
+                    end - knot >= face.degreeU) {
+                    QVector<QPointF> crease;
+                    crease.reserve(boundarySamples + 1);
+                    for (int sample = 0; sample <= boundarySamples; ++sample) {
+                        crease.append({parameter,
+                                       v0 + (v1 - v0) * qreal(sample) /
+                                                boundarySamples});
+                    }
+                    appendUvBoundary(crease, false);
+                }
+                knot = end;
+            }
+        }
     }
     return geometry;
 }
@@ -8552,17 +8561,13 @@ protected:
                         }
                     }
                     if (activeEditGeometry && selected &&
-                        (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
-                         componentSelectionMode_ == ComponentSelectionMode::Edge) &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex
                              ? !objectVertexSelection.isEmpty()
                              : !objectComponentSelection.isEmpty())) {
-            // Use the same derived-face list for highlighting as for picking,
-            // mode conversion, marquee selection, and duplication. A swept
-            // NURBS wall remains one face per boundary loop even when its knot
-            // spans happen to be planar panels.
-            const QVector<NurbsSurface3D> selectableFaces =
-                shapeSurfaceFaces(visibleShape);
+                        // Picking, component conversion and tinting share the
+                        // same exact cap and wall-panel faces.
+                        const QVector<NurbsSurface3D> selectableFaces =
+                            shapeSurfaceFaces(visibleShape);
                         for (int selectableFaceIndex = 0;
                              selectableFaceIndex < selectableFaces.size();
                              ++selectableFaceIndex) {
@@ -8580,10 +8585,17 @@ protected:
                             const bool vertexMode =
                                 componentSelectionMode_ ==
                                 ComponentSelectionMode::Vertex;
-                            bool fullySelected = vertexMode
+                            const bool faceMode = componentSelectionMode_ ==
+                                ComponentSelectionMode::Face;
+                            bool fullySelected = faceMode
+                                ? objectComponentSelection.contains(selectableFaceIndex)
+                                : vertexMode
                                 ? faceCage.pointVertices.size() >= 3
                                 : !boundaryEdgeIndices.isEmpty();
-                            if (vertexMode) {
+                            if (faceMode) {
+                                // Explicit face selection already resolves the
+                                // face; no vertex/edge inference is needed.
+                            } else if (vertexMode) {
                                 if (geometryType == GeometryType::NurbsSurface &&
                                     selectableFaceIndex == 0) {
                                     // A NURBS surface's selectable vertex IDs
@@ -8714,6 +8726,9 @@ protected:
                                         panelU, panelU);
                                     const float vv = QVector3D::dotProduct(
                                         panelV, panelV);
+                                    const float uv = QVector3D::dotProduct(
+                                        panelU, panelV);
+                                    const float gramDeterminant = uu * vv - uv * uv;
                                     const QVector3D panelNormal =
                                         QVector3D::crossProduct(panelU, panelV)
                                             .normalized();
@@ -8723,12 +8738,16 @@ protected:
                                     const auto insidePanel =
                                         [&](const QVector3D &point) {
                                             const QVector3D relative = point - origin;
+                                            const float alongU = QVector3D::dotProduct(
+                                                relative, panelU);
+                                            const float alongV = QVector3D::dotProduct(
+                                                relative, panelV);
                                             const float u =
-                                                QVector3D::dotProduct(relative,
-                                                                     panelU) / uu;
+                                                (alongU * vv - alongV * uv) /
+                                                gramDeterminant;
                                             const float v =
-                                                QVector3D::dotProduct(relative,
-                                                                     panelV) / vv;
+                                                (alongV * uu - alongU * uv) /
+                                                gramDeterminant;
                                             const float planeDistance =
                                                 std::abs(QVector3D::dotProduct(
                                                     relative, panelNormal));
@@ -8741,6 +8760,7 @@ protected:
                                                 v <= 1.0f + parameterTolerance;
                                         };
                                     if (uu > 1.0e-20f && vv > 1.0e-20f &&
+                                        gramDeterminant > uu * vv * 1.0e-10f &&
                                         panelNormal.lengthSquared() > 0.5f) {
                                         for (int triangle = 0;
                                              triangle + 2 <
@@ -8803,6 +8823,26 @@ protected:
                     edgeCage.cacheableGeometry = renderObject.cacheable;
                     edgeCage.worldOffset = renderObject.placementTranslation;
                     edgeCage.preparedDepthGeometry = cage;
+                    if (activeEditGeometry) {
+                        // Face mode uses the evaluated surface boundary, while
+                        // vertex/edge modes use a control net. Include that
+                        // dynamic cage in the cache key so switching modes
+                        // cannot leave the previous mode's edges on screen.
+                        QByteArray cageGeometryKey;
+                        QDataStream cageGeometryKeyStream(
+                            &cageGeometryKey, QIODevice::WriteOnly);
+                        cageGeometryKeyStream.setFloatingPointPrecision(
+                            QDataStream::SinglePrecision);
+                        cageGeometryKeyStream
+                            << quint8(componentSelectionMode_)
+                            << quint32(cage->lineVertices.size());
+                        for (const QVector3D &point : cage->lineVertices) {
+                            cageGeometryKeyStream << point.x() << point.y()
+                                                  << point.z();
+                        }
+                        edgeCage.geometryCacheKey =
+                            std::move(cageGeometryKey);
+                    }
                     if (hasComponentSelection) {
                         // Keep the edit-wire fade: selected CVs color their
                         // incident control-net edges from orange at the CV to
@@ -8986,7 +9026,7 @@ protected:
                                                       2.0f, 0.0f, {});
                             }
                         } else {
-                            ViewportDepthGeometry componentGeometry;
+                            QMap<QRgb, ViewportDepthGeometry> selectedFaces;
                             const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(visibleShape);
                             for (int component : objectComponentSelection) {
                                 if (component < 0 || component >= faces.size()) continue;
@@ -8994,12 +9034,17 @@ protected:
                                 faceShape.geometryType = GeometryType::NurbsSurface;
                                 faceShape.nurbsSurface = faces[component];
                                 const ViewportDepthGeometry faceCage = selectedSurfaceCage(faceShape);
+                                const QColor color = component == objectActiveComponentIndex
+                                    ? QColor(Qt::white) : QColor(QStringLiteral("#ff8a00"));
+                                auto &componentGeometry = selectedFaces[color.rgba()];
                                 componentGeometry.lineVertices += faceCage.lineVertices;
                                 componentGeometry.preciseLineVertices += faceCage.preciseLineVertices;
                             }
-                            appendComponentStroke(std::move(componentGeometry),
-                                                  QColor(QStringLiteral("#ff8a00")),
-                                                  2.0f, 0.0f, {});
+                            for (auto it = selectedFaces.begin(); it != selectedFaces.end(); ++it) {
+                                appendComponentStroke(std::move(it.value()),
+                                                      QColor::fromRgba(it.key()),
+                                                      2.0f, 0.0f, {});
+                            }
                         }
                     }
                 }
@@ -18436,16 +18481,17 @@ private:
             if (gpuSurface_->pickComponentElement(
                     screenPosition, renderFrame.camera,
                     renderFrame.viewportSize, renderFrame.objects,
-                    pickCandidates, &pickedCandidate)) {
-                if (pickedCandidate < 0 || pickedCandidate >= pending.size()) {
-                    return -1;
-                }
+                    pickCandidates, &pickedCandidate) &&
+                pickedCandidate >= 0 && pickedCandidate < pending.size()) {
                 const PendingComponent &candidate = pending[pickedCandidate];
                 if (shapeIndexOut != nullptr) {
                     *shapeIndexOut = candidate.shapeIndex;
                 }
                 return candidate.componentIndex;
             }
+            // A thin silhouette edge can miss the raster ID buffer. Continue
+            // through the exact screen-distance and surface-occlusion checks
+            // below instead of treating that raster miss as an empty click.
         }
 
         qreal bestDistance = selectionRadiusPixels;

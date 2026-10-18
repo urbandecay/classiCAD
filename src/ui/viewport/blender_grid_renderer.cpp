@@ -939,6 +939,7 @@ bool BlenderGridRenderer::pickComponentElement(
             "uViewProjection", viewProjection(transform, viewportSize, nullptr));
         componentPickProgram_.setUniformValue(
             "uPointSize", static_cast<float>(4.0 * dpr));
+        componentPickProgram_.setUniformValue("uDepthBias", 1.0e-5f);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LEQUAL);
         glDepthMask(GL_FALSE);
@@ -1201,6 +1202,7 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
             "uViewProjection", viewProjection(transform, viewportSize, nullptr));
         componentPickProgram_.setUniformValue(
             "uPointSize", static_cast<float>(4.0 * dpr));
+        componentPickProgram_.setUniformValue("uDepthBias", depthTest ? 1.0e-5f : 0.0f);
         if (depthTest) {
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);

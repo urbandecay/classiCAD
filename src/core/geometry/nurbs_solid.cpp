@@ -21,6 +21,15 @@ qreal dot(const Point3D &a, const Point3D &b)
 {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
+
+int wallPanelCount(const NurbsCurve2D &curve)
+{
+    if (curve.degree != 1) return 1;
+    int count = 0;
+    for (int i = 0; i + 1 < curve.knots.size(); ++i)
+        count += curve.knots[i + 1] > curve.knots[i];
+    return count;
+}
 }
 
 bool nurbsSolidBaseFrame(const NurbsSurface3D &surface, WorkPlaneFrame *frame)
@@ -113,8 +122,9 @@ bool nurbsSolidFaceReversed(const NurbsExtrusionSolid3D &solid, int faceIndex)
         return faceIndex >= 0 && faceIndex < solid.boundaryFaceReversed.size()
                    ? solid.boundaryFaceReversed[faceIndex] : false;
     }
-    const int wallCount = solid.baseSurface.trimLoops.isEmpty()
-                              ? 1 : solid.baseSurface.trimLoops.size();
+    int wallCount = solid.baseSurface.trimLoops.isEmpty() ? 4 : 0;
+    for (const auto &loop : solid.baseSurface.trimLoops)
+        wallCount += wallPanelCount(loop.curve);
     if (faceIndex < 0 || faceIndex >= 2 + wallCount) return false;
     WorkPlaneFrame frame;
     if (!nurbsSolidBaseFrame(solid.baseSurface, &frame)) return false;
@@ -122,7 +132,15 @@ bool nurbsSolidFaceReversed(const NurbsExtrusionSolid3D &solid, int faceIndex)
     if (faceIndex == 0) return !negative;
     if (faceIndex == 1) return negative;
     if (solid.baseSurface.trimLoops.isEmpty()) return negative;
-    const auto &loop = solid.baseSurface.trimLoops[faceIndex - 2];
+    int wallIndex = faceIndex - 2;
+    int loopIndex = 0;
+    while (loopIndex < solid.baseSurface.trimLoops.size() &&
+           wallIndex >= wallPanelCount(solid.baseSurface.trimLoops[loopIndex].curve)) {
+        wallIndex -= wallPanelCount(solid.baseSurface.trimLoops[loopIndex].curve);
+        ++loopIndex;
+    }
+    if (loopIndex >= solid.baseSurface.trimLoops.size()) return false;
+    const auto &loop = solid.baseSurface.trimLoops[loopIndex];
     const auto samples = sampleNurbsSurfaceTrimLoop(loop, 128);
     qreal twiceArea = 0;
     for (int i = 0; i < samples.size(); ++i) {
@@ -173,7 +191,28 @@ QVector<NurbsSurface3D> nurbsSolidFaces(const NurbsExtrusionSolid3D &solid)
         }
         NurbsSurface3D wall;
         if (!makeNurbsExtrusionSurface(boundary, frame, solid.displacement, &wall)) return {};
-        faces.append(wall);
+        if (wall.degreeU == 1) {
+            // Each linear boundary span is a distinct exact wall face. Keep
+            // the stored base/vector construction and the span's domain and
+            // weights; picking and editing must not select the entire wrap.
+            for (int span = 0; span + 1 < wall.controlVertexCountU; ++span) {
+                if (wall.knotsU[span + 1] <= wall.knotsU[span]) continue;
+                NurbsSurface3D panel = wall;
+                panel.controlVertexCountU = 2;
+                panel.controlPoints = {wall.controlPoints[span * 2],
+                                       wall.controlPoints[span * 2 + 1],
+                                       wall.controlPoints[span * 2 + 2],
+                                       wall.controlPoints[span * 2 + 3]};
+                panel.weights = {wall.weights[span * 2],
+                                 wall.weights[span * 2 + 1],
+                                 wall.weights[span * 2 + 2],
+                                 wall.weights[span * 2 + 3]};
+                panel.knotsU = {wall.knotsU[span], wall.knotsU[span + 1]};
+                faces.append(std::move(panel));
+            }
+        } else {
+            faces.append(std::move(wall));
+        }
     }
     return faces;
 }

@@ -1460,6 +1460,8 @@ bool verifyMeshLikeNurbsDuplicateModes(QApplication &application)
         passed &= check(
             waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
             "mesh-like NURBS duplicate camera must settle");
+        viewport->selectOutlinerObject(sourceId, false);
+        viewport->setObjectEditMode(true);
         viewport->setTool(ToolId::Select);
         viewport->setControlPointsVisible(true);
         viewport->setOsnapEnabled(false);
@@ -1674,6 +1676,8 @@ bool verifyMeshLikeNurbsSolidFaceDuplicate(QApplication &application)
         passed &= check(waitForViewPreset(viewport.get(),
                                           ViewportViewPreset::Isometric),
                         "multi-face NURBS solid duplicate camera must settle");
+        viewport->selectOutlinerObject(sourceId, false);
+        viewport->setObjectEditMode(true);
         viewport->setTool(ToolId::Select);
         viewport->setControlPointsVisible(true);
         viewport->setOsnapEnabled(false);
@@ -2034,9 +2038,184 @@ bool verifyOutlinerSelectionGrab(QApplication &application)
     return passed;
 }
 
+bool verifySolidFaceEdges(QApplication &application)
+{
+    ApplicationSession session;
+    Shape cube;
+    cube.geometryType = GeometryType::NurbsSolid;
+    NurbsSurface3D base;
+    base.controlVertexCountU = base.controlVertexCountV = 2;
+    base.controlPoints = {{-8,-8,-8}, {-8,8,-8}, {8,-8,-8}, {8,8,-8}};
+    base.weights = {1,1,1,1};
+    base.knotsU = base.knotsV = {0,1};
+    if (!check(makeNurbsExtrusionSolid(base, {0,0,16}, &cube.nurbsSolid),
+               "face-edge cube fixture must be valid")) return false;
+    const ObjectId id = session.document().append(cube);
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(640, 480);
+    viewport->setAttribute(Qt::WA_ShowWithoutActivating);
+    viewport->setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    if (!waitForViewPreset(viewport.get(), ViewportViewPreset::Isometric)) return false;
+    viewport->selectOutlinerObject(id, false);
+    viewport->setObjectEditMode(true);
+    viewport->setComponentSelectionMode(2);
+    waitForViewportTransition();
+    const QImage image = captureViewport(viewport.get());
+    saveGridCapture(QStringLiteral("solid-face-edges"), image);
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Isometric);
+    Point3D nearest;
+    Point3D farthest;
+    qreal nearestDepth = -std::numeric_limits<qreal>::infinity();
+    qreal farthestDepth = std::numeric_limits<qreal>::infinity();
+    for (double x : {-8.0, 8.0}) {
+        for (double y : {-8.0, 8.0}) {
+            const Point3D point{x,y,0};
+            const qreal depth = projection.worldDirectionToView(point).towardCamera;
+            if (depth > nearestDepth) { nearestDepth = depth; nearest = point; }
+            if (depth < farthestDepth) { farthestDepth = depth; farthest = point; }
+        }
+    }
+    const auto darkPixelsAt = [&](const Point3D &point) {
+        QPointF screen;
+        if (!projection.worldPointToScreen(point, viewport->size(), &screen)) return -1;
+        const QPoint pixel = (screen * viewport->devicePixelRatioF()).toPoint();
+        int count = 0;
+        for (int y = pixel.y() - 2; y <= pixel.y() + 2; ++y) {
+            for (int x = pixel.x() - 2; x <= pixel.x() + 2; ++x) {
+                if (!image.rect().contains(x,y)) continue;
+                const QColor color = image.pixelColor(x,y);
+                // Smooth one-pixel black wires blend with both adjacent
+                // faces; count their antialias coverage as part of the edge.
+                count += std::max({color.red(),color.green(),color.blue()}) < 60;
+            }
+        }
+        return count;
+    };
+    return check(darkPixelsAt(nearest) > 0,
+                 "Face mode must draw the visible corner edge inside a wrapped solid wall") &&
+           check(darkPixelsAt(farthest) == 0,
+                 "Face mode must occlude the rear solid edge when X-Ray is disabled");
+}
+
+bool verifySolidFaceSelection(QApplication &application)
+{
+    ApplicationSession session;
+    Shape cube;
+    cube.geometryType = GeometryType::NurbsSolid;
+    NurbsSurface3D base;
+    base.controlVertexCountU = base.controlVertexCountV = 2;
+    base.controlPoints = {{-4,-4,-4}, {-4,4,-4}, {4,-4,-4}, {4,4,-4}};
+    base.weights = {1,1,1,1};
+    base.knotsU = base.knotsV = {0,1};
+    if (!makeNurbsExtrusionSolid(base, {0,0,8}, &cube.nurbsSolid)) return false;
+    const ObjectId id = session.document().append(cube);
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(640,480);
+    viewport->setAttribute(Qt::WA_ShowWithoutActivating);
+    viewport->setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    if (!waitForViewPreset(viewport.get(), ViewportViewPreset::Isometric)) return false;
+    viewport->setControlPointsVisible(true);
+    viewport->setOsnapEnabled(false);
+    viewport->selectOutlinerObject(id,false);
+    viewport->setObjectEditMode(true);
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Isometric);
+    const auto screen = [&](const Point3D &point) {
+        QPointF position;
+        projection.worldPointToScreen(point,viewport->size(),&position);
+        return position;
+    };
+    const auto center = [](const NurbsSurface3D &face) {
+        Point3D point;
+        for (const auto &cv : face.controlPoints) {
+            point.x += cv.x / face.controlPoints.size();
+            point.y += cv.y / face.controlPoints.size();
+            point.z += cv.z / face.controlPoints.size();
+        }
+        return point;
+    };
+    const auto faces = shapeSurfaceFaces(cube);
+    if (!check(faces.size()==6,"cube selection must expose six independent faces")) return false;
+    int side = 2;
+    for (int i=3;i<faces.size();++i)
+        if (projection.worldDirectionToView(center(faces[i])).towardCamera >
+            projection.worldDirectionToView(center(faces[side])).towardCamera) side=i;
+    const auto click = [&](const Point3D &point, Qt::KeyboardModifiers modifiers) {
+        const auto position = screen(point);
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,position,
+                  Qt::LeftButton,Qt::LeftButton,modifiers);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,position,
+                  Qt::LeftButton,Qt::NoButton,modifiers);
+        application.processEvents();
+    };
+    const auto tinted = [&](const QImage &image, int face) {
+        const QPoint pixel=(screen(center(faces[face])) * viewport->devicePixelRatioF()).toPoint();
+        const QColor color=image.pixelColor(pixel);
+        return color.red()>color.green()+15 && color.green()>color.blue()+5;
+    };
+    bool passed=true;
+    for (bool controlPoints : {true,false}) {
+      viewport->setControlPointsVisible(controlPoints);
+      for (int target : {1,side}) {
+        for (int mode=0;mode<3;++mode) {
+            viewport->selectOutlinerObject(id,false);
+            viewport->setComponentSelectionMode(mode);
+            const auto &points=faces[target].controlPoints;
+            if (mode==0) {
+                for (int i=0;i<4;++i)
+                    click(points[i],i==0?Qt::NoModifier:Qt::ShiftModifier);
+            } else if (mode==1) {
+                const int pairs[4][2]={{0,1},{0,2},{1,3},{2,3}};
+                for (int i=0;i<4;++i) {
+                    const auto &a=points[pairs[i][0]];
+                    const auto &b=points[pairs[i][1]];
+                    click({(a.x+b.x)/2,(a.y+b.y)/2,(a.z+b.z)/2},
+                          i==0?Qt::NoModifier:Qt::ShiftModifier);
+                }
+            } else click(center(faces[target]),Qt::NoModifier);
+            waitForViewportTransition();
+            const QImage image=captureViewport(viewport.get());
+            saveGridCapture(QStringLiteral("solid-face-%1-mode-%2-cvs-%3")
+                                .arg(target).arg(mode).arg(controlPoints),image);
+            const bool targetTinted=tinted(image,target);
+            const bool otherTinted=tinted(image,target==1?side:1);
+            if (!targetTinted || otherTinted)
+                qCritical()<<"solid selection target"<<target<<"mode"<<mode
+                           <<"target tinted"<<targetTinted<<"other tinted"<<otherTinted;
+            passed &= check(targetTinted && !otherTinted,
+                            "selected solid face must tint from its vertices, edges, or face pick without tinting a neighbor");
+            if (mode==0) {
+                viewport->setComponentSelectionMode(1);
+                viewport->setComponentSelectionMode(2);
+                waitForViewportTransition();
+                const QImage converted=captureViewport(viewport.get());
+                passed &= check(tinted(converted,target) && !tinted(converted,target==1?side:1),
+                                "Vertex to Edge to Face must preserve the enclosed solid face selection");
+            }
+        }
+      }
+    }
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_SOLID_FACE_SELECTION_ONLY")) {
+        return verifySolidFaceSelection(application) ? 0 : 1;
+    }
+    if (qEnvironmentVariableIsSet("CLASSICAD_SOLID_FACE_EDGES_ONLY")) {
+        return verifySolidFaceEdges(application) ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_OUTLINER_GRAB_ONLY")) {
         return verifyOutlinerSelectionGrab(application) ? 0 : 1;
     }
@@ -2560,7 +2739,7 @@ int main(int argc, char **argv)
         bool valid = probe->saveVignolaDocument(path,&error) &&
                      loadVignolaDocument(path,&result,&error) && result.size()==2;
         if (valid) valid = result[1].geometryType==GeometryType::NurbsSolid &&
-            validateNurbsSolid(result[1].nurbsSolid) && shapeSurfaceFaces(result[1]).size()==3 &&
+            validateNurbsSolid(result[1].nurbsSolid) && shapeSurfaceFaces(result[1]).size()==6 &&
             std::abs(result[1].nurbsSolid.displacement.z-12)<1.0e-6;
         passed &= check(valid,"face extrusion must commit and save one capped solid");
         passed &= check(probe->executeCommand(ViewportCommand::Undo).accepted &&

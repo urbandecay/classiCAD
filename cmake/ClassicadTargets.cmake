@@ -42,7 +42,13 @@ function(classicad_add_ui_object_module target)
 endfunction()
 
 function(classicad_attach_object_modules target)
-    foreach(module IN LISTS ARGN)
+    set(modules ${ARGN})
+    # Tool diagnostics use the shared logger even in standalone contract tests.
+    if ("classicad_tool_objects" IN_LIST modules AND
+        NOT "classicad_logging_objects" IN_LIST modules)
+        list(APPEND modules classicad_logging_objects)
+    endif()
+    foreach(module IN LISTS modules)
         target_sources(${target} PRIVATE "$<TARGET_OBJECTS:${module}>")
         if (module STREQUAL "classicad_rhino_interchange_objects")
             target_link_libraries(${target} PRIVATE

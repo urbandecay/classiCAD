@@ -2618,6 +2618,65 @@ bool verifyOutlinerFaceSelection(QApplication &application, int extrudeOption)
                         "raising the recessed face beyond the neighbor must commit rather than fall back to its original height");
         waitForViewportTransition();
         saveGridCapture(QStringLiteral("split-face-manifold-raised"),captureViewport(viewport.get()));
+
+        // Keep the component selected by each commit. Face slots can change when
+        // a step disappears, so resolve the expected patch geometrically rather
+        // than reselecting the original slot and hiding stale-selection bugs.
+        const double normalLength = std::sqrt(normal.x*normal.x+normal.y*normal.y+normal.z*normal.z);
+        const double outwardSign = nurbsSolidFaceReversed(cube.nurbsSolid,target) ? -1.0 : 1.0;
+        const Point3D outward{outwardSign*normal.x/normalLength,
+                              outwardSign*normal.y/normalLength,
+                              outwardSign*normal.z/normalLength};
+        const Point3D originalCenter = center(face);
+        double currentHeight = 0.5;
+        int expectedUndoCount = 2;
+        for (double nextHeight : {-0.25,0.0,0.5,-0.25,0.0,0.5}) {
+            const Shape *current = session.document().shape(solid);
+            const auto currentFaces = current ? shapeSurfaceFaces(*current) : QVector<NurbsSurface3D>{};
+            int movingFace = -1;
+            for (int i=0;i<currentFaces.size();++i) {
+                const Point3D p = center(currentFaces[i]);
+                const double dx = p.x-originalCenter.x-currentHeight*outward.x;
+                const double dy = p.y-originalCenter.y-currentHeight*outward.y;
+                const double dz = p.z-originalCenter.z-currentHeight*outward.z;
+                if (dx*dx+dy*dy+dz*dz < 1e-12) movingFace=i;
+            }
+            passed &= check(movingFace >= 0,
+                            "the committed moving face must remain identifiable after crossing a neighbor");
+            if (movingFace < 0) break;
+            const Point3D anchor = currentFaces[movingFace].controlPoints[0];
+            const double movement = nextHeight-currentHeight;
+            QPointF nextDestination;
+            projection.worldPointToScreen({anchor.x+movement*outward.x,
+                                           anchor.y+movement*outward.y,
+                                           anchor.z+movement*outward.z},
+                                          viewport->size(),&nextDestination);
+            const auto continued = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+            passed &= check(continued.accepted && continued.count == 1,
+                            "each committed Manifold face must start the next extrusion without reselection");
+            sendMouse(viewport.get(),QEvent::MouseMove,nextDestination,
+                      Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+            sendMouse(viewport.get(),QEvent::MouseButtonPress,nextDestination,
+                      Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+            sendMouse(viewport.get(),QEvent::MouseButtonRelease,nextDestination,
+                      Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+            application.processEvents();
+            const Shape *updated = session.document().shape(solid);
+            bool reachedHeight = false;
+            if (updated) {
+                for (const auto &updatedFace : shapeSurfaceFaces(*updated)) {
+                    const Point3D p = center(updatedFace);
+                    const double dx = p.x-originalCenter.x-nextHeight*outward.x;
+                    const double dy = p.y-originalCenter.y-nextHeight*outward.y;
+                    const double dz = p.z-originalCenter.z-nextHeight*outward.z;
+                    reachedHeight |= dx*dx+dy*dy+dz*dz < 1e-12;
+                }
+            }
+            passed &= check(session.history().undoCount() == ++expectedUndoCount &&
+                                updated && validateNurbsSolid(updated->nurbsSolid) && reachedHeight,
+                            "repeated Manifold extrusions must reach below, flush, and above the neighbor without snapping back");
+            currentHeight = nextHeight;
+        }
     }
     viewport->setObjectEditMode(false);
     passed &= check(tree->currentItem() == tree->topLevelItem(0),

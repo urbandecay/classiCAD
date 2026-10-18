@@ -69,7 +69,8 @@ private:
                        const Point3D &endPoint,
                        Shape *shape) const;
     QVector<Shape> makeLineShapes(const Point3D &endPoint,
-                                 QVector<int> *faceIndices = nullptr) const;
+                                 QVector<int> *faceIndices = nullptr,
+                                 QString *error = nullptr) const;
     void updateStatus();
     void publish(ToolContext &context);
 
@@ -80,6 +81,12 @@ private:
     QVector<SolidFaceSource> stagedSolidFaceSources_;
     QVector<ObjectId> completedExtrusionObjectIds_;
     QVector<CompletedFaceExtrusion> completedFaceExtrusions_;
+    QVector<Shape> candidateShapes_;
+    QVector<int> candidateFaceIndices_;
+    QVector<Shape> displayShapes_;
+    QVector<int> displayFaceIndices_;
+    QString candidateError_;
+    QString lastDiagnostic_;
     bool stagedControlPointSourcesRequested_ = false;
     WorkPlaneFrame inputFrame_;
     Point3D cursorPoint_;

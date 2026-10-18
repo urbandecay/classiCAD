@@ -56,7 +56,8 @@ src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validat
 src/core/geometry/nurbs_surface.*  tensor-product 3D NURBS surface storage, UV trim loops, validation, and evaluation
 src/core/geometry/nurbs_surface_evaluator.* validated prepared surface state for repeated evaluation
 src/core/geometry/nurbs_surface_factory.* exact ruled extrusion and planar Fill with UV trim boundaries
-src/core/geometry/nurbs_solid.*    exact closed extrusion, planar boundary patches and steps, edge-segment closure, and face orientation
+src/core/geometry/nurbs_solid.*    exact closed extrusion storage, materialization, edge-segment closure, and face orientation
+src/core/geometry/nurbs_solid_face_extrusion.* complete connected face-sweep candidates, analytic rectangular arrangements, mode seam policy, and rejection reasons
 src/core/geometry/arc_curve_factory.* signed direction and exact rational NURBS construction for three-point arcs
 src/core/geometry/interpolating_curve_factory.* centripetal Catmull-Rom interpolation represented as exact piecewise cubic NURBS
 src/core/geometry/work_plane.*     principal and oriented local-2D to world-3D frame mapping
@@ -132,7 +133,7 @@ src/tools/polygon_tool.*           four-mode regular polygon construction, dimen
 src/tools/arc_tool.*               Arc mode/state reset, frame capture, canonical staged points, click/key/axis stage decisions, unit-aware numeric input, preview math, chord solving, endpoint axis inference/projection, chord-length completion, vertical hysteresis, chord-plane construction, commit construction, and planar endpoint constraints; screen coordinates and final cursor/snap presentation remain in the viewport
 src/tools/bezier_tool.*            Bezier creation
 src/tools/nurbs_tool.*             NURBS creation
-src/tools/point_extrude_tool.*     unified Extrude: points to edges, curves to ruled surfaces, planar faces to capped solids
+src/tools/point_extrude_tool.*     unified Extrude input and transactions, cached exact preview/commit candidate, and operation diagnostics
 src/tools/circle_tangent_tool.*   circle construction tangent to selected NURBS curves
 src/tools/grab_tool.*              base-point move state, selected-source restoration, and rollback snapshot lifecycle
 src/tools/duplicate_tool.*         interactive duplicate source/base/destination and preview geometry plus placement state
@@ -1228,3 +1229,58 @@ captures the committed result. Native and offscreen viewport checks pass; six
 focused suites (solid extrusion, outliner selection, commands, scene queries,
 surface boundaries, and rendering) pass. Full build, dependency audit, diff
 check, and offscreen startup pass. Changes remain local and unpushed.
+
+#### Shared solid-face extrusion engine rewrite (2026-10-18)
+
+`core/geometry/nurbs_solid_face_extrusion.*` now owns complete candidate
+construction and rejection reasons. Its analytic rectangular arrangement uses
+the exact source face planes and requested end plane to classify material and
+reconstruct an outward-oriented exact NURBS boundary. Partial neighbors,
+consumed wall subdivisions, and collapsing/reversing steps use that same
+boundary rule. Ordinary outward extrusion retains perimeter seams; Manifold
+joins adjoining coplanar walls. Exact implicit cap resizing and convex oblique
+outward extrusion remain supported by the core contract. The former procedural
+neighbor-resize implementation has been removed from `nurbs_solid.cpp`.
+
+`PointExtrudeTool` owns input, one complete cached candidate, display state,
+and the transaction. Status and commit use the validated candidate; rejected
+movement retains the last accepted display but cannot commit it. The tool's
+private cap implementation is removed. Exact source geometry, mode/rejection
+transitions, and committed face/displacement are logged. Standalone tool targets
+link the shared logging and serialization owners.
+
+Regression coverage now carries results through repeated height changes,
+serialization midway, twenty outward/return edits on changing faces, and six
+viewport tool reactivations without reselection. A prior-engine comparison
+reproduces four valid seam-crossing rejections: after a normal cap extension,
+the opposite cap cannot pass the old wall subdivision seam even though a valid
+half-unit slab remains. Temporary instrumentation confirms all four reject at
+the prior engine's final candidate-shell validation after neighbor resizing
+(original `nurbs_solid.cpp:458`), separately from its opposite-cap guard. The
+old validator observes four coincident edge uses where closure requires two:
+retained side patches overlap after crossing the seam. The new engine removes
+the consumed patches, passes those cases, checks slab bounds,
+volume and winding, and also passes them after rotation and world translation.
+Additional checks cover parity rays on coplanar seams, preserved convex oblique
+extension, and rejected display candidates never entering history.
+
+Full build and 289-source dependency audit pass without compiler warnings.
+Six focused suites and native viewport checks pass; offscreen startup reaches
+the viewport. The latest direct solid suite also passes the final convex
+oblique compatibility check. Broad CTest completed in 424.13 seconds: 9/17
+passed; trim_seam, box_selection, core_contracts, viewport_event_precedence,
+viewport_interaction, viewport_surface_boundary,
+viewport_duplicate_polycurve_closure and vignola_file failed. Failures include
+camera/selection/render expectations, arc selection, duplication and Rhino
+import. The full suite is not green. Temporary binaries using HEAD's tool,
+header and registry reproduce the broader circular-face preview/face-count
+assertions and arc boundary assertions, establishing those fail independently
+of this rewrite. The circular-face operation itself commits the requested
+12-unit vector; its legacy fixture expects six faces while the unchanged exact
+circular boundary contract produces two caps and one ruled loop wall.
+Logs are `/tmp/classicad-shared-extrusion-ctest-output.log` and
+`/tmp/classicad-legacy-extrude/`. Follow-up remains to resolve those broad test
+failures in their owning workstreams. The user's exact live
+Object 65 was unavailable on disk because its update snapshot was removed after
+restoration; the new diagnostic snapshots make future attempts reproducible.
+Changes remain local and unpushed.

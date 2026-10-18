@@ -20,6 +20,15 @@ the viewport footer and preview and commit use the same exact geometry path:
 Connected operations use exact NURBS boundary patches, without a display mesh
 becoming authoritative. One operation creates one undo entry.
 
+`core/geometry/nurbs_solid_face_extrusion.*` owns the complete operation. Its
+result contains the candidate solid, the surviving selected face index, and a
+specific rejection reason. The tool builds that candidate once for each input
+change; status, preview and commit consume that same value. There is no cap
+resize implementation in the tool. Rejected movement disables commit and keeps
+the last accepted display preview until the next accepted candidate or a mode
+change. Source geometry, option values, rejection transitions and completed
+face indices are logged so the exact operation can be reconstructed.
+
 Fill-created boxes with rectangular parameter-domain cap trims are converted
 to the equivalent exact connected boundary before a face is edited. This
 preserves face indices and supports all six faces with Weld or Manifold.
@@ -31,19 +40,35 @@ the same conditions. Unsupported trimmed, curved, rational, or nonplanar shells
 are rejected without changing the source object.
 
 The extrusion vector follows the selected face's normal. Outward and inward
-motions are supported, including steps in a previously extruded box. The swept
-region is checked against opposing patches in its footprint. Tangential motion,
+motions are supported, including steps in a previously extruded box. Tangential motion,
 collapse and crossing the opposite boundary are rejected. Axis constraints
 remain available when parallel to the
 selected face normal. Manifold corner updates must leave all adjoining patches
 planar, closed and consistently oriented. Unsupported results are
 rejected before replacing source geometry.
-Orthogonal edge neighbors shrink or extend with the moving face. Coplanar edge
-neighbors remain at their original plane and receive a connecting step wall.
-Faces touching only a corner are unchanged. Partial edge neighbors are split
-exactly within their existing parameter domains before editing their shared
-region. Manifold does not tilt slanted walls;
-oblique extrusion seeds are not resized through the implicit cap shortcut.
+The shared connected engine supports shells of mutually orthogonal rectangular
+patches, in any world orientation. It constructs an analytic arrangement from
+the exact source-face coordinates and requested end plane. Closed-boundary
+parity classifies material; the selected rectangular sweep adds material for
+outward movement and removes it for inward movement. A result wall exists
+exactly where one side contains material and the other does not. This replaces
+procedural neighbor resizing and handles multiple partial edge neighbors,
+disappearing steps, and steps that change direction with the same rule.
+
+The arrangement is transient and has no fixed sampling resolution. Output is
+exact rectangular degree-one NURBS geometry. Original face ownership retains
+unaffected seams; ordinary outward extrusion labels its new perimeter walls
+separately. Manifold merges those walls with adjoining coplanar faces.
+Subdivisions preserve source parameter subdomains; resized or reversed walls
+retain their original domains. Every returned boundary is checked for closure,
+and the complete translated selected face must survive. Operations exceeding
+two million arrangement cells are rejected with an explicit complexity reason.
+
+This is a restricted rectangular-face sweep contract, not an arbitrary Boolean
+or general BRep API. The core also preserves ordinary outward extrusion of a
+face on a convex planar quad shell, and exact implicit planar-cap resizing for
+trimmed translational seeds. Manifold does not tilt slanted walls;
+oblique extrusion seeds are not resized through the implicit cap path.
 
 The geometry operation reports the moving face's resulting slot to both preview
 and completion selection. A zero-height step wall is removed when the moving

@@ -54,6 +54,7 @@ set(CLASSICAD_GEOMETRY_SOURCES
     src/core/geometry/nurbs_surface_evaluator.cpp
     src/core/geometry/nurbs_surface_factory.cpp
     src/core/geometry/nurbs_solid.cpp
+    src/core/geometry/nurbs_solid_face_extrusion.cpp
     src/core/geometry/nurbs_surface_tessellator.cpp
     src/core/geometry/arc_curve_factory.cpp
     src/core/geometry/interpolating_curve_factory.cpp
@@ -368,6 +369,7 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_geometry_objects
         classicad_document_objects
         classicad_command_objects
+        classicad_serialization_objects
         classicad_service_objects
         classicad_tool_objects
     )

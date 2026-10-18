@@ -4,6 +4,7 @@
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/geometry_transform.h"
 #include "core/geometry/nurbs_surface_factory.h"
+#include "core/geometry/nurbs_solid_face_extrusion.h"
 #include "core/history/document_transaction.h"
 #include "core/serialization/shape_json_codec.h"
 #include "services/hit_testing/curve_hit_tester.h"
@@ -28,6 +29,9 @@
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLFunctions_3_3_Core>
 
+#include <algorithm>
+#include <iostream>
+
 using namespace classiCAD;
 namespace {
 bool near(const Point3D &a, const Point3D &b)
@@ -38,6 +42,74 @@ bool check(bool value, const char *message)
 {
     if (!value) qCritical() << message;
     return value;
+}
+
+bool probeFaceExtrusion(const NurbsExtrusionSolid3D &solid, int faceIndex,
+                        const Point3D &displacement, NurbsExtrusionSolid3D *result,
+                        bool manifold=false, int *resultFaceIndex=nullptr)
+{
+    auto candidate=planNurbsSolidFaceExtrusion(solid,faceIndex,displacement,manifold);
+    if (!candidate.succeeded()) {
+        std::cerr << "extrusion rejected: face=" << faceIndex
+                  << " manifold=" << manifold << " displacement=("
+                  << displacement.x << ',' << displacement.y << ',' << displacement.z
+                  << ") reason=" << candidate.error.toStdString() << '\n';
+        return false;
+    }
+    if (!result) return false;
+    if (resultFaceIndex) *resultFaceIndex=candidate.faceIndex;
+    *result=std::move(candidate.solid);
+    return true;
+}
+
+bool consistentSolidWinding(const NurbsExtrusionSolid3D &solid)
+{
+    struct Edge { Point3D a, b; };
+    QVector<Edge> edges;
+    const auto faces = nurbsSolidFaces(solid);
+    for (int index = 0; index < faces.size(); ++index) {
+        const auto &cv = faces[index].controlPoints;
+        if (cv.size() != 4) return false;
+        const int order[] = {0, 2, 3, 1};
+        for (int side = 0; side < 4; ++side) {
+            Edge edge{cv[order[side]], cv[order[(side+1)%4]]};
+            if (nurbsSolidFaceReversed(solid,index)) std::swap(edge.a,edge.b);
+            edges.append(edge);
+        }
+    }
+    QVector<Edge> segments;
+    for (const auto &edge : edges) {
+        const Point3D d{edge.b.x-edge.a.x,edge.b.y-edge.a.y,edge.b.z-edge.a.z};
+        const double length2=d.x*d.x+d.y*d.y+d.z*d.z;
+        if (length2 < 1.0e-16) return false;
+        QVector<double> cuts{0,1};
+        for (const auto &other : edges) {
+            for (const auto &p : {other.a,other.b}) {
+                const double t=((p.x-edge.a.x)*d.x+(p.y-edge.a.y)*d.y+
+                                (p.z-edge.a.z)*d.z)/length2;
+                if (t>1.0e-8 && t<1.0-1.0e-8 &&
+                    near(p,{edge.a.x+t*d.x,edge.a.y+t*d.y,edge.a.z+t*d.z})) cuts.append(t);
+            }
+        }
+        std::sort(cuts.begin(),cuts.end());
+        for (int i=1;i<cuts.size();++i) {
+            if (cuts[i]-cuts[i-1]<1.0e-8) continue;
+            const auto at = [&](double t) {
+                return Point3D{edge.a.x+t*d.x,edge.a.y+t*d.y,edge.a.z+t*d.z};
+            };
+            segments.append({at(cuts[i-1]),at(cuts[i])});
+        }
+    }
+    for (int i=0;i<segments.size();++i) {
+        int opposing=0;
+        for (int j=0;j<segments.size();++j) {
+            if (i==j) continue;
+            if (near(segments[i].a,segments[j].a) && near(segments[i].b,segments[j].b)) return false;
+            if (near(segments[i].a,segments[j].b) && near(segments[i].b,segments[j].a)) ++opposing;
+        }
+        if (opposing!=1) return false;
+    }
+    return true;
 }
 
 bool nativePlacement(const ViewportRenderObject &object,
@@ -248,7 +320,7 @@ int main(int argc, char **argv)
         for (double distance : {-0.5,0.5}) {
             for (bool manifold : {false,true}) {
                 NurbsExtrusionSolid3D edited;
-                passed &= check(extrudeNurbsSolidFace(filledBox,faceIndex,
+                passed &= check(probeFaceExtrusion(filledBox,faceIndex,
                                     {normal.x*scale*distance,normal.y*scale*distance,
                                      normal.z*scale*distance},&edited,manifold) &&
                                     validateNurbsSolid(edited) &&
@@ -311,6 +383,22 @@ int main(int argc, char **argv)
                 passed &= check(fixtureTool.status().canCommit && modePreview.shapes.size() == 1,
                                 "every supported face must extrude in both directions in every mode");
                 if (modePreview.shapes.size() != 1) continue;
+                ToolInput zeroMove=move;
+                camera.worldPointToScreenUnclipped(a,size,&zeroMove.screenPosition);
+                fixtureTool.handleMouseMove(zeroMove,fixtureContext);
+                const auto rejectedPreview=fixtureTool.preview();
+                passed &= check(!fixtureTool.status().canCommit &&
+                                    rejectedPreview.shapes.size()==1 &&
+                                    shapeToJson(rejectedPreview.shapes.first())==shapeToJson(modePreview.shapes.first()),
+                                "a rejected movement must retain the last accepted display candidate");
+                fixtureTool.commit(fixtureContext);
+                passed &= check(fixtureHistory.undoCount()==0 && fixture.size()==1,
+                                "a rejected endpoint must never commit the retained display candidate");
+                fixtureTool.handleMouseMove(move,fixtureContext);
+                passed &= check(fixtureTool.status().canCommit &&
+                                    fixtureTool.preview().shapes.size()==1 &&
+                                    shapeToJson(fixtureTool.preview().shapes.first())==shapeToJson(modePreview.shapes.first()),
+                                "returning to a valid endpoint must restore the same exact candidate");
                 passed &= check(modePreview.hiddenObjectIds.contains(sourceId) == (mode != 0) &&
                                     modePreview.extrusionPreviewFaceIndices.first() == (mode == 0 ? 1 : faceIndex),
                                 "preview must retain unwelded sources and highlight the actual moving face");
@@ -365,7 +453,7 @@ int main(int argc, char **argv)
         const double factor = (nurbsSolidFaceReversed(rectangularSolid,2)?-1.0:1.0) /
             std::hypot(normal.x,std::hypot(normal.y,normal.z));
         NurbsExtrusionSolid3D split;
-        passed &= check(extrudeNurbsSolidFace(rectangularSolid,2,
+        passed &= check(probeFaceExtrusion(rectangularSolid,2,
                             {normal.x*factor,normal.y*factor,normal.z*factor},&split,false),
                         "normal extension must create the split-face regression shell");
         const auto splitFaces = nurbsSolidFaces(split);
@@ -380,7 +468,7 @@ int main(int argc, char **argv)
             for (bool manifold : {false,true}) {
                 NurbsExtrusionSolid3D recessed;
                 const Point3D delta{-n.x*scale,-n.y*scale,-n.z*scale};
-                const bool success = extrudeNurbsSolidFace(split,target,delta,&recessed,manifold);
+                const bool success = probeFaceExtrusion(split,target,delta,&recessed,manifold);
                 passed &= check(success && validateNurbsSolid(recessed),
                                 "a split box face must recess with Manifold on or off");
                 if (!success) continue;
@@ -402,10 +490,10 @@ int main(int argc, char **argv)
                     const double factor=(nurbsSolidFaceReversed(recessed,next)?0.01:-0.01) /
                         std::hypot(normal.x,std::hypot(normal.y,normal.z));
                     NurbsExtrusionSolid3D again;
-                    passed &= check(extrudeNurbsSolidFace(recessed,next,
+                    passed &= check(probeFaceExtrusion(recessed,next,
                                         {normal.x*factor,normal.y*factor,normal.z*factor},&again,true) &&
                                         validateNurbsSolid(again) &&
-                                        extrudeNurbsSolidFace(recessed,next,
+                                        probeFaceExtrusion(recessed,next,
                                         {-normal.x*factor,-normal.y*factor,-normal.z*factor},&again,true) &&
                                         validateNurbsSolid(again),
                                     "every face of the stepped result must remain extrudable in both directions, including partial edge neighbors");
@@ -420,7 +508,7 @@ int main(int argc, char **argv)
                                        -delta.z*distance/0.25};
                     NurbsExtrusionSolid3D raised;
                     int moved=-1;
-                    const bool success=extrudeNurbsSolidFace(recessed,target,rise,&raised,raiseManifold,&moved);
+                    const bool success=probeFaceExtrusion(recessed,target,rise,&raised,raiseManifold,&moved);
                     passed &= check(success && validateNurbsSolid(raised),
                                     "Manifold must raise a recessed face through and beyond its neighbor's height");
                     if (!success) continue;
@@ -441,19 +529,245 @@ int main(int argc, char **argv)
                 reordered.boundaryFaceReversed[lateFace]=oldFlag;
                 NurbsExtrusionSolid3D flush;
                 int flushFace=-1;
-                passed &= check(extrudeNurbsSolidFace(reordered,lateFace,
+                passed &= check(probeFaceExtrusion(reordered,lateFace,
                                     {-delta.x,-delta.y,-delta.z},&flush,true,&flushFace) &&
                                     validateNurbsSolid(flush) && flushFace==lateFace-1,
                                 "removing an earlier collapsed wall must remap a later selected face");
+
+                // Carry each committed result forward: isolated probes miss
+                // stale winding and topology left by an earlier edit.
+                for (bool chainManifold : {false,true}) {
+                    auto current=recessed;
+                    int moving=target;
+                    double previousHeight=0;
+                    int step=0;
+                    for (double height : {0.125,0.25,0.5,0.25,0.125,0.0}) {
+                        const double change=(height-previousHeight)/0.25;
+                        const Point3D movement{-delta.x*change,-delta.y*change,-delta.z*change};
+                        const auto before=nurbsSolidFaces(current)[moving];
+                        NurbsExtrusionSolid3D next;
+                        int nextMoving=-1;
+                        const bool moved=probeFaceExtrusion(current,moving,movement,
+                                                              &next,chainManifold,&nextMoving);
+                        passed &= check(moved && validateNurbsSolid(next) && consistentSolidWinding(next),
+                                        "chained extrusion must remain closed and consistently oriented below, at, and above neighboring faces");
+                        if (!moved) break;
+                        const auto after=nurbsSolidFaces(next);
+                        const bool mapped=nextMoving>=0 && nextMoving<after.size();
+                        passed &= check(mapped,"each chained edit must return the surviving moving face");
+                        if (!mapped) break;
+                        for (int cv=0;cv<4;++cv) {
+                            const auto p=before.controlPoints[cv];
+                            passed &= check(near(after[nextMoving].controlPoints[cv],
+                                                 {p.x+movement.x,p.y+movement.y,p.z+movement.z}),
+                                            "chained extrusion must translate every moving control vertex exactly");
+                        }
+                        current=std::move(next);
+                        moving=nextMoving;
+                        previousHeight=height;
+                        if (++step==3) {
+                            Shape stored;
+                            stored.geometryType=GeometryType::NurbsSolid;
+                            stored.nurbsSolid=current;
+                            Shape restored;
+                            const bool loaded=shapeFromJson(shapeToJson(stored),&restored);
+                            passed &= check(loaded && validateNurbsSolid(restored.nurbsSolid) &&
+                                                consistentSolidWinding(restored.nurbsSolid),
+                                            "serialized midpoint must preserve the editable oriented shell");
+                            if (!loaded) break;
+                            current=restored.nurbsSolid;
+                        }
+                    }
+                    const auto finalFaces=nurbsSolidFaces(current);
+                    for (int index=0;index<finalFaces.size();++index) {
+                        const auto &cv=finalFaces[index].controlPoints;
+                        const Point3D u{cv[2].x-cv[0].x,cv[2].y-cv[0].y,cv[2].z-cv[0].z};
+                        const Point3D v{cv[1].x-cv[0].x,cv[1].y-cv[0].y,cv[1].z-cv[0].z};
+                        Point3D direction{u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z,u.x*v.y-u.y*v.x};
+                        const double factor=(nurbsSolidFaceReversed(current,index)?-0.01:0.01)/
+                            std::hypot(direction.x,std::hypot(direction.y,direction.z));
+                        direction={direction.x*factor,direction.y*factor,direction.z*factor};
+                        NurbsExtrusionSolid3D outward,returned;
+                        int outwardFace=-1,returnedFace=-1;
+                        const bool out=probeFaceExtrusion(current,index,direction,&outward,true,&outwardFace);
+                        const bool back=out && probeFaceExtrusion(outward,outwardFace,
+                            {-direction.x,-direction.y,-direction.z},&returned,true,&returnedFace);
+                        passed &= check(out && back && validateNurbsSolid(outward) &&
+                                            validateNurbsSolid(returned) && consistentSolidWinding(outward) &&
+                                            consistentSolidWinding(returned),
+                                        "every face after a committed chain must extrude outward and return with coherent winding");
+                    }
+                    // Twenty committed steps, each outward move followed by
+                    // its exact inverse, avoid crossing an unrelated wall or
+                    // choosing tiny slivers below the shell tolerance.
+                    auto stress=current;
+                    for (int pair=0;pair<10;++pair) {
+                        const auto stressFaces=nurbsSolidFaces(stress);
+                        QVector<int> eligible;
+                        for (int face=0;face<stressFaces.size();++face) {
+                            const auto &p=stressFaces[face].controlPoints;
+                            if (std::hypot(p[2].x-p[0].x,std::hypot(p[2].y-p[0].y,p[2].z-p[0].z))>=0.1 &&
+                                std::hypot(p[1].x-p[0].x,std::hypot(p[1].y-p[0].y,p[1].z-p[0].z))>=0.1)
+                                eligible.append(face);
+                        }
+                        passed &= check(!eligible.isEmpty(),"stress fixture must retain a face above modeling tolerance");
+                        if (eligible.isEmpty()) break;
+                        int selected=eligible[(pair*7+3)%eligible.size()];
+                        const auto &cv=stressFaces[selected].controlPoints;
+                        const Point3D u{cv[2].x-cv[0].x,cv[2].y-cv[0].y,cv[2].z-cv[0].z};
+                        const Point3D v{cv[1].x-cv[0].x,cv[1].y-cv[0].y,cv[1].z-cv[0].z};
+                        Point3D normal{u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z,u.x*v.y-u.y*v.x};
+                        const double span=std::min(std::hypot(u.x,std::hypot(u.y,u.z)),
+                                                   std::hypot(v.x,std::hypot(v.y,v.z)));
+                        const double orientation=nurbsSolidFaceReversed(stress,selected)?-1:1;
+                        const double factor=orientation*span*0.001/
+                            std::hypot(normal.x,std::hypot(normal.y,normal.z));
+                        const Point3D outward{normal.x*factor,normal.y*factor,normal.z*factor};
+                        bool pairSucceeded=true;
+                        for (int direction=0;direction<2;++direction) {
+                            const Point3D movement=direction==0?outward:Point3D{-outward.x,-outward.y,-outward.z};
+                            const auto before=nurbsSolidFaces(stress)[selected];
+                            NurbsExtrusionSolid3D next;
+                            int movedFace=-1;
+                            const bool success=probeFaceExtrusion(stress,selected,movement,&next,
+                                                                  chainManifold,&movedFace);
+                            passed &= check(success && validateNurbsSolid(next) && consistentSolidWinding(next),
+                                            "twenty committed edits on alternating faces and directions must preserve a closed oriented shell");
+                            if (!success) { pairSucceeded=false; break; }
+                            const auto after=nurbsSolidFaces(next);
+                            const bool mapped=movedFace>=0 && movedFace<after.size();
+                            passed &= check(mapped,"stress edit must preserve its moving face identity");
+                            if (!mapped) { pairSucceeded=false; break; }
+                            for (int index=0;index<4;++index) {
+                                const auto p=before.controlPoints[index];
+                                passed &= check(near(after[movedFace].controlPoints[index],
+                                                     {p.x+movement.x,p.y+movement.y,p.z+movement.z}),
+                                                "stress edit must apply the requested displacement exactly");
+                            }
+                            stress=std::move(next);
+                            selected=movedFace;
+                        }
+                        if (!pairSucceeded) break;
+                    }
+                }
             }
         }
     }
-    passed &= check(!extrudeNurbsSolidFace(rectangularSolid, 1, {0,0,-3}, &collapsed, true) &&
-                        !extrudeNurbsSolidFace(rectangularSolid, 1, {0,0,-4}, &collapsed, true),
+    // Cross the coplanar subdivision seam left by a previous normal extension.
+    // The consumed side patches must disappear rather than overlap the slab.
+    for (bool extendTop : {false,true}) {
+        NurbsExtrusionSolid3D stacked;
+        const int extendedFace=extendTop?1:0;
+        const Point3D extension{0,0,extendTop?1.0:-1.0};
+        const bool extended=probeFaceExtrusion(rectangularSolid,extendedFace,extension,&stacked,false);
+        passed &= check(extended && nurbsSolidFaces(stacked).size()==10,
+                        "ordinary outward cap extension must retain the original wall seam");
+        if (!extended) continue;
+        for (bool manifold : {false,true}) {
+            const int selected=extendTop?0:1;
+            const Point3D movement{0,0,extendTop?3.5:-3.5};
+            const auto before=nurbsSolidFaces(stacked)[selected];
+            NurbsExtrusionSolid3D slab;
+            int movedFace=-1;
+            const bool success=probeFaceExtrusion(stacked,selected,movement,&slab,manifold,&movedFace);
+            passed &= check(success && validateNurbsSolid(slab) && consistentSolidWinding(slab),
+                            "inward cap extrusion must cross a prior wall subdivision seam and retain a closed oriented slab");
+            if (!success) continue;
+            const auto faces=nurbsSolidFaces(slab);
+            const bool mapped=movedFace>=0 && movedFace<faces.size();
+            passed &= check(mapped,"crossing a prior wall seam must preserve the moving cap identity");
+            if (!mapped) continue;
+            for (int cv=0;cv<4;++cv) {
+                const auto p=before.controlPoints[cv];
+                passed &= check(near(faces[movedFace].controlPoints[cv],
+                                     {p.x,p.y,p.z+movement.z}),
+                                "cap crossing a subdivision seam must reach its exact requested plane");
+            }
+            double volume=0;
+            for (int face=0;face<faces.size();++face) {
+                const auto &cv=faces[face].controlPoints;
+                const auto tetra = [](const Point3D &a,const Point3D &b,const Point3D &c) {
+                    return (a.x*(b.y*c.z-b.z*c.y)+a.y*(b.z*c.x-b.x*c.z)+
+                            a.z*(b.x*c.y-b.y*c.x))/6.0;
+                };
+                const double orientation=nurbsSolidFaceReversed(slab,face)?-1:1;
+                volume+=orientation*(tetra(cv[0],cv[2],cv[3])+tetra(cv[0],cv[3],cv[1]));
+                for (const auto &point : cv) {
+                    const double lower=extendTop?3.5:-1.0;
+                    const double upper=extendTop?4.0:-0.5;
+                    passed &= check(point.z>=lower-1.0e-7 && point.z<=upper+1.0e-7,
+                                    "consumed wall patches must not protrude beyond the remaining slab");
+                }
+            }
+            passed &= check(std::abs(volume-18.0)<1.0e-6,
+                            "crossing a prior wall seam must leave exactly the outward-oriented 6 by 6 by 0.5 slab");
+            Shape placed;
+            placed.geometryType=GeometryType::NurbsSolid;
+            placed.nurbsSolid=stacked;
+            const Point3D rotationAxis{1,2,3};
+            passed &= check(rotateShapeGeometry(&placed,{},rotationAxis,0.731) &&
+                                bakeShapePlacementTranslation(&placed,{10000,-20000,30000}),
+                            "the seam regression must support arbitrary world orientation and placement");
+            const Point3D rotatedMovement=rotatePointAboutAxis(movement,{},rotationAxis,0.731);
+            const auto placedBefore=nurbsSolidFaces(placed.nurbsSolid)[selected];
+            NurbsExtrusionSolid3D placedSlab;
+            int placedFace=-1;
+            const bool placedSuccess=probeFaceExtrusion(placed.nurbsSolid,selected,rotatedMovement,
+                                                         &placedSlab,manifold,&placedFace);
+            passed &= check(placedSuccess && validateNurbsSolid(placedSlab) &&
+                                consistentSolidWinding(placedSlab),
+                            "crossing an old wall seam must be independent of world axes and placement");
+            if (placedSuccess && placedFace>=0) {
+                const auto moved=nurbsSolidFaces(placedSlab)[placedFace];
+                for (int cv=0;cv<4;++cv) {
+                    const auto p=placedBefore.controlPoints[cv];
+                    passed &= check(near(moved.controlPoints[cv],
+                        {p.x+rotatedMovement.x,p.y+rotatedMovement.y,p.z+rotatedMovement.z}),
+                        "a rotated moving cap must retain exact world displacement");
+                }
+            }
+        }
+    }
+    // The opposite cap may be subdivided without changing the solid. A ray
+    // through its shared seam still crosses the boundary only once.
+    {
+        auto subdivided=rectangularSolid;
+        passed &= check(materializeNurbsSolidBoundary(&subdivided),"subdivided cap fixture");
+        auto left=subdivided.boundaryFaces[1],right=left;
+        const auto midpoint=[](Point3D a,Point3D b) {
+            return Point3D{(a.x+b.x)*0.5,(a.y+b.y)*0.5,(a.z+b.z)*0.5};
+        };
+        left.controlPoints[2]=right.controlPoints[0]=midpoint(left.controlPoints[0],left.controlPoints[2]);
+        left.controlPoints[3]=right.controlPoints[1]=midpoint(left.controlPoints[1],left.controlPoints[3]);
+        const double middle=(left.knotsU[0]+left.knotsU[1])*0.5;
+        left.knotsU[1]=middle;right.knotsU[0]=middle;
+        subdivided.boundaryFaces[1]=left;
+        subdivided.boundaryFaces.append(right);
+        subdivided.boundaryFaceReversed.append(subdivided.boundaryFaceReversed[1]);
+        for (bool manifold:{false,true}) {
+            NurbsExtrusionSolid3D extended;
+            int moving=-1;
+            const bool success=probeFaceExtrusion(subdivided,0,{0,0,-0.5},&extended,manifold,&moving);
+            passed &= check(success && validateNurbsSolid(extended) && consistentSolidWinding(extended),
+                            "opposite-face subdivisions must not reverse material classification");
+            if (success) {
+                const auto extendedFaces=nurbsSolidFaces(extended);
+                for (Point3D p:extendedFaces[moving].controlPoints)
+                    passed &= check(std::abs(p.z+0.5)<1e-8,"subdivided cap must allow the opposite face to move outward");
+            }
+        }
+    }
+    passed &= check(!probeFaceExtrusion(rectangularSolid, 1, {0,0,-3}, &collapsed, true) &&
+                        !probeFaceExtrusion(rectangularSolid, 1, {0,0,-4}, &collapsed, true),
                     "Manifold must reject collapse and crossing the opposite cap");
     auto slanted = rectangularSolid;
     slanted.displacement = {1,0,3};
-    passed &= check(!extrudeNurbsSolidFace(slanted, 1, {0,0,1}, &collapsed, true),
+    NurbsExtrusionSolid3D slantedExtension;
+    passed &= check(probeFaceExtrusion(slanted,1,{0,0,1},&slantedExtension,false) &&
+                        validateNurbsSolid(slantedExtension) && consistentSolidWinding(slantedExtension) &&
+                        nurbsSolidFaces(slantedExtension).size()==10,
+                    "ordinary outward extrusion of a convex oblique seed must retain its exact perimeter seam");
+    passed &= check(!probeFaceExtrusion(slanted, 1, {0,0,1}, &collapsed, true),
                     "Manifold must reject resizing nonorthogonal neighboring walls");
 
     // Moving a top cap back toward the base must shorten the existing solid.

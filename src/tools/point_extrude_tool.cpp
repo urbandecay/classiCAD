@@ -86,10 +86,10 @@ void PointExtrudeTool::setSurfaceFaceSources(
     stagedSurfaceFaceSources_ = sources;
 }
 
-void PointExtrudeTool::setSolidCapSources(
-    const QVector<SolidCapSource> &sources)
+void PointExtrudeTool::setSolidFaceSources(
+    const QVector<SolidFaceSource> &sources)
 {
-    stagedSolidCapSources_ = sources;
+    stagedSolidFaceSources_ = sources;
 }
 
 void PointExtrudeTool::begin(ToolContext &context)
@@ -99,12 +99,12 @@ void PointExtrudeTool::begin(ToolContext &context)
     const QVector<CurveSource> stagedCurves = stagedCurveSources_;
     const QVector<SurfaceFaceSource> stagedSurfaceFaces =
         stagedSurfaceFaceSources_;
-    const QVector<SolidCapSource> stagedSolidCaps = stagedSolidCapSources_;
+    const QVector<SolidFaceSource> stagedSolidFaces = stagedSolidFaceSources_;
     const bool useStagedSources = stagedControlPointSourcesRequested_;
     stagedControlPointSources_.clear();
     stagedCurveSources_.clear();
     stagedSurfaceFaceSources_.clear();
-    stagedSolidCapSources_.clear();
+    stagedSolidFaceSources_.clear();
     stagedControlPointSourcesRequested_ = false;
     sourcePoints_.clear();
     completedExtrusionObjectIds_.clear();
@@ -115,6 +115,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     constraintAxisKey_ = 0;
     normalConstraint_ = false;
     weldEnabled_ = false;
+    manifoldEnabled_ = false;
     hasLastInput_ = false;
     hasCursorPoint_ = false;
     snap_ = {};
@@ -260,17 +261,18 @@ void PointExtrudeTool::begin(ToolContext &context)
         sourcePoints_.append(source);
     }
 
-    for (const SolidCapSource &staged : stagedSolidCaps) {
-        if (!staged.objectId.isValid() || staged.capIndex < 0 ||
-            staged.capIndex > 1 || !validateNurbsSolid(staged.solid) ||
-            !staged.solid.boundaryFaces.isEmpty() ||
+    for (const SolidFaceSource &staged : stagedSolidFaces) {
+        const int faceCount = nurbsSolidFaces(staged.solid).size();
+        if (!staged.objectId.isValid() || staged.faceIndex < 0 ||
+            staged.faceIndex >= faceCount ||
+            !validateNurbsSolid(staged.solid) ||
             !isValidWorkPlaneFrame(staged.workPlaneFrame)) {
             continue;
         }
         SourcePoint source;
         source.objectId = staged.objectId;
         source.solid = staged.solid;
-        source.solidCapIndex = staged.capIndex;
+        source.solidFaceIndex = staged.faceIndex;
         source.workPlaneFrame = staged.workPlaneFrame;
         source.workPlaneFrame.origin = staged.worldPoint;
         source.worldPoint = staged.worldPoint;
@@ -280,11 +282,10 @@ void PointExtrudeTool::begin(ToolContext &context)
     if (!sourcePoints_.isEmpty()) {
         int constraintSourceIndex = -1;
         // Face-derived sources can be staged after ordinary vertices and
-        // curves. Use a cap/face as the shared direction reference even when
-        // the user selected mixed geometry, so cap continuation starts on
-        // its required outward axis.
+        // curves. Use a solid face as the shared direction reference even
+        // when the user selected mixed geometry.
         for (int index = 0; index < sourcePoints_.size(); ++index) {
-            if (sourcePoints_[index].solidCapIndex >= 0) {
+            if (sourcePoints_[index].solidFaceIndex >= 0) {
                 constraintSourceIndex = index;
                 break;
             }
@@ -302,7 +303,7 @@ void PointExtrudeTool::begin(ToolContext &context)
         }
         normalConstraint_ =
             !sourcePoints_[constraintSourceIndex].surface.controlPoints.isEmpty() ||
-            sourcePoints_[constraintSourceIndex].solidCapIndex >= 0;
+            sourcePoints_[constraintSourceIndex].solidFaceIndex >= 0;
         inputFrame_ = sourcePoints_[constraintSourceIndex].workPlaneFrame;
         inputFrame_.origin = sourcePoints_[constraintSourceIndex].worldPoint;
         cursorPoint_ = sourcePoints_.first().worldPoint;
@@ -364,6 +365,10 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
     }
     if (input.key == Qt::Key_W) {
         toggleWeld(context);
+        return true;
+    }
+    if (input.key == Qt::Key_M) {
+        toggleManifold(context);
         return true;
     }
     if (input.key == Qt::Key_X || input.key == Qt::Key_Y ||
@@ -502,7 +507,7 @@ void PointExtrudeTool::commit(ToolContext &context)
         for (int index = 0; index < sourcePoints_.size(); ++index) {
             SourcePoint &source = sourcePoints_[index];
             if (!source.objectId.isValid() ||
-                source.solidCapIndex >= 0 ||
+                source.solidFaceIndex >= 0 ||
                 !source.surface.controlPoints.isEmpty() ||
                 !lines[index].controlPointWeldGroups.isEmpty()) {
                 continue;
@@ -587,14 +592,13 @@ void PointExtrudeTool::commit(ToolContext &context)
     }
 
     QVector<ObjectId> createdObjectIds;
+    QVector<CompletedFaceExtrusion> faceExtrusions;
     for (int index = 0; index < sourcePoints_.size(); ++index) {
         const SourcePoint &source = sourcePoints_[index];
-        if (!source.surface.controlPoints.isEmpty() ||
-            source.solidCapIndex >= 0) {
-            // A face extrusion replaces its source sheet. Keeping both puts
-            // the old face directly on top of the solid's new cap, causing
-            // z-fighting even when nothing is selected. Continuing an
-            // existing solid also replaces it so the result stays one solid.
+        const bool faceSource = !source.surface.controlPoints.isEmpty() ||
+                                source.solidFaceIndex >= 0;
+        if (faceSource && weldEnabled_) {
+            // Only connected extrusion may replace the source geometry.
             const SceneObject *sceneObject =
                 context.document().object(source.objectId);
             if (sceneObject == nullptr) {
@@ -621,8 +625,11 @@ void PointExtrudeTool::commit(ToolContext &context)
                 publish(context);
                 return;
             }
+            faceExtrusions.append({source.objectId,
+                source.solidFaceIndex >= 0 ? source.solidFaceIndex : 1});
         } else {
-            const ObjectId createdObjectId = transaction.addShape(lines[index]);
+            const ObjectId createdObjectId = transaction.addShape(
+                lines[index], context.document().containerId(source.objectId));
             if (!createdObjectId.isValid()) {
                 transaction.rollback();
                 status_.text = QStringLiteral("Extrude failed to create geometry");
@@ -631,6 +638,7 @@ void PointExtrudeTool::commit(ToolContext &context)
                 return;
             }
             createdObjectIds.append(createdObjectId);
+            if (faceSource) faceExtrusions.append({createdObjectId, 1});
         }
     }
     if (!context.commitTransaction(transaction)) {
@@ -641,17 +649,7 @@ void PointExtrudeTool::commit(ToolContext &context)
     }
 
     completedExtrusionObjectIds_ = std::move(createdObjectIds);
-    completedFaceExtrusions_.clear();
-    for (const SourcePoint &source : sourcePoints_) {
-        if (!source.objectId.isValid() ||
-            (source.surface.controlPoints.isEmpty() &&
-             source.solidCapIndex < 0)) {
-            continue;
-        }
-        completedFaceExtrusions_.append(
-            {source.objectId,
-             source.solidCapIndex >= 0 ? source.solidCapIndex : 1});
-    }
+    completedFaceExtrusions_ = std::move(faceExtrusions);
     status_.state = ToolLifecycleState::Completed;
     status_.canCommit = false;
     status_.text = QStringLiteral("Extrude created %1 object%2")
@@ -681,10 +679,15 @@ ToolPreview PointExtrudeTool::preview() const
         result.worldPoints.append(cursorPoint_);
         if (status_.canCommit) {
             result.shapes = makeLineShapes(cursorPoint_);
+            for (const SourcePoint &source : sourcePoints_) {
+                result.extrusionPreviewFaceIndices.append(
+                    weldEnabled_ && source.solidFaceIndex >= 0
+                        ? source.solidFaceIndex : 1);
+            }
             if (!result.shapes.isEmpty()) {
                 for (const SourcePoint &source : sourcePoints_) {
-                    if ((!source.surface.controlPoints.isEmpty() ||
-                         source.solidCapIndex >= 0) &&
+                    if (weldEnabled_ && (!source.surface.controlPoints.isEmpty() ||
+                         source.solidFaceIndex >= 0) &&
                         source.objectId.isValid()) {
                         result.hiddenObjectIds.append(source.objectId);
                     }
@@ -844,10 +847,30 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
                                          sourcePoints_.first().worldPoint);
     for (const SourcePoint &source : sourcePoints_) {
         Shape line;
-        if (source.solidCapIndex >= 0) {
-            if (!source.solid.boundaryFaces.isEmpty() ||
-                source.solidCapIndex > 1) {
-                return {};
+        if (source.solidFaceIndex >= 0) {
+            if (!weldEnabled_) {
+                const auto faces = nurbsSolidFaces(source.solid);
+                if (source.solidFaceIndex >= faces.size()) return {};
+                line.geometryType = GeometryType::NurbsSolid;
+                line.workPlaneFrame = source.workPlaneFrame;
+                if (!makeNurbsExtrusionSolid(faces[source.solidFaceIndex],
+                                             displacement, &line.nurbsSolid)) return {};
+                lines.append(line);
+                continue;
+            }
+            if (!manifoldEnabled_ || !source.solid.boundaryFaces.isEmpty() ||
+                source.solidFaceIndex > 1) {
+                Shape solidShape;
+                solidShape.geometryType = GeometryType::NurbsSolid;
+                solidShape.nurbsSolid = source.solid;
+                if (!extrudeNurbsSolidFace(
+                        source.solid, source.solidFaceIndex, displacement,
+                        &solidShape.nurbsSolid, manifoldEnabled_)) {
+                    return {};
+                }
+                solidShape.workPlaneFrame = source.workPlaneFrame;
+                lines.append(solidShape);
+                continue;
             }
             const Point3D outward = source.workPlaneFrame.normal;
             const qreal displacementLength = length(displacement);
@@ -859,18 +882,25 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
             const qreal alignmentTolerance =
                 std::max<qreal>(1.0e-20,
                                 displacementLength * outwardLength * 1.0e-8);
+            const Point3D sweep = source.solid.displacement;
+            const Point3D sweepCross{
+                sweep.y * outward.z - sweep.z * outward.y,
+                sweep.z * outward.x - sweep.x * outward.z,
+                sweep.x * outward.y - sweep.y * outward.x};
             // Keep the cap motion on its normal axis. Motion toward the
             // opposite cap shortens the solid; motion away from it extends it.
             if (displacementLength <= 1.0e-12 ||
                 outwardLength <= 1.0e-12 ||
-                length(cross) > alignmentTolerance) {
+                length(cross) > alignmentTolerance ||
+                length(sweepCross) > std::max<qreal>(
+                    1.0e-20, length(sweep) * outwardLength * 1.0e-8)) {
                 return {};
             }
 
             line.geometryType = GeometryType::NurbsSolid;
             line.workPlaneFrame = source.workPlaneFrame;
             line.nurbsSolid = source.solid;
-            if (source.solidCapIndex == 1) {
+            if (source.solidFaceIndex == 1) {
                 line.nurbsSolid.displacement = add(
                     line.nurbsSolid.displacement, displacement);
             } else {
@@ -880,7 +910,7 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
                 line.nurbsSolid.displacement = subtract(
                     line.nurbsSolid.displacement, displacement);
             }
-            const qreal capSide = source.solidCapIndex == 1 ? 1.0 : -1.0;
+            const qreal capSide = source.solidFaceIndex == 1 ? 1.0 : -1.0;
             const qreal remainingCapSeparation = capSide * dot(
                 line.nurbsSolid.displacement, source.workPlaneFrame.normal);
             // Do not let a cap pass through the opposite cap and invert the
@@ -924,13 +954,13 @@ void PointExtrudeTool::updateStatus()
     } else if (std::any_of(
                    sourcePoints_.cbegin(), sourcePoints_.cend(),
                    [](const SourcePoint &source) {
-                       return source.solidCapIndex >= 0;
+                       return source.solidFaceIndex >= 0;
                    })) {
         status_.text = constraintAxisKey_ != 0
             ? QStringLiteral(
-                  "Extrude: move this cap along its normal")
+                  "Extrude: move this face along its normal")
             : QStringLiteral(
-                  "Extrude: move along the cap normal to extend or shorten the solid");
+                  "Extrude: move along the selected face normal");
     } else {
         status_.text = QStringLiteral("Extrude: move endpoint to set the shared offset");
     }
@@ -943,6 +973,9 @@ void PointExtrudeTool::updateStatus()
     status_.text += weldEnabled_
         ? QStringLiteral(" • W Weld on")
         : QStringLiteral(" • W Weld off");
+    status_.text += manifoldEnabled_
+        ? QStringLiteral(" • M Manifold on")
+        : QStringLiteral(" • M Manifold off");
 }
 
 bool PointExtrudeTool::weldEnabled() const
@@ -953,6 +986,20 @@ bool PointExtrudeTool::weldEnabled() const
 void PointExtrudeTool::toggleWeld(ToolContext &context)
 {
     weldEnabled_ = !weldEnabled_;
+    if (!weldEnabled_) manifoldEnabled_ = false;
+    updateStatus();
+    publish(context);
+}
+
+bool PointExtrudeTool::manifoldEnabled() const
+{
+    return manifoldEnabled_;
+}
+
+void PointExtrudeTool::toggleManifold(ToolContext &context)
+{
+    manifoldEnabled_ = !manifoldEnabled_;
+    if (manifoldEnabled_) weldEnabled_ = true;
     updateStatus();
     publish(context);
 }

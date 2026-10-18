@@ -214,6 +214,113 @@ int main(int argc, char **argv)
                         nurbsSolidFaces(rectangularSolid).size()==6,
                     "rectangular extrusion must expose two caps and four exact wall faces");
 
+    // Exercise all six faces, both movement directions, and all three modes.
+    // Unwelded geometry must remain independently editable at coincident corners.
+    const auto sourceFaces = nurbsSolidFaces(rectangularSolid);
+    for (int faceIndex = 0; faceIndex < sourceFaces.size(); ++faceIndex) {
+        const auto &patch = sourceFaces[faceIndex];
+        const Point3D a = patch.controlPoints[0];
+        const Point3D b = patch.controlPoints[2];
+        const Point3D c = patch.controlPoints[1];
+        Point3D normal{(b.y-a.y)*(c.z-a.z)-(b.z-a.z)*(c.y-a.y),
+                       (b.z-a.z)*(c.x-a.x)-(b.x-a.x)*(c.z-a.z),
+                       (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)};
+        const double magnitude = std::hypot(normal.x, std::hypot(normal.y, normal.z));
+        const double orientation = nurbsSolidFaceReversed(rectangularSolid, faceIndex) ? -1 : 1;
+        normal = {normal.x*orientation/magnitude, normal.y*orientation/magnitude,
+                  normal.z*orientation/magnitude};
+        for (double distance : {-0.5, 0.5}) {
+            for (int mode = 0; mode < 3; ++mode) {
+                Shape original;
+                original.geometryType = GeometryType::NurbsSolid;
+                original.nurbsSolid = rectangularSolid;
+                Document fixture;
+                const ObjectId sourceId = fixture.append(original);
+                SelectionModel fixtureSelection;
+                History fixtureHistory(fixture);
+                ViewportTransform camera;
+                camera.setViewPreset(ViewportViewPreset::Isometric);
+                camera.zoom() = 24;
+                CurveSampler fixtureSampler;
+                CurveHitTester fixtureHits;
+                SnapEngine fixtureSnaps;
+                SnapSettings disabledSnaps;
+                disabledSnaps.enabled = false;
+                fixtureSnaps.setSettings(disabledSnaps);
+                ToolContext fixtureContext(fixture, fixtureSelection, fixtureHistory,
+                                           camera, fixtureSampler, fixtureHits, fixtureSnaps);
+                PointExtrudeTool fixtureTool;
+                PointExtrudeTool::SolidFaceSource source;
+                source.objectId = sourceId;
+                source.solid = rectangularSolid;
+                source.faceIndex = faceIndex;
+                source.worldPoint = a;
+                source.workPlaneFrame = makeWorkPlaneFrameFromNormal(a, normal, {b.x-a.x,b.y-a.y,b.z-a.z});
+                fixtureTool.setSolidFaceSources({source});
+                fixtureTool.begin(fixtureContext);
+                if (mode == 1) fixtureTool.toggleWeld(fixtureContext);
+                if (mode == 2) fixtureTool.toggleManifold(fixtureContext);
+                ToolInput move;
+                move.viewportSize = size;
+                move.workPlaneFrame = source.workPlaneFrame;
+                camera.worldPointToScreenUnclipped(
+                    {a.x+normal.x*distance, a.y+normal.y*distance, a.z+normal.z*distance},
+                    size, &move.screenPosition);
+                fixtureTool.handleMouseMove(move, fixtureContext);
+                const auto modePreview = fixtureTool.preview();
+                passed &= check(fixtureTool.status().canCommit && modePreview.shapes.size() == 1,
+                                "every supported face must extrude in both directions in every mode");
+                if (modePreview.shapes.size() != 1) continue;
+                passed &= check(modePreview.hiddenObjectIds.contains(sourceId) == (mode != 0) &&
+                                    modePreview.extrusionPreviewFaceIndices.first() == (mode == 0 ? 1 : faceIndex),
+                                "preview must retain unwelded sources and highlight the actual moving face");
+                passed &= check(nurbsSolidFaces(modePreview.shapes.first().nurbsSolid).size() ==
+                                    (mode == 1 ? 10 : 6),
+                                "normal welded extrusion retains the seam, while manifold preserves six faces");
+                if (mode == 1) {
+                    passed &= check(nurbsSolidFaceReversed(
+                                        modePreview.shapes.first().nurbsSolid, faceIndex) ==
+                                        nurbsSolidFaceReversed(rectangularSolid, faceIndex),
+                                    "normal extrusion must preserve the moving face winding in either direction");
+                }
+                if (mode == 2) {
+                    fixtureTool.toggleWeld(fixtureContext);
+                    passed &= check(!fixtureTool.weldEnabled() && !fixtureTool.manifoldEnabled() &&
+                                        fixtureTool.preview().hiddenObjectIds.isEmpty(),
+                                    "turning Weld off must disable Manifold and immediately detach the preview");
+                    fixtureTool.toggleManifold(fixtureContext);
+                    passed &= check(fixtureTool.weldEnabled() && fixtureTool.manifoldEnabled(),
+                                    "Manifold must explicitly enable its connected topology");
+                }
+                fixtureTool.commit(fixtureContext);
+                const auto completion = fixtureTool.preview();
+                passed &= check(fixture.size() == (mode == 0 ? 2 : 1) &&
+                                    completion.completedFaceExtrusions.size() == 1,
+                                "Weld off creates independent geometry; connected modes modify the source");
+                if (completion.completedFaceExtrusions.size() != 1) continue;
+                if (mode == 0) {
+                    passed &= check(shapeToJson(*fixture.shape(sourceId)) == shapeToJson(original) &&
+                                        completion.completedFaceExtrusions.first().objectId != sourceId &&
+                                        completion.completedFaceExtrusions.first().faceIndex == 1,
+                                    "unwelded extrusion preserves its source and selects the independent end cap");
+                }
+                passed &= check(fixtureHistory.undoCount() == 1 && fixtureHistory.undo() &&
+                                    fixture.size() == 1 &&
+                                    shapeToJson(*fixture.shape(sourceId)) == shapeToJson(original) &&
+                                    fixtureHistory.redo() && fixture.size() == (mode == 0 ? 2 : 1),
+                                "face extrusion modes must undo and redo atomically");
+            }
+        }
+    }
+    NurbsExtrusionSolid3D collapsed;
+    passed &= check(!extrudeNurbsSolidFace(rectangularSolid, 1, {0,0,-3}, &collapsed, true) &&
+                        !extrudeNurbsSolidFace(rectangularSolid, 1, {0,0,-4}, &collapsed, true),
+                    "Manifold must reject collapse and crossing the opposite cap");
+    auto slanted = rectangularSolid;
+    slanted.displacement = {1,0,3};
+    passed &= check(!extrudeNurbsSolidFace(slanted, 1, {0,0,1}, &collapsed, true),
+                    "Manifold must reject resizing nonorthogonal neighboring walls");
+
     // Moving a top cap back toward the base must shorten the existing solid.
     {
         Shape sourceSolid;
@@ -236,16 +343,17 @@ int main(int argc, char **argv)
                                capTransform, capSampler, capHitTester,
                                capSnaps);
         PointExtrudeTool capTool;
-        PointExtrudeTool::SolidCapSource capSource;
+        PointExtrudeTool::SolidFaceSource capSource;
         capSource.objectId = capObject;
         capSource.solid = rectangularSolid;
-        capSource.capIndex = 1;
+        capSource.faceIndex = 1;
         capSource.worldPoint = rectangleFace.controlPoints.first();
         capSource.worldPoint.z += rectangularSolid.displacement.z;
         capSource.workPlaneFrame = makeWorkPlaneFrameFromNormal(
             capSource.worldPoint, {0,0,1}, {1,0,0});
-        capTool.setSolidCapSources({capSource});
+        capTool.setSolidFaceSources({capSource});
         capTool.begin(capContext);
+        capTool.toggleManifold(capContext);
         ToolInput downward;
         downward.viewportSize = size;
         downward.workPlaneFrame = capSource.workPlaneFrame;
@@ -541,6 +649,7 @@ int main(int argc, char **argv)
     });
     PointExtrudeTool tool;
     tool.begin(context);
+    tool.toggleWeld(context);
     ToolInput input;
     input.viewportSize = size;
     input.workPlaneFrame = transform.workPlaneFrame();

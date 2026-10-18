@@ -24,12 +24,12 @@ public:
         WorkPlaneFrame workPlaneFrame;
         Point3D worldPoint;
     };
-    struct SolidCapSource {
+    struct SolidFaceSource {
         ObjectId objectId = ObjectId::invalid();
         NurbsExtrusionSolid3D solid;
         WorkPlaneFrame workPlaneFrame;
         Point3D worldPoint;
-        int capIndex = -1;
+        int faceIndex = -1;
     };
 
     ToolId id() const override;
@@ -37,7 +37,7 @@ public:
         const QVector<ControlPointSource> &sources);
     void setCurveSources(const QVector<CurveSource> &sources);
     void setSurfaceFaceSources(const QVector<SurfaceFaceSource> &sources);
-    void setSolidCapSources(const QVector<SolidCapSource> &sources);
+    void setSolidFaceSources(const QVector<SolidFaceSource> &sources);
     void begin(ToolContext &context) override;
     bool handleMousePress(const ToolInput &input, ToolContext &context) override;
     bool handleMouseMove(const ToolInput &input, ToolContext &context) override;
@@ -48,6 +48,8 @@ public:
     ToolStatus status() const override;
     bool weldEnabled() const;
     void toggleWeld(ToolContext &context);
+    bool manifoldEnabled() const;
+    void toggleManifold(ToolContext &context);
 
 private:
     struct SourcePoint {
@@ -59,7 +61,7 @@ private:
         NurbsExtrusionSolid3D solid;
         int sourceControlPointIndex = -1;
         QVector<int> sourceControlPointIndices;
-        int solidCapIndex = -1;
+        int solidFaceIndex = -1;
     };
 
     Point3D resolveTarget(const ToolInput &input, ToolContext &context);
@@ -74,7 +76,7 @@ private:
     QVector<ControlPointSource> stagedControlPointSources_;
     QVector<CurveSource> stagedCurveSources_;
     QVector<SurfaceFaceSource> stagedSurfaceFaceSources_;
-    QVector<SolidCapSource> stagedSolidCapSources_;
+    QVector<SolidFaceSource> stagedSolidFaceSources_;
     QVector<ObjectId> completedExtrusionObjectIds_;
     QVector<CompletedFaceExtrusion> completedFaceExtrusions_;
     bool stagedControlPointSourcesRequested_ = false;
@@ -84,6 +86,7 @@ private:
     int constraintAxisKey_ = 0;
     bool normalConstraint_ = false;
     bool weldEnabled_ = false;
+    bool manifoldEnabled_ = false;
     bool hasLastInput_ = false;
     bool hasCursorPoint_ = false;
     SnapResult snap_;

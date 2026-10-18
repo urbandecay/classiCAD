@@ -51,7 +51,7 @@ struct ToolPreviewGuide {
 
 struct CompletedFaceExtrusion {
     ObjectId objectId = ObjectId::invalid();
-    int capIndex = 1;
+    int faceIndex = 1;
 };
 
 struct ToolPreview {
@@ -63,6 +63,7 @@ struct ToolPreview {
     QVector<Point3D> worldPoints;
     Point3D worldCursorPoint;
     QVector<Shape> shapes;
+    QVector<int> extrusionPreviewFaceIndices;
     QVector<ObjectId> hiddenObjectIds;
     QVector<ObjectId> completedExtrusionObjectIds;
     QVector<CompletedFaceExtrusion> completedFaceExtrusions;

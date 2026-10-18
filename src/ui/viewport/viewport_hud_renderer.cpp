@@ -26,6 +26,12 @@ QRectF ViewportHudRenderer::pointExtrudeWeldToggleRect(
                   24.0);
 }
 
+QRectF ViewportHudRenderer::pointExtrudeManifoldToggleRect(
+    const QSize &viewportSize)
+{
+    return QRectF(108.0, viewportSize.height() - 36.0, 188.0, 24.0);
+}
+
 void ViewportHudRenderer::draw(QPainter &painter,
                                const QSize &viewportSize,
                                const ViewportHudState &state) const
@@ -100,9 +106,26 @@ void ViewportHudRenderer::draw(QPainter &painter,
         painter.drawText(37.0,
                          baseline,
                          QStringLiteral("Weld (W)"));
+        const QRectF manifoldBox(113.0, baseline - 12.0, 12.0, 12.0);
+        painter.setPen(QPen(state.pointExtrudeManifoldEnabled
+                                ? QColor(QStringLiteral("#5597df"))
+                                : QColor(QStringLiteral("#888888")), 1.0));
+        painter.setBrush(state.pointExtrudeManifoldEnabled
+                             ? QColor(QStringLiteral("#315f91"))
+                             : QColor(QStringLiteral("#292929")));
+        painter.drawRoundedRect(manifoldBox, 2.0, 2.0);
+        if (state.pointExtrudeManifoldEnabled) {
+            painter.setPen(QPen(Qt::white, 1.7));
+            painter.drawLine(QPointF(116.0, baseline - 6.0),
+                             QPointF(118.5, baseline - 3.5));
+            painter.drawLine(QPointF(118.5, baseline - 3.5),
+                             QPointF(123.0, baseline - 9.0));
+        }
+        painter.setPen(QColor(QStringLiteral("#b0b0b0")));
+        painter.drawText(131.0, baseline, QStringLiteral("Extrude Manifold (M)"));
         painter.setPen(QColor(QStringLiteral("#777777")));
-        painter.drawText(108.0,
-                         baseline,
+        painter.drawText(18.0,
+                         baseline - 28.0,
                          QStringLiteral("Click endpoint  •  X/Y/Z locks axis  •  Enter confirms  •  Esc/RMB cancels"));
     } else if (activeTool == Tool::Erase) {
         painter.setPen(QColor(QStringLiteral("#777777")));

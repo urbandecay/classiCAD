@@ -20,7 +20,8 @@ struct ViewportHudState {
     bool lineCommandActive = false;
     QString lineCommandStatus;
     QString pointToolInstructions;
-    bool pointExtrudeWeldEnabled = true;
+    bool pointExtrudeWeldEnabled = false;
+    bool pointExtrudeManifoldEnabled = false;
     int rotateStep = 0;
     bool rotateAngleSnapEnabled = false;
     bool rotateAngleInputActive = false;
@@ -43,6 +44,7 @@ public:
     static QString rotateSnapIncrementLabel(qreal incrementDegrees,
                                             bool useRadians);
     static QRectF pointExtrudeWeldToggleRect(const QSize &viewportSize);
+    static QRectF pointExtrudeManifoldToggleRect(const QSize &viewportSize);
 };
 
 } // namespace classiCAD

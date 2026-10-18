@@ -2313,13 +2313,13 @@ public:
     {
         QVector<ObjectId> resultObjectIds;
         QSet<quint64> faceExtrusionObjectValues;
-        QHash<quint64, int> faceExtrusionCapIndices;
+        QHash<quint64, int> faceExtrusionIndices;
         for (const CompletedFaceExtrusion &faceExtrusion : faceExtrusions) {
             const ObjectId objectId = faceExtrusion.objectId;
             if (objectId.isValid() && document_.shape(objectId) != nullptr) {
                 faceExtrusionObjectValues.insert(objectId.value());
-                faceExtrusionCapIndices.insert(objectId.value(),
-                                               faceExtrusion.capIndex);
+                faceExtrusionIndices.insert(objectId.value(),
+                                            faceExtrusion.faceIndex);
                 if (!resultObjectIds.contains(objectId)) {
                     resultObjectIds.append(objectId);
                 }
@@ -2353,33 +2353,33 @@ public:
             if (faceExtrusion &&
                 shape->geometryType == GeometryType::NurbsSolid) {
                 const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(*shape);
-                const int capIndex = faceExtrusionCapIndices.value(
+                const int faceIndex = faceExtrusionIndices.value(
                     objectId.value(), 1);
-                if (capIndex >= 0 && capIndex < faces.size()) {
+                if (faceIndex >= 0 && faceIndex < faces.size()) {
                     if (componentSelectionMode_ ==
                         ComponentSelectionMode::Face) {
-                        resultComponentSelection.insert(capIndex);
+                        resultComponentSelection.insert(faceIndex);
                     } else {
-                        Shape cap;
-                        cap.geometryType = GeometryType::NurbsSurface;
-                        cap.nurbsSurface = faces[capIndex];
+                        Shape faceShape;
+                        faceShape.geometryType = GeometryType::NurbsSurface;
+                        faceShape.nurbsSurface = faces[faceIndex];
                         const ViewportDepthGeometry solidCage =
                             selectedSurfaceControlNet(*shape);
-                        const ViewportDepthGeometry capCage =
-                            selectedSurfaceControlNet(cap);
+                        const ViewportDepthGeometry faceCage =
+                            selectedSurfaceControlNet(faceShape);
                         if (componentSelectionMode_ ==
                             ComponentSelectionMode::Vertex) {
-                            for (int capIndex = 0;
-                                 capIndex < capCage.pointVertices.size();
-                                 ++capIndex) {
-                                const Point3D capPoint = duplicateCagePoint(
-                                    capCage.pointVertices[capIndex]);
+                            for (int facePointIndex = 0;
+                                 facePointIndex < faceCage.pointVertices.size();
+                                 ++facePointIndex) {
+                                const Point3D facePoint = duplicateCagePoint(
+                                    faceCage.pointVertices[facePointIndex]);
                                 for (int solidIndex = 0;
                                      solidIndex <
                                          solidCage.pointVertices.size();
                                      ++solidIndex) {
                                     if (duplicatePointsEqual(
-                                            capPoint,
+                                            facePoint,
                                             duplicateCagePoint(
                                                 solidCage.pointVertices[
                                                     solidIndex]))) {
@@ -2390,14 +2390,14 @@ public:
                                 }
                             }
                         } else {
-                            for (int capEdge = 0;
-                                 capEdge + 1 <
-                                     capCage.preciseLineVertices.size();
-                                 capEdge += 2) {
+                            for (int faceEdge = 0;
+                                 faceEdge + 1 <
+                                     faceCage.preciseLineVertices.size();
+                                 faceEdge += 2) {
                                 const Point3D first = duplicateCagePoint(
-                                    capCage.preciseLineVertices[capEdge]);
+                                    faceCage.preciseLineVertices[faceEdge]);
                                 const Point3D second = duplicateCagePoint(
-                                    capCage.preciseLineVertices[capEdge + 1]);
+                                    faceCage.preciseLineVertices[faceEdge + 1]);
                                 for (int solidEdge = 0;
                                      solidEdge + 1 <
                                          solidCage.preciseLineVertices.size();
@@ -2490,46 +2490,48 @@ public:
     {
         const QHash<quint64, QSet<int>> controlPointTargets =
             selectedVertexControlPointTargets();
-        const auto makeSolidCapSource =
+        const auto makeSolidFaceSource =
             [this](ObjectId objectId, const Shape &shape,
-                   const SceneObject &sceneObject, int capIndex,
-                   PointExtrudeTool::SolidCapSource *source) {
+                   const SceneObject &sceneObject, int faceIndex,
+                   PointExtrudeTool::SolidFaceSource *source) {
                 if (source == nullptr ||
                     shape.geometryType != GeometryType::NurbsSolid ||
-                    capIndex < 0 || capIndex > 1 ||
-                    !shape.nurbsSolid.boundaryFaces.isEmpty() ||
+                    faceIndex < 0 ||
                     !validateNurbsSolid(shape.nurbsSolid)) {
                     return false;
                 }
                 const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
-                WorkPlaneFrame baseFrame;
-                if (faces.size() < 2 ||
-                    !nurbsSolidBaseFrame(shape.nurbsSolid.baseSurface,
-                                         &baseFrame) ||
-                    faces[capIndex].controlPoints.isEmpty()) {
+                if (faceIndex >= faces.size() ||
+                    faces[faceIndex].controlPoints.size() != 4) {
                     return false;
                 }
 
                 const Point3D placement = sceneObject.placementTranslation;
-                Point3D anchor = faces[capIndex].controlPoints.first();
+                const NurbsSurface3D &face = faces[faceIndex];
+                Point3D anchor = face.controlPoints.first();
                 anchor.x += placement.x;
                 anchor.y += placement.y;
                 anchor.z += placement.z;
-                Point3D outward = baseFrame.normal;
-                const Point3D &sweep = shape.nurbsSolid.displacement;
-                const qreal sweepNormal =
-                    sweep.x * baseFrame.normal.x +
-                    sweep.y * baseFrame.normal.y +
-                    sweep.z * baseFrame.normal.z;
-                if ((capIndex == 1 && sweepNormal < 0.0) ||
-                    (capIndex == 0 && sweepNormal > 0.0)) {
+                const Point3D u{
+                    face.controlPoints[2].x - face.controlPoints[0].x,
+                    face.controlPoints[2].y - face.controlPoints[0].y,
+                    face.controlPoints[2].z - face.controlPoints[0].z};
+                const Point3D v{
+                    face.controlPoints[1].x - face.controlPoints[0].x,
+                    face.controlPoints[1].y - face.controlPoints[0].y,
+                    face.controlPoints[1].z - face.controlPoints[0].z};
+                Point3D outward{
+                    u.y * v.z - u.z * v.y,
+                    u.z * v.x - u.x * v.z,
+                    u.x * v.y - u.y * v.x};
+                if (nurbsSolidFaceReversed(shape.nurbsSolid, faceIndex)) {
                     outward.x = -outward.x;
                     outward.y = -outward.y;
                     outward.z = -outward.z;
                 }
-                const WorkPlaneFrame capFrame = makeWorkPlaneFrameFromNormal(
-                    anchor, outward, baseFrame.xAxis);
-                if (!isValidWorkPlaneFrame(capFrame)) {
+                const WorkPlaneFrame faceFrame = makeWorkPlaneFrameFromNormal(
+                    anchor, outward, u);
+                if (!isValidWorkPlaneFrame(faceFrame)) {
                     return false;
                 }
 
@@ -2542,9 +2544,17 @@ public:
                     point.y += placement.y;
                     point.z += placement.z;
                 }
-                source->workPlaneFrame = capFrame;
+                for (NurbsSurface3D &boundaryFace :
+                     source->solid.boundaryFaces) {
+                    for (Point3D &point : boundaryFace.controlPoints) {
+                        point.x += placement.x;
+                        point.y += placement.y;
+                        point.z += placement.z;
+                    }
+                }
+                source->workPlaneFrame = faceFrame;
                 source->worldPoint = anchor;
-                source->capIndex = capIndex;
+                source->faceIndex = faceIndex;
                 return true;
             };
         const auto makeSurfaceFaceSource =
@@ -2666,12 +2676,12 @@ public:
                    const QVector<PointExtrudeTool::CurveSource> &curveSources,
                    const QVector<PointExtrudeTool::SurfaceFaceSource>
                        &surfaceFaceSources,
-                   const QVector<PointExtrudeTool::SolidCapSource>
-                       &solidCapSources) {
+                   const QVector<PointExtrudeTool::SolidFaceSource>
+                       &solidFaceSources) {
                 const int sourceCount = pointSources.size() +
                                         curveSources.size() +
                                         surfaceFaceSources.size() +
-                                        solidCapSources.size();
+                                        solidFaceSources.size();
                 if (sourceCount == 0) {
                     DebugLog::instance().write(
                         QStringLiteral("beginPointExtrude ignored componentMode=%1 noHighlightedSources")
@@ -2687,7 +2697,7 @@ public:
                 extrudeTool->setControlPointSources(pointSources);
                 extrudeTool->setCurveSources(curveSources);
                 extrudeTool->setSurfaceFaceSources(surfaceFaceSources);
-                extrudeTool->setSolidCapSources(solidCapSources);
+                extrudeTool->setSolidFaceSources(solidFaceSources);
                 setTool(Tool::PointExtrude);
                 setFocus(Qt::OtherFocusReason);
                 setCursor(Qt::CrossCursor);
@@ -2698,7 +2708,7 @@ public:
                     QStringLiteral(" selectedCurves=%1")
                         .arg(curveSources.size()) +
                     QStringLiteral(" selectedFaces=%1")
-                        .arg(surfaceFaceSources.size() + solidCapSources.size()));
+                        .arg(surfaceFaceSources.size() + solidFaceSources.size()));
                 return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
             };
 
@@ -2710,7 +2720,7 @@ public:
             QVector<PointExtrudeTool::ControlPointSource> pointSources;
             QVector<PointExtrudeTool::CurveSource> curveSources;
             QVector<PointExtrudeTool::SurfaceFaceSource> surfaceFaceSources;
-            QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+            QVector<PointExtrudeTool::SolidFaceSource> solidFaceSources;
             const auto &selectedEdges = componentSelections_[static_cast<int>(
                 ComponentSelectionMode::Edge)];
             for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
@@ -2906,7 +2916,7 @@ public:
                 }
             }
             return startExtrudeFromSources(pointSources, curveSources,
-                                           surfaceFaceSources, solidCapSources);
+                                           surfaceFaceSources, solidFaceSources);
         }
 
         if (objectEditMode_ &&
@@ -2914,7 +2924,7 @@ public:
             QVector<PointExtrudeTool::ControlPointSource> pointSources;
             QVector<PointExtrudeTool::CurveSource> curveSources;
             QVector<PointExtrudeTool::SurfaceFaceSource> surfaceFaceSources;
-            QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+            QVector<PointExtrudeTool::SolidFaceSource> solidFaceSources;
             const auto &selectedFaces = componentSelections_[static_cast<int>(
                 ComponentSelectionMode::Face)];
             for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
@@ -2941,22 +2951,25 @@ public:
                         surfaceFaceSources.append(std::move(source));
                     }
                 } else if (shape->geometryType == GeometryType::NurbsSolid) {
+                    if (selectionIt.value().size() != 1) {
+                        continue;
+                    }
                     QVector<int> selectedIndices;
                     for (const int faceIndex : selectionIt.value()) {
                         selectedIndices.append(faceIndex);
                     }
                     std::sort(selectedIndices.begin(), selectedIndices.end());
                     for (const int faceIndex : selectedIndices) {
-                        PointExtrudeTool::SolidCapSource source;
-                        if (makeSolidCapSource(objectId, *shape, *sceneObject,
-                                               faceIndex, &source)) {
-                            solidCapSources.append(std::move(source));
+                        PointExtrudeTool::SolidFaceSource source;
+                        if (makeSolidFaceSource(objectId, *shape, *sceneObject,
+                                                faceIndex, &source)) {
+                            solidFaceSources.append(std::move(source));
                         }
                     }
                 }
             }
             return startExtrudeFromSources(pointSources, curveSources,
-                                           surfaceFaceSources, solidCapSources);
+                                           surfaceFaceSources, solidFaceSources);
         }
 
         if (!controlPointTargets.isEmpty()) {
@@ -2976,7 +2989,7 @@ public:
             QVector<PointExtrudeTool::ControlPointSource> pointSources;
             QVector<PointExtrudeTool::CurveSource> curveSources;
             QVector<PointExtrudeTool::SurfaceFaceSource> surfaceFaceSources;
-            QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+            QVector<PointExtrudeTool::SolidFaceSource> solidFaceSources;
             QVector<DeferredCurvePointSource> deferredCurvePointSources;
             QVector<ExtrudedWeldedPoint> curveExtrudedWeldPoints;
             QVector<ConsumedWeldTarget> consumedWeldTargets;
@@ -3283,11 +3296,11 @@ public:
                             }
                         }
                         if (completeCaps.size() == 1) {
-                            PointExtrudeTool::SolidCapSource capSource;
-                            if (makeSolidCapSource(
+                            PointExtrudeTool::SolidFaceSource capSource;
+                            if (makeSolidFaceSource(
                                     objectId, *shape, *sceneObject,
                                     completeCaps.first().first, &capSource)) {
-                                solidCapSources.append(std::move(capSource));
+                                solidFaceSources.append(std::move(capSource));
                                 consumedControlPoints =
                                     completeCaps.first().second;
                             }
@@ -3924,7 +3937,7 @@ public:
 
             if (pointSources.isEmpty() && curveSources.isEmpty() &&
                 surfaceFaceSources.isEmpty() &&
-                solidCapSources.isEmpty()) {
+                solidFaceSources.isEmpty()) {
                 DebugLog::instance().write(
                     QStringLiteral("beginPointExtrude ignored selected control points with no editable source"));
                 return 0;
@@ -3934,7 +3947,7 @@ public:
                 extrudeTool->setControlPointSources(pointSources);
                 extrudeTool->setCurveSources(curveSources);
                 extrudeTool->setSurfaceFaceSources(surfaceFaceSources);
-                extrudeTool->setSolidCapSources(solidCapSources);
+                extrudeTool->setSolidFaceSources(solidFaceSources);
             } else {
                 return 0;
             }
@@ -3947,11 +3960,11 @@ public:
                     .arg(pointSources.size()) +
                 QStringLiteral(" selectedCurves=%1")
                     .arg(curveSources.size()) +
-                QStringLiteral(" selectedSolidCaps=%1")
-                    .arg(solidCapSources.size()));
+                QStringLiteral(" selectedSolidFaces=%1")
+                    .arg(solidFaceSources.size()));
             const int sourceCount = pointSources.size() + curveSources.size() +
                                     surfaceFaceSources.size() +
-                                    solidCapSources.size();
+                                    solidFaceSources.size();
             return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
         }
 
@@ -3968,7 +3981,7 @@ public:
             selected.append(selectedShapeIndex_);
         }
         int pointCount = 0;
-        QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+        QVector<PointExtrudeTool::SolidFaceSource> solidFaceSources;
         const QHash<quint64, QSet<int>> &selectedFaces =
             componentSelections_[static_cast<int>(
                 ComponentSelectionMode::Face)];
@@ -3990,15 +4003,15 @@ public:
                     sourceObjectId.value());
                 if (selectedFace != selectedFaces.cend() &&
                     selectedFace.value().size() == 1) {
-                    const int capIndex = *selectedFace.value().cbegin();
+                    const int faceIndex = *selectedFace.value().cbegin();
                     const SceneObject *sceneObject =
                         document_.object(sourceObjectId);
-                    PointExtrudeTool::SolidCapSource capSource;
+                    PointExtrudeTool::SolidFaceSource faceSource;
                     if (sceneObject != nullptr &&
-                        makeSolidCapSource(sourceObjectId, *sourceShape,
-                                           *sceneObject, capIndex,
-                                           &capSource)) {
-                        solidCapSources.append(std::move(capSource));
+                        makeSolidFaceSource(sourceObjectId, *sourceShape,
+                                            *sceneObject, faceIndex,
+                                            &faceSource)) {
+                        solidFaceSources.append(std::move(faceSource));
                         ++pointCount;
                     }
                 }
@@ -4026,7 +4039,7 @@ public:
 
         if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
                 toolRegistry_.find(Tool::PointExtrude))) {
-            extrudeTool->setSolidCapSources(solidCapSources);
+            extrudeTool->setSolidFaceSources(solidFaceSources);
         }
 
         setTool(Tool::PointExtrude);
@@ -9782,7 +9795,9 @@ protected:
                     false, false);
             }
             if (activeTool_ == Tool::PointExtrude) {
-                for (const Shape &previewShape : activeToolPreview.shapes) {
+                for (int previewIndex = 0;
+                     previewIndex < activeToolPreview.shapes.size(); ++previewIndex) {
+                    const Shape &previewShape = activeToolPreview.shapes[previewIndex];
                     gpuActiveToolPreview |= addPreviewShape(
                         previewShape, activeToolPreviewColor,
                         1.5f, false, 0.0f, false, false);
@@ -9791,12 +9806,14 @@ protected:
                     }
                     const QVector<NurbsSurface3D> faces =
                         shapeSurfaceFaces(previewShape);
-                    if (faces.size() < 2) {
+                    const int faceIndex = activeToolPreview.extrusionPreviewFaceIndices
+                                              .value(previewIndex, 1);
+                    if (faceIndex < 0 || faceIndex >= faces.size()) {
                         continue;
                     }
                     Shape cap;
                     cap.geometryType = GeometryType::NurbsSurface;
-                    cap.nurbsSurface = faces[1];
+                    cap.nurbsSurface = faces[faceIndex];
                     gpuExtrudePreviewCapShapes.append(cap);
 
                     ViewportRenderObject selectedCap;
@@ -10729,6 +10746,7 @@ protected:
         if (const auto *extrudeTool = dynamic_cast<const PointExtrudeTool *>(
                 toolRegistry_.find(Tool::PointExtrude))) {
             hudState.pointExtrudeWeldEnabled = extrudeTool->weldEnabled();
+            hudState.pointExtrudeManifoldEnabled = extrudeTool->manifoldEnabled();
         }
         hudState.rotateStep = rotateState().stage;
         hudState.rotateAngleSnapEnabled = rotateState().angleSnapEnabled;
@@ -10783,6 +10801,18 @@ protected:
     {
         navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
+        if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::PointExtrude &&
+            ViewportHudRenderer::pointExtrudeManifoldToggleRect(size())
+                .contains(screenPosition)) {
+            if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                    toolRegistry_.find(Tool::PointExtrude))) {
+                extrudeTool->toggleManifold(toolContext_);
+            }
+            update();
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton &&
             activeTool_ == Tool::PointExtrude &&
             ViewportHudRenderer::pointExtrudeWeldToggleRect(size())

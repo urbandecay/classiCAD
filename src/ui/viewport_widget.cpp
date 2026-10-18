@@ -8543,9 +8543,10 @@ protected:
                         }
                     }
                     if (geometryType == GeometryType::NurbsSurface &&
+                        !activeEditGeometry &&
                         viewportShadingSettings_.outline &&
                         !viewportShadingSettings_.xrayEnabled() &&
-                        (selected || activeEditGeometry)) {
+                        selected) {
                         QSharedPointer<const ViewportDepthGeometry> boundary;
                         if (renderObject.preparedDepthGeometry) {
                             boundary = makeViewportSurfaceOutlineGeometry(
@@ -8558,11 +8559,6 @@ protected:
                                 selectedSurfaceCage(visibleShape));
                         }
                         ViewportRenderObject outlineObject = renderObject;
-                        if (activeEditGeometry) {
-                            // Edit geometry gets the dark surface boundary;
-                            // selected components are highlighted separately.
-                            outlineObject.selected = false;
-                        }
                         ViewportSceneStroke outlineStroke;
                         if (makeViewportSurfaceOutlineStroke(
                                 outlineObject, true,
@@ -8887,6 +8883,56 @@ protected:
                             edgeCage.color = Qt::white;
                             edgeCage.lineVertexColors = std::move(edgeColors);
                         }
+                    } else if (activeEditGeometry &&
+                               componentSelectionMode_ != ComponentSelectionMode::Vertex &&
+                               !objectComponentSelection.isEmpty()) {
+                        // Color the existing one-pixel cage rather than blend
+                        // a second, wider selection stroke over the same edge.
+                        QVector<QVector4D> edgeColors(
+                            cage->lineVertices.size(), QVector4D(0, 0, 0, 1));
+                        const auto setEdgeColor = [&](int edge, const QColor &color) {
+                            const int first = edge * 2;
+                            if (first < 0 || first + 1 >= edgeColors.size()) return;
+                            const QVector4D value(color.redF(), color.greenF(),
+                                                  color.blueF(), color.alphaF());
+                            edgeColors[first] = edgeColors[first + 1] = value;
+                        };
+                        if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
+                            for (int edge : objectComponentSelection) {
+                                setEdgeColor(edge, edge == objectActiveComponentIndex
+                                    ? QColor(Qt::white) : QColor(QStringLiteral("#ff7a00")));
+                            }
+                        } else {
+                            const auto faces = shapeSurfaceFaces(visibleShape);
+                            // Apply the active face last so its white border
+                            // wins where two selected faces share an edge.
+                            for (bool active : {false, true}) {
+                                for (int faceIndex : objectComponentSelection) {
+                                    if (faceIndex < 0 || faceIndex >= faces.size() ||
+                                        (faceIndex == objectActiveComponentIndex) != active) continue;
+                                    Shape faceShape;
+                                    faceShape.geometryType = GeometryType::NurbsSurface;
+                                    faceShape.nurbsSurface = faces[faceIndex];
+                                    const auto boundary = selectedSurfaceCage(faceShape);
+                                    for (int edge = 0; edge * 2 + 1 < cage->preciseLineVertices.size(); ++edge) {
+                                        const auto &a = cage->preciseLineVertices[edge * 2];
+                                        const auto &b = cage->preciseLineVertices[edge * 2 + 1];
+                                        for (int point = 0; point + 1 < boundary.preciseLineVertices.size(); point += 2) {
+                                            const auto &c = boundary.preciseLineVertices[point];
+                                            const auto &d = boundary.preciseLineVertices[point + 1];
+                                            if ((duplicatePointsEqual(a, c) && duplicatePointsEqual(b, d)) ||
+                                                (duplicatePointsEqual(a, d) && duplicatePointsEqual(b, c))) {
+                                                setEdgeColor(edge, active ? QColor(Qt::white)
+                                                    : QColor(QStringLiteral("#ff8a00")));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        edgeCage.color = Qt::white;
+                        edgeCage.lineVertexColors = std::move(edgeColors);
                     }
                     // In Edit Mode show the active object's edge cage even
                     // when the optional control-point display is off.
@@ -9014,49 +9060,6 @@ protected:
                                         QColor::fromRgba(it.key()),
                                         1.0f, 4.0f, {});
                                 }
-                            }
-                        } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
-                            QMap<QRgb, ViewportDepthGeometry> selectedEdges;
-                            for (int component : objectComponentSelection) {
-                                const int first = component * 2;
-                                if (first + 1 >= cage->lineVertices.size()) continue;
-                                const QColor color = component == objectActiveComponentIndex
-                                                         ? QColor(Qt::white)
-                                                         : QColor(QStringLiteral("#ff7a00"));
-                                ViewportDepthGeometry &componentGeometry =
-                                    selectedEdges[color.rgba()];
-                                componentGeometry.lineVertices
-                                    << cage->lineVertices[first]
-                                    << cage->lineVertices[first + 1];
-                                componentGeometry.preciseLineVertices
-                                    << cage->preciseLineVertices[first]
-                                    << cage->preciseLineVertices[first + 1];
-                            }
-                            for (auto it = selectedEdges.begin();
-                                 it != selectedEdges.end(); ++it) {
-                                appendComponentStroke(std::move(it.value()),
-                                                      QColor::fromRgba(it.key()),
-                                                      2.0f, 0.0f, {});
-                            }
-                        } else {
-                            QMap<QRgb, ViewportDepthGeometry> selectedFaces;
-                            const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(visibleShape);
-                            for (int component : objectComponentSelection) {
-                                if (component < 0 || component >= faces.size()) continue;
-                                Shape faceShape;
-                                faceShape.geometryType = GeometryType::NurbsSurface;
-                                faceShape.nurbsSurface = faces[component];
-                                const ViewportDepthGeometry faceCage = selectedSurfaceCage(faceShape);
-                                const QColor color = component == objectActiveComponentIndex
-                                    ? QColor(Qt::white) : QColor(QStringLiteral("#ff8a00"));
-                                auto &componentGeometry = selectedFaces[color.rgba()];
-                                componentGeometry.lineVertices += faceCage.lineVertices;
-                                componentGeometry.preciseLineVertices += faceCage.preciseLineVertices;
-                            }
-                            for (auto it = selectedFaces.begin(); it != selectedFaces.end(); ++it) {
-                                appendComponentStroke(std::move(it.value()),
-                                                      QColor::fromRgba(it.key()),
-                                                      2.0f, 0.0f, {});
                             }
                         }
                     }
@@ -10241,7 +10244,8 @@ protected:
                                       renderFrame.camera,
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),
-                                      viewportShadingSettings_);
+                                      viewportShadingSettings_, false, true,
+                                      false, smoothWiresOverlay_);
             if (surfaceRenderer != nullptr && !gpuVertexSelectedFaces.isEmpty()) {
                 surfaceRenderer->draw(gpuVertexSelectedFaces,
                                       renderFrame.camera,

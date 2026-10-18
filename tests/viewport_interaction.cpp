@@ -18,6 +18,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCursor>
+#include <QColorSpace>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QDir>
@@ -30,6 +31,7 @@
 #include <QOpenGLFunctions>
 #include <QPainter>
 #include <QSet>
+#include <QScreen>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
@@ -2090,6 +2092,189 @@ bool verifyOutlinerSelectionGrab(QApplication &application)
     return passed;
 }
 
+bool verifyWireRenderingPreferences(QApplication &application)
+{
+    bool passed = true;
+    {
+        // Compare presentation against the original direct Qt rendering path,
+        // including Qt's final window composition rather than FBO readback alone.
+        class ReferenceSurface final : public QOpenGLWidget {
+        public:
+            ReferenceSurface() {
+                setTextureFormat(GL_SRGB8_ALPHA8);
+                QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+                format.setVersion(3, 3);
+                format.setProfile(QSurfaceFormat::CoreProfile);
+                format.setColorSpace(QColorSpace(QColorSpace::SRgb));
+                format.setDepthBufferSize(24);
+                format.setSamples(4);
+                setFormat(format);
+            }
+        protected:
+            void paintGL() override {
+                QPainter painter(this);
+                painter.fillRect(rect(), Qt::gray);
+            }
+        } reference;
+        reference.setAttribute(Qt::WA_ShowWithoutActivating);
+        reference.setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+        reference.setWindowFlag(Qt::WindowStaysOnTopHint);
+        reference.setWindowFlag(Qt::FramelessWindowHint);
+        reference.setGeometry(40, 40, 240, 160);
+        reference.show();
+        ViewportGpuSurface surface;
+        surface.setAttribute(Qt::WA_ShowWithoutActivating);
+        surface.setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+        surface.setWindowFlag(Qt::WindowStaysOnTopHint);
+        surface.setWindowFlag(Qt::FramelessWindowHint);
+        surface.setGeometry(320, 40, 240, 160);
+        int actualSamples = -1;
+        int maximumSamples = 0;
+        surface.setDrawCallback([&](QPainter &painter, auto &, auto &, auto &, auto &, auto &) {
+            painter.fillRect(QRect(0, 0, 480, 320), Qt::gray);
+            painter.beginNativePainting();
+            auto *functions = QOpenGLContext::currentContext()->functions();
+            functions->glGetIntegerv(GL_SAMPLES, &actualSamples);
+            functions->glGetIntegerv(GL_MAX_SAMPLES, &maximumSamples);
+            painter.endNativePainting();
+        });
+        surface.setAntiAliasingSamples(0);
+        surface.show();
+        application.processEvents();
+        waitForViewportTransition();
+        surface.grabFramebuffer();
+        passed &= check(actualSamples == 0,
+                        "No AA must disable multisampling on the actual scene target");
+        const auto presentedGray = [](QWidget &widget) {
+            const QImage image = widget.screen()->grabWindow(widget.winId()).toImage();
+            return image.pixelColor(image.width() / 2, image.height() / 2);
+        };
+        const QColor referenceGray = presentedGray(reference);
+        const QColor noAaGray = presentedGray(surface);
+        qInfo() << "Presented gray: original Qt" << referenceGray << "scene target" << noAaGray;
+        passed &= check(std::abs(referenceGray.red() - noAaGray.red()) <= 2,
+                        "scene framebuffer presentation must preserve the original viewport brightness without AA");
+        surface.setAntiAliasingSamples(8);
+        application.processEvents();
+        waitForViewportTransition();
+        surface.grabFramebuffer();
+        qInfo() << "Scene AA requested 8, actual" << actualSamples
+                << "hardware maximum" << maximumSamples;
+        passed &= check(actualSamples > 0 && actualSamples <= maximumSamples,
+                        "changing AA must recreate the entire scene target with supported samples");
+        const QColor multisampleGray = presentedGray(surface);
+        qInfo() << "Presented gray with AA" << multisampleGray;
+        passed &= check(std::abs(referenceGray.red() - multisampleGray.red()) <= 2,
+                        "multisample scene presentation must preserve the original viewport brightness");
+        surface.setAntiAliasingSamples(0);
+        application.processEvents();
+        waitForViewportTransition();
+        surface.grabFramebuffer();
+        passed &= check(actualSamples == 0,
+                        "runtime AA changes must also return the actual target to zero samples");
+    }
+
+    ApplicationSession session;
+    Shape sheet;
+    sheet.geometryType = GeometryType::NurbsSurface;
+    sheet.nurbsSurface.controlVertexCountU = sheet.nurbsSurface.controlVertexCountV = 2;
+    sheet.nurbsSurface.controlPoints = {{-4,-4,0}, {-4,4,0}, {4,-4,0}, {4,4,0}};
+    sheet.nurbsSurface.weights = {1,1,1,1};
+    sheet.nurbsSurface.knotsU = sheet.nurbsSurface.knotsV = {0,1};
+    const ObjectId id = session.document().append(sheet);
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(640, 480);
+    viewport->setAttribute(Qt::WA_ShowWithoutActivating);
+    viewport->setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    if (!waitForViewPreset(viewport.get(), ViewportViewPreset::Isometric)) return false;
+    viewport->setViewportAntiAliasingSamples(0);
+    viewport->selectOutlinerObject(id, false);
+    viewport->setObjectEditMode(true);
+    viewport->setComponentSelectionMode(2);
+    viewport->setControlPointsVisible(false);
+    viewport->setSmoothWirePreferences(true, true);
+    waitForViewportTransition();
+    const QImage baseline = captureViewport(viewport.get());
+    auto *outline = viewport->findChild<QCheckBox *>(QStringLiteral("ObjectOutline"));
+    if (!check(outline != nullptr, "wire test must find the object outline setting")) return false;
+    outline->click();
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage outlineOff = captureViewport(viewport.get());
+    passed &= check(imageMeanAbsoluteError(baseline, outlineOff) < 0.01,
+                    "object outline must not add coverage over the active edit cage");
+
+    auto transaction = session.beginTransaction();
+    transaction.editLayer(session.document().object(id)->layerId,
+                          [](Layer &layer) { layer.lineWeightMm = 1.0; });
+    session.commitTransaction(transaction);
+    viewport->update();
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage heavyLayer = captureViewport(viewport.get());
+    passed &= check(imageMeanAbsoluteError(outlineOff, heavyLayer) < 0.01,
+                    "CAD layer weight must not thicken edit geometry wires");
+    viewport->setSmoothWirePreferences(false, true);
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage overlaySmoothOff = captureViewport(viewport.get());
+    passed &= check(imageMeanAbsoluteError(heavyLayer, overlaySmoothOff) < 0.01,
+                    "Overlay Smooth Wires must not alter the active edit cage");
+    viewport->setSmoothWirePreferences(false, false);
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage editSmoothOff = captureViewport(viewport.get());
+    passed &= check(imageMeanAbsoluteError(overlaySmoothOff, editSmoothOff) > 0.001,
+                    "Edit Mode Smooth Wires must alter edit edge coverage");
+    saveGridCapture(QStringLiteral("edit-wires-smooth"), baseline);
+    saveGridCapture(QStringLiteral("edit-wires-hard"), editSmoothOff);
+
+    Shape solid;
+    solid.geometryType = GeometryType::NurbsSolid;
+    if (!makeNurbsExtrusionSolid(sheet.nurbsSurface, {0, 0, 4}, &solid.nurbsSolid)) return false;
+    auto solidTransaction = session.beginTransaction();
+    solidTransaction.replaceGeometry(id, solid);
+    session.commitTransaction(solidTransaction);
+    viewport->setObjectEditMode(false);
+    viewport->selectOutlinerObject(id, false);
+    outline->click();
+    viewport->setSmoothWirePreferences(true, false);
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage objectSmooth = captureViewport(viewport.get());
+    ViewportTransform objectProjection;
+    objectProjection.setCameraPreferences(viewport->cameraPreferences());
+    objectProjection.setViewPreset(ViewportViewPreset::Isometric);
+    QPointF creaseScreen;
+    objectProjection.worldPointToScreen({0, -4, 4}, viewport->size(), &creaseScreen);
+    const QPoint creasePixel = (creaseScreen * viewport->devicePixelRatioF()).toPoint();
+    int orangeCreasePixels = 0;
+    for (int y = creasePixel.y() - 2; y <= creasePixel.y() + 2; ++y) {
+        for (int x = creasePixel.x() - 2; x <= creasePixel.x() + 2; ++x) {
+            const QColor color = objectSmooth.pixelColor(x, y);
+            orangeCreasePixels += color.red() > 210 && color.green() < 200 && color.blue() < 90;
+        }
+    }
+    passed &= check(orangeCreasePixels == 0,
+                    "solid object outline must not expose interior cap/wall tessellation seams");
+    viewport->setSmoothWirePreferences(false, false);
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage objectHard = captureViewport(viewport.get());
+    passed &= check(imageMeanAbsoluteError(objectSmooth, objectHard) > 0.001,
+                    "Overlay Smooth Wires must control solid object outlines as well as curve overlays");
+    viewport->setSmoothWirePreferences(false, true);
+    application.processEvents();
+    waitForViewportTransition();
+    passed &= check(imageMeanAbsoluteError(objectHard, captureViewport(viewport.get())) < 0.01,
+                    "Edit Mode Smooth Wires must not change object-mode solid outlines");
+    saveGridCapture(QStringLiteral("object-outline-smooth"), objectSmooth);
+    return passed;
+}
+
 bool verifySolidFaceEdges(QApplication &application)
 {
     ApplicationSession session;
@@ -2423,6 +2608,9 @@ bool verifySolidFaceDelete(QApplication &application)
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_WIRE_PREFERENCES_ONLY")) {
+        return verifyWireRenderingPreferences(application) ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_COINCIDENT_VERTEX_BOX_ONLY")) {
         return verifyCoincidentVertexBoxSelection(application) ? 0 : 1;
     }

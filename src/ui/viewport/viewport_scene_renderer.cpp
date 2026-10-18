@@ -22,6 +22,7 @@
 #include <QIODevice>
 #include <QOpenGLContext>
 #include <QPainter>
+#include <QSet>
 #include <QVector4D>
 
 #include <algorithm>
@@ -685,8 +686,7 @@ bool makeViewportSurfaceOutlineStroke(
                                    : QColor(Qt::black);
     *sceneStroke = {nullptr,
                     color,
-                    static_cast<float>(viewportLineWeightPixels(
-                        object.layerLineWeightMm)),
+                    1.0f,
                     false};
     sceneStroke->objectId = object.objectId;
     sceneStroke->cacheableGeometry = false;
@@ -917,6 +917,12 @@ bool ViewportSceneRenderer::draw(
             keyStream << quint8(0);
         }
         keyStream << quint8(stroke.controlGuide ? 1 : 0);
+        if (stroke.editModeWire) {
+            keyStream << stroke.color.rgba() << stroke.width
+                      << stroke.worldOffset.x << stroke.worldOffset.y
+                      << stroke.worldOffset.z
+                      << int(effectiveViewportSceneLineStyle(stroke));
+        }
         keyStream << quint8(stroke.pointDiameter > 0.0f ? 1 : 0);
         keyStream << quint32(stroke.lineVertexColors.size());
         for (const QVector4D &color : stroke.lineVertexColors) {
@@ -932,6 +938,7 @@ bool ViewportSceneRenderer::draw(
         cachedLineColors_.clear();
         cachedPatternOffsets_.clear();
         strokeRanges_.reserve(strokes.size());
+        QSet<QByteArray> editSegments;
         for (int strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
             const ViewportSceneStroke &stroke = strokes[strokeIndex];
             QVector<QVector3D> generatedVertices;
@@ -954,7 +961,53 @@ bool ViewportSceneRenderer::draw(
                 vertices = &generatedVertices;
             }
             const int first = cachedVertices_.size();
-            if (vertices != nullptr) {
+            if (vertices != nullptr && stroke.editModeWire &&
+                stroke.pointDiameter <= 0.0f &&
+                effectiveViewportSceneLineStyle(stroke) == ViewportSceneLineStyle::Solid) {
+                const QVector3D offset(stroke.worldOffset.x,
+                                       stroke.worldOffset.y, stroke.worldOffset.z);
+                const bool hasColors = stroke.lineVertexColors.size() == vertices->size();
+                for (int point = 0; point + 1 < vertices->size(); point += 2) {
+                    auto a = surfaceVertexKey((*vertices)[point] + offset);
+                    auto b = surfaceVertexKey((*vertices)[point + 1] + offset);
+                    QVector4D colorA = hasColors ? stroke.lineVertexColors[point]
+                                                 : QVector4D(1, 1, 1, 1);
+                    QVector4D colorB = hasColors ? stroke.lineVertexColors[point + 1]
+                                                 : QVector4D(1, 1, 1, 1);
+                    if (b < a) {
+                        std::swap(a, b);
+                        std::swap(colorA, colorB);
+                    }
+                    QByteArray segmentKey;
+                    QDataStream segmentStream(&segmentKey, QIODevice::WriteOnly);
+                    segmentStream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+                    segmentStream << stroke.width;
+                    for (auto coordinate : a) segmentStream << coordinate;
+                    for (auto coordinate : b) segmentStream << coordinate;
+                    const auto black = [&](const QVector4D &color) {
+                        return (stroke.color.red() == 0 || color.x() == 0) &&
+                               (stroke.color.green() == 0 || color.y() == 0) &&
+                               (stroke.color.blue() == 0 || color.z() == 0);
+                    };
+                    if (black(colorA) && black(colorB)) {
+                        // Selection gradients store black in vertex colors;
+                        // unselected cages store it in the uniform instead.
+                        segmentStream << quint8(1)
+                                      << float(stroke.color.alphaF() * colorA.w())
+                                      << float(stroke.color.alphaF() * colorB.w());
+                    } else {
+                        segmentStream << quint8(0) << stroke.color.rgba()
+                                      << colorA << colorB;
+                    }
+                    if (editSegments.contains(segmentKey)) continue;
+                    editSegments.insert(segmentKey);
+                    // Adjacent exact surface pieces can expose the same wire.
+                    // Draw identical coverage once without joining their topology.
+                    cachedVertices_ << (*vertices)[point] << (*vertices)[point + 1];
+                    cachedLineColors_ << (hasColors ? stroke.lineVertexColors[point] : QVector4D(1, 1, 1, 1))
+                                      << (hasColors ? stroke.lineVertexColors[point + 1] : QVector4D(1, 1, 1, 1));
+                }
+            } else if (vertices != nullptr) {
                 cachedVertices_ += *vertices;
                 if (stroke.pointDiameter <= 0.0f &&
                     stroke.lineVertexColors.size() == vertices->size()) {

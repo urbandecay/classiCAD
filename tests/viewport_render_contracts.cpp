@@ -87,10 +87,10 @@ int main(int argc, char *argv[])
         surfaceStyleObject, true, QColor(Qt::black), boundaryGeometry,
         &surfaceOutlineStyle);
     passed &= check(splineStyleReady && surfaceOutlineReady &&
-                        std::abs(splineStyle.width -
-                                 surfaceOutlineStyle.width) < 1.0e-6f &&
+                        std::abs(splineStyle.width - 1.5f) < 1.0e-6f &&
+                        std::abs(surfaceOutlineStyle.width - 1.0f) < 1.0e-6f &&
                         !surfaceOutlineStyle.editModeWire,
-                    "surface perimeters must use the same pixel width and smooth overlay path as spline strokes");
+                    "object outlines must stay one pixel independently from CAD layer line weight and use smooth overlay wires");
 
     ViewportTransform surfaceOutlineCamera;
     surfaceOutlineCamera.setViewDirection({0.0, 0.0, -1.0});
@@ -680,6 +680,20 @@ int main(int argc, char *argv[])
                     passed &= check(wireDrawSucceeded &&
                                         gpuWireLinearBlendMatches,
                                     "smooth edit-wire coverage must blend in linear display space on an sRGB target");
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    ViewportSceneStroke neighboringWire = editWire;
+                    neighboringWire.color = Qt::white;
+                    neighboringWire.lineVertexColors = {
+                        QVector4D(0, 0, 0, 1), QVector4D(0, 0, 0, 1)};
+                    wireRenderer.draw({editWire, neighboringWire}, wireTransform,
+                                      glSize, 1.0, false, 1.0, true, true);
+                    functions.glFinish();
+                    unsigned char repeatedWirePixel[4] = {};
+                    functions.glReadPixels(300, 239, 1, 1, GL_RGBA,
+                                          GL_UNSIGNED_BYTE, repeatedWirePixel);
+                    passed &= check(std::abs(int(repeatedWirePixel[0]) -
+                                             int(wireRawPixel[0])) <= 1,
+                                    "coincident identical edit edges must contribute coverage once without darkening the antialias fringe");
                     // Regular curve and surface-outline strokes must use the
                     // same coverage blending, not darker display-space alpha.
                     editWire.editModeWire = false;

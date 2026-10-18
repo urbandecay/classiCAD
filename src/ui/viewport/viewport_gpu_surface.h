@@ -13,6 +13,7 @@
 #include <memory>
 
 class QPainter;
+class QOpenGLFramebufferObject;
 
 namespace classiCAD {
 
@@ -64,6 +65,8 @@ protected:
     void paintGL() override;
 
 private:
+    std::unique_ptr<QOpenGLFramebufferObject> sceneFramebuffer_;
+    int framebufferSampleRequest_ = -1;
     DrawCallback drawCallback_;
     std::unique_ptr<BlenderGridRenderer> gridRenderer_;
     std::unique_ptr<ViewportSceneRenderer> sceneRenderer_;

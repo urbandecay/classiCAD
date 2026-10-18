@@ -29,7 +29,8 @@ public:
               const ViewportShadingSettings &settings,
               bool previewOverlay = false,
               bool clearDepth = true,
-              bool selectionOverlay = false);
+              bool selectionOverlay = false,
+              bool smoothOverlayWires = true);
 
 private:
     struct SurfaceVertex {

@@ -389,6 +389,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform vec4 uOutlineColor;
         uniform vec4 uSelectionColor;
         uniform int uPixelOffset;
+        uniform int uSmoothWire;
         layout(location = 0) out vec4 fragmentColor;
         void main()
         {
@@ -404,6 +405,11 @@ bool ViewportSurfaceRenderer::initialize()
                 texelFetch(uObjectIdBuffer, clamp(pixel - dy, ivec2(0), size - 1), 0).r);
             float opacity = 1.0 - dot(vec4(equal(uvec4(centerId), adjacentIds)),
                                      vec4(0.25));
+            if (uSmoothWire == 0) {
+                // Hard contours occupy one pixel on the object's side of
+                // the boundary. Smooth contours distribute coverage over it.
+                opacity = centerId != 0u && opacity > 0.0 ? 1.0 : 0.0;
+            }
             if (opacity <= 0.0) {
                 discard;
             }
@@ -882,7 +888,8 @@ bool ViewportSurfaceRenderer::draw(
     const ViewportShadingSettings &settings,
     bool previewOverlay,
     bool clearDepth,
-    bool selectionOverlay)
+    bool selectionOverlay,
+    bool smoothOverlayWires)
 {
     if (QOpenGLContext::currentContext() == nullptr || viewportSize.isEmpty() ||
         !initialize()) {
@@ -1300,6 +1307,7 @@ bool ViewportSurfaceRenderer::draw(
 
             outlineProgram_.bind();
             outlineProgram_.setUniformValue("uObjectIdBuffer", 0);
+            outlineProgram_.setUniformValue("uSmoothWire", smoothOverlayWires ? 1 : 0);
             outlineProgram_.setUniformValue(
                 "uOutlineColor",
                 QVector4D(settings.outlineColor.redF(),

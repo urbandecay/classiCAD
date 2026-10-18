@@ -76,6 +76,10 @@
 #include <functional>
 #include <limits>
 
+#if defined(Q_OS_UNIX)
+#include <fnmatch.h>
+#endif
+
 namespace classiCAD {
 
 namespace {
@@ -173,6 +177,171 @@ void migrateLegacyHiddenObjectStateFilter(
     if (filter != OutlinerObjectStateFilter::Hidden) return;
     filter = OutlinerObjectStateFilter::Visible;
     invert = !invert;
+}
+
+QString outlinerPosixCharacterClass(const QString &name)
+{
+    if (name == QLatin1String("alnum")) return QStringLiteral("\\p{L}\\p{N}");
+    if (name == QLatin1String("alpha")) return QStringLiteral("\\p{L}");
+    if (name == QLatin1String("blank")) return QStringLiteral("\\t\\p{Zs}");
+    if (name == QLatin1String("cntrl")) return QStringLiteral("\\p{Cc}");
+    if (name == QLatin1String("digit")) return QStringLiteral("\\p{Nd}");
+    if (name == QLatin1String("graph")) {
+        return QStringLiteral("\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}");
+    }
+    if (name == QLatin1String("lower")) return QStringLiteral("\\p{Ll}");
+    if (name == QLatin1String("print")) {
+        return QStringLiteral("\\p{L}\\p{M}\\p{N}\\p{P}\\p{S}\\p{Zs}");
+    }
+    if (name == QLatin1String("punct")) return QStringLiteral("\\p{P}\\p{S}");
+    if (name == QLatin1String("space")) return QStringLiteral("\\s");
+    if (name == QLatin1String("upper")) return QStringLiteral("\\p{Lu}");
+    if (name == QLatin1String("xdigit")) return QStringLiteral("0-9A-Fa-f");
+    return {};
+}
+
+QString outlinerGlobRegularExpression(const QString &pattern)
+{
+    QString expression = QStringLiteral("^");
+    for (qsizetype index = 0; index < pattern.size(); ++index) {
+        const QChar character = pattern[index];
+        if (character == QLatin1Char('*')) {
+            expression.append(QStringLiteral(".*"));
+            continue;
+        }
+        if (character == QLatin1Char('?')) {
+            expression.append(QLatin1Char('.'));
+            continue;
+        }
+        if (character != QLatin1Char('[')) {
+            expression.append(QRegularExpression::escape(QString(character)));
+            continue;
+        }
+
+        qsizetype cursor = index + 1;
+        bool negated = false;
+        if (cursor < pattern.size() &&
+            (pattern[cursor] == QLatin1Char('!') ||
+             pattern[cursor] == QLatin1Char('^'))) {
+            negated = true;
+            ++cursor;
+        }
+        QString characterClass;
+        bool hasCharacter = false;
+        bool validClass = true;
+        if (cursor < pattern.size() && pattern[cursor] == QLatin1Char(']')) {
+            characterClass.append(QStringLiteral("\\]"));
+            hasCharacter = true;
+            ++cursor;
+        }
+
+        bool closed = false;
+        for (; cursor < pattern.size(); ++cursor) {
+            const QChar member = pattern[cursor];
+            if (member == QLatin1Char(']')) {
+                closed = true;
+                break;
+            }
+            if (member == QLatin1Char('[') &&
+                cursor + 1 < pattern.size() &&
+                (pattern[cursor + 1] == QLatin1Char(':') ||
+                 pattern[cursor + 1] == QLatin1Char('.') ||
+                 pattern[cursor + 1] == QLatin1Char('='))) {
+                const QChar delimiter = pattern[cursor + 1];
+                const QString terminator =
+                    QString(delimiter) + QLatin1Char(']');
+                const qsizetype tokenEnd = pattern.indexOf(
+                    terminator, cursor + 2);
+                if (tokenEnd >= 0) {
+                    const QString token = pattern.mid(
+                        cursor + 2, tokenEnd - cursor - 2);
+                    if (delimiter == QLatin1Char(':')) {
+                        const QString expansion =
+                            outlinerPosixCharacterClass(token);
+                        if (expansion.isEmpty()) {
+                            validClass = false;
+                        } else {
+                            characterClass.append(expansion);
+                            hasCharacter = true;
+                        }
+                    } else if (token.size() == 1) {
+                        const QChar collatingCharacter = token.front();
+                        if (collatingCharacter == QLatin1Char('\\')) {
+                            characterClass.append(QStringLiteral("\\\\"));
+                        } else if (collatingCharacter == QLatin1Char(']')) {
+                            characterClass.append(QStringLiteral("\\]"));
+                        } else if (collatingCharacter == QLatin1Char('^')) {
+                            characterClass.append(QStringLiteral("\\^"));
+                        } else if (collatingCharacter == QLatin1Char('-')) {
+                            characterClass.append(QStringLiteral("\\-"));
+                        } else {
+                            characterClass.append(collatingCharacter);
+                        }
+                        hasCharacter = true;
+                    } else {
+                        validClass = false;
+                    }
+                    hasCharacter = true;
+                    cursor = tokenEnd;
+                    continue;
+                }
+            }
+            if (member == QLatin1Char('\\')) {
+                characterClass.append(QStringLiteral("\\\\"));
+            } else if (member == QLatin1Char('^') && !hasCharacter) {
+                characterClass.append(QStringLiteral("\\^"));
+            } else {
+                characterClass.append(member);
+            }
+            hasCharacter = true;
+        }
+
+        if (closed && hasCharacter) {
+            QString classExpression = QStringLiteral("[");
+            if (negated) classExpression.append(QLatin1Char('^'));
+            classExpression.append(characterClass).append(QLatin1Char(']'));
+            if (QRegularExpression(
+                    QStringLiteral("^(?:%1)$").arg(classExpression))
+                    .isValid()) {
+                if (validClass) {
+                    expression.append(classExpression);
+                } else {
+                    expression.append(QStringLiteral("(?!)"));
+                }
+            } else {
+                // fnmatch treats an invalid range as a non-matching pattern.
+                expression.append(QStringLiteral("(?!)"));
+            }
+            index = cursor;
+            continue;
+        }
+        expression.append(QRegularExpression::escape(QString(character)));
+    }
+    expression.append(QLatin1Char('$'));
+    return expression;
+}
+
+bool outlinerGlobMatches(const QString &pattern, const QString &name,
+                         bool caseSensitive,
+                         const QRegularExpression &fallbackMatcher)
+{
+#if defined(Q_OS_UNIX)
+    const QByteArray patternUtf8 = pattern.toUtf8();
+    const QByteArray nameUtf8 = name.toUtf8();
+    int flags = FNM_NOESCAPE;
+#if defined(FNM_CASEFOLD)
+    if (!caseSensitive) flags |= FNM_CASEFOLD;
+    return ::fnmatch(patternUtf8.constData(), nameUtf8.constData(), flags) == 0;
+#else
+    if (caseSensitive) {
+        return ::fnmatch(patternUtf8.constData(), nameUtf8.constData(), flags) == 0;
+    }
+#endif
+#else
+    Q_UNUSED(pattern);
+    Q_UNUSED(caseSensitive);
+#endif
+    return fallbackMatcher.match(name).hasMatch();
 }
 
 QIcon paintedIcon(const std::function<void(QPainter &)> &paint)
@@ -1192,7 +1361,7 @@ void CollectionsPanel::createLayout()
     filterEdit_->setMaxLength(256);
     filterEdit_->setPlaceholderText(QStringLiteral("Filter Outliner names"));
     filterEdit_->setToolTip(QStringLiteral(
-        "Filter Outliner names with * and ? wildcards. Exact and case-sensitive matching are in Filter."));
+        "Filter Outliner names with * and ? wildcards or [character sets]. Exact and case-sensitive matching are in Filter."));
     auto *filterRow = new QHBoxLayout;
     filterRow->setContentsMargins(0, 0, 0, 0);
     filterRow->addWidget(filterEdit_, 1);
@@ -2231,32 +2400,27 @@ void CollectionsPanel::applyNameFilter(const QString &text)
     }
 
     activeFilterText_ = text;
+    QString glob = text;
     QRegularExpression matcher;
     if (!text.isEmpty()) {
-        QString glob = text;
         if (!exactNameMatch_) {
             if (!glob.startsWith(QLatin1Char('*')))
                 glob.prepend(QLatin1Char('*'));
             if (!glob.endsWith(QLatin1Char('*')))
                 glob.append(QLatin1Char('*'));
         }
-        QString expression = QStringLiteral("^");
-        for (const QChar character : glob) {
-            if (character == QLatin1Char('*')) {
-                expression.append(QStringLiteral(".*"));
-            } else if (character == QLatin1Char('?')) {
-                expression.append(QLatin1Char('.'));
-            } else {
-                expression.append(QRegularExpression::escape(QString(character)));
-            }
+        QRegularExpression::PatternOptions patternOptions =
+            QRegularExpression::DotMatchesEverythingOption;
+        if (!caseSensitiveNameFilter_) {
+            patternOptions |= QRegularExpression::CaseInsensitiveOption;
         }
-        expression.append(QLatin1Char('$'));
         matcher = QRegularExpression(
-            expression,
-            caseSensitiveNameFilter_
-                ? QRegularExpression::NoPatternOption
-                : QRegularExpression::CaseInsensitiveOption);
+            outlinerGlobRegularExpression(glob), patternOptions);
     }
+    const auto nameMatchesGlob = [this, &glob, &matcher](const QString &name) {
+        return outlinerGlobMatches(
+            glob, name, caseSensitiveNameFilter_, matcher);
+    };
 
     QSet<quint64> selectedValues;
     if (callbacks_.selectedObjectIds) {
@@ -2466,7 +2630,7 @@ void CollectionsPanel::applyNameFilter(const QString &text)
                                    QTreeWidgetItem *item) -> bool {
         if (item == nullptr) return false;
         const bool nameMatches = text.isEmpty() ||
-            matcher.match(item->text(nameColumn)).hasMatch();
+            nameMatchesGlob(item->text(nameColumn));
         const bool searchChildren = text.isEmpty() ||
             !dataApiDisplayMode_ || item->isExpanded() || nameMatches;
         bool childMatches = false;

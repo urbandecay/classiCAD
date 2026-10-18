@@ -11888,3 +11888,12 @@ scene depth.
   [lazy RNA tree expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
   Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
   passed. No GUI or matched Outliner comparison was run.
+- The hundred-fifty-third Outliner action update makes Delete Hierarchy include
+  hidden descendants in the parent's object tree. Blender tags descendant
+  objects by their active View Layer parent chains without a visibility test;
+  classiCAD now follows that behavior. Ordinary Delete keeps its visibility
+  check, and the existing linked-library and protected-parent checks still
+  apply. See Blender 5.2.2's [hierarchy tagging and delete dispatch](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L2423-L2540)
+  and [Object context menu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L300-L334).
+  `cmake --build build -j4` and `git diff --check` passed. No GUI or matched
+  Outliner interaction comparison was run.

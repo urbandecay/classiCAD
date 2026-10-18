@@ -8153,7 +8153,7 @@ private:
                         const SceneObject *candidate = document.object(id);
                         if (candidate == nullptr ||
                             !candidate->libraryPath.isEmpty() ||
-                            (id != root &&
+                            (!hierarchy && id != root &&
                              !candidate->blenderLooseMeshEdgeCompanion &&
                              !document.isObjectVisible(id))) {
                             continue;

@@ -410,7 +410,8 @@ private:
     void editSelectedDataApiKeyingSetPaths(bool add);
     void editSelectedDataApiDriverPaths(bool add);
     void updateDataApiAnimationControls();
-    void showContextMenu(const QPoint &position);
+    void showContextMenu(const QPoint &position,
+                         bool contextRowAlreadyActivated = false);
     bool activateObjectRow(QTreeWidgetItem *item,
                            Qt::KeyboardModifiers modifiers);
     void appendCollection(QTreeWidget *tree,

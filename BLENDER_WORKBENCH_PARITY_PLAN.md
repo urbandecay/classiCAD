@@ -11736,3 +11736,15 @@ scene depth.
   the source atomically. The refreshed orphan rows come from Blender after the
   purge. The source path and digest are session-only, and no matched UI
   comparison was run. `cmake --build build -j4` and `git diff --check` passed.
+- The hundred-forty-third Outliner update adds Blender's common View submenu
+  to Scene and View Layer row context menus, reusing the same Outliner-wide
+  actions already available from blank space. It includes Show Active,
+  Expand/Collapse All, Show Object Hierarchy, and Show/Hide One Level. Scene
+  and View Layer rows now activate before the menu is built, matching Blender's
+  context-click ordering; the view actions use the active scene and view layer
+  rather than treating the clicked row as a local scope. See Blender 5.2.2's
+  [context menu definitions](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L111-L165),
+  [View operator implementations](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1383-L1890),
+  and [Outliner activation handling](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L3926-L3950).
+  `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
+  Outliner comparison was run.

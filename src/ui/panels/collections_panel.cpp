@@ -3422,7 +3422,8 @@ bool CollectionsPanel::activateObjectRow(
     return true;
 }
 
-void CollectionsPanel::showContextMenu(const QPoint &position)
+void CollectionsPanel::showContextMenu(
+    const QPoint &position, bool contextRowAlreadyActivated)
 {
     QTreeWidgetItem *item = tree_ != nullptr ? tree_->itemAt(position) : nullptr;
     if (item != nullptr && tree_ != nullptr) {
@@ -3457,7 +3458,24 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 item->data(nameColumn, itemIdRole).toULongLong());
             callbacks_.setObjectSelection(selectedObjectIds,
                                            activeObjectId);
-        } else {
+        } else if (contextRowKind == OutlinerRowKind::SceneRoot &&
+                   !contextRowAlreadyActivated) {
+            const QString sceneKey = item->data(
+                nameColumn, itemSceneKeyRole).toString();
+            const QString viewLayerKey = item->data(
+                nameColumn, itemViewLayerKeyRole).toString();
+            if (!sceneKey.isEmpty() && callbacks_.setActiveScene) {
+                callbacks_.setActiveScene(sceneKey);
+                showContextMenu(position, true);
+                return;
+            }
+            if (!viewLayerKey.isEmpty() && callbacks_.setActiveViewLayer) {
+                callbacks_.setActiveViewLayer(viewLayerKey);
+                showContextMenu(position, true);
+                return;
+            }
+            activateObjectRow(item, Qt::NoModifier);
+        } else if (contextRowKind != OutlinerRowKind::SceneRoot) {
             activateObjectRow(item, Qt::NoModifier);
         }
     }
@@ -3561,14 +3579,8 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             }
         });
     };
-    if (item == nullptr) {
+    const auto addViewContextMenu = [this](QMenu &menu) {
         if (tree_ == nullptr) return;
-        QMenu menu(this);
-        const QString activeViewLayerKey = callbacks_.activeViewLayerKey
-            ? callbacks_.activeViewLayerKey() : QString{};
-        addNewCollectionAction(menu, activeViewLayerKey);
-        addPasteDataBlocksAction(menu, CollectionId::invalid());
-        menu.addSeparator();
         QMenu *viewMenu = menu.addMenu(QStringLiteral("View"));
         const auto treeRows = [this]() {
             QVector<QPair<QTreeWidgetItem *, int>> rows;
@@ -3709,22 +3721,11 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
             saveTreeState();
         });
 
-        const auto setOneLevel = [this](bool open) {
+        const auto setOneLevel = [this, treeRows](bool open) {
             if (tree_ == nullptr || dataApiDisplayMode_) return;
-            QVector<QPair<QTreeWidgetItem *, int>> rows;
-            std::function<void(QTreeWidgetItem *, int)> appendRows =
-                [&rows, &appendRows](QTreeWidgetItem *parent, int depth) {
-                    rows.append({parent, depth});
-                    for (int childIndex = 0;
-                         childIndex < parent->childCount(); ++childIndex) {
-                        appendRows(parent->child(childIndex), depth + 1);
-                    }
-                };
+            const QVector<QPair<QTreeWidgetItem *, int>> rows = treeRows();
             int maximumDepth = 0;
             int firstCollapsedDepth = 0;
-            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
-                appendRows(tree_->topLevelItem(index), 1);
-            }
             for (const auto &row : rows) {
                 maximumDepth = qMax(maximumDepth, row.second);
                 if (firstCollapsedDepth == 0 &&
@@ -3756,6 +3757,16 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         hideOneLevel->setEnabled(!dataApiDisplayMode_);
         connect(hideOneLevel, &QAction::triggered, this,
                 [setOneLevel]() { setOneLevel(false); });
+    };
+    if (item == nullptr) {
+        if (tree_ == nullptr) return;
+        QMenu menu(this);
+        const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+            ? callbacks_.activeViewLayerKey() : QString{};
+        addNewCollectionAction(menu, activeViewLayerKey);
+        addPasteDataBlocksAction(menu, CollectionId::invalid());
+        menu.addSeparator();
+        addViewContextMenu(menu);
         menu.exec(tree_->viewport()->mapToGlobal(position));
         return;
     }
@@ -3768,10 +3779,13 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
         kind == OutlinerRowKind::DataApi) return;
     QMenu menu(this);
     if (kind == OutlinerRowKind::SceneRoot &&
-        item->data(nameColumn, itemViewLayerKeyRole).toString().isEmpty() &&
+        !scenesDisplayMode_ &&
         callbacks_.createCollection) {
-        const QString activeViewLayerKey = callbacks_.activeViewLayerKey
-            ? callbacks_.activeViewLayerKey() : QString{};
+        QString activeViewLayerKey = item->data(
+            nameColumn, itemViewLayerKeyRole).toString();
+        if (activeViewLayerKey.isEmpty() && callbacks_.activeViewLayerKey) {
+            activeViewLayerKey = callbacks_.activeViewLayerKey();
+        }
         addNewCollectionAction(menu, activeViewLayerKey);
         addPasteDataBlocksAction(menu, CollectionId::invalid());
     } else if (kind == OutlinerRowKind::Collection) {
@@ -4583,6 +4597,11 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                     materialTargetIds, clickedObjectId);
             });
         }
+    }
+
+    if (kind == OutlinerRowKind::SceneRoot) {
+        if (!menu.actions().isEmpty()) menu.addSeparator();
+        addViewContextMenu(menu);
     }
 
     if (!menu.actions().isEmpty()) {

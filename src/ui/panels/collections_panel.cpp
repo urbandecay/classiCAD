@@ -4145,6 +4145,59 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 });
             }
         }
+        if (callbacks_.renameCollection ||
+            (callbacks_.makeCollectionsLocal &&
+             !linkedCollectionIds.isEmpty())) {
+            QMenu *idDataMenu = menu.addMenu(QStringLiteral("ID Data"));
+            if (callbacks_.makeCollectionsLocal &&
+                !linkedCollectionIds.isEmpty()) {
+                QAction *makeLocal = idDataMenu->addAction(
+                    QStringLiteral("Make Local"));
+                connect(makeLocal, &QAction::triggered, this,
+                        [this, linkedCollectionIds]() {
+                    callbacks_.makeCollectionsLocal(linkedCollectionIds);
+                });
+            }
+            if (callbacks_.copyOutlinerCollection &&
+                !topLevelCollectionIds.isEmpty()) {
+                QAction *copy = idDataMenu->addAction(
+                    QStringLiteral("Copy"));
+                connect(copy, &QAction::triggered, this,
+                        [this, topLevelCollectionIds]() {
+                    callbacks_.copyOutlinerCollection(topLevelCollectionIds);
+                });
+            }
+            if (callbacks_.pasteOutlinerCollection) {
+                QAction *paste = idDataMenu->addAction(
+                    QStringLiteral("Paste"));
+                paste->setEnabled(
+                    callbacks_.hasOutlinerCollectionClipboard &&
+                    callbacks_.hasOutlinerCollectionClipboard());
+                connect(paste, &QAction::triggered, this,
+                        [this, collectionId]() {
+                    callbacks_.pasteOutlinerCollection(collectionId);
+                });
+            }
+            if (callbacks_.renameCollection) {
+                QAction *rename = idDataMenu->addAction(
+                    QStringLiteral("Rename"));
+                rename->setEnabled(
+                    !item->data(nameColumn, itemLinkedLibraryRole).toBool() &&
+                    !item->data(nameColumn, itemSceneMasterRole).toBool());
+                const QString originalName = item->text(nameColumn);
+                connect(rename, &QAction::triggered, this,
+                        [this, originalName, collectionId]() {
+                    bool accepted = false;
+                    const QString name = QInputDialog::getText(
+                        this, QStringLiteral("Rename Collection"),
+                        QStringLiteral("Name"), QLineEdit::Normal,
+                        originalName, &accepted);
+                    if (accepted && !name.trimmed().isEmpty()) {
+                        callbacks_.renameCollection(collectionId, name);
+                    }
+                });
+            }
+        }
         if (callbacks_.setCollectionsAssetMarked &&
             !selectedCollectionIds.isEmpty()) {
             QMenu *assetMenu = menu.addMenu(QStringLiteral("Asset"));
@@ -4163,32 +4216,6 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                     [this, selectedCollectionIds]() {
                 callbacks_.setCollectionsAssetMarked(
                     selectedCollectionIds, false);
-            });
-        }
-        if (callbacks_.renameCollection) {
-            QAction *rename = menu.addAction(QStringLiteral("Rename"));
-            rename->setEnabled(
-                !item->data(nameColumn, itemLinkedLibraryRole).toBool() &&
-                !item->data(nameColumn, itemSceneMasterRole).toBool());
-            const QString originalName = item->text(nameColumn);
-            connect(rename, &QAction::triggered, this,
-                    [this, originalName, collectionId]() {
-                bool accepted = false;
-                const QString name = QInputDialog::getText(
-                    this, QStringLiteral("Rename Collection"),
-                    QStringLiteral("Name"), QLineEdit::Normal,
-                    originalName, &accepted);
-                if (accepted && !name.trimmed().isEmpty()) {
-                    callbacks_.renameCollection(collectionId, name);
-                }
-            });
-        }
-        if (callbacks_.makeCollectionsLocal &&
-            !linkedCollectionIds.isEmpty()) {
-            QAction *makeLocal = menu.addAction(QStringLiteral("Make Local"));
-            connect(makeLocal, &QAction::triggered, this,
-                    [this, linkedCollectionIds]() {
-                callbacks_.makeCollectionsLocal(linkedCollectionIds);
             });
         }
         if (callbacks_.setCollectionsObjectSelection &&
@@ -4330,28 +4357,6 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                 callbacks_.deselectSelectedObjects(objectTargetIds);
             });
         }
-        if (callbacks_.renameObject) {
-            QAction *rename = menu.addAction(QStringLiteral("Rename"));
-            rename->setEnabled(
-                !item->data(nameColumn, itemLinkedLibraryRole).toBool());
-            connect(rename, &QAction::triggered, this, [this, item, objectId]() {
-                bool accepted = false;
-                const QString name = QInputDialog::getText(
-                    this, QStringLiteral("Rename Object"),
-                    QStringLiteral("Name"), QLineEdit::Normal,
-                    item->text(nameColumn), &accepted);
-                if (accepted && !name.trimmed().isEmpty()) {
-                    callbacks_.renameObject(objectId, name);
-                }
-            });
-        }
-        if (callbacks_.makeObjectsLocal && !linkedObjectIds.isEmpty()) {
-            QAction *makeLocal = menu.addAction(QStringLiteral("Make Local"));
-            connect(makeLocal, &QAction::triggered, this,
-                    [this, linkedObjectIds]() {
-                callbacks_.makeObjectsLocal(linkedObjectIds);
-            });
-        }
         if (callbacks_.setObjectsAssetMarked &&
             !objectTargetIds.isEmpty()) {
             QMenu *assetMenu = menu.addMenu(QStringLiteral("Asset"));
@@ -4422,15 +4427,67 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                         [this](ObjectId id) {
                 return callbacks_.hasLinkedObjectData(id);
             });
-        if (!objectTargetIds.isEmpty() && hasLinkedObjectDataTarget &&
-            callbacks_.selectLinkedObjectData) {
+        if (objectId.isValid() &&
+            (callbacks_.renameObject ||
+             (callbacks_.makeObjectsLocal && !linkedObjectIds.isEmpty()) ||
+             callbacks_.copyOutlinerObject ||
+             (callbacks_.pasteOutlinerObjects &&
+              callbacks_.hasOutlinerObjectClipboard &&
+              callbacks_.hasOutlinerObjectClipboard()) ||
+             (hasLinkedObjectDataTarget &&
+              callbacks_.selectLinkedObjectData))) {
             QMenu *idDataMenu = menu.addMenu(QStringLiteral("ID Data"));
-            QAction *selectLinked = idDataMenu->addAction(
-                QStringLiteral("Select Linked"));
-            connect(selectLinked, &QAction::triggered, this,
-                    [this, objectTargetIds]() {
-                callbacks_.selectLinkedObjectData(objectTargetIds);
-            });
+            if (callbacks_.makeObjectsLocal && !linkedObjectIds.isEmpty()) {
+                QAction *makeLocal = idDataMenu->addAction(
+                    QStringLiteral("Make Local"));
+                connect(makeLocal, &QAction::triggered, this,
+                        [this, linkedObjectIds]() {
+                    callbacks_.makeObjectsLocal(linkedObjectIds);
+                });
+            }
+            if (callbacks_.copyOutlinerObject) {
+                QAction *copy = idDataMenu->addAction(
+                    QStringLiteral("Copy"));
+                connect(copy, &QAction::triggered, this,
+                        [this, objectId]() {
+                    callbacks_.copyOutlinerObject(objectId);
+                });
+            }
+            if (callbacks_.pasteOutlinerObjects &&
+                callbacks_.hasOutlinerObjectClipboard &&
+                callbacks_.hasOutlinerObjectClipboard()) {
+                QAction *paste = idDataMenu->addAction(
+                    QStringLiteral("Paste"));
+                connect(paste, &QAction::triggered, this, [this]() {
+                    callbacks_.pasteOutlinerObjects();
+                });
+            }
+            if (callbacks_.renameObject) {
+                QAction *rename = idDataMenu->addAction(
+                    QStringLiteral("Rename"));
+                rename->setEnabled(
+                    !item->data(nameColumn, itemLinkedLibraryRole).toBool());
+                connect(rename, &QAction::triggered, this,
+                        [this, item, objectId]() {
+                    bool accepted = false;
+                    const QString name = QInputDialog::getText(
+                        this, QStringLiteral("Rename Object"),
+                        QStringLiteral("Name"), QLineEdit::Normal,
+                        item->text(nameColumn), &accepted);
+                    if (accepted && !name.trimmed().isEmpty()) {
+                        callbacks_.renameObject(objectId, name);
+                    }
+                });
+            }
+            if (hasLinkedObjectDataTarget &&
+                callbacks_.selectLinkedObjectData) {
+                QAction *selectLinked = idDataMenu->addAction(
+                    QStringLiteral("Select Linked"));
+                connect(selectLinked, &QAction::triggered, this,
+                        [this, objectTargetIds]() {
+                    callbacks_.selectLinkedObjectData(objectTargetIds);
+                });
+            }
         }
     } else if (kind == OutlinerRowKind::Material) {
         const QString materialId = item->data(

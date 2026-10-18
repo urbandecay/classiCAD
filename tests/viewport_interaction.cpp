@@ -29,6 +29,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QPainter>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QToolButton>
@@ -2258,6 +2259,167 @@ bool verifySolidFaceSelection(QApplication &application)
     return passed;
 }
 
+bool verifySolidFaceDelete(QApplication &application)
+{
+    ApplicationSession session;
+    Shape cube;
+    cube.geometryType = GeometryType::NurbsSolid;
+    NurbsSurface3D base;
+    base.controlVertexCountU = base.controlVertexCountV = 2;
+    base.controlPoints = {{-4,-4,-4}, {-4,4,-4}, {4,-4,-4}, {4,4,-4}};
+    base.weights = {1,1,1,1};
+    base.knotsU = base.knotsV = {0,1};
+    if (!makeNurbsExtrusionSolid(base, {0,0,8}, &cube.nurbsSolid) ||
+        !check(validateNurbsSolid(cube.nurbsSolid),
+               "face deletion fixture must be a valid solid")) {
+        return false;
+    }
+
+    const QVector<NurbsSurface3D> originalFaces = shapeSurfaceFaces(cube);
+    const ObjectId id = session.document().append(cube);
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(640, 480);
+    viewport->setAttribute(Qt::WA_ShowWithoutActivating);
+    viewport->setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    if (!waitForViewPreset(viewport.get(), ViewportViewPreset::Isometric)) {
+        return false;
+    }
+    viewport->selectOutlinerObject(id, false);
+    viewport->setObjectEditMode(true);
+    viewport->setComponentSelectionMode(2);
+    viewport->setControlPointsVisible(false);
+
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Isometric);
+    const auto center = [](const NurbsSurface3D &face) {
+        Point3D point;
+        for (const Point3D &cv : face.controlPoints) {
+            point.x += cv.x / face.controlPoints.size();
+            point.y += cv.y / face.controlPoints.size();
+            point.z += cv.z / face.controlPoints.size();
+        }
+        return point;
+    };
+    int targetFace = 2;
+    for (int faceIndex = 3; faceIndex < originalFaces.size(); ++faceIndex) {
+        if (projection.worldDirectionToView(center(originalFaces[faceIndex]))
+                .towardCamera >
+            projection.worldDirectionToView(center(originalFaces[targetFace]))
+                .towardCamera) {
+            targetFace = faceIndex;
+        }
+    }
+    QPointF faceScreenPosition;
+    if (!projection.worldPointToScreen(center(originalFaces[targetFace]),
+                                       viewport->size(),
+                                       &faceScreenPosition)) {
+        return false;
+    }
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, faceScreenPosition,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, faceScreenPosition,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+    waitForViewportTransition();
+
+    QKeyEvent deleteKey(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(viewport.get(), &deleteKey);
+    application.processEvents();
+
+    bool passed = check(session.document().size() == 5,
+                        "deleting one solid face must retain the other five faces");
+    passed &= check(session.document().containerId(id) == id &&
+                        session.document().objectIdsInContainer(id).size() == 5,
+                    "remaining face surfaces must stay under the original object container");
+
+    const auto sameSurface = [](const NurbsSurface3D &a,
+                                const NurbsSurface3D &b) {
+        if (a.degreeU != b.degreeU || a.degreeV != b.degreeV ||
+            a.orderU != b.orderU || a.orderV != b.orderV ||
+            a.controlVertexCountU != b.controlVertexCountU ||
+            a.controlVertexCountV != b.controlVertexCountV ||
+            a.rational != b.rational ||
+            a.controlPoints.size() != b.controlPoints.size()) {
+            return false;
+        }
+        QSet<int> matchedControlPoints;
+        for (const Point3D &left : a.controlPoints) {
+            bool matched = false;
+            for (int index = 0; index < b.controlPoints.size(); ++index) {
+                const Point3D &right = b.controlPoints[index];
+                if (matchedControlPoints.contains(index) ||
+                    std::abs(left.x - right.x) > 1.0e-9 ||
+                    std::abs(left.y - right.y) > 1.0e-9 ||
+                    std::abs(left.z - right.z) > 1.0e-9) {
+                    continue;
+                }
+                matchedControlPoints.insert(index);
+                matched = true;
+                break;
+            }
+            if (!matched) {
+                return false;
+            }
+        }
+        return true;
+    };
+    QSet<int> retainedFaceIndices;
+    for (const SceneObject &object : session.document().objects()) {
+        const NurbsSurface3D &surface = object.geometry.nurbsSurface;
+        passed &= check(object.geometry.geometryType ==
+                            GeometryType::NurbsSurface &&
+                            validateNurbsSurface(surface),
+                        "open solid shell must be stored as valid NURBS surface patches");
+        if (surface.controlPoints.size() == 4) {
+            const Point3D &origin = surface.controlPoints[0];
+            const Point3D &uPoint = surface.controlPoints[2];
+            const Point3D &vPoint = surface.controlPoints[1];
+            const Point3D normal{
+                (uPoint.y - origin.y) * (vPoint.z - origin.z) -
+                    (uPoint.z - origin.z) * (vPoint.y - origin.y),
+                (uPoint.z - origin.z) * (vPoint.x - origin.x) -
+                    (uPoint.x - origin.x) * (vPoint.z - origin.z),
+                (uPoint.x - origin.x) * (vPoint.y - origin.y) -
+                    (uPoint.y - origin.y) * (vPoint.x - origin.x)};
+            Point3D faceCenter;
+            for (const Point3D &point : surface.controlPoints) {
+                faceCenter.x += point.x / surface.controlPoints.size();
+                faceCenter.y += point.y / surface.controlPoints.size();
+                faceCenter.z += point.z / surface.controlPoints.size();
+            }
+            passed &= check(normal.x * faceCenter.x +
+                                normal.y * faceCenter.y +
+                                normal.z * faceCenter.z > 0.0,
+                            "remaining surface normals must preserve the solid's outward orientation");
+        }
+        for (int faceIndex = 0; faceIndex < originalFaces.size(); ++faceIndex) {
+            if (sameSurface(surface, originalFaces[faceIndex])) {
+                retainedFaceIndices.insert(faceIndex);
+            }
+        }
+    }
+    passed &= check(retainedFaceIndices.size() == 5 &&
+                        !retainedFaceIndices.contains(targetFace),
+                    "only the selected face must be absent from the remaining shell");
+
+    passed &= check(viewport->executeCommand(ViewportCommand::Undo).accepted &&
+                        session.document().size() == 1 &&
+                        session.document().shape(id) != nullptr &&
+                        session.document().shape(id)->geometryType ==
+                            GeometryType::NurbsSolid &&
+                        validateNurbsSolid(
+                            session.document().shape(id)->nurbsSolid),
+                    "undo must restore the complete closed solid");
+    passed &= check(viewport->executeCommand(ViewportCommand::Redo).accepted &&
+                        session.document().size() == 5,
+                    "redo must remove only the selected face again");
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
@@ -2266,6 +2428,9 @@ int main(int argc, char **argv)
     }
     if (qEnvironmentVariableIsSet("CLASSICAD_SOLID_FACE_SELECTION_ONLY")) {
         return verifySolidFaceSelection(application) ? 0 : 1;
+    }
+    if (qEnvironmentVariableIsSet("CLASSICAD_SOLID_FACE_DELETE_ONLY")) {
+        return verifySolidFaceDelete(application) ? 0 : 1;
     }
     if (qEnvironmentVariableIsSet("CLASSICAD_SOLID_FACE_EDGES_ONLY")) {
         return verifySolidFaceEdges(application) ? 0 : 1;

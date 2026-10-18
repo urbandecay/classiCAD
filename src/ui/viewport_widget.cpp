@@ -14249,8 +14249,183 @@ private:
         return true;
     }
 
+    bool deleteSelectedFaces()
+    {
+        if (!objectEditMode_ ||
+            componentSelectionMode_ != ComponentSelectionMode::Face) {
+            return false;
+        }
+
+        const QHash<quint64, QSet<int>> &selectedFaces =
+            componentSelections_[static_cast<int>(
+                ComponentSelectionMode::Face)];
+        QVector<ObjectId> objectsToDelete;
+        int changedObjectCount = 0;
+        int deletedFaceCount = 0;
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
+
+        for (int objectIndexValue = 0;
+             objectIndexValue < document_.size(); ++objectIndexValue) {
+            const ObjectId objectId = document_.objectIdAt(objectIndexValue);
+            const auto selected = selectedFaces.constFind(objectId.value());
+            if (selected == selectedFaces.cend()) {
+                continue;
+            }
+            const Shape *source = document_.shape(objectId);
+            const SceneObject *sceneObject = document_.object(objectId);
+            if (source == nullptr || sceneObject == nullptr ||
+                (source->geometryType != GeometryType::NurbsSolid &&
+                 source->geometryType != GeometryType::NurbsSurface) ||
+                !document_.isObjectVisible(objectId) ||
+                !document_.isObjectEditable(objectId)) {
+                continue;
+            }
+
+            const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(*source);
+            if (faces.isEmpty()) {
+                continue;
+            }
+            QVector<int> remainingFaceIndices;
+            remainingFaceIndices.reserve(faces.size());
+            int deletedFromObject = 0;
+            for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+                if (selected.value().contains(faceIndex)) {
+                    ++deletedFromObject;
+                } else {
+                    remainingFaceIndices.append(faceIndex);
+                }
+            }
+            if (deletedFromObject == 0) {
+                continue;
+            }
+            deletedFaceCount += deletedFromObject;
+
+            if (remainingFaceIndices.isEmpty()) {
+                objectsToDelete.append(objectId);
+                continue;
+            }
+
+            const auto standaloneSurfaceForFace =
+                [&](int faceIndex) {
+                    NurbsSurface3D face = faces[faceIndex];
+                    if (source->geometryType != GeometryType::NurbsSolid ||
+                        !nurbsSolidFaceReversed(source->nurbsSolid,
+                                                faceIndex)) {
+                        return face;
+                    }
+
+                    qreal uStart = 0.0;
+                    qreal uEnd = 0.0;
+                    qreal vStart = 0.0;
+                    qreal vEnd = 0.0;
+                    if (!nurbsSurfaceParameterDomains(
+                            face, &uStart, &uEnd, &vStart, &vEnd)) {
+                        return face;
+                    }
+                    Q_UNUSED(vStart);
+                    Q_UNUSED(vEnd);
+
+                    const QVector<Point3D> originalPoints = face.controlPoints;
+                    const QVector<double> originalWeights = face.weights;
+                    for (int u = 0; u < face.controlVertexCountU; ++u) {
+                        for (int v = 0; v < face.controlVertexCountV; ++v) {
+                            const int sourceIndex =
+                                u * face.controlVertexCountV + v;
+                            const int reversedIndex =
+                                (face.controlVertexCountU - 1 - u) *
+                                    face.controlVertexCountV + v;
+                            face.controlPoints[reversedIndex] =
+                                originalPoints[sourceIndex];
+                            face.weights[reversedIndex] =
+                                originalWeights[sourceIndex];
+                        }
+                    }
+
+                    const QVector<double> fullKnots =
+                        expandedNurbsSurfaceKnotVector(face.knotsU);
+                    face.knotsU.clear();
+                    face.knotsU.reserve(fullKnots.size() - 2);
+                    for (int knotIndex = 1;
+                         knotIndex + 1 < fullKnots.size(); ++knotIndex) {
+                        face.knotsU.append(
+                            uStart + uEnd -
+                            fullKnots[fullKnots.size() - 1 - knotIndex]);
+                    }
+                    for (NurbsSurfaceTrimLoop &loop : face.trimLoops) {
+                        for (QPointF &point : loop.curve.controlPoints) {
+                            point.setX(uStart + uEnd - point.x());
+                        }
+                    }
+                    return face;
+                };
+
+            // A NurbsSolid is required to stay closed. After removing a face,
+            // keep every untouched exact NURBS patch as a surface in the same
+            // logical object container instead of storing an invalid solid.
+            Shape firstRemainingFace = *source;
+            firstRemainingFace.geometryType = GeometryType::NurbsSurface;
+            firstRemainingFace.nurbsSurface =
+                standaloneSurfaceForFace(remainingFaceIndices.first());
+            firstRemainingFace.nurbsSolid = {};
+            if (!transaction.replaceGeometry(objectId, firstRemainingFace)) {
+                transaction.rollback();
+                return false;
+            }
+
+            const Point3D placement = sceneObject->placementTranslation;
+            const ObjectId containerId = document_.containerId(objectId);
+            for (int index = 1; index < remainingFaceIndices.size(); ++index) {
+                Shape remainingFace = firstRemainingFace;
+                remainingFace.nurbsSurface = standaloneSurfaceForFace(
+                    remainingFaceIndices[index]);
+                const ObjectId addedId =
+                    transaction.addShape(remainingFace, containerId);
+                if (!addedId.isValid() ||
+                    !transaction.setObjectPlacementTranslation(addedId,
+                                                               placement)) {
+                    transaction.rollback();
+                    return false;
+                }
+            }
+            ++changedObjectCount;
+        }
+
+        if (changedObjectCount == 0 && objectsToDelete.isEmpty()) {
+            transaction.rollback();
+            DebugLog::instance().write(
+                QStringLiteral("delete selected faces skipped: no editable face selection"));
+            return false;
+        }
+        if (!objectsToDelete.isEmpty()) {
+            transaction.removeObjects(objectsToDelete);
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return false;
+        }
+
+        clearSelection();
+        clearComponentSelections();
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        update();
+        DebugLog::instance().write(
+            QStringLiteral("delete selected faces faces=%1 changedObjects=%2 removedObjects=%3")
+                .arg(deletedFaceCount)
+                .arg(changedObjectCount)
+                .arg(objectsToDelete.size()));
+        return true;
+    }
+
     bool deleteSelectedShapes()
     {
+        if (objectEditMode_ &&
+            componentSelectionMode_ == ComponentSelectionMode::Face) {
+            return deleteSelectedFaces();
+        }
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
             const QHash<quint64, QSet<int>> controlPointTargets =
                 selectedVertexControlPointTargets();

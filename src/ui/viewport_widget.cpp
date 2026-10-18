@@ -7971,6 +7971,17 @@ protected:
                                 componentSelectionMode_ == ComponentSelectionMode::Edge
                             ? selectedSurfaceControlNet(visibleShape)
                             : selectedSurfaceCage(visibleShape));
+                    const bool implicitAllVertexSelection =
+                        activeEditGeometry && selected &&
+                        componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex &&
+                        objectVertexSelection.isEmpty();
+                    if (implicitAllVertexSelection) {
+                        for (int vertex = 0;
+                             vertex < cage->pointVertices.size(); ++vertex) {
+                            objectVertexSelection.insert(vertex);
+                        }
+                    }
                     if (geometryType == GeometryType::NurbsSurface &&
                         viewportShadingSettings_.outline &&
                         !viewportShadingSettings_.xrayEnabled() &&
@@ -8005,7 +8016,9 @@ protected:
                     if (activeEditGeometry && selected &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                          componentSelectionMode_ == ComponentSelectionMode::Edge) &&
-                        !objectComponentSelection.isEmpty()) {
+                        (componentSelectionMode_ == ComponentSelectionMode::Vertex
+                             ? !objectVertexSelection.isEmpty()
+                             : !objectComponentSelection.isEmpty())) {
             // Use the same derived-face list for highlighting as for picking,
             // mode conversion, marquee selection, and duplication. A swept
             // NURBS wall remains one face per boundary loop even when its knot
@@ -8033,23 +8046,40 @@ protected:
                                 ? faceCage.pointVertices.size() >= 3
                                 : !boundaryEdgeIndices.isEmpty();
                             if (vertexMode) {
-                                for (const Point3D &point :
-                                     faceCage.precisePointVertices) {
-                                    int vertex = -1;
-                                    for (int index = 0;
-                                         index < cage->precisePointVertices.size();
-                                         ++index) {
-                                        if (duplicatePointsEqual(
-                                                cage->precisePointVertices[index],
-                                                point)) {
-                                            vertex = index;
+                                if (geometryType == GeometryType::NurbsSurface &&
+                                    selectableFaceIndex == 0) {
+                                    // A NURBS surface's selectable vertex IDs
+                                    // are its control-point indices. Do not
+                                    // remap them through the edge cage: that
+                                    // cage may order or duplicate its points
+                                    // differently from the surface control net.
+                                    fullySelected = face.controlPoints.size() >= 3;
+                                    for (int vertex = 0;
+                                         fullySelected &&
+                                         vertex < face.controlPoints.size();
+                                         ++vertex) {
+                                        fullySelected =
+                                            objectVertexSelection.contains(vertex);
+                                    }
+                                } else {
+                                    for (const Point3D &point :
+                                         faceCage.precisePointVertices) {
+                                        int vertex = -1;
+                                        for (int index = 0;
+                                             index < cage->precisePointVertices.size();
+                                             ++index) {
+                                            if (duplicatePointsEqual(
+                                                    cage->precisePointVertices[index],
+                                                    point)) {
+                                                vertex = index;
+                                                break;
+                                            }
+                                        }
+                                        if (vertex < 0 ||
+                                            !objectVertexSelection.contains(vertex)) {
+                                            fullySelected = false;
                                             break;
                                         }
-                                    }
-                                    if (vertex < 0 ||
-                                        !objectComponentSelection.contains(vertex)) {
-                                        fullySelected = false;
-                                        break;
                                     }
                                 }
                             } else {
@@ -8235,16 +8265,6 @@ protected:
                     if (hasComponentSelection &&
                         componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                         edgeCage.color = Qt::white;
-                        const auto vertexSelectedAt =
-                            [&](const QVector3D &endpoint) {
-                            for (int vertex = 0; vertex < cage->pointVertices.size(); ++vertex) {
-                                if ((cage->pointVertices[vertex] - endpoint).lengthSquared() <= 1.0e-12f &&
-                                    objectVertexSelection.contains(vertex)) {
-                                    return true;
-                                }
-                            }
-                            return false;
-                        };
                         const QColor selectedVertexColor(
                             QStringLiteral("#ff9900"));
                         const QColor wireColor(Qt::black);
@@ -8255,11 +8275,22 @@ protected:
                                 cage->lineVertices[edgeVertex];
                             const QVector3D &second =
                                 cage->lineVertices[edgeVertex + 1];
-                            const bool firstSelected = vertexSelectedAt(first);
-                            const bool secondSelected = vertexSelectedAt(second);
-                            const QColor firstColor = firstSelected
+                            const auto isSelectedVertex =
+                                [&](const QVector3D &endpoint) {
+                                    for (int vertex = 0;
+                                         vertex < cage->pointVertices.size();
+                                         ++vertex) {
+                                        if ((cage->pointVertices[vertex] - endpoint)
+                                                .lengthSquared() <= 1.0e-12f &&
+                                            objectVertexSelection.contains(vertex)) {
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                };
+                            const QColor firstColor = isSelectedVertex(first)
                                 ? selectedVertexColor : wireColor;
-                            const QColor secondColor = secondSelected
+                            const QColor secondColor = isSelectedVertex(second)
                                 ? selectedVertexColor : wireColor;
                             edgeCage.lineVertexColors
                                 << QVector4D(firstColor.redF(), firstColor.greenF(),
@@ -8296,7 +8327,9 @@ protected:
                     // the optional base control cage. This preserves the
                     // faded links for explicitly selected surface vertices.
                     if (activeEditGeometry && selected &&
-                        !objectComponentSelection.isEmpty()) {
+                        (componentSelectionMode_ == ComponentSelectionMode::Vertex
+                             ? !objectVertexSelection.isEmpty()
+                             : !objectComponentSelection.isEmpty())) {
                         const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,
                                                                const QColor &color,
                                                                float width,
@@ -8371,7 +8404,7 @@ protected:
                             if (controlPointsVisible_ ||
                                 activeEditGeometry) {
                                 QMap<QRgb, ViewportDepthGeometry> fadedPoints;
-                                for (int component : objectComponentSelection) {
+                                for (int component : objectVertexSelection) {
                                     if (component < 0 ||
                                         component >= cage->pointVertices.size()) {
                                         continue;
@@ -8391,64 +8424,6 @@ protected:
                                         std::move(it.value()),
                                         QColor::fromRgba(it.key()),
                                         1.0f, 4.0f, {});
-                                }
-                            }
-                            if (visibleShape.geometryType ==
-                                    GeometryType::NurbsSurface ||
-                                visibleShape.geometryType ==
-                                    GeometryType::NurbsSolid) {
-                                const QVector<QPair<int, int>> edgeEndpoints =
-                                    selectedSurfaceControlNetEdgeVertexIndices(
-                                        visibleShape);
-                                ViewportDepthGeometry connectedEdges;
-                                QVector<QVector4D> connectedEdgeColors;
-                                for (int edge = 0;
-                                     edge < edgeEndpoints.size(); ++edge) {
-                                    const QPair<int, int> endpoints =
-                                        edgeEndpoints[edge];
-                                    const int first = edge * 2;
-                                    const bool firstSelected =
-                                        objectVertexSelection.contains(
-                                            endpoints.first);
-                                    const bool secondSelected =
-                                        objectVertexSelection.contains(
-                                            endpoints.second);
-                                    if (endpoints.first < 0 ||
-                                        endpoints.second < 0 ||
-                                        (!firstSelected && !secondSelected) ||
-                                        first + 1 >= cage->lineVertices.size() ||
-                                        first + 1 >=
-                                            cage->preciseLineVertices.size()) {
-                                        continue;
-                                    }
-                                    connectedEdges.lineVertices
-                                        << cage->lineVertices[first]
-                                        << cage->lineVertices[first + 1];
-                                    connectedEdges.preciseLineVertices
-                                        << cage->preciseLineVertices[first]
-                                        << cage->preciseLineVertices[first + 1];
-                                    const float firstInfluence =
-                                        objectVertexSelection.contains(
-                                            endpoints.first) ? 1.0f : 0.0f;
-                                    const float secondInfluence =
-                                        objectVertexSelection.contains(
-                                            endpoints.second) ? 1.0f : 0.0f;
-                                    connectedEdgeColors
-                                        << QVector4D(firstInfluence,
-                                                     firstInfluence,
-                                                     firstInfluence,
-                                                     1.0f)
-                                        << QVector4D(secondInfluence,
-                                                     secondInfluence,
-                                                     secondInfluence,
-                                                     1.0f);
-                                }
-                                if (!connectedEdges.lineVertices.isEmpty()) {
-                                    appendComponentStroke(
-                                        std::move(connectedEdges),
-                                        viewportSelectionColor(),
-                                        1.0f, 0.0f,
-                                        std::move(connectedEdgeColors));
                                 }
                             }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {

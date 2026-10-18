@@ -11874,3 +11874,17 @@ scene depth.
   and [filter menu availability](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L497-L533).
   `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
   Outliner comparison was run.
+- The hundred-fifty-second Data API budget update accounts for recursively
+  emitted custom-property GROUP rows and numeric array elements before sharing
+  a struct's remaining snapshot allowance among its pointer and collection
+  branches. The prepass and emitted tree use the same key visibility and
+  runtime-RNA filtering, and recursion follows the same depth and cycle rules.
+  Its count is capped by the remaining row allowance, so a large or nested
+  property group cannot make the estimate unbounded. Pointer and collection
+  siblings now receive separate family shares after direct RNA and custom
+  property rows are accounted for; shared ancestor quotas still enforce the
+  overall snapshot cap. This remains an eager, bounded snapshot rather than
+  Blender's on-demand RNA expansion. See Blender 5.2.2's
+  [lazy RNA tree expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
+  Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
+  passed. No GUI or matched Outliner comparison was run.

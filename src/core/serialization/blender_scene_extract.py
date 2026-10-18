@@ -2455,6 +2455,66 @@ def outliner_data_api_tree():
             return "STRING"
         return "OTHER"
 
+    def custom_property_entries(owner):
+        """Yield the custom properties the Data API tree can display."""
+        try:
+            keys = iter(owner.keys())
+            rna_properties = getattr(getattr(owner, "bl_rna", None),
+                                     "properties", ())
+            find_rna_property = getattr(rna_properties, "get", None)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            return
+        try:
+            for raw_key in keys:
+                try:
+                    identifier = str(raw_key)
+                    if (not identifier or identifier == "_RNA_UI" or
+                            len(identifier) > 4096):
+                        continue
+                    property_rna = (find_rna_property(identifier)
+                                    if callable(find_rna_property) else None)
+                    # Runtime RNA properties backed by ID properties are
+                    # already shown by the regular RNA property walk.
+                    if property_rna is not None and bool(getattr(
+                            property_rna, "is_runtime", False)):
+                        continue
+                    property_value = owner[raw_key]
+                except (AttributeError, KeyError, ReferenceError, RuntimeError,
+                        TypeError, ValueError):
+                    continue
+                yield (raw_key, identifier, property_value,
+                       custom_property_value_type(property_value))
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError):
+            return
+
+    def custom_property_node_budget(owner, depth, ancestry, limit):
+        """Count visible custom rows recursively, capped by the row budget."""
+        if limit <= 0:
+            return 0
+        rows = 0
+        for _raw_key, _identifier, property_value, value_type in \
+                custom_property_entries(owner):
+            if rows >= limit:
+                break
+            rows += 1
+            if value_type == "ARRAY":
+                try:
+                    rows = min(limit, rows + len(property_value))
+                except (AttributeError, OverflowError, ReferenceError,
+                        RuntimeError, TypeError, ValueError):
+                    pass
+            elif value_type == "GROUP":
+                group_id = id(property_value)
+                if (depth + 1 < MAX_OUTLINER_DATA_API_DEPTH and
+                        group_id not in ancestry and rows < limit):
+                    rows += custom_property_node_budget(
+                        property_value, depth + 1,
+                        ancestry | {group_id}, limit - rows)
+            if rows >= limit:
+                break
+        return rows
+
     def custom_override_path_is_animatable(id_block, data_path):
         override_info = getattr(id_block, "override_library", None)
         if override_info is None:
@@ -2528,37 +2588,15 @@ def outliner_data_api_tree():
     def add_custom_property_nodes(parent, owner, id_block, owner_path,
                                   depth, ancestry, branch_remaining,
                                   item_remaining=None):
-        try:
-            keys = list(owner.keys())
-        except (AttributeError, ReferenceError, RuntimeError, TypeError):
-            return
-        try:
-            rna_properties = getattr(getattr(owner, "bl_rna", None),
-                                     "properties", ())
-            find_rna_property = getattr(rna_properties, "get", None)
-        except (AttributeError, ReferenceError, RuntimeError, TypeError):
-            find_rna_property = None
-        for raw_key in keys:
+        for raw_key, identifier, property_value, value_type in \
+                custom_property_entries(owner):
             if remaining[0] <= 0:
                 truncated[0] = True
                 break
             try:
-                identifier = str(raw_key)
-                if (not identifier or identifier == "_RNA_UI" or
-                        len(identifier) > 4096):
-                    continue
-                property_rna = (find_rna_property(identifier)
-                                if callable(find_rna_property) else None)
-                # Runtime RNA properties backed by ID properties are already
-                # present in the regular RNA walk and use their unbracketed path.
-                if property_rna is not None and bool(getattr(
-                        property_rna, "is_runtime", False)):
-                    continue
-                property_value = owner[raw_key]
                 escaped_key = bpy.utils.escape_identifier(identifier)
                 segment = '["%s"]' % escaped_key
                 data_path = owner_path + segment
-                value_type = custom_property_value_type(property_value)
                 display_name = identifier
                 if not isinstance(owner, type(None)) and hasattr(
                         owner, "id_properties_ui"):
@@ -2598,21 +2636,26 @@ def outliner_data_api_tree():
                         depth + 1, ancestry | {id(property_value)},
                         branch_remaining, item_remaining)
             elif value_type == "ARRAY":
-                for index, _element in enumerate(property_value):
-                    array_node = reserve_node(
-                        "ARRAY_ELEM", str(index), str(index + 1),
-                        "IDPROPERTY_ELEMENT",
-                        branch_remaining=branch_remaining,
-                        item_remaining=item_remaining)
-                    if array_node is None:
-                        break
-                    whole_array_path = property_node.get("animation_path")
-                    if whole_array_path is not None:
-                        element_path = dict(whole_array_path)
-                        element_path["array_index"] = index
-                        element_path["use_entire_array"] = False
-                        array_node["animation_path"] = element_path
-                    property_node["children"].append(array_node)
+                try:
+                    array_values = enumerate(property_value)
+                    for index, _element in array_values:
+                        array_node = reserve_node(
+                            "ARRAY_ELEM", str(index), str(index + 1),
+                            "IDPROPERTY_ELEMENT",
+                            branch_remaining=branch_remaining,
+                            item_remaining=item_remaining)
+                        if array_node is None:
+                            break
+                        whole_array_path = property_node.get("animation_path")
+                        if whole_array_path is not None:
+                            element_path = dict(whole_array_path)
+                            element_path["array_index"] = index
+                            element_path["use_entire_array"] = False
+                            array_node["animation_path"] = element_path
+                        property_node["children"].append(array_node)
+                except (AttributeError, OverflowError, ReferenceError,
+                        RuntimeError, TypeError, ValueError):
+                    truncated[0] = True
             parent["children"].append(property_node)
 
     def capture_driver_paths(value):
@@ -2678,10 +2721,18 @@ def outliner_data_api_tree():
 
     def populate_struct(node, value, depth, ancestry, branch_remaining,
                         item_remaining=None):
-        for prop in properties_of(value):
-            if remaining[0] <= 0:
-                truncated[0] = True
-                break
+        properties = properties_of(value)
+        unreadable_value = object()
+        visible_properties = []
+        property_values = {}
+        collection_sizes = {}
+        child_branches = []
+        available_budget = min(
+            [remaining[0], branch_remaining[0]] +
+            [item_budget[0] for item_budget in (item_remaining or [])])
+        direct_node_budget = custom_property_node_budget(
+            value, depth, ancestry, available_budget)
+        for prop in properties:
             try:
                 identifier = str(prop.identifier)
                 if identifier == "rna_type" or bool(
@@ -2689,8 +2740,61 @@ def outliner_data_api_tree():
                     continue
                 prop_type = str(prop.type)
                 prop_name = str(prop.name)
+                is_array = bool(getattr(prop, "is_array", False))
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 continue
+
+            visible_properties.append((prop, identifier, prop_type, prop_name))
+            direct_node_budget += 1
+            if prop_type in ("POINTER", "COLLECTION") or (
+                    prop_type in ("BOOLEAN", "INT", "FLOAT") and is_array):
+                try:
+                    property_value = getattr(value, identifier)
+                    property_values[identifier] = property_value
+                except (AttributeError, ReferenceError, RuntimeError,
+                        TypeError):
+                    property_values[identifier] = unreadable_value
+                    continue
+
+                if prop_type == "POINTER":
+                    if property_value is not None:
+                        child_branches.append((identifier, "POINTER", 1))
+                elif prop_type == "COLLECTION":
+                    try:
+                        collection_size = len(property_value)
+                    except (AttributeError, ReferenceError, RuntimeError,
+                            TypeError):
+                        property_values[identifier] = unreadable_value
+                        continue
+                    collection_sizes[identifier] = collection_size
+                    if collection_size > 0:
+                        child_branches.append((
+                            identifier, "COLLECTION", collection_size))
+                else:
+                    try:
+                        array_values = list(property_value)
+                    except (AttributeError, ReferenceError, RuntimeError,
+                            TypeError):
+                        property_values[identifier] = unreadable_value
+                    else:
+                        property_values[identifier] = array_values
+                        direct_node_budget += len(array_values)
+
+        child_budget = max(0, available_budget - direct_node_budget)
+        child_family_limits = {}
+        if child_branches:
+            family_share, family_remainder = divmod(
+                child_budget, len(child_branches))
+            for family_index, (identifier, _kind, _size) in enumerate(
+                    child_branches):
+                child_family_limits[identifier] = (
+                    family_share +
+                    (1 if family_index < family_remainder else 0))
+
+        for prop, identifier, prop_type, prop_name in visible_properties:
+            if remaining[0] <= 0:
+                truncated[0] = True
+                break
             property_node = reserve_node(
                 "PROPERTY", identifier, prop_name, prop_type,
                 branch_remaining=branch_remaining,
@@ -2702,30 +2806,54 @@ def outliner_data_api_tree():
                 value, prop, identifier, is_array)
             if property_animation_path is not None:
                 property_node["animation_path"] = property_animation_path
-            try:
-                property_value = getattr(value, identifier)
-            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            if identifier in property_values:
+                property_value = property_values[identifier]
+            else:
+                try:
+                    property_value = getattr(value, identifier)
+                except (AttributeError, ReferenceError, RuntimeError,
+                        TypeError):
+                    property_value = unreadable_value
+            if property_value is unreadable_value:
                 node["children"].append(property_node)
                 continue
 
             if prop_type == "POINTER":
                 if property_value is not None:
-                    child = add_struct(property_value, "pointer", depth + 1,
-                                       ancestry, branch_remaining,
-                                       item_remaining)
-                    if child is not None:
-                        property_node["children"].append(child)
+                    pointer_budget = child_family_limits.get(identifier, 0)
+                    if pointer_budget <= 0:
+                        truncated[0] = True
+                    else:
+                        pointer_item_remaining = list(item_remaining or [])
+                        pointer_item_remaining.append([pointer_budget])
+                        child = add_struct(property_value, "pointer",
+                                           depth + 1, ancestry,
+                                           branch_remaining,
+                                           pointer_item_remaining)
+                        if child is not None:
+                            property_node["children"].append(child)
             elif prop_type == "COLLECTION":
                 try:
-                    collection_size = len(property_value)
+                    collection_size = collection_sizes[identifier]
                     iterator = iter(property_value)
-                except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                except (AttributeError, KeyError, ReferenceError, RuntimeError,
+                        TypeError):
+                    continue
+                if collection_size <= 0:
+                    node["children"].append(property_node)
                     continue
                 collection_budget = branch_remaining[0]
                 if item_remaining is not None:
                     collection_budget = min(
                         collection_budget,
                         *(item_budget[0] for item_budget in item_remaining))
+                collection_budget = min(
+                    collection_budget,
+                    child_family_limits.get(identifier, 0))
+                if collection_budget <= 0:
+                    truncated[0] = True
+                    node["children"].append(property_node)
+                    continue
                 collection_item_limit = min(
                     collection_size, MAX_OUTLINER_DATA_API_COLLECTION_ITEMS,
                     MAX_OUTLINER_DATA_API_BRANCH_ITEMS,
@@ -2753,10 +2881,7 @@ def outliner_data_api_tree():
                         property_node["children"].append(child)
             elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
                   bool(getattr(prop, "is_array", False))):
-                try:
-                    values = list(property_value)
-                except (AttributeError, ReferenceError, RuntimeError, TypeError):
-                    values = []
+                values = property_value
                 subtype = str(getattr(prop, "subtype", ""))
                 for index, element in enumerate(values):
                     array_key = str(index)

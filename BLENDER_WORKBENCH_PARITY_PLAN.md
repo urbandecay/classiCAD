@@ -11714,3 +11714,13 @@ scene depth.
   stable ID enum; Orphan Data Purge still needs a real Blender datablock
   deletion operation. `cmake --build build -j4` and `git diff --check` passed;
   no GUI or matched Outliner comparison was run.
+- The hundred-forty-first Outliner update uses Blender 5.2.2's stable
+  `filter_id_type` enum, independent of the data types present in the imported
+  file ([ID type enum](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_ID.cc#L2221-L2297),
+  [Outliner header](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L1477-L1487)).
+  The Libraries and Orphan Data selectors now include every pinned Blender ID
+  type, including choices that return no rows in the current file. UI labels
+  follow Blender's singular enum labels while stored values map to the RNA
+  collection group labels captured by the extractor. Legacy unknown filter
+  values fall back to Actions. `cmake --build build -j4` and `git diff
+  --check` passed; no GUI or matched Outliner comparison was run.

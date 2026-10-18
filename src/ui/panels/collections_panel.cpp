@@ -1454,7 +1454,7 @@ void CollectionsPanel::createLayout()
     idTypeCombo_ = new QComboBox(this);
     idTypeCombo_->setToolTip(QStringLiteral(
         "Filter Blender data-block rows by ID type."));
-    idTypeCombo_->addItem(QStringLiteral("Actions"),
+    idTypeCombo_->addItem(QStringLiteral("Action"),
                           QStringLiteral("Actions"));
     idTypeCombo_->setVisible(false);
     filterRow->addWidget(idTypeCombo_);
@@ -5806,37 +5806,59 @@ void CollectionsPanel::refresh()
     {
         const QSignalBlocker blocker(idTypeCombo_);
         idTypeCombo_->clear();
-        idTypeCombo_->addItem(QStringLiteral("Actions"),
-                              QStringLiteral("Actions"));
-        QSet<QString> addedTypes;
-        addedTypes.insert(QStringLiteral("Actions"));
-        for (const OutlinerLibraryEntry &library : libraries) {
-            for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
-                if (group.displayName.isEmpty() ||
-                    addedTypes.contains(group.displayName)) {
-                    continue;
-                }
-                addedTypes.insert(group.displayName);
-                idTypeCombo_->addItem(group.displayName, group.displayName);
-            }
-        }
-        for (const OutlinerOrphanGroup &group : orphanGroups) {
-            if (group.displayName.isEmpty() ||
-                addedTypes.contains(group.displayName)) {
-                continue;
-            }
-            addedTypes.insert(group.displayName);
-            idTypeCombo_->addItem(group.displayName, group.displayName);
+        const QVector<QPair<QString, QString>> blenderIdTypeFilters{
+            {QStringLiteral("Action"), QStringLiteral("Actions")},
+            {QStringLiteral("Armature"), QStringLiteral("Armatures")},
+            {QStringLiteral("Brush"), QStringLiteral("Brushes")},
+            {QStringLiteral("Cache File"), QStringLiteral("Cache Files")},
+            {QStringLiteral("Camera"), QStringLiteral("Cameras")},
+            {QStringLiteral("Collection"), QStringLiteral("Collections")},
+            {QStringLiteral("Curve"), QStringLiteral("Curves")},
+            {QStringLiteral("Curves"), QStringLiteral("Hair Curves")},
+            {QStringLiteral("Font"), QStringLiteral("Vector Fonts")},
+            {QStringLiteral("Grease Pencil"), QStringLiteral("Grease Pencil")},
+            {QStringLiteral("Grease Pencil v3"),
+             QStringLiteral("Grease Pencil v3")},
+            {QStringLiteral("Image"), QStringLiteral("Images")},
+            {QStringLiteral("Key"), QStringLiteral("Shape Keys")},
+            {QStringLiteral("Lattice"), QStringLiteral("Lattices")},
+            {QStringLiteral("Library"), QStringLiteral("Libraries")},
+            {QStringLiteral("Light"), QStringLiteral("Lights")},
+            {QStringLiteral("Light Probe"), QStringLiteral("Light Probes")},
+            {QStringLiteral("Line Style"), QStringLiteral("Line Styles")},
+            {QStringLiteral("Mask"), QStringLiteral("Masks")},
+            {QStringLiteral("Material"), QStringLiteral("Materials")},
+            {QStringLiteral("Mesh"), QStringLiteral("Meshes")},
+            {QStringLiteral("Metaball"), QStringLiteral("Metaballs")},
+            {QStringLiteral("Movie Clip"), QStringLiteral("Movie Clips")},
+            {QStringLiteral("Node Tree"), QStringLiteral("Node Groups")},
+            {QStringLiteral("Object"), QStringLiteral("Objects")},
+            {QStringLiteral("Paint Curve"), QStringLiteral("Paint Curves")},
+            {QStringLiteral("Palette"), QStringLiteral("Palettes")},
+            {QStringLiteral("Particle"), QStringLiteral("Particles")},
+            {QStringLiteral("Point Cloud"), QStringLiteral("Point Clouds")},
+            {QStringLiteral("Scene"), QStringLiteral("Scenes")},
+            {QStringLiteral("Screen"), QStringLiteral("Screens")},
+            {QStringLiteral("Sound"), QStringLiteral("Sounds")},
+            {QStringLiteral("Speaker"), QStringLiteral("Speakers")},
+            {QStringLiteral("Text"), QStringLiteral("Texts")},
+            {QStringLiteral("Texture"), QStringLiteral("Textures")},
+            {QStringLiteral("Volume"), QStringLiteral("Volumes")},
+            {QStringLiteral("Window Manager"),
+             QStringLiteral("Window Managers")},
+            {QStringLiteral("Workspace"), QStringLiteral("Workspaces")},
+            {QStringLiteral("World"), QStringLiteral("Worlds")},
+        };
+        for (const auto &type : blenderIdTypeFilters) {
+            idTypeCombo_->addItem(type.first, type.second);
         }
         int typeIndex = idTypeCombo_->findData(idTypeFilter_);
         if (typeIndex < 0) {
-            idTypeCombo_->addItem(idTypeFilter_, idTypeFilter_);
-            typeIndex = idTypeCombo_->count() - 1;
-            idTypeCombo_->setItemData(
-                typeIndex,
-                QStringLiteral(
-                    "This selected ID type is not present in the current file."),
-                Qt::ToolTipRole);
+            idTypeFilter_ = QStringLiteral("Actions");
+            typeIndex = idTypeCombo_->findData(idTypeFilter_);
+            QSettings settings;
+            settings.setValue(QStringLiteral("outliner/idTypeFilter"),
+                              idTypeFilter_);
         }
         idTypeCombo_->setCurrentIndex(typeIndex);
         idTypeFilterButton_->setVisible(librariesMode || orphanDataMode);

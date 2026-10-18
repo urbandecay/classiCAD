@@ -125,6 +125,7 @@ constexpr int itemOverrideObjectSelectedRole = Qt::UserRole + 33;
 constexpr int itemOverrideObjectActiveRole = Qt::UserRole + 34;
 constexpr int itemOverrideObjectSelectableRole = Qt::UserRole + 35;
 constexpr int itemRestrictionActiveRole = Qt::UserRole + 36;
+constexpr int itemLayerCollectionContextRole = Qt::UserRole + 37;
 
 QColor collectionColorTagColor(const QString &colorTag);
 
@@ -2123,6 +2124,16 @@ void CollectionsPanel::createLayout()
         }
         const QStringList sourcePath =
             item->data(nameColumn, itemSourcePathRole).toStringList();
+        const bool hasLayerCollectionContext = item->data(
+            nameColumn, itemLayerCollectionContextRole).toBool();
+        const quint64 parentCollectionValue = item->data(
+            nameColumn, itemParentCollectionRole).toULongLong();
+        const OutlinerCollectionContext collectionContext{
+            CollectionId::fromValue(value),
+            CollectionId::fromValue(parentCollectionValue),
+            hasLayerCollectionContext ? viewLayerKey : QString{},
+            hasLayerCollectionContext ? sourcePath : QStringList{},
+            hasLayerCollectionContext};
         const Qt::KeyboardModifiers modifiers =
             static_cast<OutlinerTreeWidget *>(tree_)
                 ->restrictionModifiersFor(item, column);
@@ -2135,15 +2146,17 @@ void CollectionsPanel::createLayout()
         // from inside its own check-state update.
         QTimer::singleShot(0, this, [this, kind, column, hidden, value,
                                      stateKey, stateValue, viewLayerKey,
-                                     sourcePath, recursive, isolate]() {
+                                     sourcePath, collectionContext,
+                                     recursive, isolate]() {
             if (kind == OutlinerRowKind::Collection) {
                 const CollectionId id = CollectionId::fromValue(value);
                 if (column == viewportColumn && callbacks_.setViewportVisibility) {
-                    callbacks_.setViewportVisibility(id, hidden, recursive,
-                                                     isolate);
+                    callbacks_.setViewportVisibility(collectionContext, hidden,
+                                                     recursive, isolate);
                 } else if (column == renderColumn &&
                            callbacks_.setCollectionRenderVisibility) {
-                    callbacks_.setCollectionRenderVisibility(id, hidden,
+                    callbacks_.setCollectionRenderVisibility(collectionContext,
+                                                             hidden,
                                                              recursive,
                                                              isolate);
                 } else if ((column == viewLayerViewportColumn ||
@@ -2156,7 +2169,8 @@ void CollectionsPanel::createLayout()
                         recursive, isolate);
                 } else if (column == selectColumn &&
                            callbacks_.setCollectionSelectability) {
-                    callbacks_.setCollectionSelectability(id, hidden,
+                    callbacks_.setCollectionSelectability(collectionContext,
+                                                          hidden,
                                                           recursive, isolate);
                 }
             } else if (kind == OutlinerRowKind::Object) {
@@ -4367,6 +4381,8 @@ void CollectionsPanel::appendCollection(
         item->setData(nameColumn, itemSourcePathRole,
                       QVariant::fromValue(sourcePath));
         item->setData(nameColumn, itemViewLayerKeyRole, rowViewLayerKey);
+        item->setData(nameColumn, itemLayerCollectionContextRole,
+                      !activeViewLayerKey.isEmpty());
         const QString currentViewLayerKey = callbacks_.activeViewLayerKey
             ? callbacks_.activeViewLayerKey() : QString{};
         if (rowViewLayerKey == currentViewLayerKey &&

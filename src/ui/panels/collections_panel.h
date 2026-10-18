@@ -160,6 +160,7 @@ struct OutlinerCollectionContext {
     CollectionId parentCollectionId = CollectionId::invalid();
     QString viewLayerKey;
     QStringList sourcePath;
+    bool hasViewLayerContext = false;
 };
 
 struct OutlinerObjectCollectionLink {
@@ -323,14 +324,15 @@ struct CollectionsPanelCallbacks {
         unlinkObjects;
     std::function<void(const QVector<CollectionId> &)>
         removeCollectionHierarchy;
-    std::function<void(CollectionId, bool, bool, bool)> setViewportVisibility;
+    std::function<void(const OutlinerCollectionContext &, bool, bool, bool)>
+        setViewportVisibility;
     std::function<void(const QVector<OutlinerCollectionContext> &, bool)>
         setCollectionsViewportEnabled;
-    std::function<void(CollectionId, bool, bool, bool)>
+    std::function<void(const OutlinerCollectionContext &, bool, bool, bool)>
         setCollectionRenderVisibility;
     std::function<void(const QVector<OutlinerCollectionContext> &, bool)>
         setCollectionsRenderVisibility;
-    std::function<void(CollectionId, bool, bool, bool)>
+    std::function<void(const OutlinerCollectionContext &, bool, bool, bool)>
         setCollectionSelectability;
     std::function<void(ObjectId, bool, bool)> setObjectViewportVisibility;
     std::function<void(ObjectId, bool, bool)> setObjectHiddenInViewport;

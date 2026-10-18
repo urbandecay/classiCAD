@@ -8347,11 +8347,177 @@ private:
             }
             return false;
         };
+        struct CollectionRestrictionTargets {
+            QVector<CollectionId> collectionIds;
+            QVector<ObjectId> objectIds;
+        };
+        const auto layerCollectionBranchTargets = [this](
+            const OutlinerCollectionContext &target) {
+            CollectionRestrictionTargets result;
+            if (!target.hasViewLayerContext || target.viewLayerKey.isEmpty() ||
+                target.sourcePath.isEmpty()) {
+                return result;
+            }
+
+            const Document &document = session_.document();
+            const QVector<DocumentCollection> collections =
+                document.collections();
+            QHash<QString, QVector<const DocumentCollection *>> bySourceId;
+            QHash<quint64, QVector<const DocumentCollection *>> childrenByParent;
+            for (const DocumentCollection &collection : collections) {
+                if (!collection.sourceId.isEmpty()) {
+                    bySourceId[collection.sourceId].append(&collection);
+                }
+                for (const CollectionId parentId : collection.parentIds) {
+                    childrenByParent[parentId.value()].append(&collection);
+                }
+            }
+
+            const auto stateForPath = [&target](
+                const DocumentCollection &collection,
+                const QStringList &path,
+                QJsonObject *state) {
+                for (const QJsonValue &value : collection.viewLayerStates) {
+                    const QJsonObject candidate = value.toObject();
+                    if (candidate.value(QStringLiteral("view_layer_key"))
+                            .toString() != target.viewLayerKey) {
+                        continue;
+                    }
+                    const QJsonArray storedPath = candidate.value(
+                        QStringLiteral("path")).toArray();
+                    if (storedPath.size() != path.size()) continue;
+                    bool matches = true;
+                    for (qsizetype index = 0; index < path.size(); ++index) {
+                        if (!storedPath[index].isString() ||
+                            storedPath[index].toString() != path[index]) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) continue;
+                    if (state != nullptr) *state = candidate;
+                    return true;
+                }
+                return false;
+            };
+
+            CollectionId previousId = CollectionId::invalid();
+            QStringList prefix;
+            CollectionId rootId = CollectionId::invalid();
+            for (qsizetype index = 0;
+                 index < target.sourcePath.size(); ++index) {
+                prefix.append(target.sourcePath[index]);
+                const auto candidates = bySourceId.constFind(prefix.back());
+                if (candidates == bySourceId.cend()) return result;
+                const DocumentCollection *matched = nullptr;
+                for (const DocumentCollection *candidate : candidates.value()) {
+                    if (candidate == nullptr ||
+                        (previousId.isValid() &&
+                         !candidate->parentIds.contains(previousId)) ||
+                        (index + 1 == target.sourcePath.size() &&
+                         candidate->id != target.collectionId) ||
+                        !stateForPath(*candidate, prefix, nullptr)) {
+                        continue;
+                    }
+                    matched = candidate;
+                    break;
+                }
+                if (matched == nullptr) return result;
+                previousId = matched->id;
+                rootId = matched->id;
+            }
+
+            struct LayerCollectionPath {
+                CollectionId id = CollectionId::invalid();
+                QStringList sourcePath;
+                QSet<quint64> ancestors;
+            };
+            QVector<LayerCollectionPath> pending;
+            pending.append({rootId, target.sourcePath, {rootId.value()}});
+            QSet<QString> visitedPaths;
+            QSet<quint64> visitedCollections;
+            QSet<quint64> visitedObjects;
+            QHash<quint64, QVector<ObjectId>> objectIdsByCollection;
+            for (const SceneObject &object : document.objects()) {
+                for (const CollectionId collectionId : object.collectionIds) {
+                    objectIdsByCollection[collectionId.value()].append(object.id);
+                }
+            }
+
+            for (qsizetype index = 0; index < pending.size(); ++index) {
+                const LayerCollectionPath current = pending[index];
+                const QString pathKey =
+                    QString::number(current.id.value()) + QLatin1Char('\x1f') +
+                    current.sourcePath.join(QLatin1Char('\x1e'));
+                if (visitedPaths.contains(pathKey)) continue;
+                visitedPaths.insert(pathKey);
+
+                const auto currentCandidates =
+                    bySourceId.constFind(current.sourcePath.back());
+                if (currentCandidates == bySourceId.cend()) continue;
+                const DocumentCollection *currentCollection = nullptr;
+                QJsonObject currentState;
+                for (const DocumentCollection *candidate :
+                     currentCandidates.value()) {
+                    if (candidate != nullptr && candidate->id == current.id &&
+                        stateForPath(*candidate, current.sourcePath,
+                                     &currentState)) {
+                        currentCollection = candidate;
+                        break;
+                    }
+                }
+                if (currentCollection == nullptr ||
+                    !currentCollection->libraryPath.isEmpty()) {
+                    // Blender stops this recursive branch when the Collection
+                    // property cannot be edited. Linked collections are
+                    // read-only in classiCAD's restriction cells as well.
+                    continue;
+                }
+
+                if (!visitedCollections.contains(current.id.value())) {
+                    visitedCollections.insert(current.id.value());
+                    result.collectionIds.append(current.id);
+                }
+                // Blender updates the shared Collection ID at each LayerCollection
+                // occurrence, but skips direct Object changes only when this
+                // occurrence itself is excluded. Descendants are still visited.
+                if (!currentState.value(QStringLiteral("exclude")).toBool()) {
+                    for (const ObjectId objectId :
+                         objectIdsByCollection.value(current.id.value())) {
+                        if (visitedObjects.contains(objectId.value())) continue;
+                        visitedObjects.insert(objectId.value());
+                        result.objectIds.append(objectId);
+                    }
+                }
+
+                for (const DocumentCollection *child :
+                     childrenByParent.value(current.id.value())) {
+                    if (child == nullptr ||
+                        current.ancestors.contains(child->id.value()) ||
+                        child->sourceId.isEmpty()) {
+                        continue;
+                    }
+                    LayerCollectionPath childPath;
+                    childPath.id = child->id;
+                    childPath.sourcePath = current.sourcePath;
+                    childPath.sourcePath.append(child->sourceId);
+                    if (!stateForPath(*child, childPath.sourcePath, nullptr)) {
+                        continue;
+                    }
+                    childPath.ancestors = current.ancestors;
+                    childPath.ancestors.insert(child->id.value());
+                    pending.append(childPath);
+                }
+            }
+            return result;
+        };
         collectionCallbacks.setViewportVisibility =
-            [this, collectionHierarchyIds, objectsInCollections,
+            [this, layerCollectionBranchTargets,
              collectionIsolationPlan, collectionBelongsToActiveScene](
-                CollectionId id, bool hideViewport, bool recursive,
+                const OutlinerCollectionContext &target,
+                bool hideViewport, bool recursive,
                 bool isolate) {
+                const CollectionId id = target.collectionId;
                 if (isolate) {
                     const QHash<quint64, bool> plan = collectionIsolationPlan(
                         id, hideViewport, [](const DocumentCollection &entry) {
@@ -8380,10 +8546,14 @@ private:
                     if (changed) pruneOutlinerSelection();
                     return;
                 }
-                QVector<CollectionId> collectionIds = recursive
-                    ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
-                QVector<ObjectId> objectIds = recursive
-                    ? objectsInCollections(collectionIds) : QVector<ObjectId>{};
+                QVector<CollectionId> collectionIds{id};
+                QVector<ObjectId> objectIds;
+                if (recursive && target.hasViewLayerContext) {
+                    const CollectionRestrictionTargets branchTargets =
+                        layerCollectionBranchTargets(target);
+                    collectionIds = branchTargets.collectionIds;
+                    objectIds = branchTargets.objectIds;
+                }
                 if (collectionIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
                 bool changed = false;
@@ -8505,10 +8675,12 @@ private:
                 }
             };
         collectionCallbacks.setCollectionRenderVisibility =
-            [this, collectionHierarchyIds, objectsInCollections,
+            [this, layerCollectionBranchTargets,
              collectionIsolationPlan, collectionBelongsToActiveScene](
-                CollectionId id, bool hideRender, bool recursive,
+                const OutlinerCollectionContext &target,
+                bool hideRender, bool recursive,
                 bool isolate) {
+                const CollectionId id = target.collectionId;
                 if (isolate) {
                     const QHash<quint64, bool> plan = collectionIsolationPlan(
                         id, hideRender, [](const DocumentCollection &entry) {
@@ -8535,10 +8707,14 @@ private:
                     }
                     return;
                 }
-                QVector<CollectionId> collectionIds = recursive
-                    ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
-                QVector<ObjectId> objectIds = recursive
-                    ? objectsInCollections(collectionIds) : QVector<ObjectId>{};
+                QVector<CollectionId> collectionIds{id};
+                QVector<ObjectId> objectIds;
+                if (recursive && target.hasViewLayerContext) {
+                    const CollectionRestrictionTargets branchTargets =
+                        layerCollectionBranchTargets(target);
+                    collectionIds = branchTargets.collectionIds;
+                    objectIds = branchTargets.objectIds;
+                }
                 if (collectionIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
                 bool changed = false;
@@ -8572,10 +8748,12 @@ private:
                 }
             };
         collectionCallbacks.setCollectionSelectability =
-            [this, collectionHierarchyIds, objectsInCollections,
+            [this, layerCollectionBranchTargets,
              collectionIsolationPlan, collectionBelongsToActiveScene](
-                CollectionId id, bool hideSelect, bool recursive,
+                const OutlinerCollectionContext &target,
+                bool hideSelect, bool recursive,
                 bool isolate) {
+                const CollectionId id = target.collectionId;
                 if (isolate) {
                     const QHash<quint64, bool> plan = collectionIsolationPlan(
                         id, hideSelect, [](const DocumentCollection &entry) {
@@ -8604,10 +8782,14 @@ private:
                     pruneOutlinerSelection();
                     return;
                 }
-                QVector<CollectionId> collectionIds = recursive
-                    ? collectionHierarchyIds(id) : QVector<CollectionId>{id};
-                QVector<ObjectId> objectIds = recursive
-                    ? objectsInCollections(collectionIds) : QVector<ObjectId>{};
+                QVector<CollectionId> collectionIds{id};
+                QVector<ObjectId> objectIds;
+                if (recursive && target.hasViewLayerContext) {
+                    const CollectionRestrictionTargets branchTargets =
+                        layerCollectionBranchTargets(target);
+                    collectionIds = branchTargets.collectionIds;
+                    objectIds = branchTargets.objectIds;
+                }
                 if (collectionIds.isEmpty()) return;
                 DocumentTransaction transaction = session_.beginTransaction();
                 bool changed = false;

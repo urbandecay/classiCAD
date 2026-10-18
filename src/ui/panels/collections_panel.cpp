@@ -357,6 +357,18 @@ QIcon paintedIcon(const std::function<void(QPainter &)> &paint)
     return QIcon(pixmap);
 }
 
+QIcon syncSelectionIcon()
+{
+    return paintedIcon([](QPainter &painter) {
+        painter.drawLine(QPointF(2.2, 5.0), QPointF(12.4, 5.0));
+        painter.drawLine(QPointF(9.4, 2.1), QPointF(12.4, 5.0));
+        painter.drawLine(QPointF(9.4, 7.9), QPointF(12.4, 5.0));
+        painter.drawLine(QPointF(13.8, 11.0), QPointF(3.6, 11.0));
+        painter.drawLine(QPointF(6.6, 8.1), QPointF(3.6, 11.0));
+        painter.drawLine(QPointF(6.6, 13.9), QPointF(3.6, 11.0));
+    });
+}
+
 QIcon collectionIcon(const QString &colorTag)
 {
     QColor color = collectionColorTagColor(colorTag);
@@ -1365,6 +1377,13 @@ void CollectionsPanel::createLayout()
     auto *filterRow = new QHBoxLayout;
     filterRow->setContentsMargins(0, 0, 0, 0);
     filterRow->addWidget(filterEdit_, 1);
+    sequenceSyncButton_ = new QToolButton(this);
+    sequenceSyncButton_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    sequenceSyncButton_->setAutoRaise(true);
+    sequenceSyncButton_->setToolTip(QStringLiteral(
+        "Sync Outliner selection with the Video Sequencer."));
+    sequenceSyncButton_->setVisible(false);
+    filterRow->addWidget(sequenceSyncButton_);
     filterButton_ = new QToolButton(this);
     filterButton_->setText(QStringLiteral("Filter"));
     filterButton_->setToolTip(QStringLiteral(
@@ -1723,7 +1742,8 @@ void CollectionsPanel::createLayout()
         refresh();
     });
     syncSelectionAction_ = filterMenu->addAction(
-        QStringLiteral("Sync Selection"));
+        syncSelectionIcon(), QStringLiteral("Sync Selection"));
+    sequenceSyncButton_->setDefaultAction(syncSelectionAction_);
     workspaceBooleanActions_.insert(QStringLiteral("syncSelection"),
                                     syncSelectionAction_);
     syncSelectionAction_->setCheckable(true);
@@ -5536,6 +5556,7 @@ void CollectionsPanel::refresh()
     }
     filterButton_->setVisible(viewLayerMode || scenesDisplayMode_ ||
                               libraryOverridesMode);
+    sequenceSyncButton_->setVisible(sequencerMode);
     if (restrictionToggleMenuAction_ != nullptr) {
         restrictionToggleMenuAction_->setVisible(
             viewLayerMode || scenesDisplayMode_);

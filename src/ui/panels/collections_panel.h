@@ -435,6 +435,7 @@ private:
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
     QLineEdit *filterEdit_ = nullptr;
+    QToolButton *sequenceSyncButton_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
     QComboBox *dataApiKeyingSetCombo_ = nullptr;

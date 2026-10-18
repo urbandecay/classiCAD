@@ -4270,6 +4270,8 @@ public:
             selected.append(selectedShapeIndex_);
 
         QVector<ObjectId> validSelection;
+        QHash<quint64, QSet<int>> selectedSurfaceControlPoints;
+        QHash<quint64, QVector<QVector3D>> selectedSolidWorldVertices;
         QVector<QVector3D> selectedWorldVertices;
         QVector<QVector3D> selectedCurveVertices;
         QSet<quint64> selectedCurveWeldGroups;
@@ -4344,49 +4346,152 @@ public:
                     continue;
                 }
 
+                if (shape->geometryType == GeometryType::NurbsSurface) {
+                    QSet<int> controlPoints;
+                    if (componentSelectionMode_ ==
+                        ComponentSelectionMode::Vertex) {
+                        if (controlPointsVisible_) {
+                            for (const int vertex : components) {
+                                if (vertex >= 0 &&
+                                    vertex < shape->nurbsSurface.controlPoints.size()) {
+                                    controlPoints.insert(vertex);
+                                }
+                            }
+                        } else {
+                            for (const auto &boundary :
+                                 surfaceBoundaryComponents(*shape)) {
+                                if (!components.contains(boundary.firstVertex) ||
+                                    !components.contains(boundary.lastVertex)) {
+                                    continue;
+                                }
+                                for (const int vertex : boundary.vertices) {
+                                    controlPoints.insert(vertex);
+                                }
+                            }
+                        }
+                    } else if (controlPointsVisible_) {
+                        const auto edges =
+                            selectedSurfaceControlNetEdgeVertexIndices(*shape);
+                        for (const int edge : components) {
+                            if (edge < 0 || edge >= edges.size()) {
+                                continue;
+                            }
+                            controlPoints.insert(edges[edge].first);
+                            controlPoints.insert(edges[edge].second);
+                        }
+                    } else {
+                        for (const auto &boundary :
+                             surfaceBoundaryComponents(*shape)) {
+                            if (!boundaryEdgeSelected(boundary, components)) {
+                                continue;
+                            }
+                            for (const int vertex : boundary.vertices) {
+                                controlPoints.insert(vertex);
+                            }
+                        }
+                    }
+                    if (!controlPoints.isEmpty()) {
+                        selectedSurfaceControlPoints[objectId.value()] =
+                            controlPoints;
+                        const QVector3D placement(float(offset.x),
+                                                  float(offset.y),
+                                                  float(offset.z));
+                        for (const int controlPoint : controlPoints) {
+                            const Point3D &point =
+                                shape->nurbsSurface.controlPoints[controlPoint];
+                            selectedWorldVertices.append(
+                                QVector3D(float(point.x), float(point.y),
+                                          float(point.z)) + placement);
+                        }
+                    }
+                    continue;
+                }
+
+                // Solid faces are stored as one object with shared boundary
+                // CVs materialized per face. Coordinate matching is valid
+                // inside that solid, but never connects separate objects.
                 const ViewportDepthGeometry cage =
                     selectedSurfaceControlNet(*shape);
                 const QVector3D placement(float(offset.x), float(offset.y),
                                           float(offset.z));
+                QVector<QVector3D> &worldVertices =
+                    selectedSolidWorldVertices[objectId.value()];
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                     for (int vertex : components) {
-                        if (vertex >= 0 && vertex < cage.pointVertices.size())
-                            selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                        if (vertex >= 0 && vertex < cage.pointVertices.size()) {
+                            worldVertices.append(cage.pointVertices[vertex] + placement);
+                            selectedWorldVertices.append(
+                                cage.pointVertices[vertex] + placement);
+                        }
                     }
                     if (!controlPointsVisible_) {
                         for (const auto &boundary : surfaceBoundaryComponents(*shape)) {
                             if (!components.contains(boundary.firstVertex) ||
                                 !components.contains(boundary.lastVertex)) continue;
-                            for (int vertex : boundary.vertices)
-                                selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                            for (int vertex : boundary.vertices) {
+                                worldVertices.append(cage.pointVertices[vertex] + placement);
+                                selectedWorldVertices.append(
+                                    cage.pointVertices[vertex] + placement);
+                            }
                         }
                     }
                 } else {
                     if (!controlPointsVisible_) {
                         for (const auto &boundary : surfaceBoundaryComponents(*shape)) {
                             if (!boundaryEdgeSelected(boundary, components)) continue;
-                            for (int vertex : boundary.vertices)
-                                selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                            for (int vertex : boundary.vertices) {
+                                worldVertices.append(cage.pointVertices[vertex] + placement);
+                                selectedWorldVertices.append(
+                                    cage.pointVertices[vertex] + placement);
+                            }
                         }
                         continue;
                     }
-                    // An edge grab moves both ends together. Expanding the edge
-                    // to its world-space endpoints lets the same connected-CV
-                    // lookup used for vertex grabs deform every adjoining face.
                     for (int edge : components) {
                         const int first = edge * 2;
                         if (edge < 0 || first + 1 >= cage.lineVertices.size())
                             continue;
-                        selectedWorldVertices.append(cage.lineVertices[first] + placement);
-                        selectedWorldVertices.append(cage.lineVertices[first + 1] + placement);
+                        worldVertices.append(cage.lineVertices[first] + placement);
+                        worldVertices.append(cage.lineVertices[first + 1] + placement);
+                        selectedWorldVertices.append(
+                            cage.lineVertices[first] + placement);
+                        selectedWorldVertices.append(
+                            cage.lineVertices[first + 1] + placement);
                     }
                 }
             }
-            hasSelectedSurfaceComponents = !selectedWorldVertices.isEmpty();
+            hasSelectedSurfaceComponents =
+                !selectedSurfaceControlPoints.isEmpty() ||
+                std::any_of(selectedSolidWorldVertices.cbegin(),
+                            selectedSolidWorldVertices.cend(),
+                            [](const auto &selection) {
+                                return !selection.isEmpty();
+                            });
         }
         if (hasSelectedSurfaceComponents) {
-            // Capture all occurrences of selected component endpoints,
-            // including adjoining editable surface objects and solid faces.
+            QSet<quint64> selectedSurfaceWeldGroups;
+            for (auto selection = selectedSurfaceControlPoints.cbegin();
+                 selection != selectedSurfaceControlPoints.cend(); ++selection) {
+                const Shape *shape = document_.shape(
+                    ObjectId::fromValue(selection.key()));
+                if (shape == nullptr) {
+                    continue;
+                }
+                for (const int controlPoint : selection.value()) {
+                    if (controlPoint >= 0 &&
+                        controlPoint < shape->controlPointWeldGroups.size()) {
+                        const quint64 group =
+                            shape->controlPointWeldGroups[controlPoint];
+                        if (group != 0) {
+                            selectedSurfaceWeldGroups.insert(group);
+                        }
+                    }
+                }
+            }
+
+            // Surface objects connect only through explicit weld groups.
+            // A solid may share coordinates among its own derived faces, so
+            // resolve those matching CVs only within the selected solid ID.
             for (int objectIndex = 0; objectIndex < document_.size(); ++objectIndex) {
                 const ObjectId objectId = document_.objectIdAt(objectIndex);
                 const SceneObject *object = document_.object(objectId);
@@ -4400,19 +4505,39 @@ public:
                 }
                 const Point3D offset = object->placementTranslation;
                 const QVector3D placement(float(offset.x), float(offset.y), float(offset.z));
-                QSet<int> targets;
+                QSet<int> targets =
+                    selectedSurfaceControlPoints.value(objectId.value());
+                const QVector<QVector3D> selectedSolidVertices =
+                    selectedSolidWorldVertices.value(objectId.value());
                 int controlPointIndex = 0;
                 for (const NurbsSurface3D &face : shapeSurfaceFaces(source)) {
                     for (const Point3D &point : face.controlPoints) {
-                        const QVector3D world = QVector3D(float(point.x), float(point.y),
-                                                          float(point.z)) + placement;
-                        for (const QVector3D &vertex : selectedWorldVertices) {
-                            if ((world - vertex).lengthSquared() <= 1.0e-12f) {
-                                targets.insert(controlPointIndex);
-                                break;
+                        if (!selectedSolidVertices.isEmpty()) {
+                            const QVector3D world =
+                                QVector3D(float(point.x), float(point.y),
+                                          float(point.z)) + placement;
+                            for (const QVector3D &vertex : selectedSolidVertices) {
+                                if ((world - vertex).lengthSquared() <= 1.0e-12f) {
+                                    targets.insert(controlPointIndex);
+                                    break;
+                                }
                             }
                         }
                         ++controlPointIndex;
+                    }
+                }
+                if (source.geometryType == GeometryType::NurbsSurface &&
+                    !selectedSurfaceWeldGroups.isEmpty()) {
+                    const int pointCount =
+                        source.nurbsSurface.controlPoints.size();
+                    for (int controlPoint = 0;
+                         controlPoint < pointCount &&
+                         controlPoint < source.controlPointWeldGroups.size();
+                         ++controlPoint) {
+                        if (selectedSurfaceWeldGroups.contains(
+                                source.controlPointWeldGroups[controlPoint])) {
+                            targets.insert(controlPoint);
+                        }
                     }
                 }
                 if (!targets.isEmpty()) {
@@ -17262,7 +17387,7 @@ private:
         struct LinkedFace {
             ObjectId objectId;
             int faceIndex = -1;
-            QVector<QPair<Point3D, Point3D>> boundarySegments;
+            QSet<quint64> weldGroups;
         };
         QVector<LinkedFace> faces;
         int seedFace = -1;
@@ -17279,27 +17404,15 @@ private:
                  shape->geometryType != GeometryType::NurbsSolid)) {
                 continue;
             }
-            const Point3D offset = object->placementTranslation;
             const QVector<NurbsSurface3D> objectFaces = shapeSurfaceFaces(*shape);
             for (int index = 0; index < objectFaces.size(); ++index) {
-                Shape faceShape;
-                faceShape.geometryType = GeometryType::NurbsSurface;
-                faceShape.nurbsSurface = objectFaces[index];
-                const ViewportDepthGeometry cage = selectedSurfaceCage(faceShape);
                 LinkedFace linkedFace;
                 linkedFace.objectId = objectId;
                 linkedFace.faceIndex = index;
-                for (int edge = 0;
-                     edge + 1 < cage.preciseLineVertices.size(); edge += 2) {
-                    Point3D a = cage.preciseLineVertices[edge];
-                    Point3D b = cage.preciseLineVertices[edge + 1];
-                    a.x += offset.x;
-                    a.y += offset.y;
-                    a.z += offset.z;
-                    b.x += offset.x;
-                    b.y += offset.y;
-                    b.z += offset.z;
-                    linkedFace.boundarySegments.append({a, b});
+                for (const quint64 group : shape->controlPointWeldGroups) {
+                    if (group != 0) {
+                        linkedFace.weldGroups.insert(group);
+                    }
                 }
                 if (objectId == shapes_.objectIdAt(faceShapeIndex) &&
                     index == faceIndex) {
@@ -17312,22 +17425,11 @@ private:
             return;
         }
 
-        const auto samePoint = [](const Point3D &a, const Point3D &b) {
-            const qreal dx = a.x - b.x;
-            const qreal dy = a.y - b.y;
-            const qreal dz = a.z - b.z;
-            return dx * dx + dy * dy + dz * dz <= 1.0e-12;
-        };
-        const auto shareEdge = [&samePoint](const LinkedFace &a,
-                                           const LinkedFace &b) {
-            for (const auto &edgeA : a.boundarySegments) {
-                for (const auto &edgeB : b.boundarySegments) {
-                    if ((samePoint(edgeA.first, edgeB.first) &&
-                         samePoint(edgeA.second, edgeB.second)) ||
-                        (samePoint(edgeA.first, edgeB.second) &&
-                         samePoint(edgeA.second, edgeB.first))) {
-                        return true;
-                    }
+        const auto shareWeldGroup = [](const LinkedFace &first,
+                                       const LinkedFace &second) {
+            for (const quint64 group : first.weldGroups) {
+                if (second.weldGroups.contains(group)) {
+                    return true;
                 }
             }
             return false;
@@ -17338,8 +17440,19 @@ private:
         for (int cursorIndex = 0; cursorIndex < island.size(); ++cursorIndex) {
             const int current = island[cursorIndex];
             for (int candidate = 0; candidate < faces.size(); ++candidate) {
-                if (visited.contains(candidate) ||
-                    !shareEdge(faces[current], faces[candidate])) {
+                if (visited.contains(candidate)) {
+                    continue;
+                }
+                const LinkedFace &currentFace = faces[current];
+                const LinkedFace &candidateFace = faces[candidate];
+                const Shape *currentShape =
+                    document_.shape(currentFace.objectId);
+                const bool sameSolid =
+                    currentFace.objectId == candidateFace.objectId &&
+                    currentShape != nullptr &&
+                    currentShape->geometryType == GeometryType::NurbsSolid;
+                if (!sameSolid &&
+                    !shareWeldGroup(currentFace, candidateFace)) {
                     continue;
                 }
                 visited.insert(candidate);

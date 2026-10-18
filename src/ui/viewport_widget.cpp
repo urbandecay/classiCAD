@@ -7702,6 +7702,7 @@ protected:
         }
         QVector<ViewportControlPointHandle> gpuControlPointHandles;
         const bool showCurveEndpointVertices =
+            objectEditMode_ &&
             componentSelectionMode_ == ComponentSelectionMode::Vertex &&
             !controlPointsVisible_;
         const auto appendSurfaceCornerHandles =
@@ -7854,7 +7855,11 @@ protected:
             if (showCurveEndpointVertices) {
                 for (const ViewportRenderObject &renderObject : visibleShapes) {
                     if (renderObject.shape.geometryType !=
-                        GeometryType::NurbsSurface) {
+                            GeometryType::NurbsSurface ||
+                        !objectEditMode_ ||
+                        !activeContainerObjectId_.isValid() ||
+                        document_.containerId(renderObject.objectId) !=
+                            activeContainerObjectId_) {
                         continue;
                     }
                     const QSet<int> &selection =
@@ -7950,6 +7955,9 @@ protected:
                 componentSelectionObject_ == objectId
                     ? activeComponentIndex()
                     : -1;
+            const bool activeEditGeometry = objectEditMode_ &&
+                activeContainerObjectId_.isValid() &&
+                document_.containerId(objectId) == activeContainerObjectId_;
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (geometryType == GeometryType::NurbsSurface ||
                  geometryType == GeometryType::NurbsSolid)) {
@@ -7961,7 +7969,8 @@ protected:
                             : selectedSurfaceCage(visibleShape));
                     if (geometryType == GeometryType::NurbsSurface &&
                         viewportShadingSettings_.outline &&
-                        !viewportShadingSettings_.xrayEnabled()) {
+                        !viewportShadingSettings_.xrayEnabled() &&
+                        (selected || activeEditGeometry)) {
                         QSharedPointer<const ViewportDepthGeometry> boundary;
                         if (renderObject.preparedDepthGeometry) {
                             boundary = makeViewportSurfaceOutlineGeometry(
@@ -7974,10 +7983,9 @@ protected:
                                 selectedSurfaceCage(visibleShape));
                         }
                         ViewportRenderObject outlineObject = renderObject;
-                        if (!objectComponentSelection.isEmpty()) {
-                            // Component selection colors the selected control
-                            // elements; the surface perimeter keeps its normal
-                            // object-outline color, like the surface ID pass.
+                        if (activeEditGeometry) {
+                            // Edit geometry gets the dark surface boundary;
+                            // selected components are highlighted separately.
                             outlineObject.selected = false;
                         }
                         ViewportSceneStroke outlineStroke;
@@ -7990,7 +7998,7 @@ protected:
                                 objectId.value());
                         }
                     }
-                    if (selected &&
+                    if (activeEditGeometry && selected &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                          componentSelectionMode_ == ComponentSelectionMode::Edge) &&
                         !objectComponentSelection.isEmpty()) {
@@ -8205,12 +8213,14 @@ protected:
                         }
                     }
                     ViewportSceneStroke edgeCage;
-                    edgeCage.shape = &visibleShape;
+                    edgeCage.shape = nullptr;
                     const bool hasComponentSelection =
                         selected && !objectVertexSelection.isEmpty();
-                    edgeCage.color = selected && !hasComponentSelection
-                                         ? viewportSelectionColor()
-                                         : QColor(Qt::black);
+                    edgeCage.color = activeEditGeometry
+                                         ? QColor(Qt::black)
+                                         : selected && !hasComponentSelection
+                                               ? viewportSelectionColor()
+                                               : QColor(Qt::black);
                     edgeCage.width = 1.0f;
                     edgeCage.editModeWire = true;
                     edgeCage.objectId = objectId;
@@ -8254,17 +8264,14 @@ protected:
                                              secondColor.blueF(), 1.0f);
                         }
                     }
-                    // Surface CV cages are an explicit display overlay. The
-                    // solid surface remains visible without it; show the net
-                    // only when the Control Points toggle is enabled.
-                    if (controlPointsVisible_) {
+                    // In Edit Mode show the active object's edge cage even
+                    // when the optional control-point display is off.
+                    if (activeEditGeometry) {
                         gpuStrokes.append(std::move(edgeCage));
                     }
                     ViewportSceneStroke vertexCage;
-                    vertexCage.shape = &visibleShape;
-                    vertexCage.color = selected && !hasComponentSelection
-                                           ? QColor(QStringLiteral("#ff7a00"))
-                                           : QColor(12, 12, 12);
+                    vertexCage.shape = nullptr;
+                    vertexCage.color = QColor(12, 12, 12);
                     vertexCage.pointDiameter =
                         componentSelectionMode_ == ComponentSelectionMode::Vertex
                             ? static_cast<float>(
@@ -8276,7 +8283,7 @@ protected:
                     vertexCage.cacheableGeometry = renderObject.cacheable;
                     vertexCage.worldOffset = renderObject.placementTranslation;
                     vertexCage.preparedDepthGeometry = cage;
-                    if (controlPointsVisible_ &&
+                    if (activeEditGeometry &&
                         vertexCage.pointDiameter > 0.0f) {
                         gpuStrokes.append(std::move(vertexCage));
                     }
@@ -8284,7 +8291,8 @@ protected:
                     // Component highlights remain visible independently from
                     // the optional base control cage. This preserves the
                     // faded links for explicitly selected surface vertices.
-                    if (selected && !objectComponentSelection.isEmpty()) {
+                    if (activeEditGeometry && selected &&
+                        !objectComponentSelection.isEmpty()) {
                         const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,
                                                                const QColor &color,
                                                                float width,
@@ -8329,6 +8337,7 @@ protected:
                             gpuStrokes.append(std::move(stroke));
                         };
                         if (!controlPointsVisible_ &&
+                            !activeEditGeometry &&
                             componentSelectionMode_ != ComponentSelectionMode::Face) {
                             for (const auto &boundary : surfaceBoundaryComponents(visibleShape)) {
                                 const bool firstSelected = objectVertexSelection.contains(boundary.firstVertex);
@@ -8355,7 +8364,8 @@ protected:
                             }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                             const QColor selectedVertexColor(QStringLiteral("#ff7a00"));
-                            if (controlPointsVisible_) {
+                            if (controlPointsVisible_ ||
+                                activeEditGeometry) {
                                 QMap<QRgb, ViewportDepthGeometry> fadedPoints;
                                 for (int component : objectComponentSelection) {
                                     if (component < 0 ||
@@ -9634,12 +9644,18 @@ protected:
             }
             QVector<ViewportRenderObject> surfaceDrawObjects = visibleShapes;
             for (ViewportRenderObject &object : surfaceDrawObjects) {
+                const bool activeEditGeometry = objectEditMode_ &&
+                    activeContainerObjectId_.isValid() &&
+                    document_.containerId(object.objectId) ==
+                        activeContainerObjectId_;
+                object.outlineEnabled = object.selected &&
+                                        !activeEditGeometry;
                 object.outlineHandledBySceneStroke =
                     surfaceOutlineStrokeObjectIds.contains(
                         object.objectId.value());
-                if (!componentSelectionForObject(object.objectId).isEmpty()) {
+                if (activeEditGeometry) {
                     // Suppress object tint only in the surface pass. Component
-                    // overlays still need the real selection state.
+                    // overlays and the edit cage supply their own selection.
                     object.selected = false;
                 }
             }
@@ -9799,36 +9815,52 @@ protected:
                                   stroke.worldOffset);
                     } else if (stroke.shape == nullptr &&
                                stroke.preparedDepthGeometry &&
-                               !stroke.controlGuide &&
-                               !stroke.preparedDepthGeometry->preciseLineVertices
-                                    .isEmpty()) {
+                               !stroke.controlGuide) {
                         painter.save();
                         painter.setRenderHint(QPainter::Antialiasing, true);
-                        QPen pen(stroke.color);
-                        pen.setWidthF(std::max(1.0f, stroke.width));
-                        pen.setCapStyle(Qt::RoundCap);
-                        pen.setJoinStyle(Qt::RoundJoin);
-                        painter.setPen(pen);
-                        const QVector<Point3D> &segments =
-                            stroke.preparedDepthGeometry->preciseLineVertices;
-                        for (int pointIndex = 0;
-                             pointIndex + 1 < segments.size();
-                             pointIndex += 2) {
-                            Point3D first = segments[pointIndex];
-                            Point3D second = segments[pointIndex + 1];
-                            first.x += stroke.worldOffset.x;
-                            first.y += stroke.worldOffset.y;
-                            first.z += stroke.worldOffset.z;
-                            second.x += stroke.worldOffset.x;
-                            second.y += stroke.worldOffset.y;
-                            second.z += stroke.worldOffset.z;
-                            QPointF firstScreen;
-                            QPointF secondScreen;
-                            if (viewportTransform_.worldPointToScreen(
-                                    first, size(), &firstScreen) &&
-                                viewportTransform_.worldPointToScreen(
-                                    second, size(), &secondScreen)) {
-                                painter.drawLine(firstScreen, secondScreen);
+                        if (stroke.pointDiameter > 0.0f) {
+                            painter.setPen(Qt::NoPen);
+                            painter.setBrush(stroke.color);
+                            const qreal radius = stroke.pointDiameter * 0.5;
+                            for (const Point3D &point :
+                                 stroke.preparedDepthGeometry->precisePointVertices) {
+                                Point3D world = point;
+                                world.x += stroke.worldOffset.x;
+                                world.y += stroke.worldOffset.y;
+                                world.z += stroke.worldOffset.z;
+                                QPointF screen;
+                                if (viewportTransform_.worldPointToScreen(
+                                        world, size(), &screen)) {
+                                    painter.drawEllipse(screen, radius, radius);
+                                }
+                            }
+                        } else {
+                            QPen pen(stroke.color);
+                            pen.setWidthF(std::max(1.0f, stroke.width));
+                            pen.setCapStyle(Qt::RoundCap);
+                            pen.setJoinStyle(Qt::RoundJoin);
+                            painter.setPen(pen);
+                            const QVector<Point3D> &segments =
+                                stroke.preparedDepthGeometry->preciseLineVertices;
+                            for (int pointIndex = 0;
+                                 pointIndex + 1 < segments.size();
+                                 pointIndex += 2) {
+                                Point3D first = segments[pointIndex];
+                                Point3D second = segments[pointIndex + 1];
+                                first.x += stroke.worldOffset.x;
+                                first.y += stroke.worldOffset.y;
+                                first.z += stroke.worldOffset.z;
+                                second.x += stroke.worldOffset.x;
+                                second.y += stroke.worldOffset.y;
+                                second.z += stroke.worldOffset.z;
+                                QPointF firstScreen;
+                                QPointF secondScreen;
+                                if (viewportTransform_.worldPointToScreen(
+                                        first, size(), &firstScreen) &&
+                                    viewportTransform_.worldPointToScreen(
+                                        second, size(), &secondScreen)) {
+                                    painter.drawLine(firstScreen, secondScreen);
+                                }
                             }
                         }
                         painter.restore();
@@ -13588,6 +13620,7 @@ private:
                             indices.sort();
                             return indices.join(QStringLiteral(","));
                         }()));
+                toolContext_.notifySelectionChanged();
                 update();
                 emitCoordinateUpdate();
                 return;
@@ -14343,6 +14376,7 @@ private:
                     selection_.clear();
                 }
             }
+            toolContext_.notifySelectionChanged();
             update();
             emitCoordinateUpdate();
             return;

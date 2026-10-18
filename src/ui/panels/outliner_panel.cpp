@@ -1,6 +1,7 @@
 #include "outliner_panel.h"
 
 #include <QHBoxLayout>
+#include <QItemSelectionModel>
 #include <QPushButton>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -84,8 +85,11 @@ void OutlinerPanel::refresh()
     refreshing_ = true;
     tree_->clear();
     QHash<quint64, QTreeWidgetItem *> containerItems;
+    QHash<quint64, QTreeWidgetItem *> geometryItems;
     QHash<quint64, ObjectId> firstSelectedGeometry;
+    ObjectId firstSelectedContainer = ObjectId::invalid();
     ObjectId primarySelectedContainer = ObjectId::invalid();
+    ObjectId primarySelectedObject = ObjectId::invalid();
     hasSelectedObject_ = false;
 
     for (const ViewportObjectInfo &info : infos) {
@@ -111,42 +115,55 @@ void OutlinerPanel::refresh()
         geometryItem->setData(0, ObjectIdRole,
                               QVariant::fromValue<qulonglong>(info.id.value()));
         geometryItem->setData(0, ContainerRowRole, false);
+        geometryItems.insert(info.id.value(), geometryItem);
         if (info.selected && !firstSelectedGeometry.contains(info.containerId.value())) {
             firstSelectedGeometry.insert(info.containerId.value(), info.id);
+            if (!firstSelectedContainer.isValid()) {
+                firstSelectedContainer = info.containerId;
+            }
             hasSelectedObject_ = true;
         }
         if (info.primarySelected) {
             primarySelectedContainer = info.containerId;
+            primarySelectedObject = info.id;
             firstSelectedGeometry.insert(info.containerId.value(), info.id);
             hasSelectedObject_ = true;
         }
     }
 
-    if (!editMode_ && primarySelectedContainer.isValid()) {
+    if (primarySelectedContainer.isValid()) {
         activeObjectId_ = primarySelectedContainer;
-    } else if (!activeObjectId_.isValid() && !firstSelectedGeometry.isEmpty()) {
-        activeObjectId_ = ObjectId::fromValue(firstSelectedGeometry.cbegin().key());
+    } else if (firstSelectedContainer.isValid() &&
+               (!editMode_ || !activeObjectId_.isValid())) {
+        activeObjectId_ = firstSelectedContainer;
     }
 
     QTreeWidgetItem *currentItem = nullptr;
-    if (editMode_ && firstSelectedGeometry.contains(activeObjectId_.value())) {
-        const ObjectId selectedId = firstSelectedGeometry.value(activeObjectId_.value());
-        for (int index = 0; index < tree_->topLevelItemCount() && currentItem == nullptr;
-             ++index) {
-            QTreeWidgetItem *containerItem = tree_->topLevelItem(index);
-            for (int child = 0; child < containerItem->childCount(); ++child) {
-                if (itemObjectId(containerItem->child(child)) == selectedId) {
-                    currentItem = containerItem->child(child);
-                    break;
-                }
-            }
+    if (editMode_) {
+        ObjectId selectedId = ObjectId::invalid();
+        if (primarySelectedContainer == activeObjectId_) {
+            selectedId = primarySelectedObject;
+        } else if (firstSelectedGeometry.contains(activeObjectId_.value())) {
+            selectedId = firstSelectedGeometry.value(activeObjectId_.value());
         }
-    }
-    if (currentItem == nullptr) {
-        currentItem = containerItems.value(activeObjectId_.value(), nullptr);
+        currentItem = geometryItems.value(selectedId.value(), nullptr);
+        if (currentItem == nullptr) {
+            currentItem = containerItems.value(activeObjectId_.value(), nullptr);
+        }
+    } else if (hasSelectedObject_) {
+        const ObjectId selectedContainer = primarySelectedContainer.isValid()
+                                               ? primarySelectedContainer
+                                               : firstSelectedContainer;
+        currentItem = containerItems.value(selectedContainer.value(), nullptr);
     }
     if (currentItem != nullptr) {
-        tree_->setCurrentItem(currentItem);
+        tree_->setCurrentItem(currentItem, 0,
+                              QItemSelectionModel::ClearAndSelect |
+                                  QItemSelectionModel::Rows);
+        tree_->scrollToItem(currentItem);
+    } else {
+        tree_->clearSelection();
+        tree_->setCurrentItem(nullptr);
     }
     updateModeButtons();
     refreshing_ = false;

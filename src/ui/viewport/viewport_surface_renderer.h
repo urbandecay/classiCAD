@@ -48,6 +48,7 @@ private:
         bool selected = false;
         QColor objectColor;
         quint64 objectSeed = 0;
+        bool outlineEnabled = true;
         bool outlineHandledBySceneStroke = false;
     };
 

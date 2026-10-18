@@ -509,6 +509,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                             object.selected,
                             object.layerColor,
                             object.objectId.value(),
+                            object.outlineEnabled,
                             object.outlineHandledBySceneStroke});
         }
         return;
@@ -537,6 +538,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
         ranges_.append({first, count, object.preparedGeometryOffset,
                         object.selected, object.layerColor,
                         object.objectId.value(),
+                        object.outlineEnabled,
                         object.outlineHandledBySceneStroke});
     }
 }
@@ -1255,11 +1257,11 @@ bool ViewportSurfaceRenderer::draw(
                 }
                 GLuint objectId = static_cast<GLuint>(rangeIndex + 1) &
                                   0x7fffffffu;
-                if (range.outlineHandledBySceneStroke) {
-                    // Keep writing depth for this surface so its filled face
-                    // still occludes outlines behind it, but omit its ID from
-                    // the postprocessed outline mask. Its perimeter is drawn
-                    // with the shared scene-stroke renderer instead.
+                if (range.outlineHandledBySceneStroke ||
+                    !range.outlineEnabled) {
+                    // Keep the surface in the depth buffer but omit it from
+                    // the postprocessed outline mask. Edit cages or separate
+                    // scene strokes provide its visible edges when needed.
                     objectId = 0u;
                 } else if (range.selected) {
                     objectId |= 0x80000000u;

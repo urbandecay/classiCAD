@@ -69,6 +69,9 @@ struct ViewportRenderObject {
     QColor layerColor;
     QString layerLineType;
     qreal layerLineWeightMm = 0.0;
+    // Object-mode surfaces show an outline only when selected. Edit-mode
+    // geometry uses its control cage instead of the surface silhouette.
+    bool outlineEnabled = true;
     // Solid surface perimeter is rendered through ViewportSceneRenderer so
     // it shares the same pixel width and antialiasing as spline strokes.
     bool outlineHandledBySceneStroke = false;

@@ -44,6 +44,7 @@ bool SelectTool::handleMousePress(const ToolInput &input, ToolContext &context)
         clearDragState();
         if (hit.objectId.isValid()) {
             selection.toggle(hit.objectId);
+            context.notifySelectionChanged();
         } else {
             context.beginSelectionGesture(SelectionGestureKind::BeginSelectionBox,
                                           input,
@@ -96,6 +97,7 @@ bool SelectTool::beginControlPointSelectionDrag(const ToolInput &input,
                                   input,
                                   SelectionHit{objectId, controlPointIndex},
                                   false);
+    context.notifySelectionChanged();
     return true;
 }
 
@@ -114,6 +116,7 @@ bool SelectTool::handleKey(const ToolInput &input, ToolContext &context)
         }
     }
     context.selection().setObjectIds(editableObjectIds);
+    context.notifySelectionChanged();
     return true;
 }
 
@@ -190,6 +193,7 @@ void SelectTool::finishBoxSelection(const QVector<ObjectId> &objectIds,
         if (!additive) {
             selection.clear();
         }
+        context.notifySelectionChanged();
         return;
     }
 
@@ -208,6 +212,7 @@ void SelectTool::finishBoxSelection(const QVector<ObjectId> &objectIds,
     for (const ObjectId objectId : editableObjectIds) {
         selection.add(objectId);
     }
+    context.notifySelectionChanged();
 }
 
 void SelectTool::beginObjectDrag(const QVector<ObjectId> &objectIds,

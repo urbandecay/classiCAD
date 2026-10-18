@@ -11923,3 +11923,15 @@ scene depth.
   [hierarchy tagger](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L2449-L2521).
   `cmake --build build -j4` and `git diff --check` passed. No GUI or matched
   Outliner interaction comparison was run.
+- The hundred-fifty-sixth Data API update fetches a top-level `bpy.data` branch
+  from the original imported `.blend` when its Outliner row is opened. Blender
+  loads the file and extracts the bounded branch in a background process; its
+  SHA-256 is checked there before and after extraction, so reading a large file
+  does not block the UI. Results are cached for the current source identity and
+  replace the initial bounded snapshot for that section. Fetching currently
+  applies to top-level RNA properties; deeper branches still use the captured
+  per-entry and 20,000-row limits, and a native classiCAD file without its
+  original `.blend` remains a snapshot. See Blender 5.2.2's [lazy RNA tree
+  expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
+  Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
+  passed. No GUI or matched Outliner interaction comparison was run.

@@ -56,6 +56,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QPixmap>
 #include <QPolygonF>
 #include <QScrollBar>
@@ -2313,6 +2314,7 @@ void CollectionsPanel::createLayout()
     connect(tree_, &QTreeWidget::itemExpanded, this,
             [this](QTreeWidgetItem *item) {
                 populateDataApiChildren(item);
+                requestDataApiSection(item);
                 if (dataApiDisplayMode_ && !activeFilterText_.isEmpty() &&
                     !dataApiFilterRefreshPending_) {
                     dataApiFilterRefreshPending_ = true;
@@ -2927,8 +2929,22 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
         item->data(nameColumn, itemDataApiChildrenBuiltRole).toBool()) {
         return;
     }
-    const QJsonObject source = item->data(
+    QJsonObject source = item->data(
         nameColumn, itemDataApiNodeRole).toJsonObject();
+    const QString path = item->data(nameColumn, itemPathRole).toString();
+    const QString sourceKey = callbacks_.dataApiSourceKey
+        ? callbacks_.dataApiSourceKey() : QString{};
+    if (!sourceKey.isEmpty()) {
+        const QString cacheKey = sourceKey + QChar(0x1f) + path;
+        const auto fetched = dataApiFetchedSections_.constFind(cacheKey);
+        if (fetched != dataApiFetchedSections_.cend()) {
+            source = fetched.value();
+            item->setData(nameColumn, itemDataApiNodeRole,
+                          QVariant::fromValue(source));
+            item->setData(nameColumn, itemDataApiTruncatedRole,
+                          source.value(QStringLiteral("truncated")).toBool());
+        }
+    }
     item->setData(nameColumn, itemDataApiChildrenBuiltRole, true);
     while (item->childCount() > 0 &&
            item->child(0)->data(nameColumn,
@@ -2944,20 +2960,22 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
             QStringLiteral("kind")).toString();
         const QString key = child.value(
             QStringLiteral("key")).toString();
-        const QString path = item->data(nameColumn, itemPathRole).toString() +
+        const QString childPath = path +
             QLatin1Char('/') + kind.toLower() + QLatin1Char(':') + key;
         auto *row = new QTreeWidgetItem;
         row->setText(nameColumn, child.value(
             QStringLiteral("name")).toString());
         row->setData(nameColumn, itemKindRole,
                      static_cast<int>(OutlinerRowKind::DataApi));
-        row->setData(nameColumn, itemPathRole, path);
+        row->setData(nameColumn, itemPathRole, childPath);
         row->setData(nameColumn, itemDataApiKindRole, kind);
         row->setData(nameColumn, itemDataApiNodeRole,
                      QVariant::fromValue(child));
         const QString type = child.value(
             QStringLiteral("type")).toString();
         row->setData(nameColumn, itemDataApiTypeRole, type);
+        row->setData(nameColumn, itemDataApiTruncatedRole,
+                     child.value(QStringLiteral("truncated")).toBool());
         row->setToolTip(
             nameColumn,
             type.isEmpty()
@@ -2965,8 +2983,10 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
                 : QStringLiteral("Blender RNA %1 (%2)").arg(kind, type));
         row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
 
-        const bool hasChildren = !child.value(
-            QStringLiteral("children")).toArray().isEmpty();
+        const QJsonArray childRows = child.value(
+            QStringLiteral("children")).toArray();
+        const bool hasChildren = !childRows.isEmpty() ||
+            child.value(QStringLiteral("has_children")).toBool();
         if (hasChildren) {
             auto *placeholder = new QTreeWidgetItem(row);
             placeholder->setData(nameColumn, itemDataApiPlaceholderRole, true);
@@ -2998,6 +3018,129 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
             nameColumn,
             QStringLiteral("Some RNA rows were omitted when the bounded 20,000-row, per-branch, or 32-level capture limit was reached"));
         truncatedRow->setFlags(Qt::ItemIsEnabled);
+    }
+}
+
+void CollectionsPanel::requestDataApiSection(QTreeWidgetItem *item)
+{
+    if (!dataApiDisplayMode_ || item == nullptr ||
+        !callbacks_.dataApiSourceKey || !callbacks_.fetchDataApiSection) {
+        return;
+    }
+    QTreeWidgetItem *parent = item->parent();
+    if (parent == nullptr ||
+        parent->data(nameColumn, itemPathRole).toString() !=
+            QLatin1String("data-api/main") ||
+        item->data(nameColumn, itemDataApiKindRole).toString() !=
+            QLatin1String("PROPERTY")) {
+        return;
+    }
+    const QString sourceKey = callbacks_.dataApiSourceKey();
+    const QString path = item->data(nameColumn, itemPathRole).toString();
+    const QString cacheKey = sourceKey + QChar(0x1f) + path;
+    if (sourceKey.isEmpty() || dataApiFetchedSections_.contains(cacheKey) ||
+        dataApiPendingSections_.contains(cacheKey)) {
+        return;
+    }
+    const QJsonObject node = item->data(
+        nameColumn, itemDataApiNodeRole).toJsonObject();
+    if (!node.value(QStringLiteral("has_children")).toBool(
+            !node.value(QStringLiteral("children")).toArray().isEmpty())) {
+        return;
+    }
+    const QString identifier = node.value(QStringLiteral("key")).toString();
+    if (identifier.isEmpty()) return;
+    dataApiPendingSections_.insert(cacheKey);
+    QPointer<CollectionsPanel> weakPanel(this);
+    callbacks_.fetchDataApiSection(
+        identifier,
+        [weakPanel, path, sourceKey](const QJsonObject &section,
+                                    const QString &error) {
+            if (weakPanel != nullptr) {
+                weakPanel->finishDataApiSection(path, sourceKey, section, error);
+            }
+        });
+}
+
+void CollectionsPanel::finishDataApiSection(
+    const QString &path,
+    const QString &sourceKey,
+    const QJsonObject &section,
+    const QString &error)
+{
+    const QString cacheKey = sourceKey + QChar(0x1f) + path;
+    dataApiPendingSections_.remove(cacheKey);
+    if (!callbacks_.dataApiSourceKey ||
+        callbacks_.dataApiSourceKey() != sourceKey) {
+        return;
+    }
+    if (section.isEmpty()) {
+        if (!error.isEmpty() && tree_ != nullptr) {
+            QVector<QTreeWidgetItem *> pending;
+            for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+                pending.append(tree_->topLevelItem(index));
+            }
+            for (qsizetype index = 0; index < pending.size(); ++index) {
+                QTreeWidgetItem *candidate = pending[index];
+                if (candidate->data(nameColumn, itemPathRole).toString() ==
+                    path) {
+                    candidate->setToolTip(nameColumn, error);
+                    break;
+                }
+                for (int childIndex = 0;
+                     childIndex < candidate->childCount(); ++childIndex) {
+                    pending.append(candidate->child(childIndex));
+                }
+            }
+        }
+        return;
+    }
+
+    dataApiFetchedSections_.insert(cacheKey, section);
+    if (tree_ == nullptr) return;
+    QVector<QTreeWidgetItem *> pending;
+    for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+        pending.append(tree_->topLevelItem(index));
+    }
+    QTreeWidgetItem *item = nullptr;
+    for (qsizetype index = 0; index < pending.size(); ++index) {
+        QTreeWidgetItem *candidate = pending[index];
+        if (candidate->data(nameColumn, itemPathRole).toString() == path) {
+            item = candidate;
+            break;
+        }
+        for (int childIndex = 0; childIndex < candidate->childCount(); ++childIndex) {
+            pending.append(candidate->child(childIndex));
+        }
+    }
+    if (item == nullptr) return;
+    item->setData(nameColumn, itemDataApiNodeRole,
+                  QVariant::fromValue(section));
+    item->setData(nameColumn, itemDataApiTruncatedRole,
+                  section.value(QStringLiteral("truncated")).toBool());
+    const QString type = section.value(QStringLiteral("type")).toString();
+    item->setToolTip(
+        nameColumn,
+        type.isEmpty()
+            ? QStringLiteral("Blender RNA PROPERTY")
+            : QStringLiteral("Blender RNA PROPERTY (%1)").arg(type));
+    item->setData(nameColumn, itemDataApiChildrenBuiltRole, false);
+    while (item->childCount() > 0) delete item->takeChild(0);
+    if (!section.value(QStringLiteral("children")).toArray().isEmpty() ||
+        section.value(QStringLiteral("has_children")).toBool()) {
+        auto *placeholder = new QTreeWidgetItem(item);
+        placeholder->setData(nameColumn, itemDataApiPlaceholderRole, true);
+        placeholder->setFlags(Qt::NoItemFlags);
+    }
+    populateDataApiChildren(item);
+    if (!activeFilterText_.isEmpty() && !dataApiFilterRefreshPending_) {
+        dataApiFilterRefreshPending_ = true;
+        QTimer::singleShot(0, this, [this]() {
+            dataApiFilterRefreshPending_ = false;
+            if (!activeFilterText_.isEmpty()) {
+                applyNameFilter(activeFilterText_);
+            }
+        });
     }
 }
 

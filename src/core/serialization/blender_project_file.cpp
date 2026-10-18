@@ -27,6 +27,7 @@
 #include <QSet>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QTimer>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QtEndian>
@@ -704,6 +705,227 @@ bool runBlenderSceneExtractor(const QString &inputPath,
     }
     return true;
 }
+
+bool isValidDataApiSectionNode(const QJsonObject &node,
+                               int depth,
+                               int *nodeCount)
+{
+    if (nodeCount == nullptr || depth > 64 || ++(*nodeCount) > 20000) {
+        return false;
+    }
+    const QJsonValue kindValue = node.value(QStringLiteral("kind"));
+    const QJsonValue keyValue = node.value(QStringLiteral("key"));
+    const QJsonValue nameValue = node.value(QStringLiteral("name"));
+    const QJsonValue typeValue = node.value(QStringLiteral("type"));
+    const QJsonValue valueValue = node.value(QStringLiteral("value"));
+    const QJsonValue childrenValue = node.value(QStringLiteral("children"));
+    const QString kind = kindValue.toString();
+    if (!kindValue.isString() ||
+        (kind != QLatin1String("STRUCT") &&
+         kind != QLatin1String("PROPERTY") &&
+         kind != QLatin1String("ARRAY_ELEM")) ||
+        !keyValue.isString() || keyValue.toString().size() > 512 ||
+        !nameValue.isString() || nameValue.toString().size() > 4096 ||
+        !typeValue.isString() || typeValue.toString().size() > 256 ||
+        !valueValue.isString() || valueValue.toString().size() > 4096 ||
+        !childrenValue.isArray() || childrenValue.toArray().size() > 20000) {
+        return false;
+    }
+    const QJsonValue hasChildrenValue = node.value(
+        QStringLiteral("has_children"));
+    const QJsonValue truncatedValue = node.value(QStringLiteral("truncated"));
+    if ((!hasChildrenValue.isUndefined() && !hasChildrenValue.isBool()) ||
+        (!truncatedValue.isUndefined() && !truncatedValue.isBool())) {
+        return false;
+    }
+    for (const QJsonValue &childValue : childrenValue.toArray()) {
+        if (!childValue.isObject() ||
+            !isValidDataApiSectionNode(childValue.toObject(), depth + 1,
+                                       nodeCount)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+class BlenderDataApiSectionExtractionJob final : public QObject {
+public:
+    BlenderDataApiSectionExtractionJob(
+        QObject *owner,
+        QString sourcePath,
+        QByteArray expectedSourceSha256,
+        QString sectionIdentifier,
+        classiCAD::BlenderDataApiSectionCallback callback)
+        : QObject(owner),
+          sourcePath_(std::move(sourcePath)),
+          expectedSourceSha256_(std::move(expectedSourceSha256)),
+          sectionIdentifier_(std::move(sectionIdentifier)),
+          callback_(std::move(callback))
+    {
+        connect(&process_, &QProcess::finished, this,
+                [this](int exitCode, QProcess::ExitStatus exitStatus) {
+                    processFinished(exitCode, exitStatus);
+                });
+        connect(&process_, &QProcess::errorOccurred, this,
+                [this](QProcess::ProcessError error) {
+                    if (error == QProcess::FailedToStart) {
+                        finish({}, QStringLiteral(
+                            "Could not start Blender Data API extraction: %1")
+                                     .arg(process_.errorString()));
+                    }
+                });
+        timeout_.setSingleShot(true);
+        connect(&timeout_, &QTimer::timeout, this, [this]() {
+            if (process_.state() != QProcess::NotRunning) {
+                timedOut_ = true;
+                process_.kill();
+                return;
+            }
+            finish({}, QStringLiteral(
+                "Blender took too long to load this Data API section"));
+        });
+    }
+
+    void start()
+    {
+        const QFileInfo sourceInfo(sourcePath_);
+        if (!sourceInfo.isFile() || sourceInfo.isSymLink() ||
+            sourceInfo.suffix().compare(QStringLiteral("blend"),
+                                        Qt::CaseInsensitive) != 0 ||
+            expectedSourceSha256_.size() != 64 ||
+            QByteArray::fromHex(expectedSourceSha256_).toHex() !=
+                expectedSourceSha256_.toLower() ||
+            sectionIdentifier_.isEmpty() ||
+            sectionIdentifier_.size() > 512) {
+            finish({}, QStringLiteral(
+                "A valid imported Blender file and Data API section are required"));
+            return;
+        }
+        const QString executable = blenderExecutable();
+        if (executable.isEmpty()) {
+            finish({}, QStringLiteral(
+                "Blender %1 is required to load this Data API section")
+                         .arg(QLatin1String(kPinnedBlenderVersion)));
+            return;
+        }
+        if (!temporaryDirectory_.isValid()) {
+            finish({}, QStringLiteral(
+                "Could not create a temporary Data API extraction directory"));
+            return;
+        }
+        QFile scriptResource(
+            QStringLiteral(":/classiCAD/serialization/blender_scene_extract.py"));
+        if (!scriptResource.open(QIODevice::ReadOnly)) {
+            finish({}, QStringLiteral(
+                "The Blender scene extraction script is missing from this build"));
+            return;
+        }
+        const QString scriptPath = temporaryDirectory_.filePath(
+            QStringLiteral("blender_scene_extract.py"));
+        QString writeError;
+        if (!writeFile(scriptPath, scriptResource.readAll(), &writeError)) {
+            finish({}, writeError);
+            return;
+        }
+        outputPath_ = temporaryDirectory_.filePath(
+            QStringLiteral("data-api-section.json"));
+        process_.setProgram(executable);
+        process_.setArguments({
+            QStringLiteral("--background"),
+            QStringLiteral("--factory-startup"),
+            QStringLiteral("--python"), scriptPath,
+            QStringLiteral("--"),
+            QStringLiteral("data_api_section"),
+            sourceInfo.absoluteFilePath(), outputPath_, sectionIdentifier_,
+            QString::fromLatin1(expectedSourceSha256_)});
+        process_.setProcessChannelMode(QProcess::SeparateChannels);
+        process_.start();
+        timeout_.start(kBlenderTimeoutMilliseconds);
+    }
+
+private:
+    void processFinished(int exitCode, QProcess::ExitStatus exitStatus)
+    {
+        timeout_.stop();
+        if (finished_) return;
+        if (timedOut_) {
+            finish({}, QStringLiteral(
+                "Blender took too long to load this Data API section"));
+            return;
+        }
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            QByteArray diagnostic = process_.readAllStandardError().trimmed();
+            if (diagnostic.isEmpty()) {
+                diagnostic = process_.readAllStandardOutput().trimmed();
+            }
+            if (diagnostic.size() > 6000) {
+                diagnostic = diagnostic.right(6000);
+            }
+            const QString details = QString::fromUtf8(diagnostic).trimmed();
+            finish({}, details.isEmpty()
+                ? QStringLiteral("Blender could not load this Data API section")
+                : QStringLiteral("Blender could not load this Data API section:\n%1")
+                      .arg(details));
+            return;
+        }
+        QFile outputFile(outputPath_);
+        if (!outputFile.open(QIODevice::ReadOnly) ||
+            outputFile.size() < 0 ||
+            outputFile.size() > kBlenderExtractionJsonByteLimit) {
+            finish({}, QStringLiteral(
+                "Blender returned an invalid or oversized Data API section"));
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(
+            outputFile.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError ||
+            !document.isObject()) {
+            finish({}, QStringLiteral(
+                "Blender returned invalid Data API section data"));
+            return;
+        }
+        const QJsonObject result = document.object();
+        const QJsonObject root = result.value(QStringLiteral("root")).toObject();
+        const QJsonArray children = root.value(
+            QStringLiteral("children")).toArray();
+        const QJsonObject section = children.size() == 1
+            ? children.first().toObject() : QJsonObject{};
+        int nodeCount = 0;
+        if (!result.value(QStringLiteral("truncated")).isBool() ||
+            section.value(QStringLiteral("kind")).toString() !=
+                QLatin1String("PROPERTY") ||
+            section.value(QStringLiteral("key")).toString() !=
+                sectionIdentifier_ ||
+            !isValidDataApiSectionNode(section, 0, &nodeCount)) {
+            finish({}, QStringLiteral(
+                "Blender returned an invalid Data API section tree"));
+            return;
+        }
+        finish(section, {});
+    }
+
+    void finish(const QJsonObject &section, const QString &error)
+    {
+        if (finished_) return;
+        finished_ = true;
+        timeout_.stop();
+        if (callback_) callback_(section, error);
+        callback_ = {};
+        deleteLater();
+    }
+
+    QString sourcePath_;
+    QByteArray expectedSourceSha256_;
+    QString sectionIdentifier_;
+    classiCAD::BlenderDataApiSectionCallback callback_;
+    QTemporaryDir temporaryDirectory_;
+    QProcess process_;
+    QTimer timeout_;
+    QString outputPath_;
+    bool finished_ = false;
+    bool timedOut_ = false;
+};
 
 bool jsonFiniteNumber(const QJsonValue &value, double *number)
 {
@@ -2573,6 +2795,26 @@ namespace classiCAD {
 QByteArray blenderProjectSha256(const QString &path, QString *errorMessage)
 {
     return fileSha256(path, errorMessage);
+}
+
+void extractBlenderDataApiSectionAsync(
+    QObject *owner,
+    const QString &sourcePath,
+    const QByteArray &expectedSourceSha256,
+    const QString &sectionIdentifier,
+    BlenderDataApiSectionCallback callback)
+{
+    if (owner == nullptr) {
+        if (callback) {
+            callback({}, QStringLiteral(
+                "The Data API extraction owner is no longer available"));
+        }
+        return;
+    }
+    auto *job = new BlenderDataApiSectionExtractionJob(
+        owner, sourcePath, expectedSourceSha256, sectionIdentifier,
+        std::move(callback));
+    job->start();
 }
 
 bool purgeBlenderOrphanData(const QString &sourcePath,

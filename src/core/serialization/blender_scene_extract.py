@@ -2304,7 +2304,7 @@ def outliner_sequencer_tree(active_window, fallback_scene):
     return record
 
 
-def outliner_data_api_tree():
+def outliner_data_api_tree(focus_root_property=None):
     """Capture Blender's RNA Data API tree with bounded recursion."""
     remaining = [MAX_OUTLINER_DATA_API_ITEMS - 1]
     truncated = [False]
@@ -2659,6 +2659,8 @@ def outliner_data_api_tree():
             parent["children"].append(property_node)
 
     def capture_driver_paths(value):
+        if focus_root_property is not None:
+            return
         if not isinstance(value, bpy.types.ID):
             return
         pointer = identity(value)
@@ -2923,9 +2925,13 @@ def outliner_data_api_tree():
                 continue
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             continue
+        if (focus_root_property is not None and
+                identifier != focus_root_property):
+            continue
         root_properties.append(prop)
 
     root_property_count = len(root_properties)
+    focused_property_node = None
     for root_property_index, prop in enumerate(root_properties):
         if remaining[0] <= 0:
             truncated[0] = True
@@ -2943,6 +2949,9 @@ def outliner_data_api_tree():
                                      prop_type)
         if property_node is None:
             break
+        if focus_root_property is not None:
+            focused_property_node = property_node
+        property_node["has_children"] = False
         remaining_root_properties = root_property_count - root_property_index
         future_root_properties = remaining_root_properties - 1
         # Reserve a row for every later bpy.data property, then split the
@@ -2964,6 +2973,7 @@ def outliner_data_api_tree():
             continue
         if prop_type == "POINTER":
             if property_value is not None:
+                property_node["has_children"] = True
                 child = add_struct(property_value, "pointer", 1, ancestry,
                                    branch_remaining)
                 if child is not None:
@@ -2975,9 +2985,14 @@ def outliner_data_api_tree():
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 iterator = iter(())
                 collection_size = 0
+            property_node["has_children"] = collection_size > 0
+            collection_item_limit = (
+                MAX_OUTLINER_DATA_API_COLLECTION_ITEMS
+                if focus_root_property is not None
+                else MAX_OUTLINER_DATA_API_BRANCH_ITEMS)
             section_collection_limit = min(
                 collection_size, MAX_OUTLINER_DATA_API_COLLECTION_ITEMS,
-                MAX_OUTLINER_DATA_API_BRANCH_ITEMS,
+                collection_item_limit,
                 max(1, branch_remaining[0] // 32))
             if collection_size > section_collection_limit:
                 truncated[0] = True
@@ -3001,6 +3016,7 @@ def outliner_data_api_tree():
                 values = list(property_value)
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 values = []
+            property_node["has_children"] = bool(values)
             subtype = str(getattr(prop, "subtype", ""))
             for index, element in enumerate(values):
                 array_name = array_component_name(subtype, index)
@@ -3027,6 +3043,9 @@ def outliner_data_api_tree():
         pending_index += 1
         populate_struct(node, value, depth, ancestry, branch_remaining,
                         item_remaining)
+
+    if focused_property_node is not None:
+        focused_property_node["truncated"] = truncated[0]
 
     def has_data_collection(name):
         try:
@@ -6534,6 +6553,39 @@ def main():
     if "--" not in sys.argv:
         raise RuntimeError("missing arguments after Blender's -- separator")
     arguments = sys.argv[sys.argv.index("--") + 1:]
+    if len(arguments) == 5 and arguments[0] == "data_api_section":
+        input_path, output_path, section_identifier, expected_sha256 = arguments[1:]
+        if (not section_identifier or len(section_identifier) > 512 or
+                len(expected_sha256) != 64 or
+                any(character not in "0123456789abcdefABCDEF"
+                    for character in expected_sha256)):
+            raise RuntimeError(
+                "invalid Blender Data API section identifier or source hash")
+
+        input_path = os.path.abspath(input_path)
+
+        def source_sha256():
+            digest = hashlib.sha256()
+            with open(input_path, "rb") as source_file:
+                for chunk in iter(lambda: source_file.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+
+        expected_sha256 = expected_sha256.lower()
+        if source_sha256() != expected_sha256:
+            raise RuntimeError(
+                "The Blender file changed after it was imported; Data API refresh was cancelled")
+        bpy.ops.wm.open_mainfile(filepath=input_path)
+        require_pinned_blender()
+        section = outliner_data_api_tree(section_identifier)
+        if len(section["root"]["children"]) != 1:
+            raise RuntimeError(
+                "Blender Data API section is unavailable: " + section_identifier)
+        if source_sha256() != expected_sha256:
+            raise RuntimeError(
+                "The Blender file changed while its Data API section was loading")
+        write_json_atomic(output_path, section)
+        return
     if len(arguments) not in {3, 4} or arguments[0] != "extract":
         raise RuntimeError(
             "usage: blender --background --python blender_scene_extract.py -- "

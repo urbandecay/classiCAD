@@ -270,6 +270,11 @@ struct CollectionsPanelCallbacks {
     std::function<bool()> canEditDataApiKeyframes;
     std::function<QString(const QString &, bool)> editDataApiKeyframes;
     std::function<void(const QJsonArray &, bool)> editDataApiDriverPaths;
+    std::function<QString()> dataApiSourceKey;
+    std::function<void(
+        const QString &,
+        std::function<void(const QJsonObject &, const QString &)>)>
+        fetchDataApiSection;
     std::function<QJsonObject()> libraryOverrides;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
@@ -410,6 +415,11 @@ private:
     void restoreTreeState();
     void saveTreeState();
     void populateDataApiChildren(QTreeWidgetItem *item);
+    void requestDataApiSection(QTreeWidgetItem *item);
+    void finishDataApiSection(const QString &path,
+                              const QString &sourceKey,
+                              const QJsonObject &section,
+                              const QString &error);
     void editSelectedDataApiKeyingSetPaths(bool add);
     void editSelectedDataApiDriverPaths(bool add);
     void updateDataApiAnimationControls();
@@ -485,6 +495,8 @@ private:
     QHash<QString, bool> expandedBeforeFilter_;
     QSet<QString> dataApiExpandedPaths_;
     QSet<QString> dataApiCollapsedPaths_;
+    QHash<QString, QJsonObject> dataApiFetchedSections_;
+    QSet<QString> dataApiPendingSections_;
     QString activeFilterText_;
     QString idTypeFilter_;
     bool dataApiFilterRefreshPending_ = false;

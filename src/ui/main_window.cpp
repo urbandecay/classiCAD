@@ -4131,6 +4131,22 @@ private:
         collectionCallbacks.dataApi = [this]() {
             return session_.document().settings().importedBlenderDataApi;
         };
+        collectionCallbacks.dataApiSourceKey = [this]() {
+            if (importedBlenderSourcePath_.isEmpty() ||
+                importedBlenderSourceSha256_.size() != 64) {
+                return QString{};
+            }
+            return importedBlenderSourcePath_ + QChar(0x1f) +
+                QString::fromLatin1(importedBlenderSourceSha256_);
+        };
+        collectionCallbacks.fetchDataApiSection = [this](
+            const QString &sectionIdentifier,
+            std::function<void(const QJsonObject &, const QString &)> callback) {
+            extractBlenderDataApiSectionAsync(
+                this, importedBlenderSourcePath_,
+                importedBlenderSourceSha256_, sectionIdentifier,
+                std::move(callback));
+        };
         collectionCallbacks.setSequencerSelection = [this](
             const QStringList &selectedStripIds, const QString &activeStripId) {
             DocumentSettings settings = session_.document().settings();

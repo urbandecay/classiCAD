@@ -5,8 +5,11 @@
 #include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QObject>
 #include <QStringList>
 #include <QVector>
+
+#include <functional>
 
 #include "core/document/scene_object.h"
 #include "core/document/workbench_material_adapter.h"
@@ -170,6 +173,15 @@ bool editBlenderDataApiDrivers(
     bool add,
     BlenderDataApiDriverEditResult *result,
     QString *errorMessage = nullptr);
+
+using BlenderDataApiSectionCallback =
+    std::function<void(const QJsonObject &, const QString &)>;
+void extractBlenderDataApiSectionAsync(
+    QObject *owner,
+    const QString &sourcePath,
+    const QByteArray &expectedSourceSha256,
+    const QString &sectionIdentifier,
+    BlenderDataApiSectionCallback callback);
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.
 // Returned meshes, curves, and surfaces retain their authoritative geometry;

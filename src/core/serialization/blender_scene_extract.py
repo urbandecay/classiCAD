@@ -43,6 +43,7 @@ MAX_OUTLINER_SEQUENCE_ITEMS = 10000
 MAX_OUTLINER_SEQUENCE_DEPTH = 128
 MAX_OUTLINER_DATA_API_ITEMS = 20000
 MAX_OUTLINER_DATA_API_DEPTH = 32
+MAX_OUTLINER_DATA_API_BRANCH_ITEMS = 32
 MAX_OUTLINER_DATA_API_DRIVER_PATHS = 20000
 MAX_OUTLINER_KEYING_SETS = 1024
 MAX_OUTLINER_KEYING_SET_PATHS = 20000
@@ -2352,11 +2353,25 @@ def outliner_data_api_tree():
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             return id(value)
 
-    def reserve_node(kind, key, name, type_name, value_text=""):
+    def reserve_node(kind, key, name, type_name, value_text="",
+                     branch_remaining=None, item_remaining=None):
         if remaining[0] <= 0:
             truncated[0] = True
             return None
+        if branch_remaining is not None and branch_remaining[0] <= 0:
+            truncated[0] = True
+            return None
+        if item_remaining is not None:
+            for item_budget in item_remaining:
+                if item_budget[0] <= 0:
+                    truncated[0] = True
+                    return None
         remaining[0] -= 1
+        if branch_remaining is not None:
+            branch_remaining[0] -= 1
+        if item_remaining is not None:
+            for item_budget in item_remaining:
+                item_budget[0] -= 1
         return {
             "kind": kind,
             "key": str(key)[:512],
@@ -2511,7 +2526,8 @@ def outliner_data_api_tree():
             return None
 
     def add_custom_property_nodes(parent, owner, id_block, owner_path,
-                                  depth, ancestry):
+                                  depth, ancestry, branch_remaining,
+                                  item_remaining=None):
         try:
             keys = list(owner.keys())
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
@@ -2558,7 +2574,9 @@ def outliner_data_api_tree():
 
             property_node = reserve_node(
                 "PROPERTY", "idprop:" + identifier, display_name,
-                "IDPROPERTY_" + value_type)
+                "IDPROPERTY_" + value_type,
+                branch_remaining=branch_remaining,
+                item_remaining=item_remaining)
             if property_node is None:
                 break
             if value_type in {"BOOLEAN", "INT", "FLOAT", "ARRAY"}:
@@ -2577,12 +2595,15 @@ def outliner_data_api_tree():
                 else:
                     add_custom_property_nodes(
                         property_node, property_value, id_block, data_path,
-                        depth + 1, ancestry | {id(property_value)})
+                        depth + 1, ancestry | {id(property_value)},
+                        branch_remaining, item_remaining)
             elif value_type == "ARRAY":
                 for index, _element in enumerate(property_value):
                     array_node = reserve_node(
                         "ARRAY_ELEM", str(index), str(index + 1),
-                        "IDPROPERTY_ELEMENT")
+                        "IDPROPERTY_ELEMENT",
+                        branch_remaining=branch_remaining,
+                        item_remaining=item_remaining)
                     if array_node is None:
                         break
                     whole_array_path = property_node.get("animation_path")
@@ -2631,10 +2652,13 @@ def outliner_data_api_tree():
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             return
 
-    def add_struct(value, key, depth, ancestry):
+    def add_struct(value, key, depth, ancestry, branch_remaining,
+                   item_remaining=None):
         rna = getattr(value, "bl_rna", None)
         type_name = str(getattr(rna, "identifier", ""))
-        node = reserve_node("STRUCT", key, struct_name(value), type_name)
+        node = reserve_node("STRUCT", key, struct_name(value), type_name,
+                            branch_remaining=branch_remaining,
+                            item_remaining=item_remaining)
         if node is None:
             return None
         pointer = identity(value)
@@ -2648,10 +2672,12 @@ def outliner_data_api_tree():
             return node
 
         pending_structs.append(
-            (node, value, depth, ancestry | {pointer}))
+            (node, value, depth, ancestry | {pointer}, branch_remaining,
+             item_remaining))
         return node
 
-    def populate_struct(node, value, depth, ancestry):
+    def populate_struct(node, value, depth, ancestry, branch_remaining,
+                        item_remaining=None):
         for prop in properties_of(value):
             if remaining[0] <= 0:
                 truncated[0] = True
@@ -2666,7 +2692,9 @@ def outliner_data_api_tree():
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 continue
             property_node = reserve_node(
-                "PROPERTY", identifier, prop_name, prop_type)
+                "PROPERTY", identifier, prop_name, prop_type,
+                branch_remaining=branch_remaining,
+                item_remaining=item_remaining)
             if property_node is None:
                 break
             is_array = bool(getattr(prop, "is_array", False))
@@ -2683,7 +2711,8 @@ def outliner_data_api_tree():
             if prop_type == "POINTER":
                 if property_value is not None:
                     child = add_struct(property_value, "pointer", depth + 1,
-                                       ancestry)
+                                       ancestry, branch_remaining,
+                                       item_remaining)
                     if child is not None:
                         property_node["children"].append(child)
             elif prop_type == "COLLECTION":
@@ -2692,14 +2721,34 @@ def outliner_data_api_tree():
                     iterator = iter(property_value)
                 except (AttributeError, ReferenceError, RuntimeError, TypeError):
                     continue
+                collection_budget = branch_remaining[0]
+                if item_remaining is not None:
+                    collection_budget = min(
+                        collection_budget,
+                        *(item_budget[0] for item_budget in item_remaining))
+                collection_item_limit = min(
+                    collection_size, MAX_OUTLINER_DATA_API_COLLECTION_ITEMS,
+                    MAX_OUTLINER_DATA_API_BRANCH_ITEMS,
+                    max(1, collection_budget // 2))
+                if collection_size > collection_item_limit:
+                    truncated[0] = True
+                per_child_limit = max(
+                    1, collection_budget // max(1, collection_item_limit))
                 for index, element in enumerate(iterator):
                     if (index >= collection_size or
-                            index >= MAX_OUTLINER_DATA_API_COLLECTION_ITEMS or
-                            remaining[0] <= 0):
+                            index >= collection_item_limit or
+                            remaining[0] <= 0 or
+                            branch_remaining[0] <= 0 or
+                            (item_remaining is not None and any(
+                                item_budget[0] <= 0
+                                for item_budget in item_remaining))):
                         truncated[0] = True
                         break
+                    child_item_remaining = list(item_remaining or [])
+                    child_item_remaining.append([per_child_limit])
                     child = add_struct(element, str(index), depth + 1,
-                                       ancestry)
+                                       ancestry, branch_remaining,
+                                       child_item_remaining)
                     if child is not None:
                         property_node["children"].append(child)
             elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
@@ -2713,7 +2762,9 @@ def outliner_data_api_tree():
                     array_key = str(index)
                     array_name = array_component_name(subtype, index)
                     array_node = reserve_node(
-                        "ARRAY_ELEM", array_key, array_name, prop_type)
+                        "ARRAY_ELEM", array_key, array_name, prop_type,
+                        branch_remaining=branch_remaining,
+                        item_remaining=item_remaining)
                     if array_node is None:
                         break
                     if property_animation_path is not None:
@@ -2734,10 +2785,23 @@ def outliner_data_api_tree():
                     ValueError):
                 custom_owner_path = ""
             add_custom_property_nodes(
-                node, value, id_block, custom_owner_path, depth, ancestry)
+                node, value, id_block, custom_owner_path, depth, ancestry,
+                branch_remaining, item_remaining)
 
     ancestry = {identity(bpy.data)}
+    root_properties = []
     for prop in properties_of(bpy.data):
+        try:
+            identifier = str(prop.identifier)
+            if identifier == "rna_type" or bool(
+                    getattr(prop, "is_hidden", False)):
+                continue
+        except (AttributeError, ReferenceError, RuntimeError, TypeError):
+            continue
+        root_properties.append(prop)
+
+    root_property_count = len(root_properties)
+    for root_property_index, prop in enumerate(root_properties):
         if remaining[0] <= 0:
             truncated[0] = True
             break
@@ -2754,6 +2818,15 @@ def outliner_data_api_tree():
                                      prop_type)
         if property_node is None:
             break
+        remaining_root_properties = root_property_count - root_property_index
+        future_root_properties = remaining_root_properties - 1
+        # Reserve a row for every later bpy.data property, then split the
+        # remaining capacity across root sections. Unused capacity carries
+        # forward because each later section recalculates from `remaining`.
+        branch_limit = max(
+            0, (remaining[0] - future_root_properties) //
+            max(1, remaining_root_properties))
+        branch_remaining = [branch_limit]
         is_array = bool(getattr(prop, "is_array", False))
         property_animation_path = animation_path_metadata(
             bpy.data, prop, identifier, is_array)
@@ -2766,7 +2839,8 @@ def outliner_data_api_tree():
             continue
         if prop_type == "POINTER":
             if property_value is not None:
-                child = add_struct(property_value, "pointer", 1, ancestry)
+                child = add_struct(property_value, "pointer", 1, ancestry,
+                                   branch_remaining)
                 if child is not None:
                     property_node["children"].append(child)
         elif prop_type == "COLLECTION":
@@ -2776,13 +2850,24 @@ def outliner_data_api_tree():
             except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 iterator = iter(())
                 collection_size = 0
+            section_collection_limit = min(
+                collection_size, MAX_OUTLINER_DATA_API_COLLECTION_ITEMS,
+                MAX_OUTLINER_DATA_API_BRANCH_ITEMS,
+                max(1, branch_remaining[0] // 32))
+            if collection_size > section_collection_limit:
+                truncated[0] = True
+            per_item_limit = max(
+                1, branch_remaining[0] // max(1, section_collection_limit))
             for index, element in enumerate(iterator):
                 if (index >= collection_size or
-                        index >= MAX_OUTLINER_DATA_API_COLLECTION_ITEMS or
-                        remaining[0] <= 0):
+                        index >= section_collection_limit or
+                        remaining[0] <= 0 or
+                        branch_remaining[0] <= 0):
                     truncated[0] = True
                     break
-                child = add_struct(element, str(index), 1, ancestry)
+                item_remaining = [[per_item_limit]]
+                child = add_struct(element, str(index), 1, ancestry,
+                                   branch_remaining, item_remaining)
                 if child is not None:
                     property_node["children"].append(child)
         elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
@@ -2795,7 +2880,8 @@ def outliner_data_api_tree():
             for index, element in enumerate(values):
                 array_name = array_component_name(subtype, index)
                 array_node = reserve_node(
-                    "ARRAY_ELEM", str(index), array_name, prop_type)
+                    "ARRAY_ELEM", str(index), array_name, prop_type,
+                    branch_remaining=branch_remaining)
                 if array_node is None:
                     break
                 if property_animation_path is not None:
@@ -2811,9 +2897,11 @@ def outliner_data_api_tree():
         if remaining[0] <= 0:
             truncated[0] = True
             break
-        node, value, depth, ancestry = pending_structs[pending_index]
+        (node, value, depth, ancestry, branch_remaining,
+         item_remaining) = pending_structs[pending_index]
         pending_index += 1
-        populate_struct(node, value, depth, ancestry)
+        populate_struct(node, value, depth, ancestry, branch_remaining,
+                        item_remaining)
 
     def has_data_collection(name):
         try:

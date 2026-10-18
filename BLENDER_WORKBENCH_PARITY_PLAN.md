@@ -11847,3 +11847,17 @@ scene depth.
   with its actions in [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L300-L338).
   `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
   Outliner interaction comparison was run.
+- The hundred-fiftieth Data API capture update reserves one row for every
+  top-level `bpy.data` property, then divides the remaining 20,000-node budget
+  across those sections. An early large collection can no longer consume the
+  whole snapshot before later Blender data sections appear. Unused section
+  capacity flows to later sections. Each captured collection branch includes
+  at most 32 entries, with per-entry shares so collection sibling rows cannot
+  consume all capacity before their properties are captured. Omitted rows
+  still produce the bounded capture notice. Pointer child structs still share
+  their containing entry's allowance, so a pointer's own properties may be cut
+  off. Blender's on-demand expansion for large sections and pointer branches
+  remains open.
+  See Blender 5.2.2's [lazy RNA tree expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
+  `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
+  Outliner comparison was run.

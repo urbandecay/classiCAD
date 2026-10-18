@@ -2995,7 +2995,7 @@ void CollectionsPanel::populateDataApiChildren(QTreeWidgetItem *item)
                               QStringLiteral("data-api/truncated"));
         truncatedRow->setToolTip(
             nameColumn,
-            QStringLiteral("The 20,000-row or 32-level capture limit was reached"));
+            QStringLiteral("Some RNA rows were omitted when the bounded 20,000-row, per-branch, or 32-level capture limit was reached"));
         truncatedRow->setFlags(Qt::ItemIsEnabled);
     }
 }

@@ -6,11 +6,19 @@
 
 namespace classiCAD {
 
-DocumentTransaction::DocumentTransaction(Document &document, History &history)
+DocumentTransaction::DocumentTransaction(Document &document,
+                                         History &history,
+                                         ObjectId creationContainerId)
     : document_(document),
       history_(history),
-      before_(document.snapshot())
+      before_(document.snapshot()),
+      creationContainerId_(creationContainerId)
 {
+    if (creationContainerId_.isValid() &&
+        (document_.object(creationContainerId_) == nullptr ||
+         document_.containerId(creationContainerId_) != creationContainerId_)) {
+        creationContainerId_ = ObjectId::invalid();
+    }
 }
 
 DocumentTransaction::~DocumentTransaction()
@@ -31,16 +39,33 @@ Shape *DocumentTransaction::editGeometry(ObjectId objectId)
     return shape;
 }
 
-ObjectId DocumentTransaction::addShape(const Shape &shape)
+ObjectId DocumentTransaction::addShape(const Shape &shape,
+                                       ObjectId containerId)
 {
     SceneObject object;
     object.geometry = shape;
+    if (containerId.isValid()) {
+        object.containerId = containerId;
+        const SceneObject *container = document_.object(containerId);
+        if (container != nullptr) {
+            object.layerId = container->layerId;
+        }
+    }
     return insertObject(document_.size(), object);
 }
 
 ObjectId DocumentTransaction::insertObject(int index, const SceneObject &source)
 {
     SceneObject object = source;
+    if (creationContainerId_.isValid() &&
+        (document_.object(creationContainerId_) != nullptr ||
+         object.id == creationContainerId_)) {
+        object.containerId = creationContainerId_;
+        const SceneObject *container = document_.object(creationContainerId_);
+        if (container != nullptr) {
+            object.layerId = container->layerId;
+        }
+    }
     const ObjectId objectId = document_.insertObject(index, object);
     if (objectId.isValid()) {
         changes_.addObject(objectId);
@@ -57,7 +82,21 @@ ObjectId DocumentTransaction::insertObject(int index, const SceneObject &source)
 QVector<ObjectId> DocumentTransaction::insertObjects(
     int index, const QVector<SceneObject> &objects)
 {
-    QVector<ObjectId> objectIds = document_.insertObjects(index, objects);
+    QVector<SceneObject> normalizedObjects = objects;
+    if (creationContainerId_.isValid()) {
+        for (SceneObject &object : normalizedObjects) {
+            if (document_.object(creationContainerId_) != nullptr ||
+                object.id == creationContainerId_) {
+                object.containerId = creationContainerId_;
+                const SceneObject *container =
+                    document_.object(creationContainerId_);
+                if (container != nullptr) {
+                    object.layerId = container->layerId;
+                }
+            }
+        }
+    }
+    QVector<ObjectId> objectIds = document_.insertObjects(index, normalizedObjects);
     if (objectIds.isEmpty()) {
         return objectIds;
     }
@@ -175,6 +214,17 @@ bool DocumentTransaction::moveObjectToLayer(ObjectId objectId, LayerId layerId)
     return true;
 }
 
+bool DocumentTransaction::setObjectContainer(ObjectId objectId,
+                                             ObjectId containerId)
+{
+    if (!document_.setObjectContainer(objectId, containerId)) {
+        return false;
+    }
+    changes_.addObject(objectId);
+    changes_.structureChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::editLayer(LayerId layerId,
                                     const std::function<void(Layer &)> &edit,
                                     bool visibilityChanged)
@@ -224,6 +274,11 @@ void DocumentTransaction::replaceObjects(const QVector<SceneObject> &objects)
         changes_.addObject(object.id);
         changes_.addLayer(object.layerId);
     }
+}
+
+ObjectId DocumentTransaction::creationContainerId() const
+{
+    return creationContainerId_;
 }
 
 void DocumentTransaction::markAllGeometryChanged()

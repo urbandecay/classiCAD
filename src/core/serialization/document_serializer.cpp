@@ -59,7 +59,7 @@ bool idFromJson(const QJsonValue &value, quint64 *id)
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 5);
+    serialized.insert(QStringLiteral("version"), 6);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -95,6 +95,10 @@ QJsonObject documentToJson(const Document &document)
     for (const SceneObject &sceneObject : document.objects()) {
         QJsonObject serializedObject;
         serializedObject.insert(QStringLiteral("id"), idToJson(sceneObject.id.value()));
+        serializedObject.insert(
+            QStringLiteral("containerId"),
+            idToJson((sceneObject.containerId.isValid() ? sceneObject.containerId
+                                                        : sceneObject.id).value()));
         serializedObject.insert(QStringLiteral("layerId"), idToJson(sceneObject.layerId.value()));
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         QJsonObject placement;
@@ -119,7 +123,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 5) {
+    if (version < 1 || version > 6) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -270,6 +274,7 @@ bool documentFromJson(const QJsonValue &value,
         const QJsonObject serializedObject = objectValue.toObject();
         quint64 objectValueId = 0;
         quint64 objectLayerValue = 0;
+        quint64 objectContainerValue = 0;
         Shape shape;
         if (!idFromJson(serializedObject.value(QStringLiteral("id")), &objectValueId) ||
             objectIds.contains(objectValueId) ||
@@ -278,6 +283,15 @@ bool documentFromJson(const QJsonValue &value,
             !shapeFromJson(serializedObject.value(QStringLiteral("geometry")), &shape)) {
             setError(errorMessage, QStringLiteral("invalid scene object record"));
             return false;
+        }
+        if (version >= 6) {
+            if (!idFromJson(serializedObject.value(QStringLiteral("containerId")),
+                            &objectContainerValue)) {
+                setError(errorMessage, QStringLiteral("invalid object container"));
+                return false;
+            }
+        } else {
+            objectContainerValue = objectValueId;
         }
 
         Point3D placementTranslation;
@@ -315,6 +329,7 @@ bool documentFromJson(const QJsonValue &value,
 
         SceneObject sceneObject;
         sceneObject.id = ObjectId::fromValue(objectValueId);
+        sceneObject.containerId = ObjectId::fromValue(objectContainerValue);
         sceneObject.layerId = LayerId::fromValue(objectLayerValue);
         sceneObject.geometry = std::move(shape);
         sceneObject.placementTranslation = placementTranslation;
@@ -322,6 +337,20 @@ bool documentFromJson(const QJsonValue &value,
         objectIds.insert(objectValueId);
         if (objectValueId < std::numeric_limits<quint64>::max()) {
             nextObjectValue = std::max(nextObjectValue, objectValueId + 1);
+        }
+    }
+
+    QSet<quint64> containerRoots;
+    for (const SceneObject &sceneObject : snapshot.objects) {
+        if (sceneObject.id == sceneObject.containerId) {
+            containerRoots.insert(sceneObject.id.value());
+        }
+    }
+    for (const SceneObject &sceneObject : snapshot.objects) {
+        if (!objectIds.contains(sceneObject.containerId.value()) ||
+            !containerRoots.contains(sceneObject.containerId.value())) {
+            setError(errorMessage, QStringLiteral("object container root is missing"));
+            return false;
         }
     }
 

@@ -905,6 +905,8 @@ public:
                    Shape *shape) {
                 return makeToolShape(tool, points, arcMode, arcSweep, shape);
         });
+        toolContext_.setCreationContainerProvider(
+            [this]() { return drawingContainerId(); });
         toolContext_.setShapeCommitter([this](ToolId tool, const Shape &shape) {
             Shape committedShape = shape;
             if (!isValidWorkPlaneFrame(committedShape.workPlaneFrame)) {
@@ -912,12 +914,7 @@ public:
                 committedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
                 committedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
             }
-            if (tool == Tool::Line) {
-                return commitLineWithAutomaticWeld(committedShape);
-            }
-            DocumentTransaction transaction = session_.beginTransaction();
-            if (!transaction.addShape(committedShape).isValid() ||
-                !session_.commitTransaction(transaction)) {
+            if (!commitDrawnShape(committedShape, tool == Tool::Line)) {
                 return false;
             }
             DebugLog::instance().write(QStringLiteral("tool commit tool=%1 shapes=%2")
@@ -961,14 +958,7 @@ public:
                     return false;
                 }
             }
-            DocumentTransaction transaction = session_.beginTransaction();
-            for (const Shape &shape : shapes) {
-                if (!transaction.addShape(shape).isValid()) {
-                    transaction.rollback();
-                    return false;
-                }
-            }
-            return session_.commitTransaction(transaction);
+            return commitDrawnShapes(shapes);
         });
         toolContext_.setPreviewPublisher([this](const ToolPreview &preview) {
             toolPreview_ = preview;
@@ -1119,6 +1109,37 @@ public:
                 if (gesture == SelectionGestureKind::BeginSelectionBox) {
                     beginSelectionBox(input.screenPosition, additive);
                     return;
+                }
+
+                if (gesture == SelectionGestureKind::BeginObjectDrag &&
+                    document_.object(hit.objectId) != nullptr) {
+                    const ObjectId hitContainer =
+                        document_.containerId(hit.objectId);
+                    activeContainerObjectId_ = hitContainer;
+                    if (!objectEditMode_) {
+                        const bool selectingContainer =
+                            selection_.contains(hit.objectId);
+                        QVector<ObjectId> selectedIds = selection_.objectIds();
+                        const QVector<ObjectId> containerIds =
+                            document_.objectIdsInContainer(hit.objectId);
+                        for (const ObjectId containerObjectId : containerIds) {
+                            selectedIds.removeAll(containerObjectId);
+                        }
+                        if (selectingContainer) {
+                            selectedIds += containerIds;
+                        }
+                        selection_.setObjectIds(
+                            selectedIds,
+                            selectingContainer ? hitContainer
+                                               : ObjectId::invalid());
+                        if (SelectTool *selectTool = selectionToolController()) {
+                            selectTool->beginObjectDrag(
+                                selection_.objectIds(), input.screenPosition,
+                                input.rawWorldPosition);
+                        }
+                    }
+                    session_.notifySelectionChanged();
+                    notifyObjectStateChanged();
                 }
 
                 dragHistoryRecorded_ = false;
@@ -1426,7 +1447,11 @@ public:
             info.visible = layer.visible;
             info.locked = layer.locked;
             info.active = layer.id == document_.activeLayerId();
-            info.objectCount = static_cast<int>(layer.objectIds.size());
+            QSet<quint64> containerIds;
+            for (const ObjectId objectId : layer.objectIds) {
+                containerIds.insert(document_.containerId(objectId).value());
+            }
+            info.objectCount = containerIds.size();
             info.color = layer.color;
             info.lineType = layer.lineType;
             info.lineWeightMm = layer.lineWeightMm;
@@ -1436,6 +1461,111 @@ public:
             infos.append(info);
         }
         return infos;
+    }
+
+    QVector<ViewportObjectInfo> objectInfos() const override
+    {
+        QVector<ViewportObjectInfo> infos;
+        infos.reserve(document_.size());
+        QHash<quint64, QString> containerNames;
+        QHash<QString, int> geometryNameCounts;
+        int objectOrdinal = 0;
+
+        for (const SceneObject &sceneObject : document_.objects()) {
+            const ObjectId containerId = document_.containerId(sceneObject.id);
+            if (containerId == sceneObject.id) {
+                containerNames.insert(
+                    containerId.value(),
+                    QStringLiteral("Object %1").arg(++objectOrdinal));
+            }
+        }
+        for (const SceneObject &sceneObject : document_.objects()) {
+            ViewportObjectInfo info;
+            info.id = sceneObject.id;
+            info.containerId = document_.containerId(sceneObject.id);
+            info.containerName = containerNames.value(
+                info.containerId.value(), QStringLiteral("Object"));
+            info.geometryName = geometryTypeName(sceneObject.geometry.geometryType);
+            const QString geometryKey =
+                QStringLiteral("%1:%2")
+                    .arg(info.containerId.value())
+                    .arg(info.geometryName);
+            const int geometryOrdinal = ++geometryNameCounts[geometryKey];
+            if (geometryOrdinal > 1) {
+                info.geometryName += QStringLiteral(" %1").arg(geometryOrdinal);
+            }
+            info.selected = selectedShapeIndices_.contains(sceneObject.id);
+            info.primarySelected = selectedShapeIndex_ == sceneObject.id;
+            infos.append(std::move(info));
+        }
+        return infos;
+    }
+
+    void setObjectEditMode(bool editMode) override
+    {
+        if (!editMode) {
+            if (objectEditMode_) {
+                objectEditMode_ = false;
+                notifyObjectStateChanged();
+                update();
+                if (toolStatusUpdate_) {
+                    toolStatusUpdate_(QStringLiteral("Object Mode"));
+                }
+            }
+            return;
+        }
+
+        ObjectId candidate = activeContainerObjectId_;
+        const ObjectId selectedObject = selection_.primaryObjectId();
+        if (selectedObject.isValid() && document_.object(selectedObject) != nullptr) {
+            candidate = document_.containerId(selectedObject);
+        }
+        if (!candidate.isValid() || document_.object(candidate) == nullptr) {
+            return;
+        }
+
+        const bool changed = !objectEditMode_ || activeContainerObjectId_ != candidate;
+        objectEditMode_ = true;
+        activeContainerObjectId_ = candidate;
+        if (changed) {
+            notifyObjectStateChanged();
+            update();
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(QStringLiteral("Edit Mode — %1")
+                                      .arg(containerName(candidate)));
+            }
+        }
+    }
+
+    bool objectEditMode() const override
+    {
+        return objectEditMode_;
+    }
+
+    ObjectId activeContainerObjectId() const override
+    {
+        return document_.object(activeContainerObjectId_) != nullptr
+                   ? activeContainerObjectId_ : ObjectId::invalid();
+    }
+
+    void selectOutlinerObject(ObjectId objectId,
+                              bool selectContainer) override
+    {
+        if (document_.object(objectId) == nullptr) {
+            return;
+        }
+        activeContainerObjectId_ = document_.containerId(objectId);
+        if (selectContainer || !objectEditMode_) {
+            selection_.setObjectIds(document_.objectIdsInContainer(objectId),
+                                    activeContainerObjectId_);
+        } else {
+            selection_.setObjectIds({objectId}, objectId);
+        }
+        selection_.clearActiveControlPoint();
+        clearComponentSelections();
+        session_.notifySelectionChanged();
+        notifyObjectStateChanged();
+        update();
     }
 
     ViewportLayerCommandResult executeLayerCommand(
@@ -1780,7 +1910,8 @@ public:
         if (document_.settings() == settings) {
             return true;
         }
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         if (!transaction.setSettings(settings) ||
             !session_.commitTransaction(transaction)) {
             return false;
@@ -4270,12 +4401,16 @@ public:
             return false;
         }
 
-        const QPoint localCursor = mapFromGlobal(QCursor::pos());
-        if (rect().contains(localCursor)) {
-            rawCursorWorld_ = screenToWorld(localCursor);
-            cursorWorld_ = rawCursorWorld_;
-            cursorValid_ = true;
+        QPoint localCursor = mapFromGlobal(QCursor::pos());
+        if (!rect().contains(localCursor)) {
+            // G can be invoked while focus is in the Outliner or another
+            // sibling panel. Start the grab from the viewport center instead
+            // of treating that panel's screen position as a viewport point.
+            localCursor = rect().center();
         }
+        rawCursorWorld_ = screenToWorld(localCursor);
+        cursorWorld_ = rawCursorWorld_;
+        cursorValid_ = true;
         if (!grabTool_.begin(document_, validSelection, rawCursorWorld_)) {
             return false;
         }
@@ -4366,6 +4501,26 @@ public:
             }
         }
         return true;
+    }
+
+    bool beginGrabFromSelection()
+    {
+        if (grabTool_.isActive()) {
+            return true;
+        }
+        if (duplicateTool_.isActive()) {
+            cancelDuplicate();
+        }
+        if (joinTool_.isActive()) {
+            cancelJoinMode(false);
+        }
+        if (subdivisionTool_.isActive()) {
+            cancelSubdivisionPreview();
+        }
+        if (activeTool_ != Tool::Select) {
+            setTool(Tool::Select);
+        }
+        return beginGrab();
     }
 
     void beginGrabBasePointMode()
@@ -5585,9 +5740,17 @@ public:
             return;
         }
 
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         QVector<ObjectId> duplicateIds;
-        if (!applyDuplicateCommand(document_, transaction, plan, &duplicateIds)) {
+        const ObjectId targetContainer = objectEditMode_
+                                             ? drawingContainerId()
+                                             : ObjectId::invalid();
+        if (!applyDuplicateCommand(document_,
+                                   transaction,
+                                   plan,
+                                   &duplicateIds,
+                                   targetContainer)) {
             transaction.rollback();
             return;
         }
@@ -5817,7 +5980,8 @@ public:
             return 0;
         }
 
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         if (!applyExplodeCommand(transaction, plan)) {
             return 0;
         }
@@ -5865,7 +6029,8 @@ public:
             return 0;
         }
 
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         int filledCount = 0;
         if (!applyFillCommand(transaction, plan, &filledCount)) {
             return 0;
@@ -6101,6 +6266,9 @@ public:
             cancelDuplicate();
         }
         setTool(Tool::Select);
+        objectEditMode_ = false;
+        activeContainerObjectId_ = ObjectId::invalid();
+        notifyObjectStateChanged();
     }
 
     void applyProjectCameraSettings(
@@ -6203,6 +6371,12 @@ public:
     }
 
 protected:
+    bool focusNextPrevChild(bool) override
+    {
+        // Tab switches object/edit mode while the viewport has focus.
+        return false;
+    }
+
     void paintEvent(QPaintEvent *) override
     {
         if (gpuSurface_ != nullptr) {
@@ -11772,6 +11946,13 @@ protected:
                                        .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
+        if (!event->isAutoRepeat() && event->key() == Qt::Key_Tab &&
+            event->modifiers() == Qt::NoModifier &&
+            activeTool_ != Tool::CircleTangentThree) {
+            setObjectEditMode(!objectEditMode_);
+            event->accept();
+            return;
+        }
         if (!event->isAutoRepeat() && event->key() == Qt::Key_Z &&
             event->modifiers().testFlag(Qt::AltModifier)) {
             activateViewportShadingControl(0);
@@ -12223,6 +12404,9 @@ private:
         handlers.duplicateInPlace = [this](int) {
             return ApplicationCommandResult{duplicateInPlace(), 0};
         };
+        handlers.beginGrab = [this](int) {
+            return ApplicationCommandResult{beginGrabFromSelection(), 0};
+        };
         handlers.beginPointExtrude = [this](int) {
             const int count = beginPointExtrude();
             return ApplicationCommandResult{count > 0, count};
@@ -12264,7 +12448,8 @@ private:
             return {};
         }
 
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         if (!applyWeldCommand(transaction, plan) ||
             !session_.commitTransaction(transaction)) {
             if (toolStatusUpdate_) {
@@ -12973,7 +13158,8 @@ private:
         QVector<ObjectId> objectsToDelete;
         QVector<ObjectId> liveObjects;
         int editedObjectCount = 0;
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
 
         for (int objectIndexValue = 0;
              objectIndexValue < document_.size(); ++objectIndexValue) {
@@ -13201,7 +13387,8 @@ private:
             return false;
         }
 
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         int deletedCount = 0;
         if (!DeleteCommand::apply(document_,
                                   transaction,
@@ -14259,6 +14446,117 @@ private:
         if (layersChanged_) {
             layersChanged_();
         }
+        notifyObjectStateChanged();
+    }
+
+    void notifyObjectStateChanged()
+    {
+        if (document_.object(activeContainerObjectId_) == nullptr) {
+            const ObjectId selectedObject = selection_.primaryObjectId();
+            activeContainerObjectId_ =
+                document_.object(selectedObject) != nullptr
+                    ? document_.containerId(selectedObject)
+                    : ObjectId::invalid();
+            if (objectEditMode_ && !activeContainerObjectId_.isValid()) {
+                objectEditMode_ = false;
+            }
+        }
+        if (objectStateUpdate_) {
+            objectStateUpdate_(objectEditMode_, activeContainerObjectId());
+        }
+    }
+
+    QString containerName(ObjectId containerId) const
+    {
+        int ordinal = 0;
+        for (const SceneObject &sceneObject : document_.objects()) {
+            if (document_.containerId(sceneObject.id) == sceneObject.id) {
+                ++ordinal;
+                if (sceneObject.id == containerId) {
+                    return QStringLiteral("Object %1").arg(ordinal);
+                }
+            }
+        }
+        return QStringLiteral("Object");
+    }
+
+    ObjectId drawingContainerId()
+    {
+        if (!objectEditMode_) {
+            return ObjectId::invalid();
+        }
+        if (document_.object(activeContainerObjectId_) != nullptr) {
+            return activeContainerObjectId_;
+        }
+        const ObjectId selectedObject = selection_.primaryObjectId();
+        if (document_.object(selectedObject) != nullptr) {
+            activeContainerObjectId_ = document_.containerId(selectedObject);
+        }
+        return activeContainerObjectId_;
+    }
+
+    void finishDrawnCommit(const QVector<ObjectId> &createdObjectIds,
+                           ObjectId drawingContainer)
+    {
+        if (createdObjectIds.isEmpty()) {
+            return;
+        }
+        const ObjectId lastCreated = createdObjectIds.back();
+        if (document_.object(lastCreated) == nullptr) {
+            return;
+        }
+        activeContainerObjectId_ = drawingContainer.isValid()
+                                       ? drawingContainer
+                                       : document_.containerId(createdObjectIds.first());
+        objectEditMode_ = true;
+        selection_.setObjectIds({lastCreated}, lastCreated);
+        selection_.clearActiveControlPoint();
+        session_.notifySelectionChanged();
+        notifyObjectStateChanged();
+        update();
+    }
+
+    bool commitDrawnShape(const Shape &shape, bool line)
+    {
+        const ObjectId containerId = drawingContainerId();
+        ObjectId createdObjectId = ObjectId::invalid();
+        const bool committed = line
+                                   ? commitLineWithAutomaticWeld(
+                                         shape, containerId, &createdObjectId)
+                                   : commitShape(shape, containerId, &createdObjectId);
+        if (committed && createdObjectId.isValid()) {
+            finishDrawnCommit({createdObjectId}, containerId);
+        }
+        return committed;
+    }
+
+    bool commitDrawnShapes(const QVector<Shape> &shapes)
+    {
+        if (shapes.isEmpty()) {
+            return false;
+        }
+        const ObjectId currentContainer = drawingContainerId();
+        ObjectId containerId = currentContainer;
+        QVector<ObjectId> createdObjectIds;
+        createdObjectIds.reserve(shapes.size());
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
+        for (const Shape &shape : shapes) {
+            const ObjectId created = transaction.addShape(shape, containerId);
+            if (!created.isValid()) {
+                transaction.rollback();
+                return false;
+            }
+            createdObjectIds.append(created);
+            if (!containerId.isValid()) {
+                containerId = created;
+            }
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return false;
+        }
+        finishDrawnCommit(createdObjectIds, currentContainer);
+        return true;
     }
 
     void recordGeometryChange()
@@ -14268,17 +14566,34 @@ private:
 
     bool commitShape(const Shape &shape)
     {
-        DocumentTransaction transaction = session_.beginTransaction();
-        if (!transaction.addShape(shape).isValid()) {
-            return false;
-        }
-        return session_.commitTransaction(transaction);
+        return commitDrawnShape(shape, false);
     }
 
-    bool commitLineWithAutomaticWeld(const Shape &line)
+    bool commitShape(const Shape &shape,
+                     ObjectId containerId,
+                     ObjectId *createdObjectId)
+    {
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
+        const ObjectId addedId = transaction.addShape(shape, containerId);
+        if (!addedId.isValid()) {
+            return false;
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return false;
+        }
+        if (createdObjectId != nullptr) {
+            *createdObjectId = addedId;
+        }
+        return true;
+    }
+
+    bool commitLineWithAutomaticWeld(const Shape &line,
+                                    ObjectId containerId,
+                                    ObjectId *createdObjectId)
     {
         if (!lineAutoWeldEnabled_) {
-            return commitShape(line);
+            return commitShape(line, containerId, createdObjectId);
         }
         const auto hasOnlyPlanarCurves = [](const Shape &shape) {
             const QVector<ShapeNurbsCurveComponent> components =
@@ -14296,13 +14611,20 @@ private:
             return true;
         };
 
-        DocumentTransaction transaction = session_.beginTransaction();
-        const ObjectId newLineId = transaction.addShape(line);
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
+        const ObjectId newLineId = transaction.addShape(line, containerId);
         if (!newLineId.isValid()) {
             return false;
         }
         if (!hasOnlyPlanarCurves(line)) {
-            return session_.commitTransaction(transaction);
+            if (!session_.commitTransaction(transaction)) {
+                return false;
+            }
+            if (createdObjectId != nullptr) {
+                *createdObjectId = newLineId;
+            }
+            return true;
         }
 
         QVector<ObjectId> candidateIds;
@@ -14319,7 +14641,7 @@ private:
             plan.failureMessage.isEmpty() && !plan.replacements.isEmpty()) {
             if (!applyWeldCommand(transaction, plan)) {
                 transaction.rollback();
-                return commitShape(line);
+                return commitShape(line, containerId, createdObjectId);
             }
             DebugLog::instance().write(
                 QStringLiteral("line auto-weld crossings=%1 splitCurves=%2 objects=%3")
@@ -14327,7 +14649,13 @@ private:
                     .arg(plan.splitCurveCount)
                     .arg(plan.replacements.size()));
         }
-        return session_.commitTransaction(transaction);
+        if (!session_.commitTransaction(transaction)) {
+            return false;
+        }
+        if (createdObjectId != nullptr) {
+            *createdObjectId = newLineId;
+        }
+        return true;
     }
 
     void recordGeometrySnapshot(const Document::Snapshot &snapshot)
@@ -18233,7 +18561,8 @@ private:
 
         QElapsedTimer commitTimer;
         commitTimer.start();
-        DocumentTransaction transaction = session_.beginTransaction();
+        DocumentTransaction transaction =
+            session_.beginTransaction(drawingContainerId());
         QStringList changedObjectDescriptions;
         for (const TrimEraseReplacement &change : changes) {
             const int shapeIndex = change.sourceIndex;
@@ -21775,6 +22104,8 @@ private:
     ToolPreview toolPreview_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;
+    bool objectEditMode_ = false;
+    ObjectId activeContainerObjectId_ = ObjectId::invalid();
     // Temporary source-compatibility view. Document owns the storage and
     // identity; the alias will disappear once viewport responsibilities are
     // extracted into tools and services.

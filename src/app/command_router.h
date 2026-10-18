@@ -20,6 +20,7 @@ enum class ApplicationCommand {
     BeginMirror,
     BeginDuplicate,
     DuplicateInPlace,
+    BeginGrab,
     BeginPointExtrude,
     Weld,
 };
@@ -47,6 +48,7 @@ public:
         Handler beginMirror;
         Handler beginDuplicate;
         Handler duplicateInPlace;
+        Handler beginGrab;
         Handler beginPointExtrude;
         Handler weld;
     };

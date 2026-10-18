@@ -8,6 +8,7 @@
 #include "panels/layer_style_widgets.h"
 #include "panels/preferences_dialog.h"
 #include "panels/preferences_store.h"
+#include "panels/outliner_panel.h"
 #include "panels/tool_shelf.h"
 #include "theme/classicad_theme.h"
 #include "viewport/line_type_style.h"
@@ -48,6 +49,7 @@
 #include <QSizePolicy>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -73,9 +75,11 @@ public:
                 break;
             case ApplicationSessionChange::Layers:
                 refreshLayers();
+                refreshOutliner();
                 markDocumentModified();
                 break;
             case ApplicationSessionChange::Selection:
+                refreshOutliner();
                 break;
             case ApplicationSessionChange::DocumentWillBeReplaced:
                 if (viewport_ != nullptr) {
@@ -85,6 +89,7 @@ public:
             case ApplicationSessionChange::DocumentReplaced:
                 updateHistoryActions();
                 refreshLayers();
+                refreshOutliner();
                 markDocumentModified();
                 break;
             }
@@ -617,6 +622,21 @@ private:
         weldShortcut->setContext(Qt::WidgetWithChildrenShortcut);
         connect(weldShortcut, &QShortcut::activated, this, [this]() {
             startWeld();
+        });
+
+        auto *grabShortcut =
+            new QShortcut(QKeySequence(Qt::Key_G), this);
+        grabShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(grabShortcut, &QShortcut::activated, this, [this]() {
+            if (viewport_ == nullptr) {
+                return;
+            }
+            const ViewportCommandResult result =
+                viewport_->executeCommand(ViewportCommand::BeginGrab);
+            if (!result.accepted) {
+                statusBar()->showMessage(
+                    QStringLiteral("Select geometry before moving it"), 2500);
+            }
         });
     }
 
@@ -1166,6 +1186,13 @@ private:
                     }
                 }
             };
+        viewportCallbacks.objectStateUpdate =
+            [this](bool editMode, ObjectId activeObjectId) {
+                if (outlinerPanel_ != nullptr) {
+                    outlinerPanel_->setObjectState(editMode, activeObjectId);
+                    outlinerPanel_->refresh();
+                }
+            };
         workspaceSplitter->addWidget(viewport_);
         workspaceSplitter->addWidget(createRightPanel());
         workspaceSplitter->setStretchFactor(0, 1);
@@ -1273,7 +1300,10 @@ private:
         viewportCallbacks.viewStateUpdate(viewport_->workPlane(),
                                           viewport_->workPlaneOffset(),
                                           viewport_->viewPreset());
+        viewportCallbacks.objectStateUpdate(viewport_->objectEditMode(),
+                                            viewport_->activeContainerObjectId());
         refreshLayers();
+        refreshOutliner();
         updateHistoryActions();
     }
 
@@ -2298,6 +2328,13 @@ private:
         }
     }
 
+    void refreshOutliner()
+    {
+        if (outlinerPanel_ != nullptr) {
+            outlinerPanel_->refresh();
+        }
+    }
+
     bool executeLayerCommand(const ViewportLayerCommandRequest &request,
                              const QString &successMessage,
                              const QString &failureMessage)
@@ -2584,6 +2621,33 @@ private:
 
     QWidget *createRightPanel()
     {
+        auto *tabs = new QTabWidget;
+        tabs->setObjectName(QStringLiteral("rightPanelTabs"));
+
+        OutlinerPanelCallbacks outlinerCallbacks;
+        outlinerCallbacks.objectInfos = [this]() {
+            return viewport_ == nullptr ? QVector<ViewportObjectInfo>()
+                                        : viewport_->objectInfos();
+        };
+        outlinerCallbacks.setEditMode = [this](bool editMode) {
+            if (viewport_ != nullptr) {
+                viewport_->setObjectEditMode(editMode);
+            }
+        };
+        outlinerCallbacks.selectObject = [this](ObjectId id, bool container) {
+            if (viewport_ != nullptr) {
+                viewport_->selectOutlinerObject(id, container);
+            }
+        };
+        outlinerPanel_ = new OutlinerPanel(outlinerCallbacks, tabs);
+        auto *modeShortcut = new QShortcut(QKeySequence(Qt::Key_Tab), tabs);
+        modeShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(modeShortcut, &QShortcut::activated, this, [this]() {
+            if (viewport_ != nullptr) {
+                viewport_->setObjectEditMode(!viewport_->objectEditMode());
+            }
+        });
+
         LayersPanelCallbacks callbacks;
         callbacks.layerInfos = [this]() {
             return viewport_ == nullptr ? QVector<ViewportLayerInfo>()
@@ -2625,8 +2689,10 @@ private:
             refreshLayerToolbar(infos);
         };
 
-        layersPanel_ = new LayersPanel(callbacks);
-        return layersPanel_;
+        layersPanel_ = new LayersPanel(callbacks, tabs);
+        tabs->addTab(outlinerPanel_, QStringLiteral("Outliner"));
+        tabs->addTab(layersPanel_, QStringLiteral("Layer"));
+        return tabs;
     }
 
     void applyTheme()
@@ -2666,6 +2732,7 @@ private:
     QComboBox *layerLineTypeCombo_ = nullptr;
     QComboBox *layerLineWeightCombo_ = nullptr;
     LayersPanel *layersPanel_ = nullptr;
+    OutlinerPanel *outlinerPanel_ = nullptr;
     QString currentProjectPath_;
     bool documentModified_ = false;
     bool suppressDirtyTracking_ = false;

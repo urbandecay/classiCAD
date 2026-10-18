@@ -126,9 +126,15 @@ bool buildDuplicateCommandPlan(const Document &document,
 bool applyDuplicateCommand(const Document &document,
                            DocumentTransaction &transaction,
                            const DuplicateCommandPlan &plan,
-                           QVector<ObjectId> *duplicateObjectIds)
+                           QVector<ObjectId> *duplicateObjectIds,
+                           ObjectId targetContainerId)
 {
     if (duplicateObjectIds == nullptr || plan.duplicateObjects.isEmpty()) {
+        return false;
+    }
+    if (targetContainerId.isValid() &&
+        (document.object(targetContainerId) == nullptr ||
+         document.containerId(targetContainerId) != targetContainerId)) {
         return false;
     }
     duplicateObjectIds->clear();
@@ -150,6 +156,20 @@ bool applyDuplicateCommand(const Document &document,
     for (int duplicateIndex = 0;
          duplicateIndex < duplicateObjectIds->size();
          ++duplicateIndex) {
+        const ObjectId sourceId = plan.sourceObjectIds[duplicateIndex];
+        const ObjectId sourceContainer = document.containerId(sourceId);
+        const auto mappedContainer = duplicateIdBySource.constFind(
+            sourceContainer.value());
+        const ObjectId targetContainer = targetContainerId.isValid()
+                                             ? targetContainerId
+                                             : (mappedContainer == duplicateIdBySource.cend()
+                                                    ? (*duplicateObjectIds)[duplicateIndex]
+                                                    : mappedContainer.value());
+        if (!transaction.setObjectContainer((*duplicateObjectIds)[duplicateIndex],
+                                            targetContainer)) {
+            return false;
+        }
+
         const Shape *currentDuplicate =
             document.shape((*duplicateObjectIds)[duplicateIndex]);
         if (currentDuplicate == nullptr ||

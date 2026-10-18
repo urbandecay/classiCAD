@@ -105,7 +105,7 @@ LayersPanel::LayersPanel(LayersPanelCallbacks callbacks, QWidget *parent)
     : QFrame(parent)
     , callbacks_(std::move(callbacks))
 {
-    setObjectName(QStringLiteral("rightPanel"));
+    setObjectName(QStringLiteral("layersPanel"));
     setMinimumWidth(240);
     createLayout();
 }

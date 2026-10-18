@@ -1942,9 +1942,104 @@ bool verifyContinuousNearDrag(QApplication &application)
     return allPassed;
 }
 
+bool verifyOutlinerSelectionGrab(QApplication &application)
+{
+    ApplicationSession session;
+    Shape rootLine;
+    rootLine.geometryType = GeometryType::Line;
+    rootLine.points = {QPointF(-25.0, -10.0), QPointF(-15.0, -10.0)};
+    rootLine.nurbs = makeDegreeOneNurbs(rootLine.points);
+    rootLine.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+    const ObjectId rootId = session.document().append(rootLine);
+
+    Shape memberLine;
+    memberLine.geometryType = GeometryType::Line;
+    memberLine.points = {QPointF(0.0, 0.0), QPointF(10.0, 0.0)};
+    memberLine.nurbs = makeDegreeOneNurbs(memberLine.points);
+    memberLine.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+    const ObjectId memberId = session.document().append(memberLine);
+    if (!rootId.isValid() || !memberId.isValid() ||
+        !session.document().setObjectContainer(memberId, rootId)) {
+        return false;
+    }
+
+    std::unique_ptr<ViewportWidgetApi> viewport(
+        createViewportWidget(session));
+    viewport->resize(QSize(640, 480));
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Top);
+    if (!waitForViewPreset(viewport.get(), ViewportViewPreset::Top)) {
+        return false;
+    }
+
+    viewport->selectOutlinerObject(rootId, true);
+    viewport->setObjectEditMode(true);
+    viewport->selectOutlinerObject(memberId, false);
+    bool memberHighlighted = false;
+    bool rootUnselected = false;
+    for (const ViewportObjectInfo &info : viewport->objectInfos()) {
+        if (info.id == memberId) {
+            memberHighlighted = info.selected && info.primarySelected;
+        } else if (info.id == rootId) {
+            rootUnselected = !info.selected;
+        }
+    }
+    bool passed = check(memberHighlighted && rootUnselected,
+                        "selecting a geometry row in Edit Mode must highlight that same geometry in the viewport");
+
+    const QPoint center(viewport->width() / 2, viewport->height() / 2);
+    // Simulate pressing G with the pointer still over a sibling panel.
+    QCursor::setPos(viewport->mapToGlobal(
+        QPoint(viewport->width() + 40, viewport->height() / 2)));
+    const ViewportCommandResult grab =
+        viewport->executeCommand(ViewportCommand::BeginGrab);
+    passed &= check(grab.accepted,
+                    "G must start Grab from the geometry selected in the Outliner");
+    if (!grab.accepted) {
+        return false;
+    }
+
+    const QPointF destination = QPointF(center) + QPointF(32.0, 0.0);
+    sendMouse(viewport.get(), QEvent::MouseMove, destination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, destination,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+
+    const Shape *movedMember = session.document().shape(memberId);
+    const Shape *unchangedRoot = session.document().shape(rootId);
+    const auto sameWorldPoint = [](const Point3D &a, const Point3D &b) {
+        return std::abs(a.x - b.x) <= 1.0e-6 &&
+               std::abs(a.y - b.y) <= 1.0e-6 &&
+               std::abs(a.z - b.z) <= 1.0e-6;
+    };
+    const Point3D memberBefore = shapePointToWorld(
+        memberLine, memberLine.nurbs.controlPoints.first());
+    const bool memberMoved = movedMember != nullptr &&
+        !sameWorldPoint(shapePointToWorld(
+                            *movedMember,
+                            movedMember->nurbs.controlPoints.first()),
+                        memberBefore);
+    const bool rootUnchanged = unchangedRoot != nullptr &&
+        sameWorldPoint(shapePointToWorld(
+                           *unchangedRoot,
+                           unchangedRoot->nurbs.controlPoints.first()),
+                       shapePointToWorld(
+                           rootLine, rootLine.nurbs.controlPoints.first()));
+    passed &= check(memberMoved,
+                    "Grab from the Outliner must move its highlighted geometry");
+    passed &= check(rootUnchanged,
+                    "Grab from the Outliner must leave unrelated geometry unchanged");
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_OUTLINER_GRAB_ONLY")) {
+        return verifyOutlinerSelectionGrab(application) ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_BOUNDARY_ONLY")) {
         const bool boundary = verifySurfaceBoundarySplineDuplicate(application);
         const bool arcExtrusion = verifyArcToolExtrudeBoundary(application);

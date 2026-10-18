@@ -58,6 +58,9 @@ ApplicationCommandResult CommandRouter::execute(ApplicationCommand command,
     case ApplicationCommand::DuplicateInPlace:
         handler = &handlers_.duplicateInPlace;
         break;
+    case ApplicationCommand::BeginGrab:
+        handler = &handlers_.beginGrab;
+        break;
     case ApplicationCommand::BeginPointExtrude:
         handler = &handlers_.beginPointExtrude;
         break;

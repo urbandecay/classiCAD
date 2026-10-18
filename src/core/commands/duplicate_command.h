@@ -18,6 +18,7 @@ bool buildDuplicateCommandPlan(const Document &document,
 bool applyDuplicateCommand(const Document &document,
                            DocumentTransaction &transaction,
                            const DuplicateCommandPlan &plan,
-                           QVector<ObjectId> *duplicateObjectIds);
+                           QVector<ObjectId> *duplicateObjectIds,
+                           ObjectId targetContainerId = ObjectId::invalid());
 
 } // namespace classiCAD

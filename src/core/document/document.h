@@ -47,6 +47,8 @@ public:
 
     const SceneObject *object(ObjectId id) const;
     const Shape *shape(ObjectId id) const;
+    ObjectId containerId(ObjectId objectId) const;
+    QVector<ObjectId> objectIdsInContainer(ObjectId objectId) const;
     ObjectId objectIdAt(int index) const;
     int indexOf(ObjectId id) const;
     quint64 objectGeometryRevision(ObjectId id) const;
@@ -99,6 +101,7 @@ public:
     bool setLayerDescription(LayerId id, const QString &description);
     bool isLayerEditable(LayerId id) const;
     bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
+    bool setObjectContainer(ObjectId objectId, ObjectId containerId);
     bool isObjectVisible(ObjectId objectId) const;
     bool isObjectEditable(ObjectId objectId) const;
 
@@ -150,6 +153,7 @@ private:
     LayerId normalizedLayerId(LayerId requested) const;
     void rebuildLayerObjectIds();
     void rebuildObjectIndex();
+    void normalizeObjectContainers();
     void bumpRevision(quint64 *revision);
     void noteGeometryChange(ObjectId id);
     SceneObject *mutableObject(ObjectId id);

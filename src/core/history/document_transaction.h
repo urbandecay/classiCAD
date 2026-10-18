@@ -12,14 +12,17 @@ namespace classiCAD {
 // caller exits without committing.
 class DocumentTransaction final {
 public:
-    DocumentTransaction(Document &document, History &history);
+    DocumentTransaction(Document &document,
+                        History &history,
+                        ObjectId creationContainerId = ObjectId::invalid());
     ~DocumentTransaction();
 
     DocumentTransaction(const DocumentTransaction &) = delete;
     DocumentTransaction &operator=(const DocumentTransaction &) = delete;
 
     Shape *editGeometry(ObjectId objectId);
-    ObjectId addShape(const Shape &shape);
+    ObjectId addShape(const Shape &shape,
+                      ObjectId containerId = ObjectId::invalid());
     ObjectId insertObject(int index, const SceneObject &object);
     QVector<ObjectId> insertObjects(int index,
                                     const QVector<SceneObject> &objects);
@@ -31,12 +34,14 @@ public:
     bool removeObject(ObjectId objectId);
     QVector<ObjectId> removeObjects(const QVector<ObjectId> &objectIds);
     bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
+    bool setObjectContainer(ObjectId objectId, ObjectId containerId);
     bool editLayer(LayerId layerId,
                    const std::function<void(Layer &)> &edit,
                    bool visibilityChanged = false);
     bool setSettings(const DocumentSettings &settings);
     void replaceDocument(const Document::Snapshot &snapshot);
     void replaceObjects(const QVector<SceneObject> &objects);
+    ObjectId creationContainerId() const;
     void markAllGeometryChanged();
     void markSelectionChanged();
 
@@ -49,6 +54,7 @@ private:
     History &history_;
     Document::Snapshot before_;
     DocumentChangeSet changes_;
+    ObjectId creationContainerId_ = ObjectId::invalid();
     bool finished_ = false;
 };
 

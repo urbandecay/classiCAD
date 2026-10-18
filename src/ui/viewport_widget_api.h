@@ -47,6 +47,15 @@ struct ViewportLayerInfo {
     bool plotted = true;
 };
 
+struct ViewportObjectInfo {
+    ObjectId id = ObjectId::invalid();
+    ObjectId containerId = ObjectId::invalid();
+    QString containerName;
+    QString geometryName;
+    bool selected = false;
+    bool primarySelected = false;
+};
+
 struct ViewportUiCallbacks {
     std::function<void(const QString &)> coordinateUpdate;
     std::function<void(const QString &)> toolStatusUpdate;
@@ -57,6 +66,7 @@ struct ViewportUiCallbacks {
     std::function<void(const QString &)> joinStatusUpdate;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate;
     std::function<void(int, bool, bool)> viewportControlsChanged;
+    std::function<void(bool, ObjectId)> objectStateUpdate;
 };
 
 struct RotateToolPreferences {
@@ -82,6 +92,12 @@ public:
     virtual ViewportCommandResult executeCommand(ViewportCommand command,
                                                   int argument = 0) = 0;
     virtual QVector<ViewportLayerInfo> layerInfos() const = 0;
+    virtual QVector<ViewportObjectInfo> objectInfos() const = 0;
+    virtual void setObjectEditMode(bool editMode) = 0;
+    virtual bool objectEditMode() const = 0;
+    virtual ObjectId activeContainerObjectId() const = 0;
+    virtual void selectOutlinerObject(ObjectId objectId,
+                                      bool selectContainer) = 0;
     virtual ViewportLayerCommandResult executeLayerCommand(
         const ViewportLayerCommandRequest &request) = 0;
     virtual bool canUndo() const = 0;
@@ -172,6 +188,7 @@ public:
         joinStatusUpdate_ = callbacks.joinStatusUpdate;
         viewStateUpdate_ = callbacks.viewStateUpdate;
         viewportControlsChanged_ = callbacks.viewportControlsChanged;
+        objectStateUpdate_ = callbacks.objectStateUpdate;
     }
 
 protected:
@@ -184,6 +201,7 @@ protected:
     std::function<void(const QString &)> joinStatusUpdate_;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate_;
     std::function<void(int, bool, bool)> viewportControlsChanged_;
+    std::function<void(bool, ObjectId)> objectStateUpdate_;
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent = nullptr);

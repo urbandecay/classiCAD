@@ -63,6 +63,32 @@ const Shape *Document::shape(ObjectId id) const
     return sceneObject != nullptr ? &sceneObject->geometry : nullptr;
 }
 
+ObjectId Document::containerId(ObjectId objectId) const
+{
+    const SceneObject *sceneObject = object(objectId);
+    if (sceneObject == nullptr) {
+        return ObjectId::invalid();
+    }
+    return sceneObject->containerId.isValid() ? sceneObject->containerId
+                                              : sceneObject->id;
+}
+
+QVector<ObjectId> Document::objectIdsInContainer(ObjectId objectId) const
+{
+    const ObjectId requestedContainer = containerId(objectId);
+    if (!requestedContainer.isValid()) {
+        return {};
+    }
+
+    QVector<ObjectId> ids;
+    for (const SceneObject &sceneObject : objects_) {
+        if (containerId(sceneObject.id) == requestedContainer) {
+            ids.append(sceneObject.id);
+        }
+    }
+    return ids;
+}
+
 SceneObject *Document::mutableObject(ObjectId id)
 {
     const int index = indexOf(id);
@@ -266,6 +292,10 @@ ObjectId Document::insertObject(int index, SceneObject object)
     } else {
         nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
     }
+    if (!object.containerId.isValid() ||
+        (object.containerId != object.id && indexOf(object.containerId) < 0)) {
+        object.containerId = object.id;
+    }
     object.layerId = normalizedLayerId(object.layerId);
     index = std::clamp(index, 0, static_cast<int>(objects_.size()));
     objects_.insert(index, object);
@@ -274,6 +304,7 @@ ObjectId Document::insertObject(int index, SceneObject object)
     }
     objectGeometryRevisions_.insert(object.id.value(), revisionClock_);
     rebuildLayerObjectIds();
+    normalizeObjectContainers();
     DocumentChangeSet changes;
     changes.addObject(object.id);
     changes.geometryChanged = true;
@@ -310,6 +341,9 @@ QVector<ObjectId> Document::insertObjects(
             object.id = allocateObjectId();
         } else {
             nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
+        }
+        if (!object.containerId.isValid()) {
+            object.containerId = object.id;
         }
         object.layerId = normalizedLayerId(object.layerId);
         insertedPlacementChanged = insertedPlacementChanged ||
@@ -353,6 +387,7 @@ QVector<ObjectId> Document::insertObjects(
         objectGeometryRevisions_.insert(id.value(), revisionClock_);
     }
     rebuildLayerObjectIds();
+    normalizeObjectContainers();
 
     DocumentChangeSet changes;
     for (const ObjectId id : insertedIds) {
@@ -396,6 +431,7 @@ bool Document::removeAt(int index)
     for (int objectIndex = index; objectIndex < objects_.size(); ++objectIndex) {
         objectIndices_.insert(objects_[objectIndex].id.value(), objectIndex);
     }
+    normalizeObjectContainers();
     DocumentChangeSet changes;
     changes.addObject(removedId);
     changes.geometryChanged = true;
@@ -449,6 +485,7 @@ QVector<ObjectId> Document::removeObjects(const QVector<ObjectId> &objectIds)
     }
     rebuildObjectIndex();
     rebuildLayerObjectIds();
+    normalizeObjectContainers();
 
     changes.geometryChanged = true;
     changes.structureChanged = true;
@@ -500,11 +537,15 @@ void Document::replaceObjects(const QVector<SceneObject> &objects)
         } else {
             nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
         }
+        if (!object.containerId.isValid()) {
+            object.containerId = object.id;
+        }
         object.layerId = normalizedLayerId(object.layerId);
         const int index = objects_.size();
         objects_.append(object);
         objectIndices_.insert(object.id.value(), index);
     }
+    normalizeObjectContainers();
     rebuildLayerObjectIds();
     DocumentChangeSet changes;
     changes.geometryChanged = true;
@@ -857,6 +898,27 @@ bool Document::moveObjectToLayer(ObjectId objectId, LayerId layerId)
     return true;
 }
 
+bool Document::setObjectContainer(ObjectId objectId, ObjectId requestedContainerId)
+{
+    SceneObject *sceneObject = mutableObject(objectId);
+    const ObjectId targetContainerId =
+        requestedContainerId.isValid() ? requestedContainerId : objectId;
+    if (sceneObject == nullptr ||
+        (targetContainerId != objectId && indexOf(targetContainerId) < 0)) {
+        return false;
+    }
+    if (sceneObject->containerId == targetContainerId) {
+        return true;
+    }
+    sceneObject->containerId = targetContainerId;
+    normalizeObjectContainers();
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::isObjectVisible(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
@@ -890,6 +952,7 @@ void Document::restoreSnapshot(const Snapshot &snapshot)
     ensureDefaultLayer();
     rebuildLayerObjectIds();
     rebuildObjectIndex();
+    normalizeObjectContainers();
     objectGeometryRevisions_.clear();
     DocumentChangeSet changes;
     changes.geometryChanged = true;
@@ -963,6 +1026,45 @@ void Document::rebuildObjectIndex()
     objectIndices_.reserve(objects_.size());
     for (int index = 0; index < objects_.size(); ++index) {
         objectIndices_.insert(objects_[index].id.value(), index);
+    }
+}
+
+void Document::normalizeObjectContainers()
+{
+    if (objects_.isEmpty()) {
+        return;
+    }
+
+    QSet<quint64> objectIds;
+    QSet<quint64> roots;
+    objectIds.reserve(objects_.size());
+    roots.reserve(objects_.size());
+    for (SceneObject &sceneObject : objects_) {
+        objectIds.insert(sceneObject.id.value());
+        if (!sceneObject.containerId.isValid()) {
+            sceneObject.containerId = sceneObject.id;
+        }
+        if (sceneObject.containerId == sceneObject.id) {
+            roots.insert(sceneObject.id.value());
+        }
+    }
+
+    QHash<quint64, quint64> replacementRoots;
+    for (const SceneObject &sceneObject : objects_) {
+        const quint64 requestedRoot = sceneObject.containerId.value();
+        if (roots.contains(requestedRoot)) {
+            continue;
+        }
+        if (!replacementRoots.contains(requestedRoot)) {
+            replacementRoots.insert(requestedRoot, sceneObject.id.value());
+        }
+    }
+    for (SceneObject &sceneObject : objects_) {
+        const quint64 requestedRoot = sceneObject.containerId.value();
+        if (!objectIds.contains(requestedRoot) || !roots.contains(requestedRoot)) {
+            sceneObject.containerId = ObjectId::fromValue(
+                replacementRoots.value(requestedRoot, sceneObject.id.value()));
+        }
     }
 }
 

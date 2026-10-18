@@ -132,6 +132,12 @@ void ToolContext::setSelectionInteractionCallbacks(
     selectionGestureHandler_ = std::move(gestureHandler);
 }
 
+void ToolContext::setCreationContainerProvider(
+    CreationContainerProvider provider)
+{
+    creationContainerProvider_ = std::move(provider);
+}
+
 bool ToolContext::createShape(ToolId tool,
                               const QVector<QPointF> &points,
                               ArcMode arcMode,
@@ -173,7 +179,11 @@ void ToolContext::finishTool(ToolId tool) const
 
 DocumentTransaction ToolContext::beginTransaction() const
 {
-    return DocumentTransaction(document_, history_);
+    return DocumentTransaction(document_,
+                               history_,
+                               creationContainerProvider_
+                                   ? creationContainerProvider_()
+                                   : ObjectId::invalid());
 }
 
 bool ToolContext::commitTransaction(DocumentTransaction &transaction) const

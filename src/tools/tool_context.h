@@ -59,6 +59,7 @@ public:
         const ToolInput &,
         const SelectionHit &,
         bool)>;
+    using CreationContainerProvider = std::function<ObjectId()>;
 
     ToolContext(Document &document,
                 SelectionModel &selection,
@@ -92,6 +93,7 @@ public:
                                      PolygonSideCountSetter setter);
     void setSelectionInteractionCallbacks(SelectionHitTest hitTest,
                                           SelectionGestureHandler gestureHandler);
+    void setCreationContainerProvider(CreationContainerProvider provider);
 
     bool createShape(ToolId tool,
                      const QVector<QPointF> &points,
@@ -145,6 +147,7 @@ private:
     PolygonSideCountSetter polygonSideCountSetter_;
     SelectionHitTest selectionHitTest_;
     SelectionGestureHandler selectionGestureHandler_;
+    CreationContainerProvider creationContainerProvider_;
 };
 
 } // namespace classiCAD

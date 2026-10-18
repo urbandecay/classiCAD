@@ -69,9 +69,10 @@ void ApplicationSession::notifySelectionChanged()
     notify(ApplicationSessionChange::Selection);
 }
 
-DocumentTransaction ApplicationSession::beginTransaction()
+DocumentTransaction ApplicationSession::beginTransaction(
+    ObjectId creationContainerId)
 {
-    return DocumentTransaction(document_, history_);
+    return DocumentTransaction(document_, history_, creationContainerId);
 }
 
 bool ApplicationSession::commitTransaction(DocumentTransaction &transaction)

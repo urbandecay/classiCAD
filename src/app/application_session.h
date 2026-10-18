@@ -40,7 +40,8 @@ public:
     void notifyHistoryChanged();
     void notifyLayersChanged();
     void notifySelectionChanged();
-    DocumentTransaction beginTransaction();
+    DocumentTransaction beginTransaction(
+        ObjectId creationContainerId = ObjectId::invalid());
     bool commitTransaction(DocumentTransaction &transaction);
     void replaceDocument(Document document);
 

@@ -113,6 +113,27 @@ bool applyJoinCommand(const Document &document,
             return false;
         }
     }
+
+    const ObjectId creationContainerId = transaction.creationContainerId();
+    if (creationContainerId.isValid() &&
+        plan.sourceObjectIds.contains(creationContainerId) &&
+        document.containerId(creationContainerId) == creationContainerId) {
+        if (!transaction.replaceGeometry(creationContainerId,
+                                         plan.joinedObject.geometry)) {
+            return false;
+        }
+        for (const ObjectId sourceObjectId : plan.sourceObjectIds) {
+            if (sourceObjectId != creationContainerId &&
+                !transaction.removeObject(sourceObjectId)) {
+                return false;
+            }
+        }
+        if (joinedObjectId != nullptr) {
+            *joinedObjectId = creationContainerId;
+        }
+        return true;
+    }
+
     for (const ObjectId sourceObjectId : plan.sourceObjectIds) {
         if (!transaction.removeObject(sourceObjectId)) {
             return false;

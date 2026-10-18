@@ -212,6 +212,7 @@ set(CLASSICAD_UI_SOURCES
     src/ui/panels/document_grid_dialog.cpp
     src/ui/panels/layer_style_widgets.cpp
     src/ui/panels/layers_panel.cpp
+    src/ui/panels/outliner_panel.cpp
     src/ui/panels/preferences_dialog.cpp
     src/ui/panels/preferences_store.cpp
     src/ui/panels/tool_shelf.cpp
@@ -275,6 +276,7 @@ classicad_add_ui_object_module(classicad_main_window_objects
     src/ui/panels/document_grid_dialog.cpp
     src/ui/panels/layer_style_widgets.cpp
     src/ui/panels/layers_panel.cpp
+    src/ui/panels/outliner_panel.cpp
     src/ui/panels/preferences_dialog.cpp
     src/ui/panels/preferences_store.cpp
     src/ui/panels/tool_shelf.cpp

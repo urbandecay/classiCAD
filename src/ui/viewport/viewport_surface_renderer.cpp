@@ -289,6 +289,12 @@ bool ViewportSurfaceRenderer::initialize()
         void main()
         {
             vec3 normal = normalize(vNormalView);
+            // With culling disabled, open NURBS sheets are visible from both
+            // sides. Light the side being viewed without changing the stored
+            // surface orientation used by topology and backface culling.
+            if (!gl_FrontFacing) {
+                normal = -normal;
+            }
             vec3 incident = vec3(0.0, 0.0, 1.0);
             if (uPerspective) {
                 vec3 incidentWorld = normalize(uCameraPosition - vWorldPosition);

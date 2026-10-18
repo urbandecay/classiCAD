@@ -1617,22 +1617,24 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             : workbenchDefaultSolidMaterialDiffuseColor();
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition) {
-            const QVector3D normalWorld = workbenchNormalize(
+            QVector3D normalWorld = workbenchNormalize(
                 reverseOrientation && preparedGeometry == nullptr
                     ? -sourceNormal
                     : sourceNormal,
                 QVector3D(0.0f, 0.0f, 1.0f));
-            if (shadingSettings_.backfaceCulling) {
+            {
                 const QVector3D position(
                     static_cast<float>(sourcePosition.x + preparedOffset.x),
                     static_cast<float>(sourcePosition.y + preparedOffset.y),
                     static_cast<float>(sourcePosition.z + preparedOffset.z));
                 const QVector3D towardCamera = transform_.isPerspectiveEnabled()
                     ? workbenchNormalize(camera - position, worldFacing)
-                    : -worldFacing;
+                    : worldFacing;
                 if (QVector3D::dotProduct(normalWorld, towardCamera) <= 0.0f) {
-                    QColor culled(Qt::transparent);
-                    return culled;
+                    if (shadingSettings_.backfaceCulling) {
+                        return QColor(Qt::transparent);
+                    }
+                    normalWorld = -normalWorld;
                 }
             }
             const QVector3D normalView(

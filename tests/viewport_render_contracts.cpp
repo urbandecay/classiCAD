@@ -9,6 +9,7 @@
 #include "ui/viewport/workbench_lighting.h"
 
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_surface_factory.h"
 #include "core/geometry/nurbs_solid.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/viewport/viewport_transform.h"
@@ -299,6 +300,17 @@ int main(int argc, char *argv[])
     Shape surfaceShape;
     surfaceShape.geometryType = GeometryType::NurbsSurface;
     surfaceShape.nurbsSurface = fillSurface;
+    Shape backFacingSurface = surfaceShape;
+    NurbsCurve2D reversedEdge;
+    reversedEdge.degree = 1;
+    reversedEdge.order = 2;
+    reversedEdge.controlPoints = {{1.0,-1.0}, {-1.0,-1.0}};
+    reversedEdge.weights = {1.0,1.0};
+    reversedEdge.knots = {0.0,1.0};
+    passed &= check(makeNurbsExtrusionSurface(
+                        reversedEdge, makeWorkPlaneFrame(WorkPlane::XY),
+                        {0.0,2.0,0.0}, &backFacingSurface.nurbsSurface),
+                    "reversing the extruded source edge must produce an exact back-facing sheet");
     NurbsSurface3D cubeBaseSurface = fillSurface;
     for (Point3D &point : cubeBaseSurface.controlPoints) {
         point.z = -1.0;
@@ -339,13 +351,14 @@ int main(int argc, char *argv[])
         QColor centerColor;
     };
     const auto renderedSurface = [&](const ViewportShadingSettings &settings,
-                                     bool selected = false) {
+                                     bool selected = false,
+                                     bool backFacing = false) {
         QImage image(surfaceViewportSize,
                      QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         surfaceRenderer.setShadingSettings(settings);
         QPainter painter(&image);
-        surfaceRenderer.drawShape(painter, surfaceShape, surfaceViewportSize,
+        surfaceRenderer.drawShape(painter, backFacing ? backFacingSurface : surfaceShape, surfaceViewportSize,
                                  false, selected);
         painter.end();
         int coveredPixels = 0;
@@ -401,6 +414,23 @@ int main(int argc, char *argv[])
                         std::abs(matcapSurface.centerColor.blueF() -
                                  expectedMatcapColor.z()) < 0.025f,
                     "solid viewport shading must render NURBS faces with Workbench Studio and two-layer MatCap colors");
+
+    surfaceTransform.setViewDirection({4.0,-6.0,4.0});
+    for (const auto mode : {ViewportLightingMode::Studio, ViewportLightingMode::MatCap}) {
+        ViewportShadingSettings sheetSettings;
+        sheetSettings.lightingMode = mode;
+        const auto front = renderedSurface(sheetSettings);
+        const auto back = renderedSurface(sheetSettings, false, true);
+        passed &= check(front.coveredPixels > 0 && back.coveredPixels > 0 &&
+                            std::abs(front.centerColor.red()-back.centerColor.red()) <= 2 &&
+                            std::abs(front.centerColor.green()-back.centerColor.green()) <= 2 &&
+                            std::abs(front.centerColor.blue()-back.centerColor.blue()) <= 2,
+                        "CPU Studio and MatCap must illuminate both sides of an open sheet equally");
+        sheetSettings.backfaceCulling = true;
+        passed &= check(renderedSurface(sheetSettings).coveredPixels > 0 &&
+                            renderedSurface(sheetSettings, false, true).coveredPixels == 0,
+                        "CPU backface culling must preserve the sheet's exact orientation");
+    }
 
     QOpenGLContext context;
     context.setFormat(format);
@@ -527,6 +557,59 @@ int main(int argc, char *argv[])
                         gpuMatcapShading);
                     functions.glFinish();
                     gpuMatcapImage = framebuffer.toImage();
+
+                    // An open sheet has no outside: viewing its reverse side
+                    // must illuminate the visible side, while culling must
+                    // still respect the exact surface's original orientation.
+                    QVector<ViewportRenderObject> sheets;
+                    for (const Shape &sheet : {surfaceShape, backFacingSurface}) {
+                        ViewportRenderObject sheetObject;
+                        sheetObject.shape = sheet;
+                        sheetObject.preparedDepthGeometry =
+                            QSharedPointer<ViewportDepthGeometry>::create(
+                                buildViewportDepthGeometry(sheet));
+                        sheets.append(sheetObject);
+                    }
+                    for (const auto mode : {ViewportLightingMode::Studio,
+                                            ViewportLightingMode::MatCap}) {
+                        ViewportShadingSettings sheetSettings;
+                        sheetSettings.lightingMode = mode;
+                        sheetSettings.outline = false;
+                        QColor colors[2];
+                        int side = 0;
+                        for (const auto &sheetObject : sheets) {
+                            functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                            passed &= check(gpuSurfaceRenderer.draw(
+                                {sheetObject}, gpuTransform, glSize, 1.0, sheetSettings),
+                                "two-sided sheet shading must render successfully");
+                            functions.glFinish();
+                            const QImage sheetImage = framebuffer.toImage();
+                            colors[side++] = sheetImage.pixelColor(320,240);
+                            const QString prefix = qEnvironmentVariable("CLASSICAD_SHEET_CAPTURE_PREFIX");
+                            if (!prefix.isEmpty())
+                                sheetImage.save(QStringLiteral("%1-%2-%3.png")
+                                    .arg(prefix).arg(int(mode)).arg(side));
+                        }
+                        qInfo() << "sheet lighting" << int(mode)
+                                << "front" << colors[0] << "back" << colors[1];
+                        passed &= check(
+                            std::abs(colors[0].red()-colors[1].red()) <= 2 &&
+                            std::abs(colors[0].green()-colors[1].green()) <= 2 &&
+                            std::abs(colors[0].blue()-colors[1].blue()) <= 2,
+                            "GPU Studio and MatCap must shade both orientations of the same open sheet equally");
+                        sheetSettings.backfaceCulling = true;
+                        for (int sheetIndex = 0; sheetIndex < sheets.size(); ++sheetIndex) {
+                            functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                            gpuSurfaceRenderer.draw({sheets[sheetIndex]}, gpuTransform,
+                                                    glSize, 1.0, sheetSettings);
+                            functions.glFinish();
+                            const QColor pixel = framebuffer.toImage().pixelColor(320,240);
+                            passed &= check(sheetIndex == 0
+                                    ? pixel == colors[0]
+                                    : pixel == QColor(34,34,34),
+                                "GPU culling must keep the original surface orientation despite two-sided lighting");
+                        }
+                    }
                     framebuffer.release();
                 }
             }

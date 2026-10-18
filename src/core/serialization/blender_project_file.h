@@ -131,10 +131,14 @@ struct BlenderDataApiDriverEditResult {
 QByteArray blenderProjectSha256(const QString &path,
                                 QString *errorMessage = nullptr);
 
-// Runs Blender's recursive Orphan Data purge against an imported ordinary
-// .blend, stages the result, backs up the original, then atomically replaces it.
+// Runs Blender's Orphan Data purge with the selected local, linked, and
+// recursive options against an imported ordinary .blend. A changed file is
+// staged, backed up, then atomically replaced.
 bool purgeBlenderOrphanData(const QString &sourcePath,
                             const QByteArray &expectedSourceSha256,
+                            bool includeLocalIds,
+                            bool includeLinkedIds,
+                            bool recursive,
                             BlenderOrphanPurgeResult *result,
                             QString *errorMessage = nullptr);
 

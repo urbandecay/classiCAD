@@ -540,7 +540,8 @@ bool runBlenderAdapter(const QString &operation,
                        const QString &outputPath,
                        QString *errorMessage,
                        const QString &reportPath = {},
-                       const QString &requestPath = {})
+                       const QString &requestPath = {},
+                       const QStringList &additionalArguments = {})
 {
     const QString executable = blenderExecutable();
     if (executable.isEmpty()) {
@@ -580,6 +581,7 @@ bool runBlenderAdapter(const QString &operation,
                           outputPath};
     if (!requestPath.isEmpty()) arguments.append(requestPath);
     if (!reportPath.isEmpty()) arguments.append(reportPath);
+    arguments.append(additionalArguments);
     process.setArguments(arguments);
     process.setProcessChannelMode(QProcess::SeparateChannels);
     process.start();
@@ -2845,6 +2847,9 @@ void extractBlenderDataApiSectionAsync(
 
 bool purgeBlenderOrphanData(const QString &sourcePath,
                             const QByteArray &expectedSourceSha256,
+                            bool includeLocalIds,
+                            bool includeLinkedIds,
+                            bool recursive,
                             BlenderOrphanPurgeResult *result,
                             QString *errorMessage)
 {
@@ -2854,6 +2859,7 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
                  QStringLiteral("An imported Blender source and its SHA-256 are required"));
         return false;
     }
+    *result = {};
 
     const QFileInfo sourceInfo(sourcePath);
     if (!sourceInfo.isFile() || sourceInfo.isSymLink() ||
@@ -2903,12 +2909,14 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
                            absoluteSourcePath,
                            stagedPath,
                            errorMessage,
-                           reportPath)) {
-        return false;
-    }
-    if (!hasBlenderFileHeader(stagedPath)) {
-        setError(errorMessage,
-                 QStringLiteral("Blender did not produce a valid staged project after purging"));
+                           reportPath,
+                           {},
+                           {includeLocalIds ? QStringLiteral("1")
+                                            : QStringLiteral("0"),
+                            includeLinkedIds ? QStringLiteral("1")
+                                             : QStringLiteral("0"),
+                            recursive ? QStringLiteral("1")
+                                      : QStringLiteral("0")})) {
         return false;
     }
 
@@ -2980,6 +2988,28 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
         }
     }
 
+    const int removedDataBlockCount = removedCountValue.toInt();
+    if (removedDataBlockCount == 0) {
+        const QByteArray sourceAfterNoOp =
+            fileSha256(absoluteSourcePath, errorMessage);
+        if (sourceAfterNoOp.isEmpty()) return false;
+        if (sourceAfterNoOp != expectedSourceSha256) {
+            setError(errorMessage,
+                     QStringLiteral("The original Blender file changed while the purge was running. The original was left untouched."));
+            return false;
+        }
+        result->remainingOrphans = remainingOrphans;
+        result->sourceSha256 = sourceAfterNoOp;
+        result->removedDataBlockCount = 0;
+        return true;
+    }
+
+    if (!hasBlenderFileHeader(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not produce a valid staged project after purging"));
+        return false;
+    }
+
     const QByteArray stagedSha256 = fileSha256(stagedPath, errorMessage);
     if (stagedSha256.isEmpty()) return false;
     const QByteArray sourceBeforeCommit =
@@ -3035,7 +3065,7 @@ bool purgeBlenderOrphanData(const QString &sourcePath,
     result->remainingOrphans = remainingOrphans;
     result->backupPath = backupPath;
     result->sourceSha256 = committedSha256;
-    result->removedDataBlockCount = removedCountValue.toInt();
+    result->removedDataBlockCount = removedDataBlockCount;
     return true;
 }
 

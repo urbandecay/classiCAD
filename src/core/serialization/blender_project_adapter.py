@@ -2480,7 +2480,9 @@ def edit_keying_set_paths(source_path, staged_path, request_path, report_path):
         )
 
 
-def purge_project_orphans(source_path, staged_path, report_path):
+def purge_project_orphans(source_path, staged_path, report_path,
+                          do_local_ids=True, do_linked_ids=True,
+                          do_recursive=True):
     result = bpy.ops.wm.open_mainfile(
         filepath=os.path.abspath(source_path),
         load_ui=False,
@@ -2494,11 +2496,20 @@ def purge_project_orphans(source_path, staged_path, report_path):
             "Orphan Data Purge cannot edit a classiCAD-native Blender project")
 
     removed_count = bpy.data.orphans_purge(
-        do_local_ids=True,
-        do_linked_ids=True,
-        do_recursive=True,
+        do_local_ids=do_local_ids,
+        do_linked_ids=do_linked_ids,
+        do_recursive=do_recursive,
     )
     remaining_orphans = outliner_orphan_groups()
+    if int(removed_count) == 0:
+        with open(report_path, "w", encoding="utf-8") as report_file:
+            json.dump(
+                {"removed_count": 0, "orphans": remaining_orphans},
+                report_file,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        return
     result = bpy.ops.wm.save_as_mainfile(
         filepath=os.path.abspath(staged_path),
         check_existing=False,
@@ -2527,8 +2538,19 @@ def main():
     if operation == "load" and len(arguments) == 3:
         load_project(arguments[1], arguments[2])
         return
-    if operation == "purge" and len(arguments) == 4:
-        purge_project_orphans(arguments[1], arguments[2], arguments[3])
+    if operation == "purge" and len(arguments) in {4, 7}:
+        purge_options = arguments[4:]
+        if purge_options and any(value not in {"0", "1"}
+                                 for value in purge_options):
+            raise ValueError("Orphan purge options must be zero or one")
+        if purge_options:
+            do_local_ids, do_linked_ids, do_recursive = (
+                value == "1" for value in purge_options)
+        else:
+            do_local_ids = do_linked_ids = do_recursive = True
+        purge_project_orphans(
+            arguments[1], arguments[2], arguments[3],
+            do_local_ids, do_linked_ids, do_recursive)
         return
     if operation == "keying_set_paths" and len(arguments) == 5:
         edit_keying_set_paths(

@@ -25,6 +25,7 @@
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -60,6 +61,7 @@
 #include <QUuid>
 #include <QVariant>
 #include <QWidget>
+#include <QVBoxLayout>
 #include <QtMath>
 
 #include <array>
@@ -1044,23 +1046,57 @@ private:
             return;
         }
         const QString sourcePath = importedBlenderSourcePath_;
-        const QString confirmation = QStringLiteral(
-            "Remove all unused data blocks from this original Blender file?\n\n"
-            "%1\n\n"
-            "This changes the Blender file. classiCAD will create and verify a timestamped backup beside it before replacing it.")
-            .arg(sourcePath);
-        const QMessageBox::StandardButton answer = QMessageBox::warning(
-            this,
-            QStringLiteral("Purge Blender Orphan Data"),
-            confirmation,
-            QMessageBox::Yes | QMessageBox::Cancel,
-            QMessageBox::Cancel);
-        if (answer != QMessageBox::Yes) return;
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Purge Unused Data from This File"));
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *description = new QLabel(
+            QStringLiteral(
+                "Choose which unused data blocks Blender should remove. This changes the original Blender file; classiCAD creates and verifies a timestamped backup before replacing it.\n\n%1")
+                .arg(sourcePath),
+            &dialog);
+        description->setWordWrap(true);
+        layout->addWidget(description);
+
+        auto *localIds = new QCheckBox(
+            QStringLiteral("Local Data-blocks"), &dialog);
+        localIds->setChecked(true);
+        localIds->setToolTip(QStringLiteral(
+            "Include unused data blocks stored in this Blender file."));
+        layout->addWidget(localIds);
+
+        auto *linkedIds = new QCheckBox(
+            QStringLiteral("Linked Data-blocks"), &dialog);
+        linkedIds->setChecked(true);
+        linkedIds->setToolTip(QStringLiteral(
+            "Include unused data blocks linked from other Blender files."));
+        layout->addWidget(linkedIds);
+
+        auto *recursive = new QCheckBox(
+            QStringLiteral("Recursive Delete"), &dialog);
+        recursive->setChecked(true);
+        recursive->setToolTip(QStringLiteral(
+            "Repeat the purge to remove data blocks that become unused after this pass."));
+        layout->addWidget(recursive);
+
+        auto *buttons = new QDialogButtonBox(
+            QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->button(QDialogButtonBox::Ok)->setText(
+            QStringLiteral("Delete"));
+        connect(buttons, &QDialogButtonBox::accepted,
+                &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected,
+                &dialog, &QDialog::reject);
+        layout->addWidget(buttons);
+        dialog.setMinimumWidth(460);
+        if (dialog.exec() != QDialog::Accepted) return;
 
         BlenderOrphanPurgeResult purgeResult;
         QString errorMessage;
         if (!purgeBlenderOrphanData(sourcePath,
                                    importedBlenderSourceSha256_,
+                                   localIds->isChecked(),
+                                   linkedIds->isChecked(),
+                                   recursive->isChecked(),
                                    &purgeResult,
                                    &errorMessage)) {
             QMessageBox::critical(
@@ -1069,6 +1105,13 @@ private:
                 errorMessage.isEmpty()
                     ? QStringLiteral("Blender could not purge orphan data.")
                     : errorMessage);
+            return;
+        }
+
+        if (purgeResult.removedDataBlockCount == 0) {
+            statusBar()->showMessage(
+                QStringLiteral("No orphan data blocks matched those options."),
+                8000);
             return;
         }
 

@@ -51,7 +51,8 @@ public:
                      const QPointF &screenPosition,
                      const ViewportTransform &transform,
                      const QSize &viewportSize,
-                     bool editableOnly = false) const;
+                     bool editableOnly = false,
+                     ObjectId requiredContainerId = ObjectId::invalid()) const;
 
     // Drawing-plane inference can inspect every visible planar object while
     // ordinary selection remains scoped to the active plane.

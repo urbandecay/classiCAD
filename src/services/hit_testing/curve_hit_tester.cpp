@@ -901,7 +901,8 @@ int CurveHitTester::hitTestShape(const Document &document,
                                  const QPointF &screenPosition,
                                  const ViewportTransform &transform,
                                  const QSize &viewportSize,
-                                 bool editableOnly) const
+                                 bool editableOnly,
+                                 ObjectId requiredContainerId) const
 {
     constexpr qreal hitRadiusPixels = 9.0;
     int closestShape = -1;
@@ -909,7 +910,9 @@ int CurveHitTester::hitTestShape(const Document &document,
     for (int index = 0; index < document.size(); ++index) {
         const ObjectId objectId = document.objectIdAt(index);
         if (!document.isObjectVisible(objectId) ||
-            (editableOnly && !document.isObjectEditable(objectId))) {
+            (editableOnly && !document.isObjectEditable(objectId)) ||
+            (requiredContainerId.isValid() &&
+             document.containerId(objectId) != requiredContainerId)) {
             continue;
         }
         const Shape &shape = document[index];

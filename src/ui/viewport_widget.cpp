@@ -1597,6 +1597,28 @@ public:
         const bool changed = !objectEditMode_ || activeContainerObjectId_ != candidate;
         objectEditMode_ = true;
         activeContainerObjectId_ = candidate;
+        QVector<ObjectId> scopedSelection;
+        for (const ObjectId objectId : selection_.objectIds()) {
+            if (document_.containerId(objectId) == candidate) {
+                scopedSelection.append(objectId);
+            }
+        }
+        const ObjectId scopedPrimary =
+            scopedSelection.contains(selection_.primaryObjectId())
+                ? selection_.primaryObjectId()
+                : scopedSelection.isEmpty() ? ObjectId::invalid()
+                                            : scopedSelection.back();
+        const bool selectionChanged =
+            scopedSelection != selection_.objectIds() ||
+            scopedPrimary != selection_.primaryObjectId();
+        selection_.setObjectIds(scopedSelection, scopedPrimary);
+        if (changed) {
+            clearComponentSelections();
+            componentSelectionObject_ = ObjectId::invalid();
+        }
+        if (selectionChanged) {
+            session_.notifySelectionChanged();
+        }
         if (changed) {
             notifyObjectStateChanged();
             update();
@@ -1622,6 +1644,15 @@ public:
                               bool selectContainer) override
     {
         if (document_.object(objectId) == nullptr) {
+            return;
+        }
+        if (objectEditMode_ &&
+            (!activeContainerObjectId_.isValid() ||
+             document_.containerId(objectId) != activeContainerObjectId_)) {
+            // Keep Edit Mode bound to its active container. Refresh the row
+            // highlight to return to the current selection after a rejected
+            // Outliner click.
+            session_.notifySelectionChanged();
             return;
         }
         activeContainerObjectId_ = document_.containerId(objectId);
@@ -2295,20 +2326,9 @@ public:
             return;
         }
 
-        const bool hasRuledSurfaceOutput = std::any_of(
-            resultObjectIds.cbegin(), resultObjectIds.cend(), [this](ObjectId id) {
-                const Shape *shape = document_.shape(id);
-                return shape != nullptr &&
-                       shape->geometryType == GeometryType::NurbsSurface;
-            });
-        if (hasRuledSurfaceOutput &&
-            componentSelectionMode_ != ComponentSelectionMode::Vertex) {
-            // A ruled sheet's repeatable boundary is its translated control
-            // row. A whole-face selection would select the sheet itself, and
-            // edge selections are not consumed by this point/curve tool.
-            setComponentSelectionMode(ComponentSelectionMode::Vertex);
-        }
-
+        // Preserve the active component mode. The result mapping below selects
+        // the translated control row as edges when the user extruded in Edge
+        // mode, and keeps face/vertex selection in their corresponding modes.
         selection_.setObjectIds(resultObjectIds, resultObjectIds.back());
         clearComponentSelections();
         componentSelectionObject_ = resultObjectIds.back();
@@ -2631,6 +2651,305 @@ public:
                 source->sourceControlPointIndices = {firstIndex, secondIndex};
                 return true;
             };
+        const auto startExtrudeFromSources =
+            [this](const QVector<PointExtrudeTool::ControlPointSource>
+                       &pointSources,
+                   const QVector<PointExtrudeTool::CurveSource> &curveSources,
+                   const QVector<PointExtrudeTool::SurfaceFaceSource>
+                       &surfaceFaceSources,
+                   const QVector<PointExtrudeTool::SolidCapSource>
+                       &solidCapSources) {
+                const int sourceCount = pointSources.size() +
+                                        curveSources.size() +
+                                        surfaceFaceSources.size() +
+                                        solidCapSources.size();
+                if (sourceCount == 0) {
+                    DebugLog::instance().write(
+                        QStringLiteral("beginPointExtrude ignored componentMode=%1 noHighlightedSources")
+                            .arg(componentModeDiagnosticName(
+                                componentSelectionMode_)));
+                    return 0;
+                }
+                auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                    toolRegistry_.find(Tool::PointExtrude));
+                if (extrudeTool == nullptr) {
+                    return 0;
+                }
+                extrudeTool->setControlPointSources(pointSources);
+                extrudeTool->setCurveSources(curveSources);
+                extrudeTool->setSurfaceFaceSources(surfaceFaceSources);
+                extrudeTool->setSolidCapSources(solidCapSources);
+                setTool(Tool::PointExtrude);
+                setFocus(Qt::OtherFocusReason);
+                setCursor(Qt::CrossCursor);
+                update();
+                DebugLog::instance().write(
+                    QStringLiteral("beginPointExtrude selectedControlPoints=%1")
+                        .arg(pointSources.size()) +
+                    QStringLiteral(" selectedCurves=%1")
+                        .arg(curveSources.size()) +
+                    QStringLiteral(" selectedFaces=%1")
+                        .arg(surfaceFaceSources.size() + solidCapSources.size()));
+                return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
+            };
+
+        // In Edit Mode the component selection is the extrusion input. Do not
+        // fall through to the owning object: an edge is a curve source and
+        // must create a ruled surface, even when its owner is a surface/solid.
+        if (objectEditMode_ &&
+            componentSelectionMode_ == ComponentSelectionMode::Edge) {
+            QVector<PointExtrudeTool::ControlPointSource> pointSources;
+            QVector<PointExtrudeTool::CurveSource> curveSources;
+            QVector<PointExtrudeTool::SurfaceFaceSource> surfaceFaceSources;
+            QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+            const auto &selectedEdges = componentSelections_[static_cast<int>(
+                ComponentSelectionMode::Edge)];
+            for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+                const ObjectId objectId = document_.objectIdAt(shapeIndex);
+                const auto selectionIt =
+                    selectedEdges.constFind(objectId.value());
+                if (selectionIt == selectedEdges.cend() ||
+                    selectionIt.value().isEmpty() ||
+                    !document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId) ||
+                    !belongsToActiveEditContainer(objectId)) {
+                    continue;
+                }
+                const Shape *shape = document_.shape(objectId);
+                const SceneObject *sceneObject = document_.object(objectId);
+                if (shape == nullptr || sceneObject == nullptr) {
+                    continue;
+                }
+                const Point3D offset = sceneObject->placementTranslation;
+                QVector<int> selectedIndices;
+                selectedIndices.reserve(selectionIt.value().size());
+                for (const int edgeIndex : selectionIt.value()) {
+                    selectedIndices.append(edgeIndex);
+                }
+                std::sort(selectedIndices.begin(), selectedIndices.end());
+
+                if (shape->geometryType == GeometryType::NurbsSurface ||
+                    shape->geometryType == GeometryType::NurbsSolid) {
+                    const bool solid =
+                        shape->geometryType == GeometryType::NurbsSolid;
+                    if (!controlPointsVisible_) {
+                        const QVector<SurfaceBoundaryComponent> boundaries =
+                            surfaceBoundaryComponents(*shape);
+                        QSet<int> emittedBoundaries;
+                        for (const int edgeIndex : selectedIndices) {
+                            for (int boundaryIndex = 0;
+                                 boundaryIndex < boundaries.size();
+                                 ++boundaryIndex) {
+                                const SurfaceBoundaryComponent &boundary =
+                                    boundaries[boundaryIndex];
+                                if (!boundary.edges.contains(edgeIndex) ||
+                                    emittedBoundaries.contains(boundaryIndex)) {
+                                    continue;
+                                }
+                                PointExtrudeTool::CurveSource source;
+                                source.objectId = objectId;
+                                source.curve = boundary.boundary.curve;
+                                source.workPlaneFrame =
+                                    makeWorkPlaneFrame(WorkPlane::XY);
+                                source.workPlaneFrame.origin = offset;
+                                if (!solid) {
+                                    source.sourceControlPointIndices =
+                                        boundary.vertices;
+                                }
+                                if (validateNurbsCurve(source.curve) &&
+                                    isValidWorkPlaneFrame(
+                                        source.workPlaneFrame)) {
+                                    curveSources.append(std::move(source));
+                                    emittedBoundaries.insert(boundaryIndex);
+                                }
+                                break;
+                            }
+                        }
+                    } else if (!solid) {
+                        const QVector<QPair<int, int>> edgeVertices =
+                            selectedSurfaceControlNetEdgeVertexIndices(*shape);
+                        for (const int edgeIndex : selectedIndices) {
+                            if (edgeIndex < 0 ||
+                                edgeIndex >= edgeVertices.size()) {
+                                continue;
+                            }
+                            const QPair<int, int> endpoints =
+                                edgeVertices[edgeIndex];
+                            PointExtrudeTool::CurveSource source;
+                            if (makeSurfaceControlEdgeSource(
+                                    objectId, *shape, *sceneObject,
+                                    endpoints.first, endpoints.second, &source)) {
+                                curveSources.append(std::move(source));
+                            }
+                        }
+                    } else {
+                        const ViewportDepthGeometry cage =
+                            selectedSurfaceControlNet(*shape);
+                        const QVector<QPair<int, int>> edgeVertices =
+                            selectedSurfaceControlNetEdgeVertexIndices(*shape);
+                        const QVector<NurbsSurface3D> faces =
+                            shapeSurfaceFaces(*shape);
+                        for (const int edgeIndex : selectedIndices) {
+                            if (edgeIndex < 0 ||
+                                edgeIndex >= edgeVertices.size()) {
+                                continue;
+                            }
+                            const QPair<int, int> cageEndpoints =
+                                edgeVertices[edgeIndex];
+                            if (cageEndpoints.first < 0 ||
+                                cageEndpoints.second < 0 ||
+                                cageEndpoints.first >=
+                                    cage.precisePointVertices.size() ||
+                                cageEndpoints.second >=
+                                    cage.precisePointVertices.size()) {
+                                continue;
+                            }
+                            const Point3D first = cage.precisePointVertices[
+                                cageEndpoints.first];
+                            const Point3D second = cage.precisePointVertices[
+                                cageEndpoints.second];
+                            bool emittedEdge = false;
+                            for (const NurbsSurface3D &face : faces) {
+                                Shape faceShape;
+                                faceShape.geometryType =
+                                    GeometryType::NurbsSurface;
+                                faceShape.nurbsSurface = face;
+                                const QVector<QPair<int, int>> faceEdges =
+                                    nurbsSurfaceControlNetEdgeVertexIndices(face);
+                                for (const QPair<int, int> &faceEdge : faceEdges) {
+                                    if (faceEdge.first < 0 ||
+                                        faceEdge.second < 0 ||
+                                        faceEdge.first >= face.controlPoints.size() ||
+                                        faceEdge.second >= face.controlPoints.size()) {
+                                        continue;
+                                    }
+                                    const Point3D &faceFirst =
+                                        face.controlPoints[faceEdge.first];
+                                    const Point3D &faceSecond =
+                                        face.controlPoints[faceEdge.second];
+                                    const bool endpointsMatch =
+                                        (duplicatePointsEqual(faceFirst, first) &&
+                                         duplicatePointsEqual(faceSecond, second)) ||
+                                        (duplicatePointsEqual(faceFirst, second) &&
+                                         duplicatePointsEqual(faceSecond, first));
+                                    if (!endpointsMatch) {
+                                        continue;
+                                    }
+                                    PointExtrudeTool::CurveSource source;
+                                    if (makeSurfaceControlEdgeSource(
+                                            objectId, faceShape, *sceneObject,
+                                            faceEdge.first, faceEdge.second,
+                                            &source)) {
+                                        // Solid cage indices are derived from
+                                        // several faces, so they are not a
+                                        // source control-net index mapping.
+                                        source.sourceControlPointIndices.clear();
+                                        curveSources.append(std::move(source));
+                                        emittedEdge = true;
+                                        break;
+                                    }
+                                }
+                                if (emittedEdge) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                const QVector<Shape::NurbsCurve2D> curves =
+                    curveSampler_.curvesForShape(*shape);
+                int firstControlPointIndex = 0;
+                for (int curveIndex = 0; curveIndex < curves.size();
+                     ++curveIndex) {
+                    const Shape::NurbsCurve2D &curve = curves[curveIndex];
+                    const int curveFirstControlPointIndex =
+                        firstControlPointIndex;
+                    firstControlPointIndex += curve.controlPoints.size();
+                    if (!selectionIt.value().contains(curveIndex) ||
+                        !validateNurbsCurve(curve)) {
+                        continue;
+                    }
+                    WorkPlaneFrame frame =
+                        shape->geometryType == GeometryType::PolyCurve
+                            ? shapeComponentWorkPlaneFrame(*shape, curveIndex)
+                            : shapeWorkPlaneFrame(*shape);
+                    frame.origin.x += offset.x;
+                    frame.origin.y += offset.y;
+                    frame.origin.z += offset.z;
+                    if (!isValidWorkPlaneFrame(frame)) {
+                        continue;
+                    }
+                    PointExtrudeTool::CurveSource source;
+                    source.objectId = objectId;
+                    source.curve = curve;
+                    source.workPlaneFrame = frame;
+                    source.sourceControlPointIndices.reserve(
+                        curve.controlPoints.size());
+                    for (int controlPoint = 0;
+                         controlPoint < curve.controlPoints.size();
+                         ++controlPoint) {
+                        source.sourceControlPointIndices.append(
+                            curveFirstControlPointIndex + controlPoint);
+                    }
+                    curveSources.append(std::move(source));
+                }
+            }
+            return startExtrudeFromSources(pointSources, curveSources,
+                                           surfaceFaceSources, solidCapSources);
+        }
+
+        if (objectEditMode_ &&
+            componentSelectionMode_ == ComponentSelectionMode::Face) {
+            QVector<PointExtrudeTool::ControlPointSource> pointSources;
+            QVector<PointExtrudeTool::CurveSource> curveSources;
+            QVector<PointExtrudeTool::SurfaceFaceSource> surfaceFaceSources;
+            QVector<PointExtrudeTool::SolidCapSource> solidCapSources;
+            const auto &selectedFaces = componentSelections_[static_cast<int>(
+                ComponentSelectionMode::Face)];
+            for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+                const ObjectId objectId = document_.objectIdAt(shapeIndex);
+                const auto selectionIt =
+                    selectedFaces.constFind(objectId.value());
+                if (selectionIt == selectedFaces.cend() ||
+                    selectionIt.value().isEmpty() ||
+                    !document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId) ||
+                    !belongsToActiveEditContainer(objectId)) {
+                    continue;
+                }
+                const Shape *shape = document_.shape(objectId);
+                const SceneObject *sceneObject = document_.object(objectId);
+                if (shape == nullptr || sceneObject == nullptr) {
+                    continue;
+                }
+                if (shape->geometryType == GeometryType::NurbsSurface &&
+                    selectionIt.value().contains(0)) {
+                    PointExtrudeTool::SurfaceFaceSource source;
+                    if (makeSurfaceFaceSource(objectId, *shape, *sceneObject,
+                                              &source)) {
+                        surfaceFaceSources.append(std::move(source));
+                    }
+                } else if (shape->geometryType == GeometryType::NurbsSolid) {
+                    QVector<int> selectedIndices;
+                    for (const int faceIndex : selectionIt.value()) {
+                        selectedIndices.append(faceIndex);
+                    }
+                    std::sort(selectedIndices.begin(), selectedIndices.end());
+                    for (const int faceIndex : selectedIndices) {
+                        PointExtrudeTool::SolidCapSource source;
+                        if (makeSolidCapSource(objectId, *shape, *sceneObject,
+                                               faceIndex, &source)) {
+                            solidCapSources.append(std::move(source));
+                        }
+                    }
+                }
+            }
+            return startExtrudeFromSources(pointSources, curveSources,
+                                           surfaceFaceSources, solidCapSources);
+        }
+
         if (!controlPointTargets.isEmpty()) {
             struct DeferredCurvePointSource {
                 quint64 weldGroup = 0;
@@ -3625,6 +3944,13 @@ public:
                                     surfaceFaceSources.size() +
                                     solidCapSources.size();
             return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
+        }
+
+        // Component mode without a highlighted component is an empty
+        // extrusion selection. Keeping this guard ahead of the object path
+        // prevents Edit Mode from silently sweeping the owning object.
+        if (objectEditMode_) {
+            return 0;
         }
 
         QVector<ObjectId> selected = selectedShapeIndices_;
@@ -10906,6 +11232,9 @@ protected:
             activeTool_ == Tool::Select && !syntheticSelectionInput_ &&
             objectEditMode_) {
             const int hitShapeIndex = hitTestShape(screenPosition);
+            const int anyHitShapeIndex =
+                hitShapeIndex >= 0 ? hitShapeIndex
+                                   : hitTestShape(screenPosition, false);
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                 componentSelectionMode_ == ComponentSelectionMode::Edge ||
                 componentSelectionMode_ == ComponentSelectionMode::Face) {
@@ -10924,7 +11253,7 @@ protected:
                 leftSelectionBoxStartedOnObject_ = false;
                 componentBoxSelectionActive_ = true;
                 componentBoxSelectionObject_ = ObjectId::invalid();
-                componentBoxStartedOnBlank_ = hitShapeIndex < 0;
+                componentBoxStartedOnBlank_ = anyHitShapeIndex < 0;
             } else {
                 // Object mode still supports box selection from any point.
                 // A plain click on geometry leaves the current selection alone.
@@ -12447,6 +12776,28 @@ protected:
             activeTool_ == Tool::Select && event->key() == Qt::Key_A &&
             event->modifiers() == Qt::NoModifier &&
             !selectionShortcutsAvailable();
+        if (objectEditMode_ && activeTool_ == Tool::Select &&
+            event->key() == Qt::Key_A &&
+            event->modifiers() == Qt::NoModifier) {
+            if (selectionShortcutsAvailable() &&
+                activeContainerObjectId_.isValid()) {
+                selection_.setObjectIds(
+                    document_.objectIdsInContainer(activeContainerObjectId_),
+                    activeContainerObjectId_);
+                selection_.clearActiveControlPoint();
+                clearComponentSelections();
+                componentSelectionObject_ = ObjectId::invalid();
+                session_.notifySelectionChanged();
+                update();
+                emitCoordinateUpdate();
+                DebugLog::instance().write(
+                    QStringLiteral("edit-mode select all container=%1 count=%2")
+                        .arg(activeContainerObjectId_.value())
+                        .arg(selectedShapeIndices_.size()));
+            }
+            event->accept();
+            return;
+        }
         if (activeToolController_ != nullptr && !selectAllKeyBlocked) {
             if (activeTool_ == Tool::Arc && !pendingPoints_.isEmpty() &&
                 event->key() == Qt::Key_L) {
@@ -13284,6 +13635,14 @@ private:
         return objectId.isValid() && selectedShapeIndices_.contains(objectId);
     }
 
+    bool belongsToActiveEditContainer(ObjectId objectId) const
+    {
+        return !objectEditMode_ ||
+               (activeContainerObjectId_.isValid() &&
+                document_.object(objectId) != nullptr &&
+                document_.containerId(objectId) == activeContainerObjectId_);
+    }
+
     SelectTool *selectionToolController() const
     {
         return dynamic_cast<SelectTool *>(toolRegistry_.find(Tool::Select));
@@ -14059,7 +14418,8 @@ private:
                         continue;
                     }
                     if (!document_.isObjectVisible(candidateId) ||
-                        !document_.isObjectEditable(candidateId)) {
+                        !document_.isObjectEditable(candidateId) ||
+                        !belongsToActiveEditContainer(candidateId)) {
                         continue;
                     }
                     const Shape &candidateShape = shapes_[index];
@@ -14812,7 +15172,8 @@ private:
         if (moved) {
             for (int index = 0; index < shapes_.size(); ++index) {
                 const ObjectId objectId = shapes_.objectIdAt(index);
-                if (!document_.isObjectEditable(objectId)) {
+                if (!document_.isObjectEditable(objectId) ||
+                    !belongsToActiveEditContainer(objectId)) {
                     continue;
                 }
                 const SceneObject *sceneObject = document_.object(objectId);
@@ -16847,6 +17208,7 @@ private:
             const int index = objectIndex(objectId);
             if (index >= 0 && document_.isObjectVisible(objectId) &&
                 document_.isObjectEditable(objectId) &&
+                belongsToActiveEditContainer(objectId) &&
                 !indices.contains(index)) {
                 indices.append(index);
             }
@@ -16854,6 +17216,7 @@ private:
         const int primaryIndex = objectIndex(selectedShapeIndex_);
         if (primaryIndex >= 0 && document_.isObjectVisible(selectedShapeIndex_) &&
             document_.isObjectEditable(selectedShapeIndex_) &&
+            belongsToActiveEditContainer(selectedShapeIndex_) &&
             !indices.contains(primaryIndex)) {
             indices.append(primaryIndex);
         }
@@ -16884,6 +17247,7 @@ private:
             const ObjectId objectId = shapes_.objectIdAt(index);
             if (document_.isObjectVisible(objectId) &&
                 document_.isObjectEditable(objectId) &&
+                belongsToActiveEditContainer(objectId) &&
                 !controlPointsForShape(shapes_[index]).isEmpty() &&
                 !indices.contains(index)) {
                 indices.append(index);
@@ -17716,7 +18080,8 @@ private:
                 for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
                     const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
                     if (!document_.isObjectVisible(objectId) ||
-                        !document_.isObjectEditable(objectId)) {
+                        !document_.isObjectEditable(objectId) ||
+                        !belongsToActiveEditContainer(objectId)) {
                         continue;
                     }
                     const Shape &shape = shapes_[shapeIndex];
@@ -17768,7 +18133,8 @@ private:
             }
             if (faceShapeIndex < 0 || faceShapeIndex >= shapes_.size()) return -1;
             const ObjectId objectId = shapes_.objectIdAt(faceShapeIndex);
-            if (!document_.isObjectEditable(objectId)) return -1;
+            if (!document_.isObjectEditable(objectId) ||
+                !belongsToActiveEditContainer(objectId)) return -1;
             const Shape &shape = shapes_[faceShapeIndex];
             if (shape.geometryType == GeometryType::NurbsSurface && faceIndex > 0) {
                 return -1;
@@ -17782,7 +18148,8 @@ private:
         for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
             const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
             if (!document_.isObjectVisible(objectId) ||
-                !document_.isObjectEditable(objectId)) {
+                !document_.isObjectEditable(objectId) ||
+                !belongsToActiveEditContainer(objectId)) {
                 continue;
             }
             const Shape &shape = shapes_[shapeIndex];
@@ -18168,13 +18535,18 @@ private:
         return candidate.componentIndex;
     }
 
-    int hitTestShape(const QPointF &screenPosition) const
+    int hitTestShape(const QPointF &screenPosition,
+                     bool constrainToActiveContainer = true) const
     {
+        const ObjectId requiredContainerId =
+            objectEditMode_ && constrainToActiveContainer
+                ? activeContainerObjectId_ : ObjectId::invalid();
         const int hitShapeIndex = curveHitTester_.hitTestShape(document_,
                                                                screenPosition,
                                                                viewportTransform_,
                                                                size(),
-                                                               true);
+                                                               true,
+                                                               requiredContainerId);
         if (qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
             QStringLiteral("1")) {
             constexpr qreal selectionRadiusPixels = 9.0;
@@ -21493,7 +21865,11 @@ private:
             ? curveHitTester_.hitTestShape(document_,
                                            screenPosition,
                                            viewportTransform_,
-                                           size())
+                                           size(),
+                                           false,
+                                           objectEditMode_
+                                               ? activeContainerObjectId_
+                                               : ObjectId::invalid())
             : curveHitTester_.hitTestShapeOnAnyWorkPlane(
                   document_, screenPosition, viewportTransform_, size());
         if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {

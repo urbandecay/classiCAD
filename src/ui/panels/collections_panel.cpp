@@ -369,6 +369,23 @@ QIcon syncSelectionIcon()
     });
 }
 
+QIcon newCollectionIcon()
+{
+    return paintedIcon([](QPainter &painter) {
+        QPainterPath folder;
+        folder.moveTo(1.5, 4.0);
+        folder.lineTo(6.0, 4.0);
+        folder.lineTo(7.6, 5.8);
+        folder.lineTo(14.5, 5.8);
+        folder.lineTo(13.6, 12.8);
+        folder.lineTo(1.5, 12.8);
+        folder.closeSubpath();
+        painter.drawPath(folder);
+        painter.drawLine(QPointF(8.0, 9.4), QPointF(12.0, 9.4));
+        painter.drawLine(QPointF(10.0, 7.4), QPointF(10.0, 11.4));
+    });
+}
+
 QIcon collectionIcon(const QString &colorTag)
 {
     QColor color = collectionColorTagColor(colorTag);
@@ -1390,6 +1407,13 @@ void CollectionsPanel::createLayout()
         "Filter collections and objects by name, type, and state."));
     filterButton_->setPopupMode(QToolButton::InstantPopup);
     filterRow->addWidget(filterButton_);
+    newCollectionButton_ = new QToolButton(this);
+    newCollectionButton_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    newCollectionButton_->setAutoRaise(true);
+    newCollectionButton_->setToolTip(QStringLiteral(
+        "Create a collection in the active View Layer."));
+    newCollectionButton_->setVisible(false);
+    filterRow->addWidget(newCollectionButton_);
     displayModeCombo_ = new QComboBox(this);
     displayModeCombo_->addItem(QStringLiteral("View Layer"));
     displayModeCombo_->addItem(QStringLiteral("Scenes"));
@@ -1498,6 +1522,9 @@ void CollectionsPanel::createLayout()
     tree_->setUniformRowHeights(true);
     tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    connect(tree_, &QTreeWidget::itemSelectionChanged, this, [this]() {
+        updateCollectionHeaderActionState();
+    });
     tree_->setDragEnabled(true);
     tree_->setAcceptDrops(true);
     tree_->setDropIndicatorShown(true);
@@ -1648,6 +1675,13 @@ void CollectionsPanel::createLayout()
 
     auto *filterMenu = new QMenu(filterButton_);
     filterButton_->setMenu(filterMenu);
+    newCollectionHeaderAction_ = new QAction(
+        newCollectionIcon(), QStringLiteral("New Collection"), this);
+    newCollectionHeaderAction_->setToolTip(QStringLiteral(
+        "Create a nested collection under the selected collection."));
+    newCollectionButton_->setDefaultAction(newCollectionHeaderAction_);
+    connect(newCollectionHeaderAction_, &QAction::triggered, this,
+            &CollectionsPanel::createCollectionFromHeaderAction);
     QMenu *restrictionMenu = filterMenu->addMenu(
         QStringLiteral("Restriction Toggles"));
     restrictionToggleMenuAction_ = restrictionMenu->menuAction();
@@ -5346,6 +5380,79 @@ void CollectionsPanel::buildObjectParentHierarchy(
     }
 }
 
+bool CollectionsPanel::selectedCollectionParentFromActiveViewLayer(
+    CollectionId *parentId) const
+{
+    if (parentId != nullptr) *parentId = CollectionId::invalid();
+    if (tree_ == nullptr) return true;
+    const QString activeViewLayerKey = callbacks_.activeViewLayerKey
+        ? callbacks_.activeViewLayerKey() : QString{};
+    int selectedCollectionCount = 0;
+    for (QTreeWidgetItem *selected : tree_->selectedItems()) {
+        if (selected->data(nameColumn, itemKindRole).toInt() !=
+            static_cast<int>(OutlinerRowKind::Collection)) {
+            continue;
+        }
+        const QString rowViewLayerKey = selected->data(
+            nameColumn, itemViewLayerKeyRole).toString();
+        if (!activeViewLayerKey.isEmpty() &&
+            rowViewLayerKey != activeViewLayerKey) {
+            continue;
+        }
+        ++selectedCollectionCount;
+        if (selectedCollectionCount > 1) return false;
+        if (parentId != nullptr) {
+            *parentId = CollectionId::fromValue(selected->data(
+                nameColumn, itemIdRole).toULongLong());
+        }
+    }
+    return true;
+}
+
+void CollectionsPanel::createCollectionFromHeaderAction()
+{
+    if (!callbacks_.createCollection) return;
+    CollectionId parentId = CollectionId::invalid();
+    if (!selectedCollectionParentFromActiveViewLayer(&parentId)) return;
+    QSet<QString> existingNames;
+    if (callbacks_.entries) {
+        for (const CollectionPanelEntry &entry : callbacks_.entries()) {
+            existingNames.insert(entry.collection.name);
+        }
+    }
+    QString name = QStringLiteral("Collection");
+    for (int suffix = 1; existingNames.contains(name); ++suffix) {
+        name = QStringLiteral("Collection.%1")
+                   .arg(suffix, 3, 10, QLatin1Char('0'));
+    }
+    callbacks_.createCollection(name, parentId);
+}
+
+void CollectionsPanel::updateCollectionHeaderActionState()
+{
+    if (newCollectionButton_ == nullptr ||
+        newCollectionHeaderAction_ == nullptr || refreshing_) {
+        return;
+    }
+    const bool viewLayerMode = !scenesDisplayMode_ &&
+        !sequencerDisplayMode_ && !dataApiDisplayMode_ &&
+        !librariesDisplayMode_ && !orphanDataDisplayMode_ &&
+        !libraryOverridesDisplayMode_;
+    newCollectionButton_->setVisible(viewLayerMode);
+    CollectionId parentId = CollectionId::invalid();
+    const bool validSelection =
+        selectedCollectionParentFromActiveViewLayer(&parentId);
+    newCollectionHeaderAction_->setEnabled(
+        viewLayerMode && bool(callbacks_.createCollection) &&
+        validSelection);
+    newCollectionHeaderAction_->setToolTip(
+        validSelection
+            ? QStringLiteral(
+                  "Create a collection under the selected collection, or at the scene root when none is selected.")
+            : QStringLiteral(
+                  "Select no more than one collection to create a nested collection."));
+}
+
 void CollectionsPanel::refresh()
 {
     if (tree_ == nullptr || !callbacks_.entries) return;
@@ -7569,6 +7676,7 @@ void CollectionsPanel::refresh()
     refreshing_ = false;
     tree_->verticalScrollBar()->setValue(scrollPosition);
     syncSelection();
+    updateCollectionHeaderActionState();
 }
 
 void CollectionsPanel::syncSelection()

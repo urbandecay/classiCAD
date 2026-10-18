@@ -431,12 +431,17 @@ private:
                                   bool includeContents = true);
     void buildObjectParentHierarchy(
         const QVector<OutlinerObjectEntry> &objects);
+    bool selectedCollectionParentFromActiveViewLayer(
+        CollectionId *parentId) const;
+    void createCollectionFromHeaderAction();
+    void updateCollectionHeaderActionState();
 
     CollectionsPanelCallbacks callbacks_;
     QTreeWidget *tree_ = nullptr;
     QLineEdit *filterEdit_ = nullptr;
     QToolButton *sequenceSyncButton_ = nullptr;
     QToolButton *filterButton_ = nullptr;
+    QToolButton *newCollectionButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
     QComboBox *dataApiKeyingSetCombo_ = nullptr;
     QToolButton *addKeyingSetPathsButton_ = nullptr;
@@ -451,6 +456,7 @@ private:
     QAction *restrictionToggleSeparatorAction_ = nullptr;
     QAction *sortAlphabeticallyAction_ = nullptr;
     QAction *syncSelectionAction_ = nullptr;
+    QAction *newCollectionHeaderAction_ = nullptr;
     QAction *showModeColumnAction_ = nullptr;
     QAction *systemOverridesAction_ = nullptr;
     QAction *scrollToActiveAction_ = nullptr;

@@ -124,6 +124,7 @@ constexpr int itemOverrideObjectVisibleRole = Qt::UserRole + 32;
 constexpr int itemOverrideObjectSelectedRole = Qt::UserRole + 33;
 constexpr int itemOverrideObjectActiveRole = Qt::UserRole + 34;
 constexpr int itemOverrideObjectSelectableRole = Qt::UserRole + 35;
+constexpr int itemRestrictionActiveRole = Qt::UserRole + 36;
 
 QColor collectionColorTagColor(const QString &colorTag);
 
@@ -373,6 +374,14 @@ public:
         const QRect rect(option.rect.center().x() - size.width() / 2,
                          option.rect.center().y() - size.height() / 2,
                          size.width(), size.height());
+        const QVariant activeState = index.data(itemRestrictionActiveRole);
+        if (!activeState.isNull() && !activeState.toBool()) {
+            painter->save();
+            painter->setOpacity(painter->opacity() * 0.38);
+            icon.paint(painter, rect);
+            painter->restore();
+            return;
+        }
         icon.paint(painter, rect);
     }
 
@@ -383,6 +392,10 @@ public:
     {
         if (index.data(Qt::CheckStateRole).isNull() ||
             (index.flags() & Qt::ItemIsUserCheckable) == 0) {
+            return false;
+        }
+        const QVariant activeState = index.data(itemRestrictionActiveRole);
+        if (!activeState.isNull() && !activeState.toBool()) {
             return false;
         }
         if ((column_ == viewLayerViewportColumn || column_ == holdoutColumn ||
@@ -410,6 +423,13 @@ private:
     int column_ = -1;
     RestrictionGlyph glyph_ = RestrictionGlyph::Hide;
 };
+
+void setRestrictionActive(QTreeWidgetItem *item, int column, bool active)
+{
+    if (item != nullptr) {
+        item->setData(column, itemRestrictionActiveRole, active);
+    }
+}
 
 bool isDataApiPointerStruct(const QTreeWidgetItem *item)
 {
@@ -4236,7 +4256,8 @@ void CollectionsPanel::appendCollection(
     QStringList path,
     QStringList sourcePath,
     const QString &activeViewLayerKey,
-    const QString &rowViewLayerKey)
+    const QString &rowViewLayerKey,
+    RestrictionActivity inheritedRestrictions)
 {
     if (!entry.collection.id.isValid() ||
         ancestors.contains(entry.collection.id.value())) {
@@ -4246,6 +4267,64 @@ void CollectionsPanel::appendCollection(
     const QJsonObject layerState = viewLayerState(
         entry.collection, activeViewLayerKey, sourcePath);
     if (!activeViewLayerKey.isEmpty() && layerState.isEmpty()) return;
+
+    RestrictionActivity restrictions = inheritedRestrictions;
+    if (!entry.collection.isSceneMaster) {
+        if (restrictions.collectionHideRender) {
+            restrictions.collectionHideRender = !entry.collection.hideRender;
+            if (!restrictions.collectionHideRender) {
+                restrictions.layerCollectionHoldout = false;
+                restrictions.layerCollectionIndirectOnly = false;
+                restrictions.objectHideRender = false;
+            }
+        }
+        if (restrictions.collectionHideViewport) {
+            restrictions.collectionHideViewport =
+                !entry.collection.hideViewport;
+            if (!restrictions.collectionHideViewport) {
+                restrictions.collectionHideSelect = false;
+                restrictions.objectHideSelect = false;
+                restrictions.layerCollectionHideViewport = false;
+                restrictions.objectHideViewport = false;
+                restrictions.baseHideViewport = false;
+            }
+        }
+        if (restrictions.collectionHideSelect) {
+            restrictions.collectionHideSelect = !entry.collection.hideSelect;
+            if (!restrictions.collectionHideSelect) {
+                restrictions.objectHideSelect = false;
+            }
+        }
+        if (!layerState.isEmpty()) {
+            if (restrictions.layerCollectionHoldout) {
+                restrictions.layerCollectionHoldout = layerState.value(
+                    QStringLiteral("holdout")).toBool();
+            }
+            restrictions.layerCollectionIndirectOnly = layerState.value(
+                QStringLiteral("indirect_only")).toBool();
+            if (restrictions.layerCollectionHideViewport) {
+                restrictions.layerCollectionHideViewport = !layerState.value(
+                    QStringLiteral("hide_viewport")).toBool();
+                if (!restrictions.layerCollectionHideViewport) {
+                    restrictions.baseHideViewport = false;
+                    restrictions.collectionHideSelect = false;
+                    restrictions.objectHideSelect = false;
+                }
+            }
+            if (restrictions.layerCollectionExclude) {
+                restrictions.layerCollectionExclude = !layerState.value(
+                    QStringLiteral("exclude")).toBool();
+                if (!restrictions.layerCollectionExclude) {
+                    restrictions.collectionHideViewport = false;
+                    restrictions.collectionHideSelect = false;
+                    restrictions.collectionHideRender = false;
+                    restrictions.layerCollectionHideViewport = false;
+                    restrictions.layerCollectionHoldout = false;
+                    restrictions.layerCollectionIndirectOnly = false;
+                }
+            }
+        }
+    }
 
     path.append(QStringLiteral("c%1").arg(entry.collection.id.value()));
     const bool excludedFromThisLayer = layerState.value(
@@ -4307,29 +4386,52 @@ void CollectionsPanel::appendCollection(
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable |
                        Qt::ItemIsSelectable | Qt::ItemIsDragEnabled |
                        Qt::ItemIsDropEnabled);
-        item->setCheckState(viewportColumn, entry.collection.hideViewport
-                                   ? Qt::Unchecked : Qt::Checked);
-        item->setCheckState(renderColumn, entry.collection.hideRender
-                                 ? Qt::Unchecked : Qt::Checked);
-        item->setCheckState(selectColumn, entry.collection.hideSelect
-                                   ? Qt::Unchecked : Qt::Checked);
-        if (!layerState.isEmpty()) {
-            item->setData(viewLayerViewportColumn,
-                          itemViewLayerEditableRole, true);
-            item->setData(holdoutColumn, itemViewLayerEditableRole, true);
-            item->setData(indirectOnlyColumn, itemViewLayerEditableRole, true);
-            item->setData(excludeColumn, itemViewLayerEditableRole, true);
-            item->setCheckState(viewLayerViewportColumn,
-                layerState.value(QStringLiteral("hide_viewport")).toBool()
-                    ? Qt::Unchecked : Qt::Checked);
-            item->setCheckState(holdoutColumn,
-                layerState.value(QStringLiteral("holdout")).toBool()
-                    ? Qt::Checked : Qt::Unchecked);
-            item->setCheckState(indirectOnlyColumn,
-                layerState.value(QStringLiteral("indirect_only")).toBool()
-                    ? Qt::Checked : Qt::Unchecked);
-            item->setCheckState(excludeColumn,
-                excludedFromThisLayer ? Qt::Unchecked : Qt::Checked);
+        if (!entry.collection.isSceneMaster) {
+            const bool collectionFlagsEditable =
+                entry.collection.libraryPath.isEmpty();
+            item->setCheckState(viewportColumn,
+                entry.collection.hideViewport ? Qt::Unchecked : Qt::Checked);
+            item->setCheckState(renderColumn,
+                entry.collection.hideRender ? Qt::Unchecked : Qt::Checked);
+            item->setCheckState(selectColumn,
+                entry.collection.hideSelect ? Qt::Unchecked : Qt::Checked);
+            setRestrictionActive(item, viewportColumn,
+                restrictions.collectionHideViewport &&
+                    collectionFlagsEditable);
+            setRestrictionActive(item, renderColumn,
+                restrictions.collectionHideRender &&
+                    collectionFlagsEditable);
+            setRestrictionActive(item, selectColumn,
+                restrictions.collectionHideSelect &&
+                    collectionFlagsEditable);
+            if (!layerState.isEmpty()) {
+                item->setData(viewLayerViewportColumn,
+                              itemViewLayerEditableRole, true);
+                item->setData(holdoutColumn, itemViewLayerEditableRole, true);
+                item->setData(indirectOnlyColumn, itemViewLayerEditableRole, true);
+                item->setData(excludeColumn, itemViewLayerEditableRole, true);
+                item->setCheckState(viewLayerViewportColumn,
+                    layerState.value(QStringLiteral("hide_viewport")).toBool()
+                        ? Qt::Unchecked : Qt::Checked);
+                item->setCheckState(holdoutColumn,
+                    layerState.value(QStringLiteral("holdout")).toBool()
+                        ? Qt::Checked : Qt::Unchecked);
+                item->setCheckState(indirectOnlyColumn,
+                    layerState.value(QStringLiteral("indirect_only")).toBool()
+                        ? Qt::Checked : Qt::Unchecked);
+                item->setCheckState(excludeColumn,
+                    excludedFromThisLayer ? Qt::Unchecked : Qt::Checked);
+                setRestrictionActive(item, viewLayerViewportColumn,
+                    restrictions.layerCollectionHideViewport);
+                setRestrictionActive(item, holdoutColumn,
+                    restrictions.layerCollectionHoldout);
+                setRestrictionActive(item, indirectOnlyColumn,
+                    !restrictions.layerCollectionHoldout &&
+                        restrictions.layerCollectionIndirectOnly);
+                // Blender leaves Exclude available even beneath an excluded
+                // parent so the user can re-enable a branch.
+                setRestrictionActive(item, excludeColumn, true);
+            }
         }
     }
 
@@ -4376,13 +4478,13 @@ void CollectionsPanel::appendCollection(
     for (const int childIndex : childEntryIndices) {
         appendCollection(tree, entries[childIndex], entries, objects, item,
                          ancestors, path, sourcePath, activeViewLayerKey,
-                         rowViewLayerKey);
+                         rowViewLayerKey, restrictions);
     }
     if (!excludedFromViewLayer) {
         for (const OutlinerObjectEntry &object : objects) {
             if (!object.collectionIds.contains(entry.collection.id)) continue;
             appendObject(item, object, path, entry.collection.id,
-                         rowViewLayerKey);
+                         rowViewLayerKey, restrictions);
         }
     }
 }
@@ -4393,6 +4495,7 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
     const QStringList &path,
     CollectionId linkedCollectionId,
     const QString &activeViewLayerKey,
+    RestrictionActivity restrictions,
     bool includeContents)
 {
     if (parent == nullptr || (!entry.id.isValid() && !entry.outlinerOnly)) {
@@ -4460,6 +4563,16 @@ QTreeWidgetItem *CollectionsPanel::appendObject(
             item->setCheckState(viewLayerViewportColumn,
                 entry.hiddenInViewport ? Qt::Unchecked : Qt::Checked);
         }
+        const bool objectFlagsEditable = entry.libraryPath.isEmpty();
+        setRestrictionActive(item, viewportColumn,
+            restrictions.objectHideViewport && objectFlagsEditable);
+        setRestrictionActive(item, renderColumn,
+            restrictions.objectHideRender && objectFlagsEditable);
+        setRestrictionActive(item, selectColumn,
+            restrictions.objectHideSelect && objectFlagsEditable);
+        setRestrictionActive(item, viewLayerViewportColumn,
+            restrictions.baseHideViewport &&
+                (!activeViewLayerKey.isEmpty() || objectFlagsEditable));
         objectRows_[entry.id.value()].append(item);
         objectEntries_.insert(entry.id.value(), entry);
     }
@@ -5011,10 +5124,17 @@ void CollectionsPanel::buildObjectParentHierarchy(
                 .split(QLatin1Char('/'), Qt::SkipEmptyParts);
             QTreeWidgetItem *notInCollectionRow = appendObject(
                 parentRow, childEntry, parentPath,
-                CollectionId::invalid(), viewLayerKey, false);
+                CollectionId::invalid(), viewLayerKey, {}, false);
             if (notInCollectionRow != nullptr) {
                 notInCollectionRow->setData(nameColumn,
                                             itemNotInCollectionRole, true);
+                for (const int column : {
+                         viewportColumn, renderColumn, selectColumn,
+                         viewLayerViewportColumn, holdoutColumn,
+                         indirectOnlyColumn, excludeColumn}) {
+                    notInCollectionRow->setData(
+                        column, Qt::CheckStateRole, QVariant{});
+                }
                 notInCollectionRow->setToolTip(
                     nameColumn,
                     QStringLiteral("Parented object; not linked to this collection"));
@@ -5511,21 +5631,23 @@ void CollectionsPanel::refresh()
                 if (entry.collection.id.isValid()) {
                     appendCollection(tree_, entry, entries, layerObjects, root, {},
                                      {rootPath}, {}, viewLayerKey,
-                                     viewLayerKey);
+                                     viewLayerKey, RestrictionActivity{});
                 }
             }
             for (const OutlinerObjectEntry &object : layerObjects) {
                 if (object.collectionIds.isEmpty()) {
                     appendObject(root, object, {rootPath,
                                                 QStringLiteral("root")},
-                                 CollectionId::invalid(), viewLayerKey);
+                                 CollectionId::invalid(), viewLayerKey,
+                                 RestrictionActivity{});
                 }
             }
         } else {
             for (const OutlinerObjectEntry &object : layerObjects) {
                 appendObject(root, object, {rootPath,
                                             QStringLiteral("root")},
-                             CollectionId::invalid(), viewLayerKey);
+                             CollectionId::invalid(), viewLayerKey,
+                             RestrictionActivity{});
             }
         }
     };
@@ -7032,7 +7154,7 @@ void CollectionsPanel::refresh()
                     tree_, sceneEntries[rootIndex], sceneEntries,
                     sceneObjects, collectionsGroup, {},
                     {rootPath, QStringLiteral("collections")}, {},
-                    {}, scene.activeViewLayerKey);
+                    {}, scene.activeViewLayerKey, RestrictionActivity{});
             }
 
             auto *objectsGroup = new QTreeWidgetItem(sceneRoot);
@@ -7046,7 +7168,8 @@ void CollectionsPanel::refresh()
                 appendObject(objectsGroup, object,
                              {rootPath, QStringLiteral("objects")},
                              CollectionId::invalid(),
-                             scene.activeViewLayerKey);
+                             scene.activeViewLayerKey,
+                             RestrictionActivity{});
             }
             appendAnimationData(
                 sceneRoot, scene.animationData,

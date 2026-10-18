@@ -380,6 +380,20 @@ public:
     void syncSelection();
 
 private:
+    struct RestrictionActivity {
+        bool objectHideViewport = true;
+        bool objectHideSelect = true;
+        bool objectHideRender = true;
+        bool baseHideViewport = true;
+        bool collectionHideViewport = true;
+        bool collectionHideSelect = true;
+        bool collectionHideRender = true;
+        bool layerCollectionExclude = true;
+        bool layerCollectionHoldout = true;
+        bool layerCollectionIndirectOnly = true;
+        bool layerCollectionHideViewport = true;
+    };
+
     void createLayout();
     QJsonObject currentOutlinerWorkspaceState() const;
     void persistOutlinerWorkspaceState();
@@ -404,12 +418,14 @@ private:
                          QStringList path,
                          QStringList sourcePath,
                          const QString &activeViewLayerKey,
-                         const QString &rowViewLayerKey);
+                         const QString &rowViewLayerKey,
+                         RestrictionActivity inheritedRestrictions);
     QTreeWidgetItem *appendObject(QTreeWidgetItem *parent,
                                   const OutlinerObjectEntry &entry,
                                   const QStringList &path,
                                   CollectionId linkedCollectionId,
                                   const QString &activeViewLayerKey,
+                                  RestrictionActivity restrictions,
                                   bool includeContents = true);
     void buildObjectParentHierarchy(
         const QVector<OutlinerObjectEntry> &objects);

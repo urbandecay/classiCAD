@@ -8757,7 +8757,7 @@ private:
                 for (const ObjectId objectId : objectIds) {
                     const SceneObject *object =
                         session_.document().object(objectId);
-                    if (object == nullptr || !object->libraryPath.isEmpty() ||
+                    if (object == nullptr ||
                         !objectInViewLayer(*object, viewLayerKey) ||
                         (object->viewLayerHidden.contains(viewLayerKey) &&
                          object->viewLayerHidden.value(viewLayerKey).toBool() ==
@@ -8906,7 +8906,6 @@ private:
                             const DocumentCollection *collection =
                                 session_.document().collection(path.id);
                             if (collection == nullptr ||
-                                !collection->libraryPath.isEmpty() ||
                                 targetCollectionPaths.contains(pathKey(
                                     path.id, path.sourcePath))) {
                                 continue;
@@ -8928,8 +8927,7 @@ private:
                     for (const LayerCollectionPath &path : allPaths) {
                         const DocumentCollection *collection =
                             session_.document().collection(path.id);
-                        if (collection == nullptr ||
-                            !collection->libraryPath.isEmpty()) {
+                        if (collection == nullptr) {
                             continue;
                         }
                         const QJsonObject current = stateForPath(
@@ -9013,9 +9011,7 @@ private:
                 for (const LayerCollectionPath &path : paths) {
                     const DocumentCollection *collection =
                         session_.document().collection(path.id);
-                    if (collection == nullptr ||
-                        (!cascadeExclude &&
-                         !collection->libraryPath.isEmpty())) {
+                    if (collection == nullptr) {
                         continue;
                     }
                     const QJsonObject current = stateForPath(
@@ -9072,7 +9068,6 @@ private:
                             const SceneObject *object =
                                 session_.document().object(objectId);
                             if (object == nullptr ||
-                                !object->libraryPath.isEmpty() ||
                                 (object->viewLayerHidden.contains(viewLayerKey) &&
                                  object->viewLayerHidden.value(viewLayerKey)
                                          .toBool() == value)) {

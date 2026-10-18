@@ -1181,6 +1181,7 @@ QJsonObject CollectionsPanel::currentOutlinerWorkspaceState() const
     state.insert(QStringLiteral("filterText"),
                  filterEdit_ == nullptr ? QString{} : filterEdit_->text());
     state.insert(QStringLiteral("idTypeFilter"), idTypeFilter_);
+    state.insert(QStringLiteral("useFilterIdType"), useIdTypeFilter_);
     state.insert(QStringLiteral("filterObjectState"),
                  static_cast<int>(objectStateFilter_));
     state.insert(QStringLiteral("showEnableColumn"), showEnableColumn_);
@@ -1278,7 +1279,12 @@ void CollectionsPanel::applyOutlinerWorkspaceState(const QJsonObject &state)
         QStringLiteral("libraryOverrideViewMode")).toString(
             QStringLiteral("PROPERTIES"));
     overrideHierarchiesView_ = overrideView == QLatin1String("HIERARCHIES");
-    idTypeFilter_ = state.value(QStringLiteral("idTypeFilter")).toString();
+    const QString storedIdTypeFilter = state.value(
+        QStringLiteral("idTypeFilter")).toString();
+    idTypeFilter_ = storedIdTypeFilter.isEmpty()
+        ? QStringLiteral("Actions") : storedIdTypeFilter;
+    useIdTypeFilter_ = boolValue(
+        QStringLiteral("useFilterIdType"), !storedIdTypeFilter.isEmpty());
     const QString filterText = state.value(
         QStringLiteral("filterText")).toString();
 
@@ -1313,6 +1319,10 @@ void CollectionsPanel::applyOutlinerWorkspaceState(const QJsonObject &state)
     }
     activeFilterText_ = filterText;
     setComboIndex(idTypeCombo_, idTypeCombo_->findData(idTypeFilter_));
+    if (idTypeFilterButton_ != nullptr) {
+        const QSignalBlocker blocker(idTypeFilterButton_);
+        idTypeFilterButton_->setChecked(useIdTypeFilter_);
+    }
 
     const QJsonObject appliedState = currentOutlinerWorkspaceState();
     for (auto it = workspaceBooleanActions_.begin();
@@ -1433,10 +1443,19 @@ void CollectionsPanel::createLayout()
     libraryOverrideViewCombo_->setToolTip(QStringLiteral(
         "Choose the Blender Library Overrides view."));
     filterRow->addWidget(libraryOverrideViewCombo_);
+    idTypeFilterButton_ = new QToolButton(this);
+    idTypeFilterButton_->setText(QStringLiteral("ID Type"));
+    idTypeFilterButton_->setCheckable(true);
+    idTypeFilterButton_->setAutoRaise(true);
+    idTypeFilterButton_->setToolTip(QStringLiteral(
+        "Show only data blocks of the selected ID type."));
+    idTypeFilterButton_->setVisible(false);
+    filterRow->addWidget(idTypeFilterButton_);
     idTypeCombo_ = new QComboBox(this);
     idTypeCombo_->setToolTip(QStringLiteral(
         "Filter Blender data-block rows by ID type."));
-    idTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
+    idTypeCombo_->addItem(QStringLiteral("Actions"),
+                          QStringLiteral("Actions"));
     idTypeCombo_->setVisible(false);
     filterRow->addWidget(idTypeCombo_);
     sceneCombo_ = new QComboBox(this);
@@ -1631,6 +1650,13 @@ void CollectionsPanel::createLayout()
         QStringLiteral("outliner/idTypeFilter"),
         outlinerSettings.value(
             QStringLiteral("outliner/libraries/typeFilter"))).toString();
+    useIdTypeFilter_ = outlinerSettings.value(
+        QStringLiteral("outliner/useFilterIdType"),
+        !idTypeFilter_.isEmpty()).toBool();
+    if (idTypeFilter_.isEmpty()) {
+        idTypeFilter_ = QStringLiteral("Actions");
+    }
+    idTypeFilterButton_->setChecked(useIdTypeFilter_);
     displayModeCombo_->setCurrentIndex(
         libraryOverridesDisplayMode_ ? 6
             : (orphanDataDisplayMode_ ? 5
@@ -1947,6 +1973,15 @@ void CollectionsPanel::createLayout()
         QSettings settings;
         settings.setValue(QStringLiteral("outliner/idTypeFilter"),
                           idTypeFilter_);
+        persistOutlinerWorkspaceState();
+        refresh();
+    });
+    connect(idTypeFilterButton_, &QToolButton::toggled, this,
+            [this](bool enabled) {
+        useIdTypeFilter_ = enabled;
+        QSettings settings;
+        settings.setValue(QStringLiteral("outliner/useFilterIdType"),
+                          useIdTypeFilter_);
         persistOutlinerWorkspaceState();
         refresh();
     });
@@ -5548,9 +5583,15 @@ void CollectionsPanel::refresh()
                      ? QStringLiteral("Hierarchies")
                      : QStringLiteral("Properties"));
     } else if (librariesDisplayMode_) {
-        treeModeContext = QStringLiteral("/Libraries/%1").arg(idTypeFilter_);
+        treeModeContext = QStringLiteral("/Libraries/%1/%2")
+            .arg(useIdTypeFilter_ ? QStringLiteral("Filtered")
+                                  : QStringLiteral("AllTypes"),
+                 idTypeFilter_);
     } else if (orphanDataDisplayMode_) {
-        treeModeContext = QStringLiteral("/OrphanData/%1").arg(idTypeFilter_);
+        treeModeContext = QStringLiteral("/OrphanData/%1/%2")
+            .arg(useIdTypeFilter_ ? QStringLiteral("Filtered")
+                                  : QStringLiteral("AllTypes"),
+                 idTypeFilter_);
     }
     const QString treeStateContextKey =
         (callbacks_.treeStateContextKey
@@ -5621,6 +5662,8 @@ void CollectionsPanel::refresh()
         ? callbacks_.libraryOverrides() : QJsonObject{};
     const bool librariesMode = librariesDisplayMode_;
     const bool orphanDataMode = orphanDataDisplayMode_;
+    const bool filterByIdType = useIdTypeFilter_ &&
+                                !idTypeFilter_.isEmpty();
     const bool sequencerMode = sequencerDisplayMode_;
     const bool dataApiMode = dataApiDisplayMode_;
     const bool libraryOverridesMode = libraryOverridesDisplayMode_;
@@ -5763,8 +5806,10 @@ void CollectionsPanel::refresh()
     {
         const QSignalBlocker blocker(idTypeCombo_);
         idTypeCombo_->clear();
-        idTypeCombo_->addItem(QStringLiteral("All ID Types"), QString{});
+        idTypeCombo_->addItem(QStringLiteral("Actions"),
+                              QStringLiteral("Actions"));
         QSet<QString> addedTypes;
+        addedTypes.insert(QStringLiteral("Actions"));
         for (const OutlinerLibraryEntry &library : libraries) {
             for (const OutlinerLibraryDataGroup &group : library.dataGroups) {
                 if (group.displayName.isEmpty() ||
@@ -5785,16 +5830,21 @@ void CollectionsPanel::refresh()
         }
         int typeIndex = idTypeCombo_->findData(idTypeFilter_);
         if (typeIndex < 0) {
-            idTypeFilter_.clear();
-            typeIndex = 0;
-            QSettings settings;
-            settings.setValue(QStringLiteral("outliner/idTypeFilter"),
-                              QString{});
+            idTypeCombo_->addItem(idTypeFilter_, idTypeFilter_);
+            typeIndex = idTypeCombo_->count() - 1;
+            idTypeCombo_->setItemData(
+                typeIndex,
+                QStringLiteral(
+                    "This selected ID type is not present in the current file."),
+                Qt::ToolTipRole);
         }
         idTypeCombo_->setCurrentIndex(typeIndex);
+        idTypeFilterButton_->setVisible(librariesMode || orphanDataMode);
+        idTypeFilterButton_->setEnabled(librariesMode || orphanDataMode);
         idTypeCombo_->setVisible(librariesMode || orphanDataMode);
         idTypeCombo_->setEnabled((librariesMode || orphanDataMode) &&
-                                 idTypeCombo_->count() > 1);
+                                 useIdTypeFilter_ &&
+                                 idTypeCombo_->count() > 0);
     }
     QVector<OutlinerObjectEntry> displayObjects;
     if (showObjects_) displayObjects = allObjects;
@@ -6996,13 +7046,13 @@ void CollectionsPanel::refresh()
                 const OutlinerLibraryDataGroup &sourceGroup =
                     library.dataGroups[groupIndex];
                 if (sourceGroup.dataBlockNames.isEmpty()) continue;
-                if (!idTypeFilter_.isEmpty() &&
+                if (filterByIdType &&
                     sourceGroup.displayName != idTypeFilter_) {
                     continue;
                 }
                 QTreeWidgetItem *dataParent = row;
                 QString dataPath = libraryPath;
-                if (idTypeFilter_.isEmpty()) {
+                if (!filterByIdType) {
                     auto *groupRow = new QTreeWidgetItem(row);
                     groupRow->setText(nameColumn, sourceGroup.displayName);
                     groupRow->setData(nameColumn, itemKindRole,
@@ -7034,7 +7084,7 @@ void CollectionsPanel::refresh()
                         QStringLiteral("Blender data block"));
                     dataRow->setFlags(Qt::ItemIsEnabled |
                                       Qt::ItemIsSelectable);
-                    if (!idTypeFilter_.isEmpty()) {
+                    if (filterByIdType) {
                         const bool isSceneId = sourceGroup.displayName ==
                             QLatin1String("Scenes");
                         const QVector<OutlinerActionSlotEntry> actionSlots =
@@ -7235,7 +7285,7 @@ void CollectionsPanel::refresh()
         for (qsizetype groupIndex = 0;
              groupIndex < orphanGroups.size(); ++groupIndex) {
             const OutlinerOrphanGroup &sourceGroup = orphanGroups[groupIndex];
-            if (!idTypeFilter_.isEmpty() &&
+            if (filterByIdType &&
                 sourceGroup.displayName != idTypeFilter_) {
                 continue;
             }
@@ -7243,7 +7293,7 @@ void CollectionsPanel::refresh()
                                           .arg(groupIndex);
             QTreeWidgetItem *dataParent = nullptr;
             QString dataPath = groupPath;
-            if (idTypeFilter_.isEmpty()) {
+            if (!filterByIdType) {
                 auto *groupRow = new QTreeWidgetItem(tree_);
                 groupRow->setText(nameColumn, sourceGroup.displayName);
                 groupRow->setData(nameColumn, itemKindRole,

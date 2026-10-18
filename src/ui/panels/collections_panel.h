@@ -442,6 +442,7 @@ private:
     QToolButton *sequenceSyncButton_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QToolButton *newCollectionButton_ = nullptr;
+    QToolButton *idTypeFilterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
     QComboBox *dataApiKeyingSetCombo_ = nullptr;
     QToolButton *addKeyingSetPathsButton_ = nullptr;
@@ -492,6 +493,7 @@ private:
     bool showObjectContents_ = true;
     bool showObjectChildren_ = true;
     bool showAllViewLayers_ = false;
+    bool useIdTypeFilter_ = false;
     bool scrollToActive_ = true;
     bool sortAlphabetically_ = false;
     bool syncSelectionEnabled_ = true;

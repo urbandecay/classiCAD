@@ -11702,3 +11702,15 @@ scene depth.
 - The hundred-thirty-seventh Outliner context-menu update follows Blender 5.2.2's [Object menu Unlink rule](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L317-L324). In View Layer mode, classiCAD now hides “Unlink from Collection” when the Collections filter is off; other display modes retain the action when its callback and target exist. `cmake --build build -j4` and `git diff --check` passed; no GUI comparison was run.
 - The hundred-thirty-eighth Outliner context-menu update follows Blender 5.2.2's [ID Data submenu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L165-L179) and [ID operation list](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L2824-L2869). Object and collection rows now place the existing Make Local and Rename actions under ID Data, and expose the already-supported Copy/Paste actions there as Blender does; object Select Linked remains in the submenu. Other Blender operations are omitted because classiCAD lacks their backing data/reference behavior. `cmake --build build -j4` and `git diff --check` passed; no GUI or matched Outliner comparison was run.
 - The hundred-thirty-ninth View Layer tree update follows Blender 5.2.2's [no-Collections tree builder](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_display_view_layer.cc#L100-L135). When Collections is filtered out and the tree shows only the active View Layer, classiCAD now adds the view-layer objects directly as top-level rows instead of placing them under a synthetic “Scene Collection” root. The existing per-View-Layer roots remain when All View Layers is enabled. The Objects and Collections toggles rebuild the tree and already omit their respective row types; the suspected descendant-visibility leak was not present. `cmake --build build -j4` and `git diff --check` passed; no GUI or matched Outliner comparison was run.
+- The hundred-fortieth Outliner update follows Blender 5.2.2's separate
+  `use_filter_id_type` toggle and `filter_id_type` choice for Libraries and
+  Orphan Data ([header controls](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L64-L79),
+  [RNA properties](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_space.cc#L4615-L4625)).
+  classiCAD now stores the toggle separately, disables the type selector when
+  the toggle is off, keeps the chosen type when switching it off, and applies
+  grouped versus single-type rows according to the toggle. An absent saved
+  type stays selected across files. Type choices still come from imported
+  groups plus the Blender-default Actions type rather than Blender's complete
+  stable ID enum; Orphan Data Purge still needs a real Blender datablock
+  deletion operation. `cmake --build build -j4` and `git diff --check` passed;
+  no GUI or matched Outliner comparison was run.

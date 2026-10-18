@@ -1981,6 +1981,28 @@ def _outliner_custom_property_type(value):
     return "OTHER"
 
 
+def _outliner_custom_override_path_is_animatable(id_block, data_path):
+    override_info = getattr(id_block, "override_library", None)
+    if override_info is None:
+        return True
+    if bool(getattr(override_info, "is_system_override", False)):
+        return False
+    try:
+        override_properties = list(override_info.properties)[:512]
+        for source_property in override_properties:
+            if str(source_property.rna_path) != data_path:
+                continue
+            operations = list(source_property.operations)[:64]
+            return bool(operations) and all(
+                str(operation.operation) == "REPLACE" and
+                "LOCKED" not in set(getattr(operation, "flag", ()))
+                for operation in operations)
+    except (AttributeError, ReferenceError, RuntimeError, TypeError,
+            ValueError):
+        return False
+    return False
+
+
 def _driver_expression_for_outliner_property(prop, value, array_index,
                                              custom_property=False):
     """Match ANIM_add_driver()'s default expression for Outliner rows."""
@@ -2143,6 +2165,12 @@ def edit_data_api_drivers(source_path, staged_path, request_path, report_path):
             raise ValueError(
                 "Blender driver path is not an animatable property: " + data_path)
         readonly_check = getattr(owner, "is_property_readonly", None)
+        override_info = getattr(id_block, "override_library", None)
+        if (custom_property and override_info is not None and
+                not _outliner_custom_override_path_is_animatable(
+                    id_block, data_path)):
+            raise ValueError(
+                "Blender driver override path is not editable: " + data_path)
         if callable(readonly_check):
             try:
                 if bool(readonly_check(identifier)):
@@ -2152,10 +2180,17 @@ def edit_data_api_drivers(source_path, staged_path, request_path, report_path):
                 raise ValueError(
                     "Blender could not check driver editability: " + data_path
                 ) from error
-        elif not custom_property or getattr(
-                id_block, "override_library", None) is not None:
+        elif not custom_property:
             raise ValueError(
                 "Blender could not check driver editability: " + data_path)
+
+        if add and override_info is not None:
+            reference = getattr(override_info, "reference", None)
+            if (reference is None or
+                    getattr(reference, "animation_data", None) is not None):
+                raise ValueError(
+                    "Blender does not allow adding drivers to this animated library override: " +
+                    data_path)
 
         animation_data = id_block.animation_data
         action = animation_data.action if animation_data is not None else None

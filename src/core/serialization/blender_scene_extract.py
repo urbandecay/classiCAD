@@ -2440,6 +2440,28 @@ def outliner_data_api_tree():
             return "STRING"
         return "OTHER"
 
+    def custom_override_path_is_animatable(id_block, data_path):
+        override_info = getattr(id_block, "override_library", None)
+        if override_info is None:
+            return True
+        if bool(getattr(override_info, "is_system_override", False)):
+            return False
+        try:
+            override_properties = list(override_info.properties)[
+                :MAX_OUTLINER_OVERRIDE_PROPERTIES_PER_ID]
+            for source_property in override_properties:
+                if str(source_property.rna_path) != data_path:
+                    continue
+                operations = list(source_property.operations)[:64]
+                return bool(operations) and all(
+                    str(operation.operation) == "REPLACE" and
+                    "LOCKED" not in set(getattr(operation, "flag", ()))
+                    for operation in operations)
+        except (AttributeError, ReferenceError, RuntimeError, TypeError,
+                ValueError):
+            return False
+        return False
+
     def custom_property_animation_path(id_block, owner, owner_path,
                                        identifier, data_path, value,
                                        array_index=0):
@@ -2454,6 +2476,8 @@ def outliner_data_api_tree():
             if is_array:
                 if len(value) <= 0 or value.typecode not in {"b", "i", "f", "d"}:
                     return None
+            if not custom_override_path_is_animatable(id_block, data_path):
+                return None
             readonly_check = getattr(owner, "is_property_readonly", None)
             if callable(readonly_check):
                 try:
@@ -2462,11 +2486,6 @@ def outliner_data_api_tree():
                 except (AttributeError, ReferenceError, RuntimeError,
                         TypeError, ValueError):
                     return None
-            elif getattr(id_block, "override_library", None) is not None:
-                # IDPropertyGroup has no Python read-only query. Keep nested
-                # paths on local IDs; for overrides, do not guess per-path
-                # editability without Blender's RNA property callback.
-                return None
 
             animation_data = id_block.animation_data
             action = animation_data.action if animation_data is not None else None

@@ -11823,3 +11823,16 @@ scene depth.
   logic](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/animation/drivers.cc#L360-L506).
   Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
   passed. No matched Outliner interaction comparison was run.
+- The hundred-forty-eighth Data API driver update adds a conservative path
+  check for nested numeric custom properties on library overrides. The
+  override must be nonsystem, the exact escaped RNA path must already appear
+  in Blender's override property list, and every recorded operation must be
+  REPLACE without a LOCKED flag. This avoids guessing that a parent override
+  makes an unrecorded nested value editable. Driver creation on any library
+  override also follows Blender's extra rule that the linked reference cannot
+  already have animation data; Keying Set path eligibility does not use that
+  driver-only condition.
+  Other override operation types remain unavailable because Python does not
+  expose Blender's full owner-aware RNA animatability callback for IDProperty
+  groups. See Blender's [RNA animation editability checks](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_access.cc#L2135-L2276)
+  and [Outliner Data API driver operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1929-L2065).

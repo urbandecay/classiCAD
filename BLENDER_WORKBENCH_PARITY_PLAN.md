@@ -11836,3 +11836,14 @@ scene depth.
   expose Blender's full owner-aware RNA animatability callback for IDProperty
   groups. See Blender's [RNA animation editability checks](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_access.cc#L2135-L2276)
   and [Outliner Data API driver operators](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L1929-L2065).
+- The hundred-forty-ninth Outliner update passes the selected Object rows to
+  both Copy actions, then snapshots those IDs and their loose-mesh companions
+  into the existing multi-object clipboard. This makes copying follow the
+  Outliner selection even when Sync Selection is off; the previous callback
+  read the 3D View selection and could therefore copy the wrong set. A
+  right-click on an unselected row still reduces the Outliner selection to
+  that row before the menu is built. Blender's selected-ID copy traversal is
+  in [`outliner_edit.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_edit.cc#L862-L924),
+  with its actions in [`space_outliner.py`](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L300-L338).
+  `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
+  Outliner interaction comparison was run.

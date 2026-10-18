@@ -4439,11 +4439,11 @@ void CollectionsPanel::showContextMenu(
             if (!linked && assetMarked) canClearObjectAsset = true;
             if (!linked && !assetMarked) canMarkObjectAsset = true;
         }
-        if (callbacks_.copyOutlinerObject && objectId.isValid()) {
+        if (callbacks_.copyOutlinerObject && !objectTargetIds.isEmpty()) {
             QAction *copy = menu.addAction(QStringLiteral("Copy"));
             connect(copy, &QAction::triggered, this,
-                    [this, objectId]() {
-                callbacks_.copyOutlinerObject(objectId);
+                    [this, objectTargetIds]() {
+                callbacks_.copyOutlinerObject(objectTargetIds);
             });
         }
         if (callbacks_.pasteOutlinerObjects &&
@@ -4454,7 +4454,7 @@ void CollectionsPanel::showContextMenu(
                 callbacks_.pasteOutlinerObjects();
             });
         }
-        if ((callbacks_.copyOutlinerObject && objectId.isValid()) ||
+        if ((callbacks_.copyOutlinerObject && !objectTargetIds.isEmpty()) ||
             (callbacks_.pasteOutlinerObjects &&
              callbacks_.hasOutlinerObjectClipboard &&
              callbacks_.hasOutlinerObjectClipboard())) {
@@ -4571,7 +4571,8 @@ void CollectionsPanel::showContextMenu(
         if (objectId.isValid() &&
             (callbacks_.renameObject ||
              (callbacks_.makeObjectsLocal && !linkedObjectIds.isEmpty()) ||
-             callbacks_.copyOutlinerObject ||
+             (callbacks_.copyOutlinerObject &&
+              !objectTargetIds.isEmpty()) ||
              (callbacks_.pasteOutlinerObjects &&
               callbacks_.hasOutlinerObjectClipboard &&
               callbacks_.hasOutlinerObjectClipboard()) ||
@@ -4586,12 +4587,13 @@ void CollectionsPanel::showContextMenu(
                     callbacks_.makeObjectsLocal(linkedObjectIds);
                 });
             }
-            if (callbacks_.copyOutlinerObject) {
+            if (callbacks_.copyOutlinerObject &&
+                !objectTargetIds.isEmpty()) {
                 QAction *copy = idDataMenu->addAction(
                     QStringLiteral("Copy"));
                 connect(copy, &QAction::triggered, this,
-                        [this, objectId]() {
-                    callbacks_.copyOutlinerObject(objectId);
+                        [this, objectTargetIds]() {
+                    callbacks_.copyOutlinerObject(objectTargetIds);
                 });
             }
             if (callbacks_.pasteOutlinerObjects &&

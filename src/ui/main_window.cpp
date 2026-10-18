@@ -5162,12 +5162,22 @@ private:
         collectionCallbacks.hasOutlinerObjectClipboard = [this]() {
             return !outlinerObjectClipboard_.isEmpty();
         };
-        collectionCallbacks.copyOutlinerObject = [this](ObjectId objectId) {
+        collectionCallbacks.copyOutlinerObject =
+            [this](const QVector<ObjectId> &requestedObjectIds) {
             const Document &document = session_.document();
-            const SceneObject *source = document.object(objectId);
-            if (source == nullptr || source->blenderLooseMeshEdgeCompanion) {
-                return;
+            QVector<ObjectId> selectedIds;
+            QSet<quint64> requestedIds;
+            for (const ObjectId objectId : requestedObjectIds) {
+                const SceneObject *source = document.object(objectId);
+                if (source == nullptr ||
+                    source->blenderLooseMeshEdgeCompanion ||
+                    requestedIds.contains(objectId.value())) {
+                    continue;
+                }
+                requestedIds.insert(objectId.value());
+                selectedIds.append(objectId);
             }
+            if (selectedIds.isEmpty()) return;
             outlinerObjectClipboard_.clear();
             outlinerObjectClipboardMaterials_.clear();
             outlinerObjectClipboardAnchorIdentities_.clear();
@@ -5187,9 +5197,6 @@ private:
                 outlinerObjectClipboardCollectionIdentities_.insert(
                     collection.id.value(), identity);
             }
-            QVector<ObjectId> selectedIds =
-                session_.selection().objectIds();
-            if (!selectedIds.contains(objectId)) selectedIds = {objectId};
             QSet<quint64> copiedObjectIds;
             QStringList copiedSourceIdentities;
             for (const ObjectId selectedId : selectedIds) {

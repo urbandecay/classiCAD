@@ -4399,7 +4399,13 @@ void CollectionsPanel::showContextMenu(const QPoint &position)
                     {candidateObjectId, candidateCollectionId});
             }
         }
-        if (callbacks_.unlinkObjects && !unlinkTargets.isEmpty()) {
+        const bool collectionsFilteredOutInViewLayer =
+            !scenesDisplayMode_ && !sequencerDisplayMode_ &&
+            !dataApiDisplayMode_ && !librariesDisplayMode_ &&
+            !orphanDataDisplayMode_ && !libraryOverridesDisplayMode_ &&
+            !showCollections_;
+        if (callbacks_.unlinkObjects && !unlinkTargets.isEmpty() &&
+            !collectionsFilteredOutInViewLayer) {
             QAction *unlink = menu.addAction(
                 QStringLiteral("Unlink from Collection"));
             connect(unlink, &QAction::triggered, this,

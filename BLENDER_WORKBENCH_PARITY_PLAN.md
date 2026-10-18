@@ -11935,3 +11935,18 @@ scene depth.
   expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
   Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
   passed. No GUI or matched Outliner interaction comparison was run.
+- The hundred-fifty-seventh Data API update extends that fetch to nested RNA
+  properties and structs when their Outliner rows are expanded, including
+  branches clipped by the initial recursion limit. Each request resolves its
+  Blender RNA path from the original `.blend`, checks the file digest before
+  and after extraction in the background Blender process, and caches the result
+  by source identity and tree path. Results remain bounded to 20,000 rows and
+  64 path segments. Custom IDProperty groups and arrays are still not fetched
+  independently, and native classiCAD documents without their original
+  `.blend` retain only their captured snapshot. Each uncached expansion starts
+  a Blender background process; no matched Outliner UI comparison was run.
+  The Data API tree-path item role is distinct from the existing object
+  selectable-state role. See Blender 5.2.2's [lazy RNA tree
+  expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
+  Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
+  passed.

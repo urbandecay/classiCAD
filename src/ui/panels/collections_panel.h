@@ -272,7 +272,7 @@ struct CollectionsPanelCallbacks {
     std::function<void(const QJsonArray &, bool)> editDataApiDriverPaths;
     std::function<QString()> dataApiSourceKey;
     std::function<void(
-        const QString &,
+        const QJsonArray &,
         std::function<void(const QJsonObject &, const QString &)>)>
         fetchDataApiSection;
     std::function<QJsonObject()> libraryOverrides;
@@ -415,8 +415,8 @@ private:
     void restoreTreeState();
     void saveTreeState();
     void populateDataApiChildren(QTreeWidgetItem *item);
-    void requestDataApiSection(QTreeWidgetItem *item);
-    void finishDataApiSection(const QString &path,
+    void requestDataApiNode(QTreeWidgetItem *item);
+    void finishDataApiNode(const QString &path,
                               const QString &sourceKey,
                               const QJsonObject &section,
                               const QString &error);

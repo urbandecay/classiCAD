@@ -2304,7 +2304,7 @@ def outliner_sequencer_tree(active_window, fallback_scene):
     return record
 
 
-def outliner_data_api_tree(focus_root_property=None):
+def outliner_data_api_tree(focus_root_property=None, focus_node_path=None):
     """Capture Blender's RNA Data API tree with bounded recursion."""
     remaining = [MAX_OUTLINER_DATA_API_ITEMS - 1]
     truncated = [False]
@@ -2488,6 +2488,16 @@ def outliner_data_api_tree(focus_root_property=None):
                 ValueError):
             return
 
+    def has_data_api_children(value):
+        for prop in properties_of(value):
+            try:
+                if (str(prop.identifier) != "rna_type" and not bool(
+                        getattr(prop, "is_hidden", False))):
+                    return True
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
+                continue
+        return next(custom_property_entries(value), None) is not None
+
     def custom_property_node_budget(owner, depth, ancestry, limit):
         """Count visible custom rows recursively, capped by the row budget."""
         if limit <= 0:
@@ -2592,6 +2602,7 @@ def outliner_data_api_tree(focus_root_property=None):
                 custom_property_entries(owner):
             if remaining[0] <= 0:
                 truncated[0] = True
+                parent["truncated"] = True
                 break
             try:
                 escaped_key = bpy.utils.escape_identifier(identifier)
@@ -2616,7 +2627,9 @@ def outliner_data_api_tree(focus_root_property=None):
                 branch_remaining=branch_remaining,
                 item_remaining=item_remaining)
             if property_node is None:
+                parent["truncated"] = True
                 break
+            property_node["has_children"] = False
             if value_type in {"BOOLEAN", "INT", "FLOAT", "ARRAY"}:
                 path_record = custom_property_animation_path(
                     id_block, owner, owner_path, identifier, data_path,
@@ -2625,17 +2638,27 @@ def outliner_data_api_tree(focus_root_property=None):
                     property_node["animation_path"] = path_record
 
             if value_type == "GROUP":
-                if depth + 1 >= MAX_OUTLINER_DATA_API_DEPTH:
+                property_node["has_children"] = bool(property_value)
+                if focus_node_path is not None and property_node["has_children"]:
+                    property_node["deferred"] = True
+                elif depth + 1 >= MAX_OUTLINER_DATA_API_DEPTH:
                     if len(property_value):
                         truncated[0] = True
+                        property_node["truncated"] = True
                 elif id(property_value) in ancestry:
                     truncated[0] = True
+                    property_node["truncated"] = True
                 else:
                     add_custom_property_nodes(
                         property_node, property_value, id_block, data_path,
                         depth + 1, ancestry | {id(property_value)},
                         branch_remaining, item_remaining)
             elif value_type == "ARRAY":
+                property_node["has_children"] = len(property_value) > 0
+                if focus_node_path is not None and property_node["has_children"]:
+                    property_node["deferred"] = True
+                    parent["children"].append(property_node)
+                    continue
                 try:
                     array_values = enumerate(property_value)
                     for index, _element in array_values:
@@ -2653,13 +2676,17 @@ def outliner_data_api_tree(focus_root_property=None):
                             element_path["use_entire_array"] = False
                             array_node["animation_path"] = element_path
                         property_node["children"].append(array_node)
+                    if len(property_node["children"]) < len(property_value):
+                        property_node["truncated"] = True
                 except (AttributeError, OverflowError, ReferenceError,
                         RuntimeError, TypeError, ValueError):
                     truncated[0] = True
+                    property_node["truncated"] = True
             parent["children"].append(property_node)
 
     def capture_driver_paths(value):
-        if focus_root_property is not None:
+        if (focus_root_property is not None or
+                focus_node_path is not None):
             return
         if not isinstance(value, bpy.types.ID):
             return
@@ -2697,6 +2724,68 @@ def outliner_data_api_tree(focus_root_property=None):
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             return
 
+    def resolve_focus_node(path):
+        if not isinstance(path, list) or not path or len(path) > 64:
+            raise RuntimeError("invalid Blender Data API node path")
+        current = bpy.data
+        current_kind = "STRUCT"
+        target = None
+        target_owner = None
+        target_property = None
+        for segment in path:
+            if not isinstance(segment, dict):
+                raise RuntimeError("invalid Blender Data API node path")
+            kind = segment.get("kind")
+            key = segment.get("key")
+            if (kind not in {"PROPERTY", "STRUCT", "ARRAY_ELEM"} or
+                    not isinstance(key, str) or not key or len(key) > 512):
+                raise RuntimeError("invalid Blender Data API node path")
+            if kind == "PROPERTY":
+                if current_kind not in {"STRUCT", "PROPERTY"}:
+                    raise RuntimeError("invalid Blender Data API property path")
+                target_owner = current
+                target_property = None
+                if key.startswith("idprop:"):
+                    current = current[key[len("idprop:"):]]
+                else:
+                    try:
+                        rna_properties = getattr(
+                            getattr(current, "bl_rna", None), "properties", ())
+                        target_property = rna_properties.get(key)
+                        if (target_property is None or
+                                bool(getattr(target_property, "is_hidden", False))):
+                            raise RuntimeError(
+                                "Blender Data API property is unavailable: " + key)
+                        current = getattr(current, key)
+                    except (AttributeError, ReferenceError, RuntimeError,
+                            TypeError) as error:
+                        raise RuntimeError(
+                            "could not resolve Blender Data API property: " + key) from error
+                current_kind = "PROPERTY"
+            elif kind == "STRUCT":
+                if current_kind != "PROPERTY":
+                    raise RuntimeError("invalid Blender Data API struct path")
+                if key != "pointer":
+                    try:
+                        current = current[int(key)]
+                    except (IndexError, KeyError, TypeError, ValueError) as error:
+                        raise RuntimeError(
+                            "could not resolve Blender Data API collection item") from error
+                current_kind = "STRUCT"
+                target_property = None
+            else:
+                if current_kind != "PROPERTY":
+                    raise RuntimeError("invalid Blender Data API array path")
+                try:
+                    current = current[int(key)]
+                except (IndexError, KeyError, TypeError, ValueError) as error:
+                    raise RuntimeError(
+                        "could not resolve Blender Data API array element") from error
+                current_kind = "ARRAY_ELEM"
+                target_property = None
+            target = (kind, key, current, target_owner, target_property)
+        return target
+
     def add_struct(value, key, depth, ancestry, branch_remaining,
                    item_remaining=None):
         rna = getattr(value, "bl_rna", None)
@@ -2706,14 +2795,20 @@ def outliner_data_api_tree(focus_root_property=None):
                             item_remaining=item_remaining)
         if node is None:
             return None
+        node["has_children"] = has_data_api_children(value)
+        if focus_node_path is not None and node["has_children"]:
+            node["deferred"] = True
         pointer = identity(value)
         capture_driver_paths(value)
         if pointer in ancestry:
-            truncated[0] = True
+            if node["has_children"]:
+                truncated[0] = True
+                node["truncated"] = True
             return node
         if depth >= MAX_OUTLINER_DATA_API_DEPTH:
-            if properties_of(value):
+            if node["has_children"]:
                 truncated[0] = True
+                node["truncated"] = True
             return node
 
         pending_structs.append(
@@ -2723,6 +2818,7 @@ def outliner_data_api_tree(focus_root_property=None):
 
     def populate_struct(node, value, depth, ancestry, branch_remaining,
                         item_remaining=None):
+        direct_truncated = False
         properties = properties_of(value)
         unreadable_value = object()
         visible_properties = []
@@ -2796,13 +2892,16 @@ def outliner_data_api_tree(focus_root_property=None):
         for prop, identifier, prop_type, prop_name in visible_properties:
             if remaining[0] <= 0:
                 truncated[0] = True
+                direct_truncated = True
                 break
             property_node = reserve_node(
                 "PROPERTY", identifier, prop_name, prop_type,
                 branch_remaining=branch_remaining,
                 item_remaining=item_remaining)
             if property_node is None:
+                direct_truncated = True
                 break
+            property_node["has_children"] = False
             is_array = bool(getattr(prop, "is_array", False))
             property_animation_path = animation_path_metadata(
                 value, prop, identifier, is_array)
@@ -2822,18 +2921,23 @@ def outliner_data_api_tree(focus_root_property=None):
 
             if prop_type == "POINTER":
                 if property_value is not None:
-                    pointer_budget = child_family_limits.get(identifier, 0)
-                    if pointer_budget <= 0:
-                        truncated[0] = True
+                    property_node["has_children"] = True
+                    if focus_node_path is not None:
+                        property_node["deferred"] = True
                     else:
-                        pointer_item_remaining = list(item_remaining or [])
-                        pointer_item_remaining.append([pointer_budget])
-                        child = add_struct(property_value, "pointer",
-                                           depth + 1, ancestry,
-                                           branch_remaining,
-                                           pointer_item_remaining)
-                        if child is not None:
-                            property_node["children"].append(child)
+                        pointer_budget = child_family_limits.get(identifier, 0)
+                        if pointer_budget <= 0:
+                            truncated[0] = True
+                            property_node["truncated"] = True
+                        else:
+                            pointer_item_remaining = list(item_remaining or [])
+                            pointer_item_remaining.append([pointer_budget])
+                            child = add_struct(property_value, "pointer",
+                                               depth + 1, ancestry,
+                                               branch_remaining,
+                                               pointer_item_remaining)
+                            if child is not None:
+                                property_node["children"].append(child)
             elif prop_type == "COLLECTION":
                 try:
                     collection_size = collection_sizes[identifier]
@@ -2841,7 +2945,12 @@ def outliner_data_api_tree(focus_root_property=None):
                 except (AttributeError, KeyError, ReferenceError, RuntimeError,
                         TypeError):
                     continue
+                property_node["has_children"] = collection_size > 0
                 if collection_size <= 0:
+                    node["children"].append(property_node)
+                    continue
+                if focus_node_path is not None:
+                    property_node["deferred"] = True
                     node["children"].append(property_node)
                     continue
                 collection_budget = branch_remaining[0]
@@ -2854,6 +2963,7 @@ def outliner_data_api_tree(focus_root_property=None):
                     child_family_limits.get(identifier, 0))
                 if collection_budget <= 0:
                     truncated[0] = True
+                    property_node["truncated"] = True
                     node["children"].append(property_node)
                     continue
                 collection_item_limit = min(
@@ -2862,6 +2972,7 @@ def outliner_data_api_tree(focus_root_property=None):
                     max(1, collection_budget // 2))
                 if collection_size > collection_item_limit:
                     truncated[0] = True
+                    property_node["truncated"] = True
                 per_child_limit = max(
                     1, collection_budget // max(1, collection_item_limit))
                 for index, element in enumerate(iterator):
@@ -2881,10 +2992,17 @@ def outliner_data_api_tree(focus_root_property=None):
                                        child_item_remaining)
                     if child is not None:
                         property_node["children"].append(child)
+                if len(property_node["children"]) < collection_size:
+                    property_node["truncated"] = True
             elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
                   bool(getattr(prop, "is_array", False))):
                 values = property_value
                 subtype = str(getattr(prop, "subtype", ""))
+                property_node["has_children"] = bool(values)
+                if focus_node_path is not None and values:
+                    property_node["deferred"] = True
+                    node["children"].append(property_node)
+                    continue
                 for index, element in enumerate(values):
                     array_key = str(index)
                     array_name = array_component_name(subtype, index)
@@ -2900,6 +3018,8 @@ def outliner_data_api_tree(focus_root_property=None):
                         element_path["use_entire_array"] = False
                         array_node["animation_path"] = element_path
                     property_node["children"].append(array_node)
+                if len(property_node["children"]) < len(values):
+                    property_node["truncated"] = True
             node["children"].append(property_node)
 
         id_block = value if isinstance(value, bpy.types.ID) else getattr(
@@ -2914,21 +3034,41 @@ def outliner_data_api_tree(focus_root_property=None):
             add_custom_property_nodes(
                 node, value, id_block, custom_owner_path, depth, ancestry,
                 branch_remaining, item_remaining)
+        if direct_truncated:
+            node["truncated"] = True
+        node["has_children"] = bool(node["children"]) or bool(
+            node.get("truncated"))
 
     ancestry = {identity(bpy.data)}
     root_properties = []
-    for prop in properties_of(bpy.data):
-        try:
-            identifier = str(prop.identifier)
-            if identifier == "rna_type" or bool(
-                    getattr(prop, "is_hidden", False)):
+    property_owner = bpy.data
+    focused_target = None
+    if focus_node_path is not None:
+        focused_target = resolve_focus_node(focus_node_path)
+        (focused_kind, focused_key, focused_value, focused_owner,
+         focused_property) = focused_target
+        if focused_kind == "PROPERTY":
+            if focused_property is None:
+                raise RuntimeError(
+                    "custom Blender Data API properties cannot be refreshed independently")
+            property_owner = focused_owner
+            root_properties.append(focused_property)
+        elif focused_kind != "STRUCT":
+            raise RuntimeError(
+                "this Blender Data API node has no expandable children")
+    else:
+        for prop in properties_of(bpy.data):
+            try:
+                identifier = str(prop.identifier)
+                if identifier == "rna_type" or bool(
+                        getattr(prop, "is_hidden", False)):
+                    continue
+            except (AttributeError, ReferenceError, RuntimeError, TypeError):
                 continue
-        except (AttributeError, ReferenceError, RuntimeError, TypeError):
-            continue
-        if (focus_root_property is not None and
-                identifier != focus_root_property):
-            continue
-        root_properties.append(prop)
+            if (focus_root_property is not None and
+                    identifier != focus_root_property):
+                continue
+            root_properties.append(prop)
 
     root_property_count = len(root_properties)
     focused_property_node = None
@@ -2949,7 +3089,9 @@ def outliner_data_api_tree(focus_root_property=None):
                                      prop_type)
         if property_node is None:
             break
-        if focus_root_property is not None:
+        if (focus_root_property is not None or
+                (focused_target is not None and
+                 focused_target[0] == "PROPERTY")):
             focused_property_node = property_node
         property_node["has_children"] = False
         remaining_root_properties = root_property_count - root_property_index
@@ -2963,18 +3105,19 @@ def outliner_data_api_tree(focus_root_property=None):
         branch_remaining = [branch_limit]
         is_array = bool(getattr(prop, "is_array", False))
         property_animation_path = animation_path_metadata(
-            bpy.data, prop, identifier, is_array)
+            property_owner, prop, identifier, is_array)
         if property_animation_path is not None:
             property_node["animation_path"] = property_animation_path
         try:
-            property_value = getattr(bpy.data, identifier)
+            property_value = getattr(property_owner, identifier)
         except (AttributeError, ReferenceError, RuntimeError, TypeError):
             root["children"].append(property_node)
             continue
         if prop_type == "POINTER":
             if property_value is not None:
                 property_node["has_children"] = True
-                child = add_struct(property_value, "pointer", 1, ancestry,
+                child = add_struct(property_value, "pointer", 1,
+                                   ancestry | {identity(property_owner)},
                                    branch_remaining)
                 if child is not None:
                     property_node["children"].append(child)
@@ -2988,16 +3131,20 @@ def outliner_data_api_tree(focus_root_property=None):
             property_node["has_children"] = collection_size > 0
             collection_item_limit = (
                 MAX_OUTLINER_DATA_API_COLLECTION_ITEMS
-                if focus_root_property is not None
+                if (focus_root_property is not None or
+                    (focused_target is not None and
+                     focused_target[0] == "PROPERTY"))
                 else MAX_OUTLINER_DATA_API_BRANCH_ITEMS)
             section_collection_limit = min(
                 collection_size, MAX_OUTLINER_DATA_API_COLLECTION_ITEMS,
                 collection_item_limit,
-                max(1, branch_remaining[0] // 32))
+                max(1, branch_remaining[0]) if focus_node_path is not None
+                else max(1, branch_remaining[0] // 32))
             if collection_size > section_collection_limit:
                 truncated[0] = True
-            per_item_limit = max(
-                1, branch_remaining[0] // max(1, section_collection_limit))
+                property_node["truncated"] = True
+            per_item_limit = (1 if focus_node_path is not None else max(
+                1, branch_remaining[0] // max(1, section_collection_limit)))
             for index, element in enumerate(iterator):
                 if (index >= collection_size or
                         index >= section_collection_limit or
@@ -3010,6 +3157,8 @@ def outliner_data_api_tree(focus_root_property=None):
                                    branch_remaining, item_remaining)
                 if child is not None:
                     property_node["children"].append(child)
+            if len(property_node["children"]) < collection_size:
+                property_node["truncated"] = True
         elif (prop_type in ("BOOLEAN", "INT", "FLOAT") and
               bool(getattr(prop, "is_array", False))):
             try:
@@ -3031,18 +3180,35 @@ def outliner_data_api_tree(focus_root_property=None):
                     element_path["use_entire_array"] = False
                     array_node["animation_path"] = element_path
                 property_node["children"].append(array_node)
+            if len(property_node["children"]) < len(values):
+                property_node["truncated"] = True
         root["children"].append(property_node)
 
-    pending_index = 0
-    while pending_index < len(pending_structs):
-        if remaining[0] <= 0:
-            truncated[0] = True
-            break
-        (node, value, depth, ancestry, branch_remaining,
-         item_remaining) = pending_structs[pending_index]
-        pending_index += 1
-        populate_struct(node, value, depth, ancestry, branch_remaining,
-                        item_remaining)
+    if focused_target is not None and focused_target[0] == "STRUCT":
+        (_focused_kind, focused_key, focused_value, _focused_owner,
+         _focused_property) = focused_target
+        target_rna = getattr(focused_value, "bl_rna", None)
+        target_node = reserve_node(
+            "STRUCT", focused_key, struct_name(focused_value),
+            str(getattr(target_rna, "identifier", "")))
+        if target_node is not None:
+            root["children"].append(target_node)
+            target_node["has_children"] = has_data_api_children(focused_value)
+            populate_struct(
+                target_node, focused_value, 1,
+                ancestry | {identity(focused_value)}, [remaining[0]])
+
+    if focus_node_path is None:
+        pending_index = 0
+        while pending_index < len(pending_structs):
+            if remaining[0] <= 0:
+                truncated[0] = True
+                break
+            (node, value, depth, ancestry, branch_remaining,
+             item_remaining) = pending_structs[pending_index]
+            pending_index += 1
+            populate_struct(node, value, depth, ancestry, branch_remaining,
+                            item_remaining)
 
     if focused_property_node is not None:
         focused_property_node["truncated"] = truncated[0]
@@ -6553,14 +6719,21 @@ def main():
     if "--" not in sys.argv:
         raise RuntimeError("missing arguments after Blender's -- separator")
     arguments = sys.argv[sys.argv.index("--") + 1:]
-    if len(arguments) == 5 and arguments[0] == "data_api_section":
-        input_path, output_path, section_identifier, expected_sha256 = arguments[1:]
-        if (not section_identifier or len(section_identifier) > 512 or
+    if len(arguments) == 5 and arguments[0] in {
+            "data_api_section", "data_api_node"}:
+        input_path, output_path, focus_argument, expected_sha256 = arguments[1:]
+        if (not focus_argument or len(focus_argument) > 64 * 1024 or
                 len(expected_sha256) != 64 or
                 any(character not in "0123456789abcdefABCDEF"
                     for character in expected_sha256)):
             raise RuntimeError(
-                "invalid Blender Data API section identifier or source hash")
+                "invalid Blender Data API focus path or source hash")
+        if arguments[0] == "data_api_section":
+            if len(focus_argument) > 512:
+                raise RuntimeError("invalid Blender Data API section identifier")
+            focus_node_path = [{"kind": "PROPERTY", "key": focus_argument}]
+        else:
+            focus_node_path = json.loads(focus_argument)
 
         input_path = os.path.abspath(input_path)
 
@@ -6577,10 +6750,10 @@ def main():
                 "The Blender file changed after it was imported; Data API refresh was cancelled")
         bpy.ops.wm.open_mainfile(filepath=input_path)
         require_pinned_blender()
-        section = outliner_data_api_tree(section_identifier)
+        section = outliner_data_api_tree(focus_node_path=focus_node_path)
         if len(section["root"]["children"]) != 1:
             raise RuntimeError(
-                "Blender Data API section is unavailable: " + section_identifier)
+                "Blender Data API node is unavailable")
         if source_sha256() != expected_sha256:
             raise RuntimeError(
                 "The Blender file changed while its Data API section was loading")

@@ -4140,11 +4140,11 @@ private:
                 QString::fromLatin1(importedBlenderSourceSha256_);
         };
         collectionCallbacks.fetchDataApiSection = [this](
-            const QString &sectionIdentifier,
+            const QJsonArray &nodePath,
             std::function<void(const QJsonObject &, const QString &)> callback) {
             extractBlenderDataApiSectionAsync(
                 this, importedBlenderSourcePath_,
-                importedBlenderSourceSha256_, sectionIdentifier,
+                importedBlenderSourceSha256_, nodePath,
                 std::move(callback));
         };
         collectionCallbacks.setSequencerSelection = [this](

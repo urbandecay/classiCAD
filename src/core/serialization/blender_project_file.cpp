@@ -734,8 +734,10 @@ bool isValidDataApiSectionNode(const QJsonObject &node,
     const QJsonValue hasChildrenValue = node.value(
         QStringLiteral("has_children"));
     const QJsonValue truncatedValue = node.value(QStringLiteral("truncated"));
+    const QJsonValue deferredValue = node.value(QStringLiteral("deferred"));
     if ((!hasChildrenValue.isUndefined() && !hasChildrenValue.isBool()) ||
-        (!truncatedValue.isUndefined() && !truncatedValue.isBool())) {
+        (!truncatedValue.isUndefined() && !truncatedValue.isBool()) ||
+        (!deferredValue.isUndefined() && !deferredValue.isBool())) {
         return false;
     }
     for (const QJsonValue &childValue : childrenValue.toArray()) {
@@ -754,12 +756,12 @@ public:
         QObject *owner,
         QString sourcePath,
         QByteArray expectedSourceSha256,
-        QString sectionIdentifier,
+        QJsonArray nodePath,
         classiCAD::BlenderDataApiSectionCallback callback)
         : QObject(owner),
           sourcePath_(std::move(sourcePath)),
           expectedSourceSha256_(std::move(expectedSourceSha256)),
-          sectionIdentifier_(std::move(sectionIdentifier)),
+          nodePath_(std::move(nodePath)),
           callback_(std::move(callback))
     {
         connect(&process_, &QProcess::finished, this,
@@ -795,10 +797,32 @@ public:
             expectedSourceSha256_.size() != 64 ||
             QByteArray::fromHex(expectedSourceSha256_).toHex() !=
                 expectedSourceSha256_.toLower() ||
-            sectionIdentifier_.isEmpty() ||
-            sectionIdentifier_.size() > 512) {
+            nodePath_.isEmpty() || nodePath_.size() > 64) {
             finish({}, QStringLiteral(
-                "A valid imported Blender file and Data API section are required"));
+                "A valid imported Blender file and Data API node are required"));
+            return;
+        }
+        for (const QJsonValue &pathElement : nodePath_) {
+            if (!pathElement.isObject()) {
+                finish({}, QStringLiteral("The Blender Data API node path is invalid"));
+                return;
+            }
+            const QJsonObject segment = pathElement.toObject();
+            const QString kind = segment.value(QStringLiteral("kind")).toString();
+            const QJsonValue key = segment.value(QStringLiteral("key"));
+            if ((kind != QLatin1String("PROPERTY") &&
+                 kind != QLatin1String("STRUCT") &&
+                 kind != QLatin1String("ARRAY_ELEM")) ||
+                !key.isString() || key.toString().isEmpty() ||
+                key.toString().size() > 512) {
+                finish({}, QStringLiteral("The Blender Data API node path is invalid"));
+                return;
+            }
+        }
+        const QByteArray nodePathJson = QJsonDocument(nodePath_).toJson(
+            QJsonDocument::Compact);
+        if (nodePathJson.size() > 64 * 1024) {
+            finish({}, QStringLiteral("The Blender Data API node path is too long"));
             return;
         }
         const QString executable = blenderExecutable();
@@ -835,8 +859,9 @@ public:
             QStringLiteral("--factory-startup"),
             QStringLiteral("--python"), scriptPath,
             QStringLiteral("--"),
-            QStringLiteral("data_api_section"),
-            sourceInfo.absoluteFilePath(), outputPath_, sectionIdentifier_,
+            QStringLiteral("data_api_node"),
+            sourceInfo.absoluteFilePath(), outputPath_,
+            QString::fromUtf8(nodePathJson),
             QString::fromLatin1(expectedSourceSha256_)});
         process_.setProcessChannelMode(QProcess::SeparateChannels);
         process_.start();
@@ -891,12 +916,13 @@ private:
             QStringLiteral("children")).toArray();
         const QJsonObject section = children.size() == 1
             ? children.first().toObject() : QJsonObject{};
+        const QJsonObject target = nodePath_.last().toObject();
         int nodeCount = 0;
         if (!result.value(QStringLiteral("truncated")).isBool() ||
             section.value(QStringLiteral("kind")).toString() !=
-                QLatin1String("PROPERTY") ||
+                target.value(QStringLiteral("kind")).toString() ||
             section.value(QStringLiteral("key")).toString() !=
-                sectionIdentifier_ ||
+                target.value(QStringLiteral("key")).toString() ||
             !isValidDataApiSectionNode(section, 0, &nodeCount)) {
             finish({}, QStringLiteral(
                 "Blender returned an invalid Data API section tree"));
@@ -917,7 +943,7 @@ private:
 
     QString sourcePath_;
     QByteArray expectedSourceSha256_;
-    QString sectionIdentifier_;
+    QJsonArray nodePath_;
     classiCAD::BlenderDataApiSectionCallback callback_;
     QTemporaryDir temporaryDirectory_;
     QProcess process_;
@@ -2801,7 +2827,7 @@ void extractBlenderDataApiSectionAsync(
     QObject *owner,
     const QString &sourcePath,
     const QByteArray &expectedSourceSha256,
-    const QString &sectionIdentifier,
+    const QJsonArray &nodePath,
     BlenderDataApiSectionCallback callback)
 {
     if (owner == nullptr) {
@@ -2812,7 +2838,7 @@ void extractBlenderDataApiSectionAsync(
         return;
     }
     auto *job = new BlenderDataApiSectionExtractionJob(
-        owner, sourcePath, expectedSourceSha256, sectionIdentifier,
+        owner, sourcePath, expectedSourceSha256, nodePath,
         std::move(callback));
     job->start();
 }

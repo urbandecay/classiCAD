@@ -180,7 +180,7 @@ void extractBlenderDataApiSectionAsync(
     QObject *owner,
     const QString &sourcePath,
     const QByteArray &expectedSourceSha256,
-    const QString &sectionIdentifier,
+    const QJsonArray &nodePath,
     BlenderDataApiSectionCallback callback);
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.

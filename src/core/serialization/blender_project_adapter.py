@@ -24,6 +24,7 @@ DOCUMENT_TEXT_NAME = "classiCAD.DocumentData"
 ROOT_COLLECTION_NAME = "classiCAD"
 MAX_PROXY_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_PROXY_IMAGE_PIXELS = MAX_PROXY_IMAGE_BYTES // 16
+MAX_OUTLINER_ORPHAN_ITEMS = 20000
 TEMPORARY_PROXY_IMAGE_PATHS = []
 
 
@@ -1452,6 +1453,78 @@ def load_project(source_path, output_json_path):
         json.dump(document, output_file, ensure_ascii=False, separators=(",", ":"))
 
 
+def outliner_orphan_groups():
+    groups = []
+    groups_by_name = {}
+    seen_ids = set()
+    row_count = 0
+    never_unused_types = {"Library", "Scene", "WorkSpace"}
+    for property_rna in bpy.data.bl_rna.properties:
+        if getattr(property_rna, "type", "") != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, property_rna.identifier)
+        except (AttributeError, RuntimeError, TypeError):
+            continue
+        for id_block in collection:
+            if not isinstance(id_block, bpy.types.ID):
+                continue
+            id_key = id_block.as_pointer()
+            if id_key in seen_ids:
+                continue
+            seen_ids.add(id_key)
+            if (id_block.bl_rna.identifier in never_unused_types or
+                    int(id_block.users) > 0):
+                continue
+            group_name = str(property_rna.name)
+            group = groups_by_name.get(group_name)
+            if group is None:
+                group = {"name": group_name, "names": [], "truncated": False}
+                groups_by_name[group_name] = group
+                groups.append(group)
+            if row_count >= MAX_OUTLINER_ORPHAN_ITEMS:
+                group["truncated"] = True
+                continue
+            row_count += 1
+            group["names"].append(str(id_block.name_full))
+    return groups
+
+
+def purge_project_orphans(source_path, staged_path, report_path):
+    result = bpy.ops.wm.open_mainfile(
+        filepath=os.path.abspath(source_path),
+        load_ui=False,
+        use_scripts=False,
+    )
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender did not finish opening the source project")
+    if any(scene.get("classiCAD_format") == PROJECT_FORMAT
+           for scene in bpy.data.scenes):
+        raise RuntimeError(
+            "Orphan Data Purge cannot edit a classiCAD-native Blender project")
+
+    removed_count = bpy.data.orphans_purge(
+        do_local_ids=True,
+        do_linked_ids=True,
+        do_recursive=True,
+    )
+    remaining_orphans = outliner_orphan_groups()
+    result = bpy.ops.wm.save_as_mainfile(
+        filepath=os.path.abspath(staged_path),
+        check_existing=False,
+        compress=True,
+    )
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender did not finish saving the purged project")
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        json.dump(
+            {"removed_count": int(removed_count), "orphans": remaining_orphans},
+            report_file,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
 def main():
     require_pinned_blender()
     arguments = read_arguments()
@@ -1463,6 +1536,9 @@ def main():
         return
     if operation == "load" and len(arguments) == 3:
         load_project(arguments[1], arguments[2])
+        return
+    if operation == "purge" and len(arguments) == 4:
+        purge_project_orphans(arguments[1], arguments[2], arguments[3])
         return
     raise RuntimeError("invalid classiCAD adapter arguments")
 

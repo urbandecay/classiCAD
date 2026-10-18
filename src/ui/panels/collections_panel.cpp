@@ -1435,6 +1435,13 @@ void CollectionsPanel::createLayout()
     displayModeCombo_->setToolTip(QStringLiteral(
         "Choose the Blender Outliner tree display."));
     filterRow->addWidget(displayModeCombo_);
+    purgeOrphanDataButton_ = new QToolButton(this);
+    purgeOrphanDataButton_->setText(QStringLiteral("Purge"));
+    purgeOrphanDataButton_->setAutoRaise(true);
+    purgeOrphanDataButton_->setToolTip(QStringLiteral(
+        "Remove unused data blocks from the imported Blender file."));
+    purgeOrphanDataButton_->setVisible(false);
+    filterRow->addWidget(purgeOrphanDataButton_);
     libraryOverrideViewCombo_ = new QComboBox(this);
     libraryOverrideViewCombo_->addItem(QStringLiteral("Properties"),
                                        QStringLiteral("PROPERTIES"));
@@ -1984,6 +1991,13 @@ void CollectionsPanel::createLayout()
                           useIdTypeFilter_);
         persistOutlinerWorkspaceState();
         refresh();
+    });
+    connect(purgeOrphanDataButton_, &QToolButton::clicked, this, [this]() {
+        if (callbacks_.purgeOrphanData && callbacks_.canPurgeOrphanData &&
+            callbacks_.canPurgeOrphanData()) {
+            callbacks_.purgeOrphanData();
+            refresh();
+        }
     });
     QAction *collectionsAction = filterMenu->addAction(
         QStringLiteral("Collections"));
@@ -5867,6 +5881,16 @@ void CollectionsPanel::refresh()
         idTypeCombo_->setEnabled((librariesMode || orphanDataMode) &&
                                  useIdTypeFilter_ &&
                                  idTypeCombo_->count() > 0);
+    }
+    if (purgeOrphanDataButton_ != nullptr) {
+        const bool canPurge = callbacks_.canPurgeOrphanData &&
+                              callbacks_.canPurgeOrphanData();
+        purgeOrphanDataButton_->setVisible(orphanDataMode);
+        purgeOrphanDataButton_->setEnabled(orphanDataMode && canPurge);
+        purgeOrphanDataButton_->setToolTip(
+            canPurge
+                ? QStringLiteral("Remove unused data blocks from the imported Blender file. A backup is created first.")
+                : QStringLiteral("Open an original Blender file with orphan data to enable Purge."));
     }
     QVector<OutlinerObjectEntry> displayObjects;
     if (showObjects_) displayObjects = allObjects;

@@ -927,6 +927,14 @@ private:
             return;
         }
 
+        const QFileInfo selectedFileInfo(path);
+        QByteArray sourceSha256BeforeImport;
+        if (!selectedFileInfo.isSymLink() &&
+            selectedFileInfo.suffix().compare(QStringLiteral("blend"),
+                                              Qt::CaseInsensitive) == 0) {
+            sourceSha256BeforeImport = blenderProjectSha256(path);
+        }
+
         QString errorMessage;
         ProjectViewportCameraSettings cameraSettings;
         BlenderSceneImportReport ordinaryImportReport;
@@ -951,6 +959,21 @@ private:
 
         const bool importedOrdinaryBlend =
             !ordinaryImportReport.blenderVersion.isEmpty();
+        importedBlenderSourcePath_.clear();
+        importedBlenderSourceSha256_.clear();
+        if (importedOrdinaryBlend && !sourceSha256BeforeImport.isEmpty() &&
+            !selectedFileInfo.isSymLink()) {
+            const QByteArray sourceSha256AfterImport =
+                blenderProjectSha256(path);
+            if (sourceSha256AfterImport == sourceSha256BeforeImport) {
+                importedBlenderSourcePath_ = selectedFileInfo.absoluteFilePath();
+                importedBlenderSourceSha256_ = sourceSha256AfterImport;
+            } else {
+                statusBar()->showMessage(
+                    QStringLiteral("The Blender file changed while it was importing; Orphan Data Purge is disabled."),
+                    8000);
+            }
+        }
         if (importedOrdinaryBlend && !ordinaryImportReport.scenes.isEmpty()) {
             const QJsonObject scene = activeImportedBlenderScene(ordinaryImportReport);
             QJsonObject shading = scene.value(
@@ -1012,6 +1035,71 @@ private:
                              ? QStringLiteral("No supported objects were found.")
                              : ordinaryImportReport.warningMessage));
         }
+    }
+
+    void purgeImportedBlenderOrphans()
+    {
+        if (importedBlenderSourcePath_.isEmpty() ||
+            importedBlenderSourceSha256_.isEmpty()) {
+            return;
+        }
+        const QString sourcePath = importedBlenderSourcePath_;
+        const QString confirmation = QStringLiteral(
+            "Remove all unused data blocks from this original Blender file?\n\n"
+            "%1\n\n"
+            "This changes the Blender file. classiCAD will create and verify a timestamped backup beside it before replacing it.")
+            .arg(sourcePath);
+        const QMessageBox::StandardButton answer = QMessageBox::warning(
+            this,
+            QStringLiteral("Purge Blender Orphan Data"),
+            confirmation,
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel);
+        if (answer != QMessageBox::Yes) return;
+
+        BlenderOrphanPurgeResult purgeResult;
+        QString errorMessage;
+        if (!purgeBlenderOrphanData(sourcePath,
+                                   importedBlenderSourceSha256_,
+                                   &purgeResult,
+                                   &errorMessage)) {
+            QMessageBox::critical(
+                this,
+                QStringLiteral("Could Not Purge Blender Orphan Data"),
+                errorMessage.isEmpty()
+                    ? QStringLiteral("Blender could not purge orphan data.")
+                    : errorMessage);
+            return;
+        }
+
+        importedBlenderSourceSha256_ = purgeResult.sourceSha256;
+        DocumentSettings settings = session_.document().settings();
+        settings.importedBlenderOrphans = purgeResult.remainingOrphans;
+        bool settingsCommitted = false;
+        {
+            DocumentTransaction transaction = session_.beginTransaction();
+            settingsCommitted = transaction.setSettings(settings) &&
+                                session_.commitTransaction(transaction);
+        }
+        if (!settingsCommitted) {
+            if (!session_.document().setSettings(settings)) {
+                importedBlenderSourcePath_.clear();
+                importedBlenderSourceSha256_.clear();
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("Purge Finished, Refresh Failed"),
+                    QStringLiteral("Blender purged the original file and saved a backup at %1, but classiCAD could not refresh its Orphan Data list.")
+                        .arg(purgeResult.backupPath));
+                return;
+            }
+            refreshCollections();
+            markDocumentModified();
+        }
+        statusBar()->showMessage(
+            QStringLiteral("Removed %1 orphan data block(s). Backup: %2")
+                .arg(purgeResult.removedDataBlockCount)
+                .arg(purgeResult.backupPath),
+            12000);
     }
 
     void importRhino3dm()
@@ -1382,6 +1470,8 @@ private:
         viewport_->refreshAfterNewDocument();
         suppressDirtyTracking_ = false;
         currentProjectPath_.clear();
+        importedBlenderSourcePath_.clear();
+        importedBlenderSourceSha256_.clear();
         documentModified_ = false;
         updateWindowTitle();
         statusBar()->showMessage(QStringLiteral("New Vignola project"), 3000);
@@ -3983,6 +4073,14 @@ private:
                 }
             }
             return groups;
+        };
+        collectionCallbacks.canPurgeOrphanData = [this]() {
+            return !importedBlenderSourcePath_.isEmpty() &&
+                   importedBlenderSourceSha256_.size() == 64 &&
+                   !session_.document().settings().importedBlenderOrphans.isEmpty();
+        };
+        collectionCallbacks.purgeOrphanData = [this]() {
+            purgeImportedBlenderOrphans();
         };
         collectionCallbacks.sequencer = [this]() {
             OutlinerSequenceTree tree;
@@ -9726,6 +9824,8 @@ private:
     QActionGroup *workPlaneActionGroup_ = nullptr;
     CollectionsPanel *collectionsPanel_ = nullptr;
     QString currentProjectPath_;
+    QString importedBlenderSourcePath_;
+    QByteArray importedBlenderSourceSha256_;
     bool documentModified_ = false;
     bool suppressDirtyTracking_ = false;
     bool updateRestartInProgress_ = false;

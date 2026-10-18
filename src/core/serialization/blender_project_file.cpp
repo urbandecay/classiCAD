@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QBuffer>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -491,10 +492,53 @@ bool writeFile(const QString &path,
     return true;
 }
 
+QByteArray fileSha256(const QString &path, QString *errorMessage)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not read Blender project for change detection: %1")
+                     .arg(file.errorString()));
+        return {};
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!file.atEnd()) {
+        const QByteArray chunk = file.read(kCopyChunkSize);
+        if (chunk.isEmpty() && file.error() != QFileDevice::NoError) {
+            setError(errorMessage,
+                     QStringLiteral("Could not read Blender project for change detection: %1")
+                         .arg(file.errorString()));
+            return {};
+        }
+        if (!chunk.isEmpty()) hash.addData(chunk);
+    }
+    return hash.result().toHex();
+}
+
+QString uniqueBlenderBackupPath(const QString &sourcePath)
+{
+    const QFileInfo sourceInfo(sourcePath);
+    const QString timestamp = QDateTime::currentDateTime().toString(
+        QStringLiteral("yyyyMMdd-HHmmss"));
+    const QString baseName = sourceInfo.completeBaseName() +
+        QStringLiteral(".backup-") + timestamp;
+    const QString suffix = sourceInfo.suffix();
+    for (int index = 0; index < 10000; ++index) {
+        QString name = baseName;
+        if (index > 0) name += QStringLiteral("-%1").arg(index);
+        if (!suffix.isEmpty()) name += QStringLiteral(".") + suffix;
+        const QString candidate = sourceInfo.dir().filePath(name);
+        if (!QFileInfo::exists(candidate)) return candidate;
+    }
+    return {};
+}
+
 bool runBlenderAdapter(const QString &operation,
                        const QString &inputPath,
                        const QString &outputPath,
-                       QString *errorMessage)
+                       QString *errorMessage,
+                       const QString &reportPath = {})
 {
     const QString executable = blenderExecutable();
     if (executable.isEmpty()) {
@@ -524,14 +568,16 @@ bool runBlenderAdapter(const QString &operation,
 
     QProcess process;
     process.setProgram(executable);
-    process.setArguments({QStringLiteral("--background"),
+    QStringList arguments{QStringLiteral("--background"),
                           QStringLiteral("--factory-startup"),
                           QStringLiteral("--python"),
                           adapterPath,
                           QStringLiteral("--"),
                           operation,
                           inputPath,
-                          outputPath});
+                          outputPath};
+    if (!reportPath.isEmpty()) arguments.append(reportPath);
+    process.setArguments(arguments);
     process.setProcessChannelMode(QProcess::SeparateChannels);
     process.start();
     if (!process.waitForStarted(10000)) {
@@ -547,7 +593,9 @@ bool runBlenderAdapter(const QString &operation,
                  QStringLiteral("Blender took too long to %1 the project")
                      .arg(operation == QLatin1String("save")
                               ? QStringLiteral("save")
-                              : QStringLiteral("open")));
+                              : (operation == QLatin1String("purge")
+                                     ? QStringLiteral("purge orphan data in")
+                                     : QStringLiteral("open"))));
         return false;
     }
 
@@ -2516,6 +2564,207 @@ bool commitStagedFile(const QString &stagedPath,
 } // namespace
 
 namespace classiCAD {
+
+QByteArray blenderProjectSha256(const QString &path, QString *errorMessage)
+{
+    return fileSha256(path, errorMessage);
+}
+
+bool purgeBlenderOrphanData(const QString &sourcePath,
+                            const QByteArray &expectedSourceSha256,
+                            BlenderOrphanPurgeResult *result,
+                            QString *errorMessage)
+{
+    if (result == nullptr || sourcePath.trimmed().isEmpty() ||
+        expectedSourceSha256.size() != 64) {
+        setError(errorMessage,
+                 QStringLiteral("An imported Blender source and its SHA-256 are required"));
+        return false;
+    }
+
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile() || sourceInfo.isSymLink() ||
+        sourceInfo.suffix().compare(QStringLiteral("blend"),
+                                    Qt::CaseInsensitive) != 0) {
+        setError(errorMessage,
+                 QStringLiteral("Purge is available only for a direct ordinary Blender .blend file"));
+        return false;
+    }
+    const QString absoluteSourcePath = sourceInfo.absoluteFilePath();
+    const QFileInfo absoluteSourceInfo(absoluteSourcePath);
+    const QByteArray sourceBeforePurge =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforePurge.isEmpty()) return false;
+    if (sourceBeforePurge != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed after it was imported. Reopen it before purging."));
+        return false;
+    }
+
+    QTemporaryDir adapterOutputDirectory;
+    if (!adapterOutputDirectory.isValid()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create temporary Blender purge report data"));
+        return false;
+    }
+    QTemporaryFile stagedFile(absoluteSourceInfo.dir().filePath(
+        QStringLiteral(".classiCAD-purge-XXXXXX")));
+    stagedFile.setAutoRemove(true);
+    if (!stagedFile.open()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create a staged Blender file beside the source: %1")
+                     .arg(stagedFile.errorString()));
+        return false;
+    }
+    const QString stagedPath = stagedFile.fileName();
+    stagedFile.close();
+    if (!QFile::remove(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not prepare the staged Blender file"));
+        return false;
+    }
+
+    const QString reportPath = adapterOutputDirectory.filePath(
+        QStringLiteral("purge-report.json"));
+    if (!runBlenderAdapter(QStringLiteral("purge"),
+                           absoluteSourcePath,
+                           stagedPath,
+                           errorMessage,
+                           reportPath)) {
+        return false;
+    }
+    if (!hasBlenderFileHeader(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not produce a valid staged project after purging"));
+        return false;
+    }
+
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::ReadOnly)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not return updated Orphan Data information"));
+        return false;
+    }
+    if (reportFile.size() < 0 ||
+        reportFile.size() > kBlenderExtractionJsonByteLimit) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned an oversized Orphan Data report"));
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument reportDocument = QJsonDocument::fromJson(
+        reportFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError ||
+        !reportDocument.isObject()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid purge information: %1")
+                     .arg(parseError.errorString()));
+        return false;
+    }
+    const QJsonObject report = reportDocument.object();
+    const QJsonValue remainingOrphansValue = report.value(
+        QStringLiteral("orphans"));
+    const QJsonValue removedCountValue = report.value(
+        QStringLiteral("removed_count"));
+    if (!remainingOrphansValue.isArray() ||
+        remainingOrphansValue.toArray().size() > 1024 ||
+        !removedCountValue.isDouble() ||
+        removedCountValue.toInt(-1) < 0 ||
+        removedCountValue.toInt(-1) > 10000000) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid purge results"));
+        return false;
+    }
+    const QJsonArray remainingOrphans = remainingOrphansValue.toArray();
+    int totalOrphanRows = 0;
+    for (const QJsonValue &groupValue : remainingOrphans) {
+        if (!groupValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned an invalid Orphan Data group"));
+            return false;
+        }
+        const QJsonObject group = groupValue.toObject();
+        const QJsonValue nameValue = group.value(QStringLiteral("name"));
+        const QJsonValue namesValue = group.value(QStringLiteral("names"));
+        const QJsonValue truncatedValue = group.value(
+            QStringLiteral("truncated"));
+        if (!nameValue.isString() || nameValue.toString().size() > 256 ||
+            !namesValue.isArray() || namesValue.toArray().size() > 20000 ||
+            totalOrphanRows + namesValue.toArray().size() > 20000 ||
+            !truncatedValue.isBool()) {
+            setError(errorMessage,
+                     QStringLiteral("Blender returned invalid Orphan Data group metadata"));
+            return false;
+        }
+        totalOrphanRows += namesValue.toArray().size();
+        for (const QJsonValue &dataNameValue : namesValue.toArray()) {
+            if (!dataNameValue.isString() ||
+                dataNameValue.toString().size() > 4096) {
+                setError(errorMessage,
+                         QStringLiteral("Blender returned an invalid orphan data-block name"));
+                return false;
+            }
+        }
+    }
+
+    const QByteArray stagedSha256 = fileSha256(stagedPath, errorMessage);
+    if (stagedSha256.isEmpty()) return false;
+    const QByteArray sourceBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeCommit.isEmpty()) return false;
+    if (sourceBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed while the purge was running. The original was left untouched."));
+        return false;
+    }
+
+    const QString backupPath = uniqueBlenderBackupPath(absoluteSourcePath);
+    if (backupPath.isEmpty() || !QFile::copy(absoluteSourcePath, backupPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create the safety backup beside the Blender file"));
+        return false;
+    }
+    const QByteArray backupSha256 = fileSha256(backupPath, errorMessage);
+    if (backupSha256 != expectedSourceSha256) {
+        QFile::remove(backupPath);
+        setError(errorMessage,
+                 QStringLiteral("The Blender safety backup could not be verified; the original was left untouched."));
+        return false;
+    }
+
+    const QByteArray sourceImmediatelyBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceImmediatelyBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed before replacement. The safety backup was kept at %1.")
+                     .arg(backupPath));
+        return false;
+    }
+
+    if (!commitStagedFile(stagedPath, absoluteSourcePath, errorMessage)) {
+        return false;
+    }
+    const QByteArray committedSha256 =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (committedSha256 != stagedSha256) {
+        QString restoreError;
+        if (!commitStagedFile(backupPath, absoluteSourcePath, &restoreError)) {
+            setError(errorMessage,
+                     QStringLiteral("The purged file did not verify and restoring its backup also failed. Restore the backup at %1. %2")
+                         .arg(backupPath, restoreError));
+        } else {
+            setError(errorMessage,
+                     QStringLiteral("The purged file did not verify, so the original was restored from its backup."));
+        }
+        return false;
+    }
+
+    result->remainingOrphans = remainingOrphans;
+    result->backupPath = backupPath;
+    result->sourceSha256 = committedSha256;
+    result->removedDataBlockCount = removedCountValue.toInt();
+    return true;
+}
 
 bool saveVignolaDocument(const QString &path,
                          const Document &document,

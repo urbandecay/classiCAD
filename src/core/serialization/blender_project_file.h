@@ -96,6 +96,24 @@ struct BlenderSceneImportReport {
     QHash<QString, ImportedBlenderColorLutMetadata> importedBlenderColorLutMetadata;
 };
 
+struct BlenderOrphanPurgeResult {
+    QJsonArray remainingOrphans;
+    QString backupPath;
+    QByteArray sourceSha256;
+    int removedDataBlockCount = 0;
+};
+
+// Hashes Blender project bytes without loading them into memory at once.
+QByteArray blenderProjectSha256(const QString &path,
+                                QString *errorMessage = nullptr);
+
+// Runs Blender's recursive Orphan Data purge against an imported ordinary
+// .blend, stages the result, backs up the original, then atomically replaces it.
+bool purgeBlenderOrphanData(const QString &sourcePath,
+                            const QByteArray &expectedSourceSha256,
+                            BlenderOrphanPurgeResult *result,
+                            QString *errorMessage = nullptr);
+
 // Extracts supported Blender scene geometry through the pinned Python runtime.
 // Returned meshes, curves, and surfaces retain their authoritative geometry;
 // transforms follow each geometry type's native representation. No project

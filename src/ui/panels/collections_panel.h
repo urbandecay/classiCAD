@@ -257,6 +257,8 @@ struct CollectionsPanelCallbacks {
     std::function<QVector<OutlinerSceneEntry>()> scenes;
     std::function<QVector<OutlinerLibraryEntry>()> libraries;
     std::function<QVector<OutlinerOrphanGroup>()> orphanGroups;
+    std::function<bool()> canPurgeOrphanData;
+    std::function<void()> purgeOrphanData;
     std::function<OutlinerSequenceTree()> sequencer;
     std::function<void(const QStringList &, const QString &)> setSequencerSelection;
     std::function<QJsonObject()> dataApi;
@@ -442,6 +444,7 @@ private:
     QToolButton *sequenceSyncButton_ = nullptr;
     QToolButton *filterButton_ = nullptr;
     QToolButton *newCollectionButton_ = nullptr;
+    QToolButton *purgeOrphanDataButton_ = nullptr;
     QToolButton *idTypeFilterButton_ = nullptr;
     QComboBox *displayModeCombo_ = nullptr;
     QComboBox *dataApiKeyingSetCombo_ = nullptr;

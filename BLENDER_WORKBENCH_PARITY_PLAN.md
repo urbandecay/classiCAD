@@ -11724,3 +11724,15 @@ scene depth.
   collection group labels captured by the extractor. Legacy unknown filter
   values fall back to Actions. `cmake --build build -j4` and `git diff
   --check` passed; no GUI or matched Outliner comparison was run.
+- The hundred-forty-second Outliner update adds Blender's real Orphan Data
+  Purge through the pinned Blender 5.2.2 adapter and
+  [`BlendData.orphans_purge()`](https://docs.blender.org/api/5.2/bpy.types.BlendData.html#bpy.types.BlendData.orphans_purge)
+  with local, linked, and recursive deletion enabled. The header action is
+  available only for a directly opened ordinary `.blend`; it confirms the
+  source path, refuses classiCAD-native projects and symbolic links, and uses
+  SHA-256 checks to reject a source changed since import or while the purge
+  runs. Blender writes to a staged file; classiCAD validates the report and
+  staged file, makes and verifies a timestamped sibling backup, then replaces
+  the source atomically. The refreshed orphan rows come from Blender after the
+  purge. The source path and digest are session-only, and no matched UI
+  comparison was run. `cmake --build build -j4` and `git diff --check` passed.

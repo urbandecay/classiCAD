@@ -164,10 +164,11 @@ QString outlinerObjectTypeFilterKey(QString blenderType)
         return QStringLiteral("EMPTY");
     }
     if (blenderType == QLatin1String("GREASE_PENCIL") ||
-        blenderType == QLatin1String("GREASEPENCIL") ||
-        blenderType == QLatin1String("GPENCIL")) {
+        blenderType == QLatin1String("GREASEPENCIL")) {
         return QStringLiteral("GREASE_PENCIL");
     }
+    // Blender 5.2.2 treats legacy GPENCIL objects as Other Objects. Only
+    // OB_GREASE_PENCIL uses the dedicated Grease Pencil filter.
     return QStringLiteral("OTHERS");
 }
 

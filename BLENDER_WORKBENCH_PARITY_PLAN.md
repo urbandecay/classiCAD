@@ -11861,3 +11861,16 @@ scene depth.
   See Blender 5.2.2's [lazy RNA tree expansion](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/tree/tree_element_rna.cc#L85-L120).
   `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
   Outliner comparison was run.
+- The hundred-fifty-first Outliner filter audit compares the type filter with
+  Blender 5.2.2's actual grouping. Blender exposes Meshes, Armatures, Lights,
+  Cameras, Grease Pencil, Empties, and Others; it does not expose separate
+  filters for curves, fonts, or volumes. Its tree filter routes legacy
+  `GPENCIL` objects through the default Others case, while only modern
+  `GREASEPENCIL` objects use the dedicated Grease Pencil filter. classiCAD had
+  incorrectly grouped legacy `GPENCIL` with modern Grease Pencil; the mapping
+  now follows Blender. Filter menu availability also follows Blender's
+  datablock collection checks, including the always-present Empties row.
+  References: Blender 5.2.2's [object type filter implementation](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tree.cc#L835-L890)
+  and [filter menu availability](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L497-L533).
+  `cmake --build build -j4` and `git diff --check` passed; no GUI or matched
+  Outliner comparison was run.

@@ -11908,3 +11908,16 @@ scene depth.
   to another layer's active row. See Blender's [5.2.2 layer data definition](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesdna/DNA_layer_types.h#L223-L235).
   `cmake --build build -j4` and `git diff --check` passed. No GUI or matched
   Outliner comparison was run.
+- The hundred-fifty-fifth Outliner action update narrows the preceding Delete
+  Hierarchy change to objects included in the active View Layer. The earlier
+  change correctly stopped filtering hidden descendants, but its shared
+  hierarchy traversal can also find objects stored outside that layer;
+  deletion now checks collection-path inclusion separately from visibility
+  for both the root and each descendant. Unlinked imported Blender objects are
+  excluded; local objects use their stored default View Layer, and synthetic
+  loose-mesh companions follow their source object's membership. This follows
+  Blender's active View-Layer base traversal while retaining hidden descendants
+  and the existing linked-data protections. Ordinary Delete is unchanged. See Blender 5.2.2's
+  [hierarchy tagger](https://github.com/blender/blender/blob/v5.2.2/source/blender/editors/space_outliner/outliner_tools.cc#L2449-L2521).
+  `cmake --build build -j4` and `git diff --check` passed. No GUI or matched
+  Outliner interaction comparison was run.

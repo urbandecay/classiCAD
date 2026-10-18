@@ -8019,6 +8019,113 @@ private:
                         4000);
                 }
             };
+        // Test collection inclusion separately from visibility. Blender's
+        // hierarchy deletion traverses objects in the active View Layer even
+        // when their viewport-hidden flags are set.
+        const auto objectInViewLayer = [this](const SceneObject &object,
+                                               const QString &viewLayerKey) {
+            if (viewLayerKey.isEmpty() || object.collectionIds.isEmpty()) {
+                return true;
+            }
+            const Document &document = session_.document();
+            const auto matchesPath = [](const QJsonArray &stored,
+                                        const QStringList &expected) {
+                if (stored.size() != expected.size()) return false;
+                for (qsizetype index = 0; index < expected.size(); ++index) {
+                    if (!stored[index].isString() ||
+                        stored[index].toString() != expected[index]) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            for (const CollectionId membershipId : object.collectionIds) {
+                const DocumentCollection *membership =
+                    document.collection(membershipId);
+                if (membership == nullptr) continue;
+                for (const QJsonValue &membershipValue :
+                     membership->viewLayerStates) {
+                    const QJsonObject membershipState =
+                        membershipValue.toObject();
+                    if (membershipState.value(
+                            QStringLiteral("view_layer_key")).toString() !=
+                        viewLayerKey) {
+                        continue;
+                    }
+                    QStringList sourcePath;
+                    const QJsonArray storedPath = membershipState.value(
+                        QStringLiteral("path")).toArray();
+                    for (const QJsonValue &part : storedPath) {
+                        if (!part.isString()) {
+                            sourcePath.clear();
+                            break;
+                        }
+                        sourcePath.append(part.toString());
+                    }
+                    if (sourcePath.isEmpty() ||
+                        sourcePath.back() != membership->sourceId) {
+                        continue;
+                    }
+
+                    bool included = true;
+                    CollectionId previous = CollectionId::invalid();
+                    for (qsizetype index = 0; index < sourcePath.size(); ++index) {
+                        const QString &sourceId = sourcePath[index];
+                        const auto node = std::find_if(
+                            document.collections().cbegin(),
+                            document.collections().cend(),
+                            [&sourceId, previous](
+                                const DocumentCollection &candidate) {
+                                return candidate.sourceId == sourceId &&
+                                    (!previous.isValid() ||
+                                     candidate.parentIds.contains(previous));
+                            });
+                        if (node == document.collections().cend()) {
+                            included = false;
+                            break;
+                        }
+                        QStringList prefix;
+                        for (qsizetype prefixIndex = 0;
+                             prefixIndex <= index; ++prefixIndex) {
+                            prefix.append(sourcePath[prefixIndex]);
+                        }
+                        bool foundState = false;
+                        bool excluded = false;
+                        for (const QJsonValue &stateValue :
+                             node->viewLayerStates) {
+                            const QJsonObject state = stateValue.toObject();
+                            if (state.value(QStringLiteral("view_layer_key"))
+                                    .toString() == viewLayerKey &&
+                                matchesPath(state.value(QStringLiteral("path"))
+                                                .toArray(),
+                                            prefix)) {
+                                foundState = true;
+                                excluded = state.value(
+                                    QStringLiteral("exclude")).toBool();
+                                break;
+                            }
+                        }
+                        if (!foundState || excluded) {
+                            included = false;
+                            break;
+                        }
+                        previous = node->id;
+                    }
+                    if (included) return true;
+                }
+            }
+            return false;
+        };
+        const auto objectInOutlinerHierarchyViewLayer =
+            [objectInViewLayer](const SceneObject &object,
+                                const QString &viewLayerKey) {
+                if (viewLayerKey.isEmpty()) return true;
+                if (object.collectionIds.isEmpty()) {
+                    return object.blenderSourceObjectId.isEmpty() &&
+                        object.defaultViewLayerKey == viewLayerKey;
+                }
+                return objectInViewLayer(object, viewLayerKey);
+            };
         const auto objectHierarchyIds = [this](ObjectId root) {
             QVector<ObjectId> result;
             const Document &document = session_.document();
@@ -8091,10 +8198,12 @@ private:
                 session_.selection().setActiveObjectId(activeRoot);
             };
         collectionCallbacks.deleteObjectSelection =
-            [this, objectHierarchyIds](const QVector<ObjectId> &contextObjectIds,
-                                       bool hierarchy) {
+            [this, objectHierarchyIds, objectInOutlinerHierarchyViewLayer](
+                const QVector<ObjectId> &contextObjectIds, bool hierarchy) {
                 const Document &document = session_.document();
                 const QVector<ObjectId> &roots = contextObjectIds;
+                const QString activeViewLayerKey =
+                    document.settings().activeViewLayerKey;
 
                 const auto identityFor = [](const SceneObject &object) {
                     return object.blenderSourceObjectId.isEmpty()
@@ -8133,7 +8242,9 @@ private:
                 for (const ObjectId root : roots) {
                     const SceneObject *rootObject = document.object(root);
                     if (rootObject == nullptr ||
-                        rootObject->blenderLooseMeshEdgeCompanion) {
+                        rootObject->blenderLooseMeshEdgeCompanion ||
+                        (hierarchy && !objectInOutlinerHierarchyViewLayer(
+                             *rootObject, activeViewLayerKey))) {
                         continue;
                     }
                     QVector<ObjectId> candidates;
@@ -8151,8 +8262,18 @@ private:
                     }
                     for (const ObjectId id : candidates) {
                         const SceneObject *candidate = document.object(id);
+                        const SceneObject *membershipObject = candidate;
+                        if (candidate != nullptr &&
+                            candidate->blenderLooseMeshEdgeCompanion) {
+                            membershipObject = objectsByIdentity.value(
+                                candidate->blenderSourceObjectId, nullptr);
+                        }
                         if (candidate == nullptr ||
                             !candidate->libraryPath.isEmpty() ||
+                            (hierarchy &&
+                             (membershipObject == nullptr ||
+                              !objectInOutlinerHierarchyViewLayer(
+                                  *membershipObject, activeViewLayerKey))) ||
                             (!hierarchy && id != root &&
                              !candidate->blenderLooseMeshEdgeCompanion &&
                              !document.isObjectVisible(id))) {
@@ -8638,99 +8759,6 @@ private:
                 }
             }
             return result;
-        };
-        const auto objectInViewLayer = [this](const SceneObject &object,
-                                               const QString &viewLayerKey) {
-            if (viewLayerKey.isEmpty() || object.collectionIds.isEmpty()) {
-                return true;
-            }
-            const Document &document = session_.document();
-            const auto matchesPath = [](const QJsonArray &stored,
-                                        const QStringList &expected) {
-                if (stored.size() != expected.size()) return false;
-                for (qsizetype index = 0; index < expected.size(); ++index) {
-                    if (!stored[index].isString() ||
-                        stored[index].toString() != expected[index]) {
-                        return false;
-                    }
-                }
-                return true;
-            };
-            for (const CollectionId membershipId : object.collectionIds) {
-                const DocumentCollection *membership =
-                    document.collection(membershipId);
-                if (membership == nullptr) continue;
-                for (const QJsonValue &membershipValue :
-                     membership->viewLayerStates) {
-                    const QJsonObject membershipState =
-                        membershipValue.toObject();
-                    if (membershipState.value(
-                            QStringLiteral("view_layer_key")).toString() !=
-                        viewLayerKey) {
-                        continue;
-                    }
-                    QStringList sourcePath;
-                    const QJsonArray storedPath = membershipState.value(
-                        QStringLiteral("path")).toArray();
-                    for (const QJsonValue &part : storedPath) {
-                        if (!part.isString()) {
-                            sourcePath.clear();
-                            break;
-                        }
-                        sourcePath.append(part.toString());
-                    }
-                    if (sourcePath.isEmpty() ||
-                        sourcePath.back() != membership->sourceId) {
-                        continue;
-                    }
-
-                    bool included = true;
-                    CollectionId previous = CollectionId::invalid();
-                    for (qsizetype index = 0; index < sourcePath.size(); ++index) {
-                        const QString &sourceId = sourcePath[index];
-                        const auto node = std::find_if(
-                            document.collections().cbegin(),
-                            document.collections().cend(),
-                            [&sourceId, previous](
-                                const DocumentCollection &candidate) {
-                                return candidate.sourceId == sourceId &&
-                                    (!previous.isValid() ||
-                                     candidate.parentIds.contains(previous));
-                            });
-                        if (node == document.collections().cend()) {
-                            included = false;
-                            break;
-                        }
-                        QStringList prefix;
-                        for (qsizetype prefixIndex = 0;
-                             prefixIndex <= index; ++prefixIndex) {
-                            prefix.append(sourcePath[prefixIndex]);
-                        }
-                        bool foundState = false;
-                        bool excluded = false;
-                        for (const QJsonValue &stateValue : node->viewLayerStates) {
-                            const QJsonObject state = stateValue.toObject();
-                            if (state.value(QStringLiteral("view_layer_key"))
-                                    .toString() == viewLayerKey &&
-                                matchesPath(state.value(QStringLiteral("path"))
-                                                .toArray(),
-                                            prefix)) {
-                                foundState = true;
-                                excluded = state.value(
-                                    QStringLiteral("exclude")).toBool();
-                                break;
-                            }
-                        }
-                        if (!foundState || excluded) {
-                            included = false;
-                            break;
-                        }
-                        previous = node->id;
-                    }
-                    if (included) return true;
-                }
-            }
-            return false;
         };
         struct CollectionRestrictionTargets {
             QVector<CollectionId> collectionIds;

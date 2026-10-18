@@ -82,11 +82,6 @@ void OutlinerPanel::refresh()
     }
 
     const QVector<ViewportObjectInfo> infos = callbacks_.objectInfos();
-    const QTreeWidgetItem *previousCurrentItem = tree_->currentItem();
-    const ObjectId previousCurrentId = itemObjectId(previousCurrentItem);
-    const bool previousCurrentWasContainer =
-        previousCurrentItem != nullptr &&
-        previousCurrentItem->data(0, ContainerRowRole).toBool();
     refreshing_ = true;
     QHash<quint64, QTreeWidgetItem *> containerItems;
     QHash<quint64, QTreeWidgetItem *> geometryItems;
@@ -226,13 +221,7 @@ void OutlinerPanel::refresh()
     }
 
     QTreeWidgetItem *currentItem = nullptr;
-    if (previousCurrentId.isValid() &&
-        previousCurrentId == primarySelectedObject) {
-        currentItem = previousCurrentWasContainer
-                          ? containerItems.value(previousCurrentId.value(), nullptr)
-                          : geometryItems.value(previousCurrentId.value(), nullptr);
-    }
-    if (currentItem == nullptr && editMode_) {
+    if (editMode_) {
         ObjectId selectedId = ObjectId::invalid();
         if (primarySelectedContainer == activeObjectId_) {
             selectedId = primarySelectedObject;
@@ -240,19 +229,11 @@ void OutlinerPanel::refresh()
             selectedId = firstSelectedGeometry.value(activeObjectId_.value());
         }
         currentItem = geometryItems.value(selectedId.value(), nullptr);
-        if (currentItem == nullptr) {
-            currentItem = containerItems.value(activeObjectId_.value(), nullptr);
-        }
-    } else if (currentItem == nullptr && hasSelectedObject_) {
-        if (primarySelectedObject.isValid()) {
-            currentItem = geometryItems.value(primarySelectedObject.value(), nullptr);
-        }
-        if (currentItem == nullptr) {
-            const ObjectId selectedContainer = primarySelectedContainer.isValid()
-                                                   ? primarySelectedContainer
-                                                   : firstSelectedContainer;
-            currentItem = containerItems.value(selectedContainer.value(), nullptr);
-        }
+    } else if (hasSelectedObject_) {
+        const ObjectId selectedContainer = primarySelectedContainer.isValid()
+                                               ? primarySelectedContainer
+                                               : firstSelectedContainer;
+        currentItem = containerItems.value(selectedContainer.value(), nullptr);
     }
     if (currentItem != nullptr) {
         tree_->setCurrentItem(currentItem, 0,

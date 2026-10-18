@@ -2331,6 +2331,11 @@ private:
     void refreshOutliner()
     {
         if (outlinerPanel_ != nullptr) {
+            if (viewport_ != nullptr) {
+                outlinerPanel_->setObjectState(
+                    viewport_->objectEditMode(),
+                    viewport_->activeContainerObjectId());
+            }
             outlinerPanel_->refresh();
         }
     }

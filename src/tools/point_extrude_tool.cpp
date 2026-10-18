@@ -411,7 +411,8 @@ void PointExtrudeTool::commit(ToolContext &context)
         return;
     }
 
-    QVector<Shape> lines = makeLineShapes(cursorPoint_);
+    QVector<int> generatedFaceIndices;
+    QVector<Shape> lines = makeLineShapes(cursorPoint_,&generatedFaceIndices);
     if (lines.isEmpty() || lines.size() != sourcePoints_.size()) {
         status_.text = QStringLiteral("Extrude failed to create geometry");
         status_.canCommit = false;
@@ -624,7 +625,7 @@ void PointExtrudeTool::commit(ToolContext &context)
                 return;
             }
             faceExtrusions.append({source.objectId,
-                source.solidFaceIndex >= 0 ? source.solidFaceIndex : 1});
+                generatedFaceIndices.value(index,1)});
         } else {
             const ObjectId createdObjectId = transaction.addShape(
                 lines[index], context.document().containerId(source.objectId));
@@ -676,12 +677,7 @@ ToolPreview PointExtrudeTool::preview() const
         }
         result.worldPoints.append(cursorPoint_);
         if (status_.canCommit) {
-            result.shapes = makeLineShapes(cursorPoint_);
-            for (const SourcePoint &source : sourcePoints_) {
-                result.extrusionPreviewFaceIndices.append(
-                    weldEnabled_ && source.solidFaceIndex >= 0
-                        ? source.solidFaceIndex : 1);
-            }
+            result.shapes = makeLineShapes(cursorPoint_,&result.extrusionPreviewFaceIndices);
             if (!result.shapes.isEmpty()) {
                 for (const SourcePoint &source : sourcePoints_) {
                     if (weldEnabled_ && (!source.surface.controlPoints.isEmpty() ||
@@ -830,9 +826,15 @@ bool PointExtrudeTool::makeLineShape(const SourcePoint &source,
     return true;
 }
 
-QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
+QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint,
+                                              QVector<int> *faceIndices) const
 {
     QVector<Shape> lines;
+    if (faceIndices != nullptr) {
+        faceIndices->clear();
+        for (const SourcePoint &source : sourcePoints_)
+            faceIndices->append(weldEnabled_ && source.solidFaceIndex >= 0 ? source.solidFaceIndex : 1);
+    }
     lines.reserve(sourcePoints_.size());
     if (sourcePoints_.isEmpty()) {
         return lines;
@@ -861,11 +863,13 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
                 Shape solidShape;
                 solidShape.geometryType = GeometryType::NurbsSolid;
                 solidShape.nurbsSolid = source.solid;
+                int movedFace=source.solidFaceIndex;
                 if (!extrudeNurbsSolidFace(
                         source.solid, source.solidFaceIndex, displacement,
-                        &solidShape.nurbsSolid, manifoldEnabled_)) {
+                        &solidShape.nurbsSolid, manifoldEnabled_,&movedFace)) {
                     return {};
                 }
+                if (faceIndices != nullptr) (*faceIndices)[lines.size()]=movedFace;
                 solidShape.workPlaneFrame = source.workPlaneFrame;
                 lines.append(solidShape);
                 continue;

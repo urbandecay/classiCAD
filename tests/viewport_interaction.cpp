@@ -1,4 +1,5 @@
 #include "ui/viewport_widget_api.h"
+#include "ui/panels/outliner_panel.h"
 #include "ui/viewport/blender_grid_renderer.h"
 #include "ui/viewport/viewport_gpu_surface.h"
 #include "ui/viewport/viewport_depth_geometry.h"
@@ -34,6 +35,7 @@
 #include <QScreen>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QToolButton>
 #include <QSlider>
 #include <QWheelEvent>
@@ -2444,6 +2446,185 @@ bool verifySolidFaceSelection(QApplication &application)
     return passed;
 }
 
+bool verifyOutlinerFaceSelection(QApplication &application, int extrudeOption)
+{
+    ApplicationSession session;
+    Shape line;
+    line.geometryType = GeometryType::Line;
+    line.points = {{-20,-10},{-15,-10}};
+    line.nurbs = makeDegreeOneNurbs(line.points);
+    const ObjectId root = session.document().append(line);
+    Shape cube;
+    cube.geometryType = GeometryType::NurbsSolid;
+    NurbsSurface3D base;
+    base.controlVertexCountU = base.controlVertexCountV = 2;
+    base.controlPoints = {{-4,-4,-4},{-4,4,-4},{4,-4,-4},{4,4,-4}};
+    base.weights = {1,1,1,1};
+    base.knotsU = base.knotsV = {0,1};
+    NurbsSurfaceTrimLoop trim;
+    trim.curve.degree = 1;
+    trim.curve.order = 2;
+    trim.curve.controlPoints = {{0,0},{1,0},{1,1},{0,1},{0,0}};
+    trim.curve.weights = {1,1,1,1,1};
+    trim.curve.knots = {0,1,2,3,4};
+    base.trimLoops = {trim};
+    if (!makeNurbsExtrusionSolid(base,{0,0,8},&cube.nurbsSolid)) return false;
+    if (extrudeOption == 3) {
+        NurbsExtrusionSolid3D split;
+        if (!extrudeNurbsSolidFace(cube.nurbsSolid,2,{0,-2,0},&split,false)) return false;
+        cube.nurbsSolid=std::move(split);
+    }
+    const ObjectId solid = session.document().append(cube);
+    session.document().setObjectContainer(solid,root);
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(640,480);
+    viewport->setAttribute(Qt::WA_ShowWithoutActivating);
+    viewport->setWindowFlag(Qt::WindowDoesNotAcceptFocus);
+    OutlinerPanel panel({
+        [&]() { return viewport->objectInfos(); },
+        [&](bool edit) { viewport->setObjectEditMode(edit); },
+        [&](ObjectId id,bool container) { viewport->selectOutlinerObject(id,container); }
+    });
+    const auto refresh = [&]() {
+        panel.setObjectState(viewport->objectEditMode(),viewport->activeContainerObjectId());
+        panel.refresh();
+    };
+    session.setChangeObserver([&](ApplicationSessionChange change) {
+        if (change == ApplicationSessionChange::Selection) refresh();
+    });
+    ViewportUiCallbacks callbacks;
+    callbacks.objectStateUpdate = [&](bool,ObjectId) { refresh(); };
+    viewport->setUiCallbacks(callbacks);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    if (!waitForViewPreset(viewport.get(),ViewportViewPreset::Isometric)) return false;
+    viewport->setOsnapEnabled(false);
+    viewport->setControlPointsVisible(false);
+    viewport->setPanButton(Qt::RightButton);
+    refresh();
+    auto *tree = panel.findChild<QTreeWidget *>(QStringLiteral("outlinerTree"));
+    viewport->selectOutlinerObject(root,false);
+    bool passed = check(tree && tree->currentItem() == tree->topLevelItem(0) &&
+                            session.selection().objectIds().size() == 2,
+                        "Object Mode must select and display the container even when given a child row");
+    viewport->setObjectEditMode(true);
+    viewport->setComponentSelectionMode(2);
+    viewport->selectOutlinerObject(root,false);
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Isometric);
+    const auto faces = shapeSurfaceFaces(cube);
+    const auto center = [](const NurbsSurface3D &face) {
+        Point3D p;
+        for (const auto &cv : face.controlPoints) {
+            p.x += cv.x/face.controlPoints.size();
+            p.y += cv.y/face.controlPoints.size();
+            p.z += cv.z/face.controlPoints.size();
+        }
+        return p;
+    };
+    int target = extrudeOption == 3 ? 6 : 2;
+    for (int i=target+1;i<faces.size();++i)
+        if (projection.worldDirectionToView(center(faces[i])).towardCamera >
+            projection.worldDirectionToView(center(faces[target])).towardCamera) target=i;
+    QPointF position;
+    projection.worldPointToScreen(center(faces[target]),viewport->size(),&position);
+    // Exercise the configured RMB selection path that previously missed notification.
+    sendMouse(viewport.get(),QEvent::MouseButtonPress,position,
+              Qt::RightButton,Qt::RightButton,Qt::NoModifier);
+    sendMouse(viewport.get(),QEvent::MouseButtonRelease,position,
+              Qt::RightButton,Qt::NoButton,Qt::NoModifier);
+    application.processEvents();
+    passed &= check(tree->currentItem() == tree->topLevelItem(0)->child(1) &&
+                        session.selection().primaryObjectId() == solid,
+                    "RMB face selection must immediately highlight its owning solid row, not the root Line");
+    viewport->selectOutlinerObject(root,true);
+    passed &= check(tree->currentItem() == tree->topLevelItem(0)->child(1),
+                    "clicking the edit container must preserve the selected face and geometry row");
+    const auto started = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+    passed &= check(started.accepted && started.count == 1,
+                    "the face shown in the outliner must be the single Extrude source");
+    if (extrudeOption != 0) {
+        QKeyEvent option(QEvent::KeyPress,
+                         extrudeOption == 1 ? Qt::Key_W : Qt::Key_M,
+                         Qt::NoModifier);
+        QApplication::sendEvent(viewport.get(), &option);
+    }
+    const auto &face = faces[target];
+    const Point3D a = face.controlPoints[0];
+    const Point3D u{face.controlPoints[2].x-a.x,face.controlPoints[2].y-a.y,face.controlPoints[2].z-a.z};
+    const Point3D v{face.controlPoints[1].x-a.x,face.controlPoints[1].y-a.y,face.controlPoints[1].z-a.z};
+    Point3D normal{u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z,u.x*v.y-u.y*v.x};
+    const double distance = extrudeOption == 3 ? -0.5 : 2.0;
+    const double scale = (nurbsSolidFaceReversed(cube.nurbsSolid,target)?-distance:distance) /
+        std::sqrt(normal.x*normal.x+normal.y*normal.y+normal.z*normal.z);
+    QPointF destination;
+    projection.worldPointToScreen({a.x+scale*normal.x,a.y+scale*normal.y,a.z+scale*normal.z},
+                                  viewport->size(),&destination);
+    sendMouse(viewport.get(),QEvent::MouseMove,destination,Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+    sendMouse(viewport.get(),QEvent::MouseButtonPress,destination,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    sendMouse(viewport.get(),QEvent::MouseButtonRelease,destination,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    application.processEvents();
+    passed &= check(session.document().size() == (extrudeOption == 0 ? 3 : 2) &&
+                        session.history().undoCount() == 1 &&
+                        validateNurbsSolid(session.document().objects().last().geometry.nurbsSolid),
+                    "Extrude must commit the selected side face inside the line-rooted object");
+    if (extrudeOption == 3) {
+        waitForViewportTransition();
+        saveGridCapture(QStringLiteral("split-face-manifold-recess"),captureViewport(viewport.get()));
+    }
+    if (extrudeOption >= 2) {
+        passed &= check(viewport->executeCommand(ViewportCommand::Undo).accepted &&
+                            session.document().size() == 2,
+                        "undo must restore the trimmed source box before another face extrusion");
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,position,
+                  Qt::RightButton,Qt::RightButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,position,
+                  Qt::RightButton,Qt::NoButton,Qt::NoModifier);
+        application.processEvents();
+        const auto retried = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+        passed &= check(retried.accepted && retried.count == 1,
+                        "a face must remain extrudable after undoing an extrusion");
+        sendMouse(viewport.get(),QEvent::MouseMove,destination,
+                  Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,destination,
+                  Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,destination,
+                  Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        application.processEvents();
+        const Shape *restored = session.document().shape(solid);
+        passed &= check(session.history().undoCount() == 1 &&
+                            restored != nullptr &&
+                            validateNurbsSolid(restored->nurbsSolid),
+                        "Manifold extrusion must commit again on the restored source after Undo");
+    }
+    if (extrudeOption == 3) {
+        const auto raised = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+        passed &= check(raised.accepted && raised.count == 1,
+                        "the recessed region must start another Manifold extrusion");
+        QPointF aboveNeighbor;
+        projection.worldPointToScreen({a.x-scale*normal.x,a.y-scale*normal.y,a.z-scale*normal.z},
+                                       viewport->size(),&aboveNeighbor);
+        sendMouse(viewport.get(),QEvent::MouseMove,aboveNeighbor,
+                  Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,aboveNeighbor,
+                  Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,aboveNeighbor,
+                  Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        application.processEvents();
+        passed &= check(session.history().undoCount()==2 &&
+                            validateNurbsSolid(session.document().shape(solid)->nurbsSolid),
+                        "raising the recessed face beyond the neighbor must commit rather than fall back to its original height");
+        waitForViewportTransition();
+        saveGridCapture(QStringLiteral("split-face-manifold-raised"),captureViewport(viewport.get()));
+    }
+    viewport->setObjectEditMode(false);
+    passed &= check(tree->currentItem() == tree->topLevelItem(0),
+                    "leaving Edit Mode must highlight the object row");
+    return passed;
+}
+
 bool verifySolidFaceDelete(QApplication &application)
 {
     ApplicationSession session;
@@ -2608,6 +2789,12 @@ bool verifySolidFaceDelete(QApplication &application)
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_OUTLINER_FACE_ONLY")) {
+        bool passed = true;
+        for (int option = 0; option < 4; ++option)
+            passed = verifyOutlinerFaceSelection(application, option) && passed;
+        return passed ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_WIRE_PREFERENCES_ONLY")) {
         return verifyWireRenderingPreferences(application) ? 0 : 1;
     }

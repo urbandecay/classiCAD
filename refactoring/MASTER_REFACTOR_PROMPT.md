@@ -56,7 +56,7 @@ src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validat
 src/core/geometry/nurbs_surface.*  tensor-product 3D NURBS surface storage, UV trim loops, validation, and evaluation
 src/core/geometry/nurbs_surface_evaluator.* validated prepared surface state for repeated evaluation
 src/core/geometry/nurbs_surface_factory.* exact ruled extrusion and planar Fill with UV trim boundaries
-src/core/geometry/nurbs_solid.*    exact closed planar-face extrusion, caps/walls, validation, and face orientation
+src/core/geometry/nurbs_solid.*    exact closed extrusion, planar boundary patches and steps, edge-segment closure, and face orientation
 src/core/geometry/arc_curve_factory.* signed direction and exact rational NURBS construction for three-point arcs
 src/core/geometry/interpolating_curve_factory.* centripetal Catmull-Rom interpolation represented as exact piecewise cubic NURBS
 src/core/geometry/work_plane.*     principal and oriented local-2D to world-3D frame mapping
@@ -150,6 +150,7 @@ src/ui/viewport_widget.cpp         Qt event routing, camera-dependent cursor/sna
 src/ui/panels/document_grid_dialog.* document length-unit and base-grid-spacing dialog values
 src/ui/panels/layer_style_widgets.* shared layer-linetype combo, icons, and descriptions
 src/ui/panels/layers_panel.*         layer table, filtering, stable-ID selection, and typed edit callbacks
+src/ui/panels/outliner_panel.*       object/container tree and mode-aware selection projection from viewport state
 src/ui/panels/preferences_dialog.* preference pages and typed values returned to MainWindow
 src/ui/panels/preferences_store.*   typed application preference loading, migration, and QSettings persistence
 src/ui/panels/tool_shelf.*          tool-button layout, exclusive tool selection, and local scroll/help presentation
@@ -1147,3 +1148,83 @@ code is uncommitted and unpushed. Follow-up: run placement-aware persistence,
 transform, duplicate, snap, selection, and CPU-depth contracts, then measure
 large-scene group moves against the prior revision and inspect the full-scene
 frame-construction cost.
+
+#### Outliner selection synchronization correction (2026-10-18)
+
+The existing UI boundary now projects Object Mode selection onto container
+rows and Edit Mode selection onto geometry rows without preserving a stale
+current row or falling back to selecting the edit container. MainWindow reads
+the viewport's mode and active container on each refresh. The viewport publishes
+synthetic/RMB component selection changes, reports the active component owner,
+and preserves component selection when the edit container is clicked. Object
+Mode row selection consistently selects the owning container. Geometry storage,
+extrusion algorithms, and the completed refactoring phases remain unchanged.
+
+The interaction target reuses the compiled main-window UI objects to exercise
+the real OutlinerPanel. Its registered viewport_outliner_selection regression
+passes offscreen; the same sequence passes natively with normal Extrude, Weld,
+and Manifold, including committing a selected side face in a line-rooted group.
+Existing outliner Grab and solid face-selection checks pass. Full build and
+287-source dependency audit, diff checks, and offscreen startup pass. The broad
+CTest suite was not repeated for this focused correction. Changes remain local.
+
+#### Fill-created box side extrusion correction (2026-10-18)
+
+Connected face extrusion now uses materializeNurbsSolidBoundary before editing,
+so rectangular UV cap trims created by Fill no longer reject side faces. The
+conversion retains exact surface domains and face indices. The earlier
+untrimmed-box interaction fixture missed this case; it now retains the cap
+trims and verifies normal Extrude, Weld, and Manifold in the real viewport.
+Geometry coverage checks all six trimmed-box faces in both directions and both
+connected modes. The solid extrusion suite and registered outliner interaction
+check pass offscreen; the trimmed-box interaction passes natively. Full build,
+dependency audit, diff check, and offscreen startup pass. Changes remain local.
+The viewport regression also commits a Manifold side extrusion, undoes it,
+reselects the restored face, and commits the same extrusion again; this retry
+passes with Manifold still enabled.
+
+#### Connected partial-face recess correction (2026-10-18)
+
+The core solid-face extrusion owner now follows overlapping shared edge
+segments rather than moving every face that touches a selected corner.
+Orthogonal neighbors shorten or extend; coplanar neighbors stay in place and
+gain a step wall. Longer neighbors are subdivided into exact degree-one NURBS
+patches with their parameter subdomains preserved. Connected inward extrusion
+uses this boundary update with Manifold on or off, avoiding overlapping rim
+walls. Face indices for the moving patch remain stable for preview and commit.
+
+The closed-shell validator now compares matching geometric edge subsegments
+when one long patch edge meets multiple shorter edges. Swept-face clearance
+uses opposing patches within the selected footprint rather than requiring
+every face of a stepped shell to bound a convex volume. This extends the
+existing planar-patch extrusion contract to connected orthogonal steps; it
+does not introduce a second geometry model or general Boolean operations.
+
+Added regression coverage for recessing each extension wall beside a coplanar
+neighbor and extruding every resulting face again, plus an actual viewport
+Manifold recess/Undo/retry sequence on a previously extended box. Final build
+and dependency audit pass. Split-face viewport regressions pass natively and
+offscreen, including Undo/retry; the native capture shows a single clean step
+without the old rim. Solid extrusion, command, scene-query, surface-boundary,
+and rendering suites pass. The broader core_contracts suite reports camera,
+snap/drag, tangent/perpendicular, and dimension assertions outside these changed
+paths; it does not pass. Offscreen startup and diff checks pass. Changes remain
+local and unpushed.
+
+#### Extrusion across neighboring face heights (2026-10-18)
+
+Shared step walls may collapse at a neighboring cap's height and reverse their
+natural orientation when the selected face passes that height. The core face
+extrusion operation now removes those zero-area walls and returns the resulting
+moving-face slot. PointExtrudeTool carries that slot into both preview and
+completion selection instead of assuming all face indices survive unchanged.
+Connected outward movement that fills a recess also updates existing shared
+walls with Manifold off, avoiding overlapping interior walls.
+
+Regression checks cover below, equal, and above-neighbor heights in both modes,
+including selected-face remapping after removing an earlier wall. The native
+viewport test raises a recessed face beyond its neighbor after Undo/retry and
+captures the committed result. Native and offscreen viewport checks pass; six
+focused suites (solid extrusion, outliner selection, commands, scene queries,
+surface boundaries, and rendering) pass. Full build, dependency audit, diff
+check, and offscreen startup pass. Changes remain local and unpushed.

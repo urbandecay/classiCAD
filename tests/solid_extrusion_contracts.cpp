@@ -217,6 +217,46 @@ int main(int argc, char **argv)
     // Exercise all six faces, both movement directions, and all three modes.
     // Unwelded geometry must remain independently editable at coincident corners.
     const auto sourceFaces = nurbsSolidFaces(rectangularSolid);
+    // Match a box made by Fill -> Extrude, whose caps retain a rectangular
+    // parameter-domain trim. These used to accept cap motion but reject sides.
+    auto trimmedRectangle = rectangleFace;
+    qreal trimU0, trimU1, trimV0, trimV1;
+    passed &= check(nurbsSurfaceParameterDomains(trimmedRectangle,
+                         &trimU0,&trimU1,&trimV0,&trimV1), "rectangle trim domain");
+    NurbsSurfaceTrimLoop rectangleTrim;
+    rectangleTrim.curve.degree = 1;
+    rectangleTrim.curve.order = 2;
+    rectangleTrim.curve.controlPoints = {{trimU0,trimV0},{trimU1,trimV0},
+        {trimU1,trimV1},{trimU0,trimV1},{trimU0,trimV0}};
+    rectangleTrim.curve.weights = {1,1,1,1,1};
+    rectangleTrim.curve.knots = {0,1,2,3,4};
+    trimmedRectangle.trimLoops = {rectangleTrim};
+    NurbsExtrusionSolid3D filledBox;
+    passed &= check(makeNurbsExtrusionSolid(trimmedRectangle,{0,0,3},&filledBox),
+                    "filled rectangle must produce a valid trimmed box");
+    const auto filledFaces = nurbsSolidFaces(filledBox);
+    for (int faceIndex = 0; faceIndex < filledFaces.size(); ++faceIndex) {
+        const auto &patch = filledFaces[faceIndex];
+        const auto a = patch.controlPoints[0];
+        const auto b = patch.controlPoints[2];
+        const auto c = patch.controlPoints[1];
+        Point3D normal{(b.y-a.y)*(c.z-a.z)-(b.z-a.z)*(c.y-a.y),
+                       (b.z-a.z)*(c.x-a.x)-(b.x-a.x)*(c.z-a.z),
+                       (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)};
+        const double scale = (nurbsSolidFaceReversed(filledBox,faceIndex)?-1.0:1.0) /
+            std::hypot(normal.x,std::hypot(normal.y,normal.z));
+        for (double distance : {-0.5,0.5}) {
+            for (bool manifold : {false,true}) {
+                NurbsExtrusionSolid3D edited;
+                passed &= check(extrudeNurbsSolidFace(filledBox,faceIndex,
+                                    {normal.x*scale*distance,normal.y*scale*distance,
+                                     normal.z*scale*distance},&edited,manifold) &&
+                                    validateNurbsSolid(edited) &&
+                                    nurbsSolidFaces(edited).size() == (manifold || distance < 0 ? 6 : 10),
+                                "all Fill-created box faces must extrude inward and outward with Weld or Manifold");
+            }
+        }
+    }
     for (int faceIndex = 0; faceIndex < sourceFaces.size(); ++faceIndex) {
         const auto &patch = sourceFaces[faceIndex];
         const Point3D a = patch.controlPoints[0];
@@ -275,7 +315,7 @@ int main(int argc, char **argv)
                                     modePreview.extrusionPreviewFaceIndices.first() == (mode == 0 ? 1 : faceIndex),
                                 "preview must retain unwelded sources and highlight the actual moving face");
                 passed &= check(nurbsSolidFaces(modePreview.shapes.first().nurbsSolid).size() ==
-                                    (mode == 1 ? 10 : 6),
+                                    (mode == 1 && distance > 0 ? 10 : 6),
                                 "normal welded extrusion retains the seam, while manifold preserves six faces");
                 if (mode == 1) {
                     passed &= check(nurbsSolidFaceReversed(
@@ -313,6 +353,101 @@ int main(int argc, char **argv)
         }
     }
     NurbsExtrusionSolid3D collapsed;
+    // A normal connected extension splits its four side planes into adjacent
+    // patches. Recess one such patch without pulling its coplanar neighbor or
+    // retaining the old perimeter as an overlapping rim.
+    {
+        const auto &patch = sourceFaces[2];
+        const auto a = patch.controlPoints[0];
+        const auto u = Point3D{patch.controlPoints[2].x-a.x,patch.controlPoints[2].y-a.y,patch.controlPoints[2].z-a.z};
+        const auto v = Point3D{patch.controlPoints[1].x-a.x,patch.controlPoints[1].y-a.y,patch.controlPoints[1].z-a.z};
+        Point3D normal{u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z,u.x*v.y-u.y*v.x};
+        const double factor = (nurbsSolidFaceReversed(rectangularSolid,2)?-1.0:1.0) /
+            std::hypot(normal.x,std::hypot(normal.y,normal.z));
+        NurbsExtrusionSolid3D split;
+        passed &= check(extrudeNurbsSolidFace(rectangularSolid,2,
+                            {normal.x*factor,normal.y*factor,normal.z*factor},&split,false),
+                        "normal extension must create the split-face regression shell");
+        const auto splitFaces = nurbsSolidFaces(split);
+        for (int target = 6; target < splitFaces.size(); ++target) {
+            const auto &selected = splitFaces[target];
+            const auto p = selected.controlPoints[0];
+            const Point3D su{selected.controlPoints[2].x-p.x,selected.controlPoints[2].y-p.y,selected.controlPoints[2].z-p.z};
+            const Point3D sv{selected.controlPoints[1].x-p.x,selected.controlPoints[1].y-p.y,selected.controlPoints[1].z-p.z};
+            Point3D n{su.y*sv.z-su.z*sv.y,su.z*sv.x-su.x*sv.z,su.x*sv.y-su.y*sv.x};
+            const double scale = (nurbsSolidFaceReversed(split,target)?-0.25:0.25) /
+                std::hypot(n.x,std::hypot(n.y,n.z));
+            for (bool manifold : {false,true}) {
+                NurbsExtrusionSolid3D recessed;
+                const Point3D delta{-n.x*scale,-n.y*scale,-n.z*scale};
+                const bool success = extrudeNurbsSolidFace(split,target,delta,&recessed,manifold);
+                passed &= check(success && validateNurbsSolid(recessed),
+                                "a split box face must recess with Manifold on or off");
+                if (!success) continue;
+                const auto resultFaces = nurbsSolidFaces(recessed);
+                passed &= check(resultFaces.size() == splitFaces.size()+1,
+                                "a recess must leave one step wall and shrink existing neighbors without four overlapping rim walls");
+                for (int cv=0; cv<4; ++cv) {
+                    const auto before = selected.controlPoints[cv];
+                    passed &= check(near(resultFaces[target].controlPoints[cv],
+                                         {before.x+delta.x,before.y+delta.y,before.z+delta.z}),
+                                    "the selected face must end at the requested recess plane");
+                }
+                for (int next=0; next<resultFaces.size(); ++next) {
+                    const auto &nextFace=resultFaces[next];
+                    const auto a=nextFace.controlPoints[0];
+                    const Point3D u{nextFace.controlPoints[2].x-a.x,nextFace.controlPoints[2].y-a.y,nextFace.controlPoints[2].z-a.z};
+                    const Point3D v{nextFace.controlPoints[1].x-a.x,nextFace.controlPoints[1].y-a.y,nextFace.controlPoints[1].z-a.z};
+                    const Point3D normal{u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z,u.x*v.y-u.y*v.x};
+                    const double factor=(nurbsSolidFaceReversed(recessed,next)?0.01:-0.01) /
+                        std::hypot(normal.x,std::hypot(normal.y,normal.z));
+                    NurbsExtrusionSolid3D again;
+                    passed &= check(extrudeNurbsSolidFace(recessed,next,
+                                        {normal.x*factor,normal.y*factor,normal.z*factor},&again,true) &&
+                                        validateNurbsSolid(again) &&
+                                        extrudeNurbsSolidFace(recessed,next,
+                                        {-normal.x*factor,-normal.y*factor,-normal.z*factor},&again,true) &&
+                                        validateNurbsSolid(again),
+                                    "every face of the stepped result must remain extrudable in both directions, including partial edge neighbors");
+                }
+                // Raise the recessed face to, and then past, its neighbor.
+                // Preview must remain valid on both sides of the zero-height
+                // step wall rather than reverting to the original solid.
+                for (double distance : {0.125,0.25,0.5,1.0}) {
+                  for (bool raiseManifold : {false,true}) {
+                    const Point3D rise{-delta.x*distance/0.25,
+                                       -delta.y*distance/0.25,
+                                       -delta.z*distance/0.25};
+                    NurbsExtrusionSolid3D raised;
+                    int moved=-1;
+                    const bool success=extrudeNurbsSolidFace(recessed,target,rise,&raised,raiseManifold,&moved);
+                    passed &= check(success && validateNurbsSolid(raised),
+                                    "Manifold must raise a recessed face through and beyond its neighbor's height");
+                    if (!success) continue;
+                    const auto raisedFaces=nurbsSolidFaces(raised);
+                    passed &= check(moved>=0 && moved<raisedFaces.size() &&
+                                        near(raisedFaces[moved].controlPoints[0],
+                                            {resultFaces[target].controlPoints[0].x+rise.x,
+                                             resultFaces[target].controlPoints[0].y+rise.y,
+                                             resultFaces[target].controlPoints[0].z+rise.z}),
+                                    "crossing a neighbor must report the actual moving face index");
+                  }
+                }
+                auto reordered=recessed;
+                const int lateFace=reordered.boundaryFaces.size()-1;
+                std::swap(reordered.boundaryFaces[target],reordered.boundaryFaces[lateFace]);
+                const bool oldFlag=reordered.boundaryFaceReversed[target];
+                reordered.boundaryFaceReversed[target]=reordered.boundaryFaceReversed[lateFace];
+                reordered.boundaryFaceReversed[lateFace]=oldFlag;
+                NurbsExtrusionSolid3D flush;
+                int flushFace=-1;
+                passed &= check(extrudeNurbsSolidFace(reordered,lateFace,
+                                    {-delta.x,-delta.y,-delta.z},&flush,true,&flushFace) &&
+                                    validateNurbsSolid(flush) && flushFace==lateFace-1,
+                                "removing an earlier collapsed wall must remap a later selected face");
+            }
+        }
+    }
     passed &= check(!extrudeNurbsSolidFace(rectangularSolid, 1, {0,0,-3}, &collapsed, true) &&
                         !extrudeNurbsSolidFace(rectangularSolid, 1, {0,0,-4}, &collapsed, true),
                     "Manifold must reject collapse and crossing the opposite cap");

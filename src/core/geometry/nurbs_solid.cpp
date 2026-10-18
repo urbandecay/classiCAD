@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <QLineF>
 #include <QSet>
 
@@ -82,6 +83,7 @@ bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid)
             return false;
         struct Edge { Point3D a; Point3D b; int count = 1; };
         QVector<Edge> edges;
+        QVector<Edge> rawEdges;
         const auto close = [](const Point3D &a, const Point3D &b) {
             return length(subtract(a, b)) < 1.0e-7;
         };
@@ -95,6 +97,29 @@ bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid)
                 const Point3D a = face.controlPoints[perimeter[i]];
                 const Point3D b = face.controlPoints[perimeter[i + 1]];
                 if (close(a, b)) return false;
+                rawEdges.append({a, b, 1});
+            }
+        }
+        // Adjacent rectangular patches may meet along part of a longer edge.
+        // Compare their exact geometric subsegments, including T junctions.
+        for (const Edge &raw : rawEdges) {
+            const Point3D direction = subtract(raw.b, raw.a);
+            const qreal squaredLength = dot(direction, direction);
+            QVector<qreal> parameters{0.0, 1.0};
+            for (const Edge &other : rawEdges) {
+                for (const Point3D &point : {other.a, other.b}) {
+                    const qreal t = dot(subtract(point, raw.a), direction) / squaredLength;
+                    if (t > 0.0 && t < 1.0 &&
+                        close(point, add(raw.a, multiply(direction, t)))) {
+                        parameters.append(t);
+                    }
+                }
+            }
+            std::sort(parameters.begin(), parameters.end());
+            for (int part = 0; part + 1 < parameters.size(); ++part) {
+                const Point3D a = add(raw.a, multiply(direction, parameters[part]));
+                const Point3D b = add(raw.a, multiply(direction, parameters[part + 1]));
+                if (close(a, b)) continue;
                 bool found = false;
                 for (Edge &edge : edges) {
                     if ((close(a, edge.a) && close(b, edge.b)) ||
@@ -140,10 +165,17 @@ bool extrudeNurbsSolidFace(const NurbsExtrusionSolid3D &solid,
                            int faceIndex,
                            const Point3D &displacement,
                            NurbsExtrusionSolid3D *result,
-                           bool manifold)
+                           bool manifold,
+                           int *resultFaceIndex)
 {
+    if (resultFaceIndex != nullptr) *resultFaceIndex = faceIndex;
     if (result == nullptr || !validateNurbsSolid(solid)) return false;
-    const QVector<NurbsSurface3D> faces = nurbsSolidFaces(solid);
+    // Fill-created boxes retain exact rectangular UV trims on their caps.
+    // Convert that construction to its equivalent connected patches before
+    // editing any face, just as shared-corner editing does.
+    NurbsExtrusionSolid3D boundary = solid;
+    if (!materializeNurbsSolidBoundary(&boundary)) return false;
+    const QVector<NurbsSurface3D> faces = nurbsSolidFaces(boundary);
     if (faceIndex < 0 || faceIndex >= faces.size()) return false;
 
     struct FacePlane {
@@ -181,7 +213,7 @@ bool extrudeNurbsSolidFace(const NurbsExtrusionSolid3D &solid,
                 return false;
             }
         }
-        if (nurbsSolidFaceReversed(solid, facePlanes.size())) {
+        if (nurbsSolidFaceReversed(boundary, facePlanes.size())) {
             facePlanes.append({face.controlPoints[0],
                                multiply(naturalNormal, -1.0)});
         } else {
@@ -191,22 +223,12 @@ bool extrudeNurbsSolidFace(const NurbsExtrusionSolid3D &solid,
 
     const qreal shellTolerance = std::max<qreal>(1.0e-12,
                                                   geometryScale * 1.0e-9);
-    for (const FacePlane &plane : facePlanes) {
-        for (const NurbsSurface3D &face : faces) {
-            for (const Point3D &point : face.controlPoints) {
-                if (dot(subtract(point, plane.origin), plane.normal) >
-                    shellTolerance) {
-                    return false;
-                }
-            }
-        }
-    }
 
     const NurbsSurface3D &selectedFace = faces[faceIndex];
     const Point3D outwardNormal = facePlanes[faceIndex].normal;
     const qreal tolerance = shellTolerance;
     const bool selectedFaceReversed =
-        nurbsSolidFaceReversed(solid, faceIndex);
+        nurbsSolidFaceReversed(boundary, faceIndex);
     const qreal displacementLength = length(displacement);
     const qreal signedDistance = dot(displacement, outwardNormal);
     const Point3D tangential = subtract(
@@ -218,70 +240,223 @@ bool extrudeNurbsSolidFace(const NurbsExtrusionSolid3D &solid,
         return false;
     }
 
-    // Inward extrusion makes a recess. Keep every moved corner behind all
-    // other outward planes so the new face cannot cross the convex shell.
-    if (signedDistance < 0.0) {
-        for (const Point3D &point : selectedFace.controlPoints) {
-            const Point3D movedPoint = add(point, displacement);
-            for (int planeIndex = 0; planeIndex < facePlanes.size();
-                 ++planeIndex) {
-                if (planeIndex == faceIndex) continue;
-                const FacePlane &plane = facePlanes[planeIndex];
-                if (dot(subtract(movedPoint, plane.origin), plane.normal) >
-                    tolerance) {
-                    return false;
-                }
-            }
+    // Test the swept face against opposing patches in its footprint. A recess
+    // is nonconvex; unrelated face half-spaces cannot bound its movement.
+    const Point3D uAxis = normalized(subtract(selectedFace.controlPoints[2],
+                                             selectedFace.controlPoints[0]));
+    const Point3D vAxis = normalized(cross(outwardNormal, uAxis));
+    const auto interval = [&](const NurbsSurface3D &face, const Point3D &axis) {
+        QPair<qreal,qreal> bounds{std::numeric_limits<qreal>::max(),
+                                 std::numeric_limits<qreal>::lowest()};
+        for (const Point3D &point : face.controlPoints) {
+            const qreal coordinate = dot(subtract(point, reference), axis);
+            bounds.first = std::min(bounds.first, coordinate);
+            bounds.second = std::max(bounds.second, coordinate);
         }
+        return bounds;
+    };
+    const auto selectedU = interval(selectedFace, uAxis);
+    const auto selectedV = interval(selectedFace, vAxis);
+    for (int index = 0; index < faces.size(); ++index) {
+        if (index == faceIndex || dot(facePlanes[index].normal, outwardNormal) > -1.0 + 1.0e-8)
+            continue;
+        const auto otherU = interval(faces[index], uAxis);
+        const auto otherV = interval(faces[index], vAxis);
+        if (std::min(selectedU.second, otherU.second) - std::max(selectedU.first, otherU.first) <= tolerance ||
+            std::min(selectedV.second, otherV.second) - std::max(selectedV.first, otherV.first) <= tolerance)
+            continue;
+        const qreal separation = dot(subtract(facePlanes[index].origin,
+                                              selectedFace.controlPoints[0]), outwardNormal);
+        if ((signedDistance < 0.0 && separation < -tolerance && signedDistance <= separation + tolerance) ||
+            (signedDistance > 0.0 && separation > tolerance && signedDistance >= separation - tolerance))
+            return false;
     }
 
-    NurbsExtrusionSolid3D candidate = solid;
+    NurbsExtrusionSolid3D candidate = boundary;
     candidate.boundaryFaces = faces;
     candidate.boundaryFaceReversed.clear();
     candidate.boundaryFaceReversed.reserve(faces.size() + 4);
     for (int index = 0; index < faces.size(); ++index) {
         candidate.boundaryFaceReversed.append(
-            nurbsSolidFaceReversed(solid, index));
+            nurbsSolidFaceReversed(boundary, index));
     }
 
-    if (manifold) {
-        // Dissolving the new orthogonal walls is equivalent to extending the
-        // existing adjoining patches at their shared corners. Preserve their
-        // NURBS domains and reject moves that leave the planar convex contract.
-        for (int index = 0; index < candidate.boundaryFaces.size(); ++index) {
-            auto &face = candidate.boundaryFaces[index];
-            for (Point3D &point : face.controlPoints) {
-                for (const Point3D &corner : selectedFace.controlPoints) {
-                    if (length(subtract(point, corner)) <= tolerance) {
-                        if (index != faceIndex &&
-                            std::abs(dot(facePlanes[index].normal, outwardNormal)) > 1.0e-4) {
-                            return false;
-                        }
-                        point = add(point, displacement);
-                        break;
-                    }
+    bool fillsRecess = false;
+    const int boundaryOrder[] = {0,2,3,1};
+    if (signedDistance > 0.0) {
+        for (int index=0; index<faces.size() && !fillsRecess; ++index) {
+            if (index==faceIndex || std::abs(dot(facePlanes[index].normal,outwardNormal))>1.0e-4)
+                continue;
+            bool extendsAhead=false;
+            for (const Point3D &point : faces[index].controlPoints)
+                extendsAhead |= dot(subtract(point,selectedFace.controlPoints[0]),outwardNormal)>tolerance;
+            if (!extendsAhead) continue;
+            for (int edge=0; edge<4 && !fillsRecess; ++edge) {
+                const Point3D a=selectedFace.controlPoints[boundaryOrder[edge]];
+                const Point3D b=selectedFace.controlPoints[boundaryOrder[(edge+1)%4]];
+                const Point3D axis=normalized(subtract(b,a));
+                const qreal extent=length(subtract(b,a));
+                for (int side=0; side<4; ++side) {
+                    const Point3D p=faces[index].controlPoints[boundaryOrder[side]];
+                    const Point3D q=faces[index].controlPoints[boundaryOrder[(side+1)%4]];
+                    const qreal first=dot(subtract(p,a),axis), last=dot(subtract(q,a),axis);
+                    if (length(subtract(subtract(p,a),multiply(axis,first)))<=tolerance &&
+                        length(subtract(subtract(q,a),multiply(axis,last)))<=tolerance &&
+                        std::min(extent,std::max(first,last))-std::max<qreal>(0,std::min(first,last))>tolerance)
+                        fillsRecess=true;
                 }
             }
         }
+    }
+    if (manifold || signedDistance < 0.0 || fillsRecess) {
+        // Edit edge neighbors only. Coplanar neighbors stay in place and gain
+        // a step wall; orthogonal neighbors shorten/extend to the moving face.
+        // Faces touching just one corner must keep their original geometry.
+        for (Point3D &point : candidate.boundaryFaces[faceIndex].controlPoints)
+            point = add(point, displacement);
+        const int forward[] = {0,2,3,1};
+        const int reverse[] = {0,1,3,2};
+        const int *perimeter = selectedFaceReversed ? reverse : forward;
+        QVector<Point3D> expectedNormals;
+        QVector<bool> resizedNeighbor(faces.size(),false);
+        for (const FacePlane &plane : facePlanes) expectedNormals.append(plane.normal);
+        QSet<int> editedNeighbors;
+        for (int edge = 0; edge < 4; ++edge) {
+            const Point3D &a = selectedFace.controlPoints[perimeter[edge]];
+            const Point3D &b = selectedFace.controlPoints[perimeter[(edge+1)%4]];
+            const Point3D direction = subtract(b,a);
+            const qreal edgeLength = length(direction);
+            const Point3D edgeAxis = multiply(direction,1.0/edgeLength);
+            QVector<QPair<qreal,qreal>> coverage;
+            for (int index = 0; index < faces.size(); ++index) {
+                if (index == faceIndex) continue;
+                const auto &neighbor = faces[index];
+                for (int side = 0; side < 4; ++side) {
+                    const int i = forward[side], j = forward[(side+1)%4];
+                    const Point3D p = neighbor.controlPoints[i], q = neighbor.controlPoints[j];
+                    const qreal pDistance = dot(subtract(p,a),edgeAxis);
+                    const qreal qDistance = dot(subtract(q,a),edgeAxis);
+                    if (length(subtract(subtract(p,a),multiply(edgeAxis,pDistance))) > tolerance ||
+                        length(subtract(subtract(q,a),multiply(edgeAxis,qDistance))) > tolerance) continue;
+                    const qreal low = std::max<qreal>(0,std::min(pDistance,qDistance));
+                    const qreal high = std::min(edgeLength,std::max(pDistance,qDistance));
+                    if (high-low <= tolerance) continue;
+                    coverage.append({low,high});
+                    const Point3D start = add(a,multiply(edgeAxis,low));
+                    const Point3D end = add(a,multiply(edgeAxis,high));
+                    const qreal alignment = dot(facePlanes[index].normal,outwardNormal);
+                    if (std::abs(alignment) < 1.0e-4) {
+                        if (editedNeighbors.contains(index)) return false;
+                        editedNeighbors.insert(index);
+                        // Split a longer neighboring edge at the selected
+                        // region's limits before moving only its shared part.
+                        const bool variesU = (i/2 != j/2);
+                        const Point3D edgeOrigin=neighbor.controlPoints[std::min(i,j)];
+                        const Point3D axis = subtract(neighbor.controlPoints[std::max(i,j)],edgeOrigin);
+                        const qreal squared = dot(axis,axis);
+                        const qreal first = dot(subtract(start,edgeOrigin),axis)/squared;
+                        const qreal last = dot(subtract(end,edgeOrigin),axis)/squared;
+                        const qreal t0 = std::clamp(std::min(first,last),qreal(0),qreal(1));
+                        const qreal t1 = std::clamp(std::max(first,last),qreal(0),qreal(1));
+                        QVector<qreal> cuts{0,t0,t1,1};
+                        std::sort(cuts.begin(),cuts.end());
+                        bool replaced = false;
+                        const auto pointAt = [&](qreal u,qreal v) {
+                            return add(add(multiply(neighbor.controlPoints[0],(1-u)*(1-v)),
+                                           multiply(neighbor.controlPoints[1],(1-u)*v)),
+                                       add(multiply(neighbor.controlPoints[2],u*(1-v)),
+                                           multiply(neighbor.controlPoints[3],u*v)));
+                        };
+                        for (int part=0; part+1<cuts.size(); ++part) {
+                            const qreal lo=cuts[part], hi=cuts[part+1];
+                            if ((hi-lo)*length(axis) <= tolerance) continue;
+                            NurbsSurface3D patch=neighbor;
+                            patch.controlPoints = variesU
+                                ? QVector<Point3D>{pointAt(lo,0),pointAt(lo,1),pointAt(hi,0),pointAt(hi,1)}
+                                : QVector<Point3D>{pointAt(0,lo),pointAt(0,hi),pointAt(1,lo),pointAt(1,hi)};
+                            auto &knots=variesU?patch.knotsU:patch.knotsV;
+                            const qreal domainStart=knots[0], span=knots[1]-knots[0];
+                            knots={domainStart+span*lo,domainStart+span*hi};
+                            if ((lo+hi)*0.5 > t0 && (lo+hi)*0.5 < t1) {
+                                for (Point3D &point : patch.controlPoints) {
+                                    const qreal along=dot(subtract(point,a),edgeAxis);
+                                    if (length(subtract(subtract(point,a),multiply(edgeAxis,along))) <= tolerance)
+                                        point=add(point,displacement);
+                                }
+                            }
+                            if (!replaced) {
+                                candidate.boundaryFaces[index]=std::move(patch);
+                                resizedNeighbor[index]=true;
+                                replaced=true;
+                            } else {
+                                candidate.boundaryFaces.append(std::move(patch));
+                                candidate.boundaryFaceReversed.append(nurbsSolidFaceReversed(boundary,index));
+                                expectedNormals.append(facePlanes[index].normal);
+                                resizedNeighbor.append(true);
+                            }
+                        }
+                    } else if (alignment > 1.0-1.0e-8) {
+                        NurbsSurface3D wall;
+                        wall.controlVertexCountU=wall.controlVertexCountV=2;
+                        wall.controlPoints={start,add(start,displacement),end,add(end,displacement)};
+                        wall.weights={1,1,1,1};
+                        wall.knotsU=wall.knotsV={0,1};
+                        candidate.boundaryFaces.append(std::move(wall));
+                        candidate.boundaryFaceReversed.append(false);
+                        expectedNormals.append(normalized(cross(subtract(end,start),displacement)));
+                        resizedNeighbor.append(false);
+                    } else return false;
+                }
+            }
+            std::sort(coverage.begin(),coverage.end());
+            qreal covered=0;
+            for (const auto &part : coverage) {
+                if (std::abs(part.first-covered)>tolerance) return false;
+                covered=part.second;
+            }
+            if (std::abs(covered-edgeLength)>tolerance) return false;
+        }
+        QVector<NurbsSurface3D> retainedFaces;
+        QVector<bool> retainedReversed;
+        int movedFace = -1;
         for (int index = 0; index < candidate.boundaryFaces.size(); ++index) {
             const auto &face = candidate.boundaryFaces[index];
-            Point3D normal = normalized(cross(
-                subtract(face.controlPoints[2], face.controlPoints[0]),
-                subtract(face.controlPoints[1], face.controlPoints[0])));
+            const Point3D u=subtract(face.controlPoints[2],face.controlPoints[0]);
+            const Point3D v=subtract(face.controlPoints[1],face.controlPoints[0]);
+            const Point3D area=cross(u,v);
+            if (length(area) <= tolerance*std::max(length(u),length(v))) {
+                // At a neighboring cap's height, the connecting step wall
+                // disappears. Past that height its natural winding reverses.
+                if (!resizedNeighbor[index] || index == faceIndex) return false;
+                Point3D axis=length(u)>length(v)?u:v;
+                const Point3D diagonal=subtract(face.controlPoints[3],face.controlPoints[0]);
+                if (length(diagonal)>length(axis)) axis=diagonal;
+                axis=normalized(axis);
+                for (const Point3D &point : face.controlPoints) {
+                    const Point3D delta=subtract(point,face.controlPoints[0]);
+                    if (length(subtract(delta,multiply(axis,dot(delta,axis))))>tolerance)
+                        return false;
+                }
+                continue;
+            }
+            Point3D normal = normalized(area);
             if (candidate.boundaryFaceReversed[index]) normal = multiply(normal, -1);
-            if (dot(normal, facePlanes[index].normal) <= 0.0) return false;
+            const qreal orientation=dot(normal,expectedNormals[index]);
+            if (orientation <= 0.0 &&
+                (!resizedNeighbor[index] || orientation > -1.0+1.0e-8)) return false;
             for (const Point3D &point : face.controlPoints) {
                 if (std::abs(dot(subtract(point, face.controlPoints[0]), normal)) >
                     tolerance) return false;
             }
-            for (const auto &other : candidate.boundaryFaces) {
-                for (const Point3D &point : other.controlPoints) {
-                    if (dot(subtract(point, face.controlPoints[0]), normal) >
-                        tolerance) return false;
-                }
-            }
+            if (index == faceIndex) movedFace=retainedFaces.size();
+            retainedFaces.append(face);
+            retainedReversed.append(candidate.boundaryFaceReversed[index]);
         }
+        if (movedFace < 0) return false;
+        candidate.boundaryFaces=std::move(retainedFaces);
+        candidate.boundaryFaceReversed=std::move(retainedReversed);
         if (!validateNurbsSolid(candidate)) return false;
+        if (resultFaceIndex != nullptr) *resultFaceIndex=movedFace;
         *result = std::move(candidate);
         return true;
     }

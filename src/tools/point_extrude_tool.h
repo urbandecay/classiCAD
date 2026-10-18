@@ -68,7 +68,8 @@ private:
     bool makeLineShape(const SourcePoint &source,
                        const Point3D &endPoint,
                        Shape *shape) const;
-    QVector<Shape> makeLineShapes(const Point3D &endPoint) const;
+    QVector<Shape> makeLineShapes(const Point3D &endPoint,
+                                 QVector<int> *faceIndices = nullptr) const;
     void updateStatus();
     void publish(ToolContext &context);
 

@@ -465,6 +465,7 @@ if (CLASSICAD_BUILD_TESTS)
     )
     classicad_configure_ui_target(classicad_viewport_interaction_test)
     classicad_attach_object_modules(classicad_viewport_interaction_test
+        classicad_main_window_objects
         classicad_geometry_objects
         classicad_document_objects
         classicad_command_objects
@@ -479,6 +480,10 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_viewport_widget_objects
     )
     add_test(NAME viewport_interaction COMMAND classicad_viewport_interaction_test)
+    add_test(NAME viewport_outliner_selection COMMAND classicad_viewport_interaction_test)
+    set_tests_properties(viewport_outliner_selection PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_OUTLINER_FACE_ONLY=1"
+    )
     add_test(NAME viewport_surface_boundary COMMAND classicad_viewport_interaction_test)
     set_tests_properties(viewport_surface_boundary PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_SURFACE_BOUNDARY_ONLY=1")

@@ -1574,7 +1574,11 @@ public:
                 info.geometryName += QStringLiteral(" %1").arg(geometryOrdinal);
             }
             info.selected = selectedShapeIndices_.contains(sceneObject.id);
-            info.primarySelected = selectedShapeIndex_ == sceneObject.id;
+            const bool hasActiveComponent = objectEditMode_ &&
+                !componentSelectionForObject(componentSelectionObject_).isEmpty();
+            info.primarySelected =
+                (hasActiveComponent ? componentSelectionObject_
+                                    : selectedShapeIndex_) == sceneObject.id;
             infos.append(std::move(info));
         }
         return infos;
@@ -1655,6 +1659,12 @@ public:
         if (document_.object(objectId) == nullptr) {
             return;
         }
+        if (objectEditMode_ && selectContainer) {
+            // A container is the edit scope, not a selectable component.
+            // Keep the current face/edge selection when its parent is clicked.
+            session_.notifySelectionChanged();
+            return;
+        }
         if (objectEditMode_ &&
             (!activeContainerObjectId_.isValid() ||
              document_.containerId(objectId) != activeContainerObjectId_)) {
@@ -1665,8 +1675,8 @@ public:
             return;
         }
         activeContainerObjectId_ = document_.containerId(objectId);
-        if (selectContainer) {
-            selection_.setObjectIds(document_.objectIdsInContainer(objectId),
+        if (!objectEditMode_) {
+            selection_.setObjectIds(document_.objectIdsInContainer(activeContainerObjectId_),
                                     activeContainerObjectId_);
         } else {
             selection_.setObjectIds({objectId}, objectId);
@@ -11405,6 +11415,7 @@ protected:
                         .arg(componentIndex)
                         .arg(additive)
                         .arg(selectedIndices.join(QStringLiteral(","))));
+                toolContext_.notifySelectionChanged();
                 update();
                 event->accept();
                 return;

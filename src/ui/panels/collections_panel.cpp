@@ -7571,7 +7571,7 @@ void CollectionsPanel::refresh()
             populateSceneRoot(viewLayerRoot, entries, displayObjects,
                               viewLayer.key, rootPath);
         }
-    } else {
+    } else if (showCollections_ || showAllViewLayers_) {
         auto *sceneRoot = new QTreeWidgetItem(tree_);
         sceneRoot->setText(nameColumn, QStringLiteral("Scene Collection"));
         sceneRoot->setIcon(nameColumn, collectionIcon(QStringLiteral("NONE")));
@@ -7584,10 +7584,18 @@ void CollectionsPanel::refresh()
         populateSceneRoot(sceneRoot, entries, displayObjects,
                           activeViewLayerKey,
                           QStringLiteral("scene"));
+    } else {
+        populateSceneRoot(tree_->invisibleRootItem(), entries, displayObjects,
+                          activeViewLayerKey, QStringLiteral("scene"));
     }
     if (showObjectChildren_ && !librariesMode && !orphanDataMode &&
         !sequencerMode && !dataApiMode && !libraryOverridesMode) {
         buildObjectParentHierarchy(displayObjects);
+    }
+    if (viewLayerMode && !showAllViewLayers_ && !showCollections_) {
+        for (int index = 0; index < tree_->topLevelItemCount(); ++index) {
+            sceneRoots.append(tree_->topLevelItem(index));
+        }
     }
     if (sortAlphabetically_) {
         tree_->sortItems(nameColumn, Qt::AscendingOrder);

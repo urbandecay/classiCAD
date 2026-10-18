@@ -132,6 +132,8 @@ constexpr int itemOverrideObjectSelectableRole = Qt::UserRole + 35;
 constexpr int itemRestrictionActiveRole = Qt::UserRole + 36;
 constexpr int itemLayerCollectionContextRole = Qt::UserRole + 37;
 constexpr int itemDataApiLocationRole = Qt::UserRole + 38;
+constexpr int itemOverrideTargetRole = Qt::UserRole + 39;
+constexpr int itemOverridePropertyPathsRole = Qt::UserRole + 40;
 
 QColor collectionColorTagColor(const QString &colorTag);
 
@@ -4030,6 +4032,67 @@ void CollectionsPanel::showContextMenu(
     }
     const OutlinerRowKind kind = static_cast<OutlinerRowKind>(
         item->data(nameColumn, itemKindRole).toInt());
+    if (libraryOverridesDisplayMode_) {
+        QMenu menu(this);
+        QAction *removeProperties = menu.addAction(
+            QStringLiteral("Remove"));
+        QJsonArray propertyTargets;
+        QHash<QString, qsizetype> targetIndices;
+        if (!overrideHierarchiesView_ && tree_ != nullptr) {
+            const QList<QTreeWidgetItem *> selectedItems =
+                item->isSelected() ? tree_->selectedItems()
+                                  : QList<QTreeWidgetItem *>{item};
+            for (QTreeWidgetItem *selected : selectedItems) {
+                const QStringList propertyPaths = selected->data(
+                    nameColumn, itemOverridePropertyPathsRole).toStringList();
+                if (propertyPaths.isEmpty()) continue;
+                const QJsonObject target = selected->data(
+                    nameColumn, itemOverrideTargetRole).toJsonObject();
+                const QString sourceId = target.value(
+                    QStringLiteral("id")).toString();
+                const QString rnaType = target.value(
+                    QStringLiteral("rna_type")).toString();
+                if (sourceId.isEmpty() || rnaType.isEmpty()) continue;
+                const QString targetKey = sourceId + QLatin1Char('\x1f') + rnaType;
+                qsizetype targetIndex = targetIndices.value(targetKey, -1);
+                if (targetIndex < 0) {
+                    QJsonObject requestTarget = target;
+                    requestTarget.insert(QStringLiteral("paths"), QJsonArray{});
+                    targetIndex = propertyTargets.size();
+                    targetIndices.insert(targetKey, targetIndex);
+                    propertyTargets.append(requestTarget);
+                }
+                QJsonObject requestTarget = propertyTargets.at(
+                    static_cast<int>(targetIndex)).toObject();
+                QJsonArray paths = requestTarget.value(
+                    QStringLiteral("paths")).toArray();
+                for (const QString &path : propertyPaths) {
+                    if (!path.isEmpty() && !paths.contains(path)) {
+                        paths.append(path);
+                    }
+                }
+                requestTarget.insert(QStringLiteral("paths"), paths);
+                propertyTargets[static_cast<int>(targetIndex)] = requestTarget;
+            }
+        }
+        removeProperties->setEnabled(
+            !propertyTargets.isEmpty() &&
+            callbacks_.canRemoveLibraryOverrideProperties &&
+            callbacks_.canRemoveLibraryOverrideProperties() &&
+            callbacks_.removeLibraryOverrideProperties);
+        if (!propertyTargets.isEmpty()) {
+            connect(removeProperties, &QAction::triggered, this,
+                    [this, propertyTargets]() {
+                if (callbacks_.removeLibraryOverrideProperties) {
+                    callbacks_.removeLibraryOverrideProperties(propertyTargets);
+                }
+            });
+        }
+        menu.addSeparator();
+        addViewContextMenu(menu);
+        menu.exec(tree_->viewport()->mapToGlobal(position));
+        return;
+    }
     if (kind == OutlinerRowKind::ObjectContent ||
         kind == OutlinerRowKind::SceneGroup ||
         kind == OutlinerRowKind::Library ||
@@ -6469,11 +6532,23 @@ void CollectionsPanel::refresh()
                         QStringLiteral("id")).toString();
                     const QString idPath = groupPath + QStringLiteral("/id-%1")
                                                .arg(id);
+                    QJsonObject overrideTarget;
+                    overrideTarget.insert(QStringLiteral("id"), id);
+                    overrideTarget.insert(QStringLiteral("name"),
+                        sourceItem.value(QStringLiteral("name")).toString());
+                    overrideTarget.insert(QStringLiteral("type"),
+                        sourceItem.value(QStringLiteral("type")).toString());
+                    overrideTarget.insert(QStringLiteral("rna_type"),
+                        sourceItem.value(QStringLiteral("rna_type")).toString());
+                    overrideTarget.insert(QStringLiteral("library_path"),
+                        sourceItem.value(QStringLiteral("library_path")).toString());
                     idRow->setText(nameColumn, sourceItem.value(
                         QStringLiteral("name")).toString());
                     idRow->setData(nameColumn, itemKindRole,
                                    static_cast<int>(OutlinerRowKind::ObjectContent));
                     idRow->setData(nameColumn, itemPathRole, idPath);
+                    idRow->setData(nameColumn, itemOverrideTargetRole,
+                                   QVariant::fromValue(overrideTarget));
                     QString description = QStringLiteral(
                         "Read-only Blender library override for %1")
                         .arg(sourceItem.value(QStringLiteral("reference_name"))
@@ -6490,6 +6565,7 @@ void CollectionsPanel::refresh()
                     for (qsizetype propertyIndex = 0;
                          propertyIndex < visibleProperties.size(); ++propertyIndex) {
                         const QJsonObject property = visibleProperties[propertyIndex];
+                        QVector<QTreeWidgetItem *> pathNodes;
                         QJsonArray segments = property.value(
                             QStringLiteral("segments")).toArray();
                         if (segments.isEmpty()) {
@@ -6523,10 +6599,14 @@ void CollectionsPanel::refresh()
                                 propertyRow->setData(
                                     nameColumn, itemPathRole,
                                     idPath + relativePath);
+                                propertyRow->setData(
+                                    nameColumn, itemOverrideTargetRole,
+                                    QVariant::fromValue(overrideTarget));
                                 propertyRow->setFlags(Qt::ItemIsEnabled |
                                                       Qt::ItemIsSelectable);
                                 pathRows.insert(relativePath, propertyRow);
                             }
+                            pathNodes.append(propertyRow);
                             parent = propertyRow;
                         }
                         if (propertyRow == nullptr) continue;
@@ -6534,6 +6614,22 @@ void CollectionsPanel::refresh()
                             QStringLiteral("path")).toString();
                         const bool pathValid = property.value(
                             QStringLiteral("valid")).toBool();
+                        const bool removable = pathValid &&
+                            !property.value(QStringLiteral("system")).toBool();
+                        if (removable && !operationPath.isEmpty()) {
+                            for (QTreeWidgetItem *pathNode : pathNodes) {
+                                QStringList propertyPaths = pathNode->data(
+                                    nameColumn,
+                                    itemOverridePropertyPathsRole).toStringList();
+                                if (!propertyPaths.contains(operationPath)) {
+                                    propertyPaths.append(operationPath);
+                                    pathNode->setData(
+                                        nameColumn,
+                                        itemOverridePropertyPathsRole,
+                                        propertyPaths);
+                                }
+                            }
+                        }
                         propertyRow->setText(viewportColumn, property.value(
                             QStringLiteral("value")).toString());
                         QStringList operationLabels;

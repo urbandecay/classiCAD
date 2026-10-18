@@ -276,6 +276,8 @@ struct CollectionsPanelCallbacks {
         std::function<void(const QJsonObject &, const QString &)>)>
         fetchDataApiSection;
     std::function<QJsonObject()> libraryOverrides;
+    std::function<bool()> canRemoveLibraryOverrideProperties;
+    std::function<void(const QJsonArray &)> removeLibraryOverrideProperties;
     std::function<QString()> activeSceneKey;
     std::function<void(const QString &)> setActiveScene;
     std::function<QVector<OutlinerViewLayerEntry>()> viewLayers;

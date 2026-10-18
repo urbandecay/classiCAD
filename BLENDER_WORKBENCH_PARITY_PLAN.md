@@ -11986,3 +11986,17 @@ scene depth.
   loading, not a live Blender session; native `.vignola` files without their
   source retain their bounded snapshot. `cmake --build build -j4` and
   `git diff --check` passed. No GUI comparison was run.
+- The hundred-sixty-first Outliner update ports Blender 5.2.2's Library
+  Overrides Properties context-menu `Remove` action. Right-clicking a selected
+  property row or property group now gathers its valid, non-system override
+  paths and removes them through Blender's
+  `IDOverrideLibrary.properties.remove()` API in the original imported
+  `.blend`. The edit uses a source digest check, staged save, verified sibling
+  backup, and atomic replacement, then refreshes the Library Overrides tree.
+  System rows, stale paths, hierarchy rows, and files without the original
+  `.blend` cannot invoke the removal. The `Make`, `Reset`, `Clear`, and
+  Troubleshoot actions from Blender's common Library Override submenu are
+  still missing. See Blender 5.2.2's [Outliner context menu](https://github.com/blender/blender/blob/v5.2.2/scripts/startup/bl_ui/space_outliner.py#L102-L123)
+  and the [Library Override property collection API](https://docs.blender.org/api/5.2/bpy.types.IDOverrideLibraryProperties.html).
+  Python syntax parsing, `cmake --build build -j4`, and `git diff --check`
+  passed. No matched Outliner comparison was run.

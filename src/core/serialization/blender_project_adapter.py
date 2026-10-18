@@ -2553,6 +2553,120 @@ def purge_project_orphans(source_path, staged_path, report_path,
         )
 
 
+def remove_library_override_properties(source_path, staged_path, request_path,
+                                      report_path, extractor_script_path):
+    with open(request_path, "r", encoding="utf-8") as request_file:
+        request = json.load(request_file)
+    targets = request.get("targets") if isinstance(request, dict) else None
+    if (not isinstance(targets, list) or not targets or len(targets) > 20000):
+        raise ValueError("Library override property removal request is invalid")
+
+    result = bpy.ops.wm.open_mainfile(
+        filepath=os.path.abspath(source_path),
+        load_ui=False,
+        use_scripts=False,
+    )
+    if "FINISHED" not in result:
+        raise RuntimeError("Blender did not finish opening the source project")
+    if any(scene.get("classiCAD_format") == PROJECT_FORMAT
+           for scene in bpy.data.scenes):
+        raise RuntimeError(
+            "Library override editing cannot edit a classiCAD-native Blender project")
+
+    if not os.path.isfile(extractor_script_path):
+        raise RuntimeError("The Blender Outliner extractor is unavailable")
+    spec = importlib.util.spec_from_file_location(
+        "classiCAD_blender_scene_extract", extractor_script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load the Blender Outliner extractor")
+    extractor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(extractor)
+    extractor.require_pinned_blender()
+    extractor.SOURCE_PROJECT_NAMESPACE = extractor.source_project_namespace(
+        bpy.data.filepath)
+
+    ids_by_identity = {}
+    seen_pointers = set()
+    for collection_property in bpy.data.bl_rna.properties:
+        if getattr(collection_property, "type", "") != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, collection_property.identifier)
+        except (AttributeError, RuntimeError, TypeError):
+            continue
+        for id_block in collection:
+            if not isinstance(id_block, bpy.types.ID):
+                continue
+            pointer = id_block.as_pointer()
+            if pointer in seen_pointers:
+                continue
+            seen_pointers.add(pointer)
+            key = (extractor.stable_id(id_block), id_block.bl_rna.identifier)
+            ids_by_identity.setdefault(key, []).append(id_block)
+
+    normalized_targets = []
+    for target in targets:
+        if not isinstance(target, dict):
+            raise ValueError("A library override target is invalid")
+        source_id = target.get("id", "")
+        rna_type = target.get("rna_type", "")
+        paths = target.get("paths")
+        if (not isinstance(source_id, str) or not source_id or len(source_id) > 8192 or
+                not isinstance(rna_type, str) or not rna_type or len(rna_type) > 256 or
+                not isinstance(paths, list) or not paths or len(paths) > 20000 or
+                any(not isinstance(path, str) or not path or len(path) > 4096
+                    for path in paths)):
+            raise ValueError("A library override target has invalid identity or paths")
+        id_matches = ids_by_identity.get((source_id, rna_type), [])
+        if len(id_matches) != 1:
+            raise ValueError(
+                "Could not resolve a selected library override uniquely in the source file")
+        id_block = id_matches[0]
+        override_info = getattr(id_block, "override_library", None)
+        if (override_info is None or getattr(id_block, "library", None) is not None or
+                getattr(override_info, "reference", None) is None):
+            raise ValueError(
+                "A selected data-block is no longer an editable library override")
+        normalized_targets.append((id_block, tuple(dict.fromkeys(paths))))
+
+    changed_property_count = 0
+    for id_block, paths in normalized_targets:
+        override_properties = id_block.override_library.properties
+        available_by_path = {
+            str(override_property.rna_path): override_property
+            for override_property in list(override_properties)
+        }
+        for path in paths:
+            override_property = available_by_path.get(path)
+            if override_property is None:
+                continue
+            override_properties.remove(override_property)
+            changed_property_count += 1
+
+    if changed_property_count:
+        overrides = extractor.outliner_library_overrides_tree()
+        save_result = bpy.ops.wm.save_as_mainfile(
+            filepath=os.path.abspath(staged_path),
+            check_existing=False,
+            compress=True,
+        )
+        if "FINISHED" not in save_result:
+            raise RuntimeError(
+                "Blender did not finish saving the edited library overrides")
+    else:
+        overrides = extractor.outliner_library_overrides_tree()
+
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        json.dump(
+            {"changed": changed_property_count > 0,
+             "changed_property_count": changed_property_count,
+             "library_overrides": overrides},
+            report_file,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+
 def main():
     require_pinned_blender()
     arguments = read_arguments()
@@ -2590,6 +2704,11 @@ def main():
     if operation == "data_api_drivers" and len(arguments) == 5:
         edit_data_api_drivers(
             arguments[1], arguments[2], arguments[3], arguments[4])
+        return
+    if operation == "library_override_remove" and len(arguments) == 6:
+        remove_library_override_properties(
+            arguments[1], arguments[2], arguments[3], arguments[4],
+            arguments[5])
         return
     raise RuntimeError("invalid classiCAD adapter arguments")
 

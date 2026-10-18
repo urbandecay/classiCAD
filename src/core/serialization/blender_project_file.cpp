@@ -569,7 +569,8 @@ bool runBlenderAdapter(const QString &operation,
         return false;
     }
     QString sceneExtractorPath;
-    if (operation == QLatin1String("purge")) {
+    if (operation == QLatin1String("purge") ||
+        operation == QLatin1String("library_override_remove")) {
         QFile extractorResource(
             QStringLiteral(":/classiCAD/serialization/blender_scene_extract.py"));
         if (!extractorResource.open(QIODevice::ReadOnly)) {
@@ -3774,6 +3775,241 @@ bool editBlenderDataApiDrivers(
     result->backupPath = backupPath;
     result->changedPathCount = changedPathCount;
     result->changedFCurveCount = changedFCurveCount;
+    return true;
+}
+
+bool removeBlenderLibraryOverrideProperties(
+    const QString &sourcePath,
+    const QByteArray &expectedSourceSha256,
+    const QJsonArray &targets,
+    BlenderLibraryOverridePropertyEditResult *result,
+    QString *errorMessage)
+{
+    if (result == nullptr || sourcePath.trimmed().isEmpty() ||
+        expectedSourceSha256.size() != 64 || targets.isEmpty() ||
+        targets.size() > 20000) {
+        setError(errorMessage,
+                 QStringLiteral("A Blender source and selected override properties are required"));
+        return false;
+    }
+    int requestedPropertyCount = 0;
+    for (const QJsonValue &targetValue : targets) {
+        if (!targetValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender library override target is invalid"));
+            return false;
+        }
+        const QJsonObject target = targetValue.toObject();
+        const QJsonValue idValue = target.value(QStringLiteral("id"));
+        const QJsonValue rnaTypeValue = target.value(
+            QStringLiteral("rna_type"));
+        const QJsonValue pathsValue = target.value(QStringLiteral("paths"));
+        if (!idValue.isString() || idValue.toString().isEmpty() ||
+            idValue.toString().size() > 8192 || !rnaTypeValue.isString() ||
+            rnaTypeValue.toString().isEmpty() ||
+            rnaTypeValue.toString().size() > 256 || !pathsValue.isArray() ||
+            pathsValue.toArray().isEmpty() ||
+            pathsValue.toArray().size() > 20000 ||
+            requestedPropertyCount + pathsValue.toArray().size() > 20000) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender library override target has invalid identity or paths"));
+            return false;
+        }
+        requestedPropertyCount += pathsValue.toArray().size();
+        for (const QJsonValue &pathValue : pathsValue.toArray()) {
+            if (!pathValue.isString() || pathValue.toString().isEmpty() ||
+                pathValue.toString().size() > 4096) {
+                setError(errorMessage,
+                         QStringLiteral("A Blender library override property path is invalid"));
+                return false;
+            }
+        }
+    }
+
+    const QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.isFile() || sourceInfo.isSymLink() ||
+        sourceInfo.suffix().compare(QStringLiteral("blend"),
+                                    Qt::CaseInsensitive) != 0) {
+        setError(errorMessage,
+                 QStringLiteral("Library override editing is available only for a direct ordinary Blender .blend file"));
+        return false;
+    }
+    const QString absoluteSourcePath = sourceInfo.absoluteFilePath();
+    const QFileInfo absoluteSourceInfo(absoluteSourcePath);
+    const QByteArray sourceBeforeEdit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeEdit.isEmpty()) return false;
+    if (sourceBeforeEdit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed after it was imported. Reopen it before removing override properties."));
+        return false;
+    }
+
+    QTemporaryDir adapterOutputDirectory;
+    if (!adapterOutputDirectory.isValid()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create temporary library override report data"));
+        return false;
+    }
+    const QString requestPath = adapterOutputDirectory.filePath(
+        QStringLiteral("override-request.json"));
+    const QString reportPath = adapterOutputDirectory.filePath(
+        QStringLiteral("override-report.json"));
+    const QByteArray requestBytes = QJsonDocument(
+        QJsonObject{{QStringLiteral("targets"), targets}}).toJson(
+            QJsonDocument::Compact);
+    if (requestBytes.size() > kBlenderExtractionJsonByteLimit ||
+        !writeFile(requestPath, requestBytes, errorMessage)) {
+        if (errorMessage != nullptr && errorMessage->isEmpty()) {
+            setError(errorMessage,
+                     QStringLiteral("The Blender library override request is too large"));
+        }
+        return false;
+    }
+
+    QTemporaryFile stagedFile(absoluteSourceInfo.dir().filePath(
+        QStringLiteral(".classiCAD-overrides-XXXXXX")));
+    stagedFile.setAutoRemove(true);
+    if (!stagedFile.open()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create a staged Blender file beside the source: %1")
+                     .arg(stagedFile.errorString()));
+        return false;
+    }
+    const QString stagedPath = stagedFile.fileName();
+    stagedFile.close();
+    if (!QFile::remove(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not prepare the staged Blender file"));
+        return false;
+    }
+
+    if (!runBlenderAdapter(QStringLiteral("library_override_remove"),
+                           absoluteSourcePath, stagedPath, errorMessage,
+                           reportPath, requestPath)) {
+        return false;
+    }
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::ReadOnly) || reportFile.size() < 0 ||
+        reportFile.size() > kBlenderExtractionJsonByteLimit) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not return updated Library Overrides information"));
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument reportDocument = QJsonDocument::fromJson(
+        reportFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError ||
+        !reportDocument.isObject()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid Library Overrides information: %1")
+                     .arg(parseError.errorString()));
+        return false;
+    }
+    const QJsonObject report = reportDocument.object();
+    const QJsonValue changedValue = report.value(QStringLiteral("changed"));
+    const QJsonValue changedCountValue = report.value(
+        QStringLiteral("changed_property_count"));
+    const QJsonValue overridesValue = report.value(
+        QStringLiteral("library_overrides"));
+    int changedPropertyCount = -1;
+    int nodeCount = 0;
+    if (!changedValue.isBool() ||
+        !jsonInteger(changedCountValue, &changedPropertyCount) ||
+        changedPropertyCount < 0 ||
+        changedPropertyCount > requestedPropertyCount ||
+        changedValue.toBool() != (changedPropertyCount > 0) ||
+        !overridesValue.isObject() ||
+        !isBoundedOutlinerJsonValue(overridesValue, 0, &nodeCount)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid or incomplete Library Overrides metadata"));
+        return false;
+    }
+    const QJsonObject refreshedOverrides = overridesValue.toObject();
+    const QJsonValue propertiesValue = refreshedOverrides.value(
+        QStringLiteral("properties"));
+    const QJsonValue hierarchiesValue = refreshedOverrides.value(
+        QStringLiteral("hierarchies"));
+    if (!propertiesValue.isObject() || !hierarchiesValue.isArray() ||
+        hierarchiesValue.toArray().size() > 1024 ||
+        !refreshedOverrides.value(QStringLiteral("truncated")).isBool() ||
+        !refreshedOverrides.value(QStringLiteral("has_libraries")).isBool() ||
+        !propertiesValue.toObject().value(QStringLiteral("groups")).isArray() ||
+        !propertiesValue.toObject().value(QStringLiteral("truncated")).isBool()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender returned invalid refreshed Library Override metadata"));
+        return false;
+    }
+    const QByteArray sourceAfterEdit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceAfterEdit.isEmpty()) return false;
+    if (sourceAfterEdit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed while its Library Overrides were being edited. The original was left untouched."));
+        return false;
+    }
+    if (!changedValue.toBool()) {
+        result->libraryOverrides = refreshedOverrides;
+        result->backupPath.clear();
+        result->sourceSha256 = sourceAfterEdit;
+        result->changedPropertyCount = 0;
+        return true;
+    }
+    if (!hasBlenderFileHeader(stagedPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not produce a valid staged project after editing Library Overrides"));
+        return false;
+    }
+
+    const QByteArray stagedSha256 = fileSha256(stagedPath, errorMessage);
+    if (stagedSha256.isEmpty()) return false;
+    const QByteArray sourceBeforeCommit =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (sourceBeforeCommit.isEmpty()) return false;
+    if (sourceBeforeCommit != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed while Library Overrides were being edited. The original was left untouched."));
+        return false;
+    }
+    const QString backupPath = uniqueBlenderBackupPath(absoluteSourcePath);
+    if (backupPath.isEmpty() || !QFile::copy(absoluteSourcePath, backupPath)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create the safety backup beside the Blender file"));
+        return false;
+    }
+    if (fileSha256(backupPath, errorMessage) != expectedSourceSha256) {
+        QFile::remove(backupPath);
+        setError(errorMessage,
+                 QStringLiteral("The Blender safety backup could not be verified; the original was left untouched."));
+        return false;
+    }
+    if (fileSha256(absoluteSourcePath, errorMessage) != expectedSourceSha256) {
+        setError(errorMessage,
+                 QStringLiteral("The original Blender file changed before replacement. The safety backup was kept at %1.")
+                     .arg(backupPath));
+        return false;
+    }
+    if (!commitStagedFile(stagedPath, absoluteSourcePath, errorMessage)) {
+        return false;
+    }
+    const QByteArray committedSha256 =
+        fileSha256(absoluteSourcePath, errorMessage);
+    if (committedSha256 != stagedSha256) {
+        QString restoreError;
+        if (!commitStagedFile(backupPath, absoluteSourcePath, &restoreError)) {
+            setError(errorMessage,
+                     QStringLiteral("The edited file did not verify and restoring its backup also failed. Restore the backup at %1. %2")
+                         .arg(backupPath, restoreError));
+        } else {
+            setError(errorMessage,
+                     QStringLiteral("The edited file did not verify, so the original was restored from its backup."));
+        }
+        return false;
+    }
+    result->libraryOverrides = refreshedOverrides;
+    result->backupPath = backupPath;
+    result->sourceSha256 = committedSha256;
+    result->changedPropertyCount = changedPropertyCount;
     return true;
 }
 

@@ -4256,6 +4256,85 @@ private:
         collectionCallbacks.libraryOverrides = [this]() {
             return session_.document().settings().importedBlenderLibraryOverrides;
         };
+        collectionCallbacks.canRemoveLibraryOverrideProperties = [this]() {
+            return !importedBlenderSourcePath_.isEmpty() &&
+                   importedBlenderSourceSha256_.size() == 64;
+        };
+        collectionCallbacks.removeLibraryOverrideProperties =
+            [this](const QJsonArray &targets) {
+                if (targets.isEmpty()) return;
+                if (importedBlenderSourcePath_.isEmpty() ||
+                    importedBlenderSourceSha256_.size() != 64) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Removing override properties requires the original Blender .blend file"),
+                        5000);
+                    return;
+                }
+                int requestedPathCount = 0;
+                for (const QJsonValue &targetValue : targets) {
+                    requestedPathCount += targetValue.toObject().value(
+                        QStringLiteral("paths")).toArray().size();
+                }
+                const QString sourcePath = importedBlenderSourcePath_;
+                const QMessageBox::StandardButton answer = QMessageBox::warning(
+                    this,
+                    QStringLiteral("Remove Blender Override Properties"),
+                    QStringLiteral(
+                        "Remove up to %1 selected property override(s) from the original Blender file? Their values will return to the linked references. classiCAD creates and verifies a backup beside the file.\n\n%2")
+                        .arg(requestedPathCount)
+                        .arg(sourcePath),
+                    QMessageBox::Yes | QMessageBox::Cancel,
+                    QMessageBox::Cancel);
+                if (answer != QMessageBox::Yes) return;
+
+                BlenderLibraryOverridePropertyEditResult editResult;
+                QString errorMessage;
+                if (!removeBlenderLibraryOverrideProperties(
+                        sourcePath, importedBlenderSourceSha256_, targets,
+                        &editResult, &errorMessage)) {
+                    QMessageBox::critical(
+                        this,
+                        QStringLiteral("Could Not Remove Blender Override Properties"),
+                        errorMessage.isEmpty()
+                            ? QStringLiteral("Blender could not remove the selected override properties.")
+                            : errorMessage);
+                    return;
+                }
+
+                DocumentSettings settings = session_.document().settings();
+                const bool overridesChanged =
+                    settings.importedBlenderLibraryOverrides !=
+                    editResult.libraryOverrides;
+                settings.importedBlenderLibraryOverrides =
+                    editResult.libraryOverrides;
+                importedBlenderSourceSha256_ = editResult.sourceSha256;
+                if (overridesChanged) {
+                    DocumentTransaction transaction = session_.beginTransaction();
+                    if (!transaction.setSettings(settings) ||
+                        !session_.commitTransaction(transaction)) {
+                        if (!session_.document().setSettings(settings)) {
+                            importedBlenderSourcePath_.clear();
+                            importedBlenderSourceSha256_.clear();
+                            QMessageBox::critical(
+                                this,
+                                QStringLiteral("Overrides Changed, Refresh Failed"),
+                                QStringLiteral(
+                                    "The Blender file was changed and backed up at %1, but classiCAD could not refresh its Library Overrides list.")
+                                    .arg(editResult.backupPath));
+                            return;
+                        }
+                    }
+                    markDocumentModified();
+                }
+                refreshCollections();
+                QString message = QStringLiteral("Removed %1 Blender override property path(s)")
+                    .arg(editResult.changedPropertyCount);
+                if (!editResult.backupPath.isEmpty()) {
+                    message += QStringLiteral(". Backup: %1")
+                                   .arg(editResult.backupPath);
+                }
+                statusBar()->showMessage(message, 10000);
+            };
         collectionCallbacks.activeSceneRecord = activeSceneRecord;
         collectionCallbacks.canEditKeyingSetPaths = [this]() {
             return !importedBlenderSourcePath_.isEmpty() &&

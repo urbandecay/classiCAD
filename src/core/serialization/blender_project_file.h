@@ -130,6 +130,13 @@ struct BlenderDataApiDriverEditResult {
     int changedFCurveCount = 0;
 };
 
+struct BlenderLibraryOverridePropertyEditResult {
+    QJsonObject libraryOverrides;
+    QString backupPath;
+    QByteArray sourceSha256;
+    int changedPropertyCount = 0;
+};
+
 // Hashes Blender project bytes without loading them into memory at once.
 QByteArray blenderProjectSha256(const QString &path,
                                 QString *errorMessage = nullptr);
@@ -179,6 +186,15 @@ bool editBlenderDataApiDrivers(
     const QJsonArray &paths,
     bool add,
     BlenderDataApiDriverEditResult *result,
+    QString *errorMessage = nullptr);
+
+// Removes selected override properties from the original imported .blend,
+// then stages, verifies, backs up, and atomically replaces the source file.
+bool removeBlenderLibraryOverrideProperties(
+    const QString &sourcePath,
+    const QByteArray &expectedSourceSha256,
+    const QJsonArray &targets,
+    BlenderLibraryOverridePropertyEditResult *result,
     QString *errorMessage = nullptr);
 
 using BlenderDataApiSectionCallback =

@@ -62,6 +62,7 @@ set(CLASSICAD_GEOMETRY_SOURCES
     src/core/geometry/curve_evaluator.cpp
     src/core/geometry/circle_construction.cpp
     src/core/geometry/geometry_transform.cpp
+    src/core/geometry/extrusion_weld.cpp
     src/core/geometry/planar_geometry.cpp
     src/core/geometry/point_text.cpp
     src/core/geometry/shape_mapping.cpp
@@ -305,6 +306,19 @@ classicad_attach_object_modules(classiCAD
 
 option(CLASSICAD_BUILD_TESTS "Build geometry regression tests" OFF)
 if (CLASSICAD_BUILD_TESTS)
+    add_executable(classicad_extrusion_weld_contracts_test tests/extrusion_weld_contracts.cpp)
+    classicad_configure_ui_target(classicad_extrusion_weld_contracts_test)
+    classicad_attach_object_modules(classicad_extrusion_weld_contracts_test
+        classicad_geometry_objects)
+    add_test(NAME extrusion_weld_contracts COMMAND classicad_extrusion_weld_contracts_test)
+    add_executable(classicad_extrusion_connection_contracts_test tests/extrusion_connection_contracts.cpp)
+    classicad_configure_ui_target(classicad_extrusion_connection_contracts_test)
+    classicad_attach_object_modules(classicad_extrusion_connection_contracts_test
+        classicad_geometry_objects classicad_document_objects
+        classicad_command_objects classicad_serialization_objects
+        classicad_service_objects classicad_tool_objects classicad_viewport_shared_objects)
+    add_test(NAME extrusion_connection_contracts COMMAND classicad_extrusion_connection_contracts_test)
+    set_tests_properties(extrusion_connection_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     enable_testing()
 
     set(CLASSICAD_TEST_RUNTIME_SOURCES

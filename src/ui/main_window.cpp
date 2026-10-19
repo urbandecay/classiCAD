@@ -536,12 +536,12 @@ private:
                 .arg(snapIncrementLabel));
     }
 
-    void startPointExtrude()
+    void startPointExtrude(int mode = 0)
     {
         const ViewportCommandResult result =
             viewport_ == nullptr
                 ? ViewportCommandResult{}
-                : viewport_->executeCommand(ViewportCommand::BeginPointExtrude);
+                : viewport_->executeCommand(ViewportCommand::BeginPointExtrude, mode);
         if (!result.accepted) {
             if (pointExtrudeToolButton_ != nullptr) {
                 pointExtrudeToolButton_->setChecked(false);
@@ -559,9 +559,25 @@ private:
             pointExtrudeToolButton_->setChecked(true);
         }
         statusBar()->showMessage(
-            QStringLiteral("Extrude: click endpoint; same offset for %1 source%2  •  X/Y/Z locks axis  •  OSnap when enabled  •  Esc cancels")
+            QStringLiteral("Extrude: click endpoint; same offset for %1 source%2  •  E toggles division  •  X/Y/Z locks axis  •  Esc cancels")
                 .arg(result.count)
                 .arg(result.count == 1 ? QString() : QStringLiteral("s")));
+    }
+
+    void createExtrudeToolMenu(QToolButton *button)
+    {
+        auto *menu = new QMenu(button);
+        QAction *normalAction = menu->addAction(QStringLiteral("Extrude"));
+        QAction *dividedAction = menu->addAction(QStringLiteral("Extrude with Division"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+        button->setToolTip(QStringLiteral("Extrude — E; press E again for a division ring; hover for options"));
+        connect(normalAction, &QAction::triggered, this, [this]() {
+            startPointExtrude(0);
+        });
+        connect(dividedAction, &QAction::triggered, this, [this]() {
+            startPointExtrude(1);
+        });
     }
 
     void startScale(ScaleMode mode)
@@ -878,9 +894,10 @@ private:
         QAction *pointExtrudeAction =
             editMenu->addAction(QStringLiteral("Extrude"));
         pointExtrudeAction->setShortcut(QKeySequence(Qt::Key_E));
+        pointExtrudeAction->setAutoRepeat(false);
         pointExtrudeAction->setShortcutContext(Qt::WindowShortcut);
         connect(pointExtrudeAction, &QAction::triggered, this, [this]() {
-            startPointExtrude();
+            startPointExtrude(2);
         });
 
 
@@ -1534,6 +1551,7 @@ private:
             case Tool::Ellipse: createEllipseToolMenu(button); break;
             case Tool::LinearDimension: createDimensionToolMenu(button); break;
             case Tool::Scale: createScaleToolMenu(button); break;
+            case Tool::PointExtrude: createExtrudeToolMenu(button); break;
             default: break;
             }
         };

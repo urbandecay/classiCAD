@@ -530,6 +530,25 @@ misread or implemented incorrectly.
 
 ## Extrude weld toggle port findings
 
+- Orthographic unclipped cursor rays begin at the orbit-target plane, not at
+  an eye position. A raised extrusion source can therefore have a valid
+  negative ray/plane distance. Reject negative depth only for perspective;
+  otherwise a visible raised solid corner cannot extrude in Top view.
+
+- **User override supersedes the original source-boundary toggle below:**
+  extrusion from a selection is always attached to that selection. Normal E
+  uses the supported connected extrusion without a division ring; a second E
+  switches to Extrude with Division. Both entries appear in the Extrude hover
+  menu. The remaining W checkbox means Weld to Snap for supported external
+  targets, never detach from the source. Do not restore the original
+  source-welding interpretation when comparing against older add-on notes.
+- Selected coplanar rectangular solid faces must be evaluated together as one
+  region. Sequential single-face sweeps can create internal walls, overwrite
+  earlier candidates for the same object, or remap the wrong completion face.
+  Preserve one candidate per object and all resulting selected face indices.
+- [x] Add core regression checks for adjacent coplanar region sweep, moving-face
+  mapping, closed consistent winding, and rejection of noncoplanar cap selections.
+
 - In the supplied add-on, the active modal handler maps `W` to the global
   `auto_weld` flag (except Move and Rotate), and geometry commit invokes the
   weld manager on the newly created vertices and edges. There is no matching

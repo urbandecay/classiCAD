@@ -40,16 +40,50 @@ int wallPanelCount(const NurbsCurve2D &curve)
         count += curve.knots[i + 1] > curve.knots[i];
     return count;
 }
+
+// Degree-one knot insertion may add CV rows without changing an affine face.
+// Preserve its UV map as well as its geometric image when removing those rows.
+bool canonicalAffinePatch(const NurbsSurface3D &surface, NurbsSurface3D *canonical)
+{
+    if (canonical == nullptr || !validateNurbsSurface(surface) || surface.rational ||
+        surface.degreeU != 1 || surface.degreeV != 1) return false;
+    const int countU = surface.controlVertexCountU;
+    const int countV = surface.controlVertexCountV;
+    const auto &cv = surface.controlPoints;
+    const Point3D origin = cv.first();
+    const Point3D u = subtract(cv[(countU - 1) * countV], origin);
+    const Point3D v = subtract(cv[countV - 1], origin);
+    const qreal scale = std::max(length(u), length(v));
+    const Point3D normal{u.y*v.z-u.z*v.y, u.z*v.x-u.x*v.z, u.x*v.y-u.y*v.x};
+    if (scale <= 1.0e-12 || length(normal) <= length(u)*length(v)*1.0e-10)
+        return false;
+    const qreal firstU = surface.knotsU.first(), lastU = surface.knotsU.last();
+    const qreal firstV = surface.knotsV.first(), lastV = surface.knotsV.last();
+    if (lastU <= firstU || lastV <= firstV) return false;
+    for (int i=0; i<countU; ++i) for (int j=0; j<countV; ++j) {
+        const qreal a = (surface.knotsU[i]-firstU)/(lastU-firstU);
+        const qreal b = (surface.knotsV[j]-firstV)/(lastV-firstV);
+        const Point3D expected = add(origin,add(multiply(u,a),multiply(v,b)));
+        if (length(subtract(cv[i*countV+j],expected)) > scale*1.0e-9)
+            return false;
+    }
+    *canonical = surface;
+    canonical->controlVertexCountU = canonical->controlVertexCountV = 2;
+    canonical->controlPoints = {origin,add(origin,v),add(origin,u),add(add(origin,u),v)};
+    canonical->weights = {1,1,1,1};
+    canonical->knotsU = {firstU,lastU};
+    canonical->knotsV = {firstV,lastV};
+    return validateNurbsSurface(*canonical);
+}
 }
 
 bool nurbsSolidBaseFrame(const NurbsSurface3D &surface, WorkPlaneFrame *frame)
 {
-    if (frame == nullptr || !validateNurbsSurface(surface) || surface.rational ||
-        surface.degreeU != 1 || surface.degreeV != 1 ||
-        surface.controlVertexCountU != 2 || surface.controlVertexCountV != 2) {
+    NurbsSurface3D canonical;
+    if (frame == nullptr || !canonicalAffinePatch(surface, &canonical)) {
         return false;
     }
-    const auto &cv = surface.controlPoints;
+    const auto &cv = canonical.controlPoints;
     const Point3D u = subtract(cv[2], cv[0]);
     const Point3D v = subtract(cv[1], cv[0]);
     const qreal scale = std::max(length(u), length(v));
@@ -125,7 +159,9 @@ bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid)
         return !edges.isEmpty();
     }
     WorkPlaneFrame frame;
-    if (!nurbsSolidBaseFrame(solid.baseSurface, &frame) ||
+    if (solid.baseSurface.controlVertexCountU != 2 ||
+        solid.baseSurface.controlVertexCountV != 2 ||
+        !nurbsSolidBaseFrame(solid.baseSurface, &frame) ||
         !std::isfinite(solid.displacement.x) ||
         !std::isfinite(solid.displacement.y) ||
         !std::isfinite(solid.displacement.z)) {
@@ -144,7 +180,9 @@ bool makeNurbsExtrusionSolid(const NurbsSurface3D &surface,
                              const Point3D &displacement,
                              NurbsExtrusionSolid3D *solid)
 {
-    const NurbsExtrusionSolid3D result{surface, displacement, {}, {}};
+    NurbsSurface3D canonical;
+    if (!canonicalAffinePatch(surface, &canonical)) return false;
+    const NurbsExtrusionSolid3D result{canonical, displacement, {}, {}};
     if (solid == nullptr || !validateNurbsSolid(result)) return false;
     *solid = result;
     return true;
@@ -250,6 +288,24 @@ QVector<NurbsSurface3D> nurbsSolidFaces(const NurbsExtrusionSolid3D &solid)
         }
     }
     return faces;
+}
+
+QVector<Point3D> nurbsSolidControlPoints(const NurbsExtrusionSolid3D &solid)
+{
+    QVector<Point3D> points;
+    for (const auto &face : nurbsSolidFaces(solid)) {
+        for (const auto &point : face.controlPoints) {
+            const bool seen = std::any_of(points.cbegin(), points.cend(),
+                [&point](const Point3D &existing) {
+                    const qreal dx = existing.x - point.x;
+                    const qreal dy = existing.y - point.y;
+                    const qreal dz = existing.z - point.z;
+                    return dx*dx + dy*dy + dz*dz <= 1.0e-16;
+                });
+            if (!seen) points.append(point);
+        }
+    }
+    return points;
 }
 
 bool materializeNurbsSolidBoundary(NurbsExtrusionSolid3D *solid)

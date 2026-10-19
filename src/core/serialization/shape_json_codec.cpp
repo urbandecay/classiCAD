@@ -662,6 +662,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             controlPointCount = points.size();
         } else if (geometryType == GeometryType::NurbsSurface) {
             controlPointCount = nurbsSurface.controlPoints.size();
+        } else if (geometryType == GeometryType::NurbsSolid) {
+            controlPointCount = nurbsSolidControlPoints(nurbsSolid).size();
         } else if (geometryType == GeometryType::PolyCurve) {
             for (const Shape::NurbsCurve2D &component : components) {
                 controlPointCount += component.controlPoints.size();

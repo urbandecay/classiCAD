@@ -8,9 +8,11 @@
 #include <QEvent>
 #include <QFrame>
 #include <QLabel>
+#include <QMenu>
 #include <QScrollBar>
 #include <QSizePolicy>
 #include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 
@@ -107,6 +109,7 @@ ToolShelf::ToolShelf(ToolShelfCallbacks callbacks, QWidget *parent)
         layout, group, QStringLiteral("↑\nExtrude"), ToolId::PointExtrude);
     extrudeButton->setToolTip(
         QStringLiteral("Extrude — selected points create edges; selected curves create NURBS surfaces"));
+    configureMenu(ToolId::PointExtrude, extrudeButton);
     addToolButton(layout, group, QStringLiteral("↻\nRotate"), ToolId::Rotate);
     addToolButton(layout, group, QStringLiteral("⇄\nMirror"), ToolId::Mirror);
     QToolButton *scaleButton = addToolButton(
@@ -246,7 +249,17 @@ void ToolShelf::setHelpText(const QString &text)
 
 bool ToolShelf::eventFilter(QObject *watched, QEvent *event)
 {
-    Q_UNUSED(watched)
+    if (event->type() == QEvent::Enter &&
+        watched == button(ToolId::PointExtrude)) {
+        auto *extrudeButton = button(ToolId::PointExtrude);
+        QTimer::singleShot(350, extrudeButton, [extrudeButton]() {
+            if (extrudeButton->underMouse() && extrudeButton->menu() != nullptr &&
+                !extrudeButton->menu()->isVisible()) {
+                extrudeButton->menu()->popup(
+                    extrudeButton->mapToGlobal(QPoint(extrudeButton->width(), 0)));
+            }
+        });
+    }
     if (event->type() == QEvent::Wheel) {
         auto *wheelEvent = static_cast<QWheelEvent *>(event);
         int scrollDelta = wheelEvent->pixelDelta().y();

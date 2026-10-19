@@ -2566,7 +2566,7 @@ bool verifyOutlinerFaceSelection(QApplication &application, int extrudeOption)
     sendMouse(viewport.get(),QEvent::MouseButtonPress,destination,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
     sendMouse(viewport.get(),QEvent::MouseButtonRelease,destination,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
     application.processEvents();
-    passed &= check(session.document().size() == (extrudeOption == 0 ? 3 : 2) &&
+    passed &= check(session.document().size() == 2 &&
                         session.history().undoCount() == 1 &&
                         validateNurbsSolid(session.document().objects().last().geometry.nurbsSolid),
                     "Extrude must commit the selected side face inside the line-rooted object");
@@ -2845,11 +2845,158 @@ bool verifySolidFaceDelete(QApplication &application)
     return passed;
 }
 
+bool verifyStandaloneFaceExtrusionHistory(QApplication &application,
+                                         bool adjacentFaces = false)
+{
+    ApplicationSession session;
+    Shape face;
+    face.geometryType = GeometryType::NurbsSurface;
+    face.nurbsSurface.controlVertexCountU = face.nurbsSurface.controlVertexCountV = 2;
+    face.nurbsSurface.controlPoints = {{-4,-4,0},{-4,4,0},{4,-4,0},{4,4,0}};
+    face.nurbsSurface.weights = {1,1,1,1};
+    face.nurbsSurface.knotsU = face.nurbsSurface.knotsV = {0,1};
+    const ObjectId id = session.document().append(face);
+    if (adjacentFaces) {
+        Shape adjacent = face;
+        for (Point3D &point : adjacent.nurbsSurface.controlPoints) point.x += 8;
+        const ObjectId adjacentId = session.document().append(adjacent);
+        session.document().setObjectContainer(adjacentId,id);
+    }
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(640,480);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    if (!waitForViewPreset(viewport.get(),ViewportViewPreset::Isometric)) return false;
+    viewport->setOsnapEnabled(false);
+    viewport->setControlPointsVisible(false);
+    viewport->setPanButton(Qt::RightButton);
+    viewport->selectOutlinerObject(id,false);
+    viewport->setObjectEditMode(true);
+    viewport->setComponentSelectionMode(2);
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Isometric);
+    QPointF position, destination;
+    projection.worldPointToScreen({0,0,0},viewport->size(),&position);
+    projection.worldPointToScreen({-4,-4,3},viewport->size(),&destination);
+    const auto selectFace = [&]() {
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,position,
+                  Qt::RightButton,Qt::RightButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,position,
+                  Qt::RightButton,Qt::NoButton,Qt::NoModifier);
+        if (adjacentFaces) {
+            QPointF adjacentPosition;
+            projection.worldPointToScreen({8,0,0},viewport->size(),&adjacentPosition);
+            sendMouse(viewport.get(),QEvent::MouseButtonPress,adjacentPosition,
+                      Qt::RightButton,Qt::RightButton,Qt::ShiftModifier);
+            sendMouse(viewport.get(),QEvent::MouseButtonRelease,adjacentPosition,
+                      Qt::RightButton,Qt::NoButton,Qt::ShiftModifier);
+        }
+        application.processEvents();
+    };
+    selectFace();
+    bool passed = check(viewport->executeCommand(ViewportCommand::BeginPointExtrude).accepted,
+                        "standalone face must start Extrude");
+    sendMouse(viewport.get(),QEvent::MouseMove,destination,
+              Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+    sendMouse(viewport.get(),QEvent::MouseButtonPress,destination,
+              Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+    sendMouse(viewport.get(),QEvent::MouseButtonRelease,destination,
+              Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+    application.processEvents();
+    passed &= check(session.history().undoCount() == 1,
+                    "standalone face extrusion must commit one history entry");
+    if (!adjacentFaces) {
+        const auto divideExtrude = [&](double height) {
+            const auto started = viewport->executeCommand(ViewportCommand::BeginPointExtrude,1);
+            passed &= check(started.accepted && started.count == 1,
+                            "Divide extrusion must keep the selected solid cap");
+            QPointF target;
+            projection.worldPointToScreen({-4,-4,height},viewport->size(),&target);
+            sendMouse(viewport.get(),QEvent::MouseMove,target,
+                      Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+            sendMouse(viewport.get(),QEvent::MouseButtonPress,target,
+                      Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+            sendMouse(viewport.get(),QEvent::MouseButtonRelease,target,
+                      Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+            application.processEvents();
+        };
+        divideExtrude(5);
+        passed &= check(session.history().undoCount() == 2 &&
+                            shapeSurfaceFaces(*session.document().shape(id)).size() > 6,
+                        "Divide extrusion must append walls before history remapping is tested");
+        passed &= check(viewport->executeCommand(ViewportCommand::Undo).accepted,
+                        "Undo must restore the solid before its divided extrusion");
+        // The translated cap's appended slot no longer exists in the restored
+        // six-face box. E must recover the corresponding outward-facing cap.
+        divideExtrude(4);
+        qreal minimumZ = std::numeric_limits<qreal>::max();
+        qreal maximumZ = std::numeric_limits<qreal>::lowest();
+        for (const auto &solidFace : shapeSurfaceFaces(*session.document().shape(id))) {
+            for (const auto &point : solidFace.controlPoints) {
+                minimumZ = std::min(minimumZ,point.z);
+                maximumZ = std::max(maximumZ,point.z);
+            }
+        }
+        passed &= check(session.history().undoCount() == 2 &&
+                            std::abs(minimumZ) < 1.0e-7 && std::abs(maximumZ-4) < 1.0e-7,
+                        "immediate Divide extrusion after Undo must move the original top cap");
+        passed &= check(viewport->executeCommand(ViewportCommand::Undo).accepted,
+                        "Undo must return to the first standalone extrusion");
+    }
+    if (adjacentFaces) {
+        const auto continued = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+        passed &= check(continued.accepted && continued.count == 2,
+                        "both translated region caps must stay selected for the next extrusion");
+        QKeyEvent cancel(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+        QApplication::sendEvent(viewport.get(),&cancel);
+    }
+    int selectionNotifications = 0;
+    session.setChangeObserver([&](ApplicationSessionChange change) {
+        if (change == ApplicationSessionChange::Selection) ++selectionNotifications;
+    });
+    passed &= check(viewport->executeCommand(ViewportCommand::Undo).accepted &&
+                        session.document().shape(id)->geometryType == GeometryType::NurbsSurface,
+                    "Undo must restore the standalone source face");
+    passed &= check(selectionNotifications > 0,
+                    "Undo selection reset must notify selection observers");
+    const auto immediateRetry = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+    passed &= check(immediateRetry.accepted && immediateRetry.count > 0,
+                    "Undo must preserve a surviving source face for immediate Extrude without reselection");
+    QKeyEvent cancelRetry(QEvent::KeyPress,Qt::Key_Escape,Qt::NoModifier);
+    QApplication::sendEvent(viewport.get(),&cancelRetry);
+    passed &= check(viewport->executeCommand(ViewportCommand::Redo).accepted &&
+                        viewport->executeCommand(ViewportCommand::Undo).accepted,
+                    "standalone face extrusion must survive repeated history navigation");
+    selectFace();
+    const auto restarted = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+    passed &= check(restarted.accepted && restarted.count == (adjacentFaces ? 2 : 1),
+                    "restored standalone face must remain selectable and extrudable");
+    sendMouse(viewport.get(),QEvent::MouseMove,destination,
+              Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+    // History navigation during a preview must discard its hidden source IDs.
+    passed &= check(viewport->executeCommand(ViewportCommand::Redo).accepted &&
+                        viewport->executeCommand(ViewportCommand::Undo).accepted,
+                    "history navigation must cancel an active extrusion preview");
+    selectFace();
+    const auto afterPreview = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+    passed &= check(afterPreview.accepted && afterPreview.count == (adjacentFaces ? 2 : 1),
+                    "history reset must leave the face pickable after an active preview");
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_EXTRUSION_HISTORY_ONLY")) {
+        const bool standalone = verifyStandaloneFaceExtrusionHistory(application);
+        const bool region = verifyStandaloneFaceExtrusionHistory(application,true);
+        return standalone && region ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_OUTLINER_FACE_ONLY")) {
-        bool passed = true;
+        bool passed = verifyStandaloneFaceExtrusionHistory(application);
+        passed = verifyStandaloneFaceExtrusionHistory(application,true) && passed;
         for (int option = 0; option < 4; ++option)
             passed = verifyOutlinerFaceSelection(application, option) && passed;
         return passed ? 0 : 1;

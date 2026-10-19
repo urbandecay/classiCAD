@@ -285,9 +285,48 @@ int main(int argc, char **argv)
     passed &= check(makeNurbsExtrusionSolid(rectangleFace,{0,0,3},&rectangularSolid) &&
                         nurbsSolidFaces(rectangularSolid).size()==6,
                     "rectangular extrusion must expose two caps and four exact wall faces");
+    {
+        auto splitFace=rectangleFace;
+        splitFace.controlVertexCountU=3;
+        splitFace.knotsU={2,3,6};
+        splitFace.knotsV={-4,8};
+        const auto &p=rectangleFace.controlPoints;
+        const auto interpolate=[](Point3D a,Point3D b) {
+            return Point3D{a.x*0.75+b.x*0.25,a.y*0.75+b.y*0.25,a.z*0.75+b.z*0.25};
+        };
+        splitFace.controlPoints={p[0],p[1],interpolate(p[0],p[2]),
+                                 interpolate(p[1],p[3]),p[2],p[3]};
+        splitFace.weights={1,1,1,1,1,1};
+        NurbsSurfaceTrimLoop loop;
+        loop.curve.degree=1;loop.curve.order=2;
+        loop.curve.controlPoints={{2,-4},{6,-4},{6,8},{2,8},{2,-4}};
+        loop.curve.weights={1,1,1,1,1};loop.curve.knots={0,1,2,3,4};
+        splitFace.trimLoops={loop};
+        WorkPlaneFrame splitFrame;
+        NurbsExtrusionSolid3D splitSolid;
+        passed &= check(nurbsSolidBaseFrame(splitFace,&splitFrame) &&
+                            makeNurbsExtrusionSolid(splitFace,{0,0,3},&splitSolid) &&
+                            splitSolid.baseSurface.controlVertexCountU==2 &&
+                            splitSolid.baseSurface.controlVertexCountV==2 &&
+                            splitSolid.baseSurface.knotsU==QVector<qreal>{2,6} &&
+                            splitSolid.baseSurface.knotsV==QVector<qreal>{-4,8} &&
+                            splitSolid.baseSurface.trimLoops.size()==1 &&
+                            splitSolid.baseSurface.trimLoops[0].curve.controlPoints==loop.curve.controlPoints,
+                        "a knot-split affine face must extrude into a canonical seed preserving UV domains and trims");
+        for (qreal u:{2.0,2.5,3.0,4.0,6.0}) for (qreal v:{-4.0,0.0,8.0}) {
+            Point3D original,canonical;
+            passed &= check(evaluateNurbsSurfacePoint(splitFace,u,v,&original) &&
+                                evaluateNurbsSurfacePoint(splitSolid.baseSurface,u,v,&canonical) &&
+                                near(original,canonical),
+                            "canonical affine extrusion must retain the exact source UV evaluation");
+        }
+        splitFace.controlPoints[2].x+=0.1;
+        passed &= check(!nurbsSolidBaseFrame(splitFace,&splitFrame) &&
+                            !makeNurbsExtrusionSolid(splitFace,{0,0,3},&splitSolid),
+                        "a planar piecewise affine net with a changed UV map must not be flattened");
+    }
 
-    // Exercise all six faces, both movement directions, and all three modes.
-    // Unwelded geometry must remain independently editable at coincident corners.
+    // Exercise all six faces, both movement directions, and both connected modes.
     const auto sourceFaces = nurbsSolidFaces(rectangularSolid);
     // Match a box made by Fill -> Extrude, whose caps retain a rectangular
     // parameter-domain trim. These used to accept cap motion but reject sides.
@@ -342,7 +381,7 @@ int main(int argc, char **argv)
         normal = {normal.x*orientation/magnitude, normal.y*orientation/magnitude,
                   normal.z*orientation/magnitude};
         for (double distance : {-0.5, 0.5}) {
-            for (int mode = 0; mode < 3; ++mode) {
+            for (int mode = 0; mode < 2; ++mode) {
                 Shape original;
                 original.geometryType = GeometryType::NurbsSolid;
                 original.nurbsSolid = rectangularSolid;
@@ -370,8 +409,7 @@ int main(int argc, char **argv)
                 source.workPlaneFrame = makeWorkPlaneFrameFromNormal(a, normal, {b.x-a.x,b.y-a.y,b.z-a.z});
                 fixtureTool.setSolidFaceSources({source});
                 fixtureTool.begin(fixtureContext);
-                if (mode == 1) fixtureTool.toggleWeld(fixtureContext);
-                if (mode == 2) fixtureTool.toggleManifold(fixtureContext);
+                if (mode == 1) fixtureTool.toggleManifold(fixtureContext);
                 ToolInput move;
                 move.viewportSize = size;
                 move.workPlaneFrame = source.workPlaneFrame;
@@ -399,43 +437,30 @@ int main(int argc, char **argv)
                                     fixtureTool.preview().shapes.size()==1 &&
                                     shapeToJson(fixtureTool.preview().shapes.first())==shapeToJson(modePreview.shapes.first()),
                                 "returning to a valid endpoint must restore the same exact candidate");
-                passed &= check(modePreview.hiddenObjectIds.contains(sourceId) == (mode != 0) &&
-                                    modePreview.extrusionPreviewFaceIndices.first() == (mode == 0 ? 1 : faceIndex),
-                                "preview must retain unwelded sources and highlight the actual moving face");
+                passed &= check(modePreview.hiddenObjectIds.contains(sourceId) &&
+                                    modePreview.extrusionPreviewFaceIndices.first() >= 0,
+                                "connected preview must hide its source and highlight the moving face");
                 passed &= check(nurbsSolidFaces(modePreview.shapes.first().nurbsSolid).size() ==
                                     (mode == 1 && distance > 0 ? 10 : 6),
-                                "normal welded extrusion retains the seam, while manifold preserves six faces");
+                                "divided extrusion retains the seam, while normal extrusion preserves six faces");
                 if (mode == 1) {
                     passed &= check(nurbsSolidFaceReversed(
                                         modePreview.shapes.first().nurbsSolid, faceIndex) ==
                                         nurbsSolidFaceReversed(rectangularSolid, faceIndex),
                                     "normal extrusion must preserve the moving face winding in either direction");
                 }
-                if (mode == 2) {
-                    fixtureTool.toggleWeld(fixtureContext);
-                    passed &= check(!fixtureTool.weldEnabled() && !fixtureTool.manifoldEnabled() &&
-                                        fixtureTool.preview().hiddenObjectIds.isEmpty(),
-                                    "turning Weld off must disable Manifold and immediately detach the preview");
-                    fixtureTool.toggleManifold(fixtureContext);
-                    passed &= check(fixtureTool.weldEnabled() && fixtureTool.manifoldEnabled(),
-                                    "Manifold must explicitly enable its connected topology");
-                }
                 fixtureTool.commit(fixtureContext);
                 const auto completion = fixtureTool.preview();
-                passed &= check(fixture.size() == (mode == 0 ? 2 : 1) &&
+                passed &= check(fixture.size() == 1 &&
                                     completion.completedFaceExtrusions.size() == 1,
-                                "Weld off creates independent geometry; connected modes modify the source");
+                                "both extrusion modes modify the connected source");
                 if (completion.completedFaceExtrusions.size() != 1) continue;
-                if (mode == 0) {
-                    passed &= check(shapeToJson(*fixture.shape(sourceId)) == shapeToJson(original) &&
-                                        completion.completedFaceExtrusions.first().objectId != sourceId &&
-                                        completion.completedFaceExtrusions.first().faceIndex == 1,
-                                    "unwelded extrusion preserves its source and selects the independent end cap");
-                }
+                passed &= check(completion.completedFaceExtrusions.first().objectId == sourceId,
+                                "extrusion must retain source object identity");
                 passed &= check(fixtureHistory.undoCount() == 1 && fixtureHistory.undo() &&
                                     fixture.size() == 1 &&
                                     shapeToJson(*fixture.shape(sourceId)) == shapeToJson(original) &&
-                                    fixtureHistory.redo() && fixture.size() == (mode == 0 ? 2 : 1),
+                                    fixtureHistory.redo() && fixture.size() == 1,
                                 "face extrusion modes must undo and redo atomically");
             }
         }
@@ -744,6 +769,29 @@ int main(int argc, char **argv)
         subdivided.boundaryFaces[1]=left;
         subdivided.boundaryFaces.append(right);
         subdivided.boundaryFaceReversed.append(subdivided.boundaryFaceReversed[1]);
+        const QVector<int> region{1,static_cast<int>(subdivided.boundaryFaces.size()-1)};
+        for (bool manifold:{false,true}) {
+            const auto extrusion=planNurbsSolidRegionExtrusion(
+                subdivided,region,{0,0,0.5},manifold);
+            passed &= check(extrusion.succeeded() && extrusion.faceIndices.size()==2 &&
+                            validateNurbsSolid(extrusion.solid) &&
+                            consistentSolidWinding(extrusion.solid),
+                            "adjacent coplanar selected faces must extrude as one closed region");
+            if (extrusion.succeeded()) {
+                for (int slot=0;slot<region.size();++slot) {
+                    const auto &moved=extrusion.solid.boundaryFaces[extrusion.faceIndices[slot]];
+                    const auto &original=subdivided.boundaryFaces[region[slot]];
+                    for (int cv=0;cv<4;++cv)
+                        passed &= check(near(moved.controlPoints[cv],
+                            {original.controlPoints[cv].x,original.controlPoints[cv].y,
+                             original.controlPoints[cv].z+0.5}),
+                            "region face mappings must preserve selected face order and exact displacement");
+                }
+            }
+        }
+        passed &= check(!planNurbsSolidRegionExtrusion(
+                            subdivided,{0,1},{0,0,0.5},true).succeeded(),
+                        "opposite cap selection must reject a noncoplanar shared region");
         for (bool manifold:{false,true}) {
             NurbsExtrusionSolid3D extended;
             int moving=-1;
@@ -802,7 +850,6 @@ int main(int argc, char **argv)
             capSource.worldPoint, {0,0,1}, {1,0,0});
         capTool.setSolidFaceSources({capSource});
         capTool.begin(capContext);
-        capTool.toggleManifold(capContext);
         ToolInput downward;
         downward.viewportSize = size;
         downward.workPlaneFrame = capSource.workPlaneFrame;
@@ -1098,7 +1145,6 @@ int main(int argc, char **argv)
     });
     PointExtrudeTool tool;
     tool.begin(context);
-    tool.toggleWeld(context);
     ToolInput input;
     input.viewportSize = size;
     input.workPlaneFrame = transform.workPlaneFrame();
@@ -1114,24 +1160,21 @@ int main(int argc, char **argv)
                         preview.shapes[0].nurbsSolid.displacement.z > 0,
                     "face extrusion defaults to its normal, including a top view drag");
     tool.commit(context);
-    // Face extrusion replaces its source; curve extrusion adds a sheet while
-    // retaining the source curve. Both changes share one history operation.
-    passed &= check(document.size() == 3 && history.undoCount() == 1 &&
+    // Both selected sources become their connected extrusions in one operation.
+    passed &= check(document.size() == 2 && history.undoCount() == 1 &&
                         history.undo() && document.size() == 2 &&
-                        history.redo() && document.size() == 3,
+                        history.redo() && document.size() == 2,
                     "mixed extrusion commits and undoes atomically");
 
     PointExtrudeTool persistentOptionsTool;
     persistentOptionsTool.begin(context);
-    persistentOptionsTool.toggleWeld(context);
-    persistentOptionsTool.begin(context);
-    passed &= check(persistentOptionsTool.weldEnabled() &&
-                        !persistentOptionsTool.manifoldEnabled(),
-                    "Weld setting must persist when Extrude starts again");
+    passed &= check(!persistentOptionsTool.weldEnabled() &&
+                        persistentOptionsTool.manifoldEnabled(),
+                    "Extrude must default to connected geometry without a division ring");
     persistentOptionsTool.toggleManifold(context);
     persistentOptionsTool.begin(context);
-    passed &= check(persistentOptionsTool.weldEnabled() &&
-                        persistentOptionsTool.manifoldEnabled(),
-                    "Manifold and its required Weld setting must persist when Extrude starts again");
+    passed &= check(!persistentOptionsTool.weldEnabled() &&
+                        !persistentOptionsTool.manifoldEnabled(),
+                    "division mode must persist when the tool starts again");
     return passed ? 0 : 1;
 }

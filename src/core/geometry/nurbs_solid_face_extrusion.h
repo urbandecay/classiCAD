@@ -12,6 +12,7 @@ enum class SolidFaceExtrusionError { None, InvalidOperation, UnsupportedBoundary
 struct SolidFaceExtrusionResult {
     NurbsExtrusionSolid3D solid;
     int faceIndex = -1;
+    QVector<int> faceIndices;
     QString error;
     SolidFaceExtrusionError errorCode = SolidFaceExtrusionError::None;
     bool succeeded() const { return error.isEmpty() && faceIndex >= 0; }
@@ -19,6 +20,10 @@ struct SolidFaceExtrusionResult {
 
 SolidFaceExtrusionResult planNurbsSolidFaceExtrusion(
     const NurbsExtrusionSolid3D &solid, int faceIndex,
+    const Point3D &displacement, bool manifold);
+
+SolidFaceExtrusionResult planNurbsSolidRegionExtrusion(
+    const NurbsExtrusionSolid3D &solid, const QVector<int> &faceIndices,
     const Point3D &displacement, bool manifold);
 
 } // namespace classiCAD

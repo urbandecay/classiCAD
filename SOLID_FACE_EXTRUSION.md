@@ -1,21 +1,41 @@
 # Constrained NURBS solid face extrusion
 
-Extrude supports three explicit face behaviors. The controls sit together in
+Extrude supports two connected face behaviors. The controls sit together in
 the viewport footer and preview and commit use the same exact geometry path:
 
-- Weld off: retain the source geometry and create a separate exact extrusion
-  solid from the selected planar face. Coincident coordinates do not create
-  shared topology or weld groups. No gap is introduced. The new end cap is
-  selected and the source object retains its placement and geometry.
-- Weld on, Extrude Manifold off: replace the selected face in the existing
+- Extrude with Division (`E`, then `E`, or the Extrude hover menu): replace the selected face in the existing
   solid. Outward movement adds four exact ruled walls and retains the old
   perimeter as a seam. Inward movement shortens adjoining orthogonal patches
   and creates a step beside unchanged coplanar patches, without overlapping rims.
   Outward movement that fills an existing recess also updates its shared walls
   rather than adding coincident walls inside the filled region.
-- Extrude Manifold on: resize the selected face and update its adjacent planar
+- Extrude (`E`, the default): resize the selected face and update its adjacent planar
   patches along their shared edges, without adding an overlapping perimeter rim.
-  Turning Manifold on enables Weld; turning Weld off disables Manifold.
+
+Source connectivity is mandatory in both modes. The separate `Weld to Snap (W)`
+option controls attachment to a supported external snap target; it never detaches
+the extrusion from its selection. The internal `manifold` flag is true for
+ordinary Extrude and false for Extrude with Division. Pressing E again while
+the tool is active switches between these modes before committing.
+
+Whole loose points and curves become their extrusion under the same object ID;
+an edge extracted from an existing face keeps its owner and attaches the new
+sheet to that boundary. Adjacent standalone planar face sweeps remove matching
+opposing walls and become one connected solid, retaining every translated cap
+in the completion selection. Disconnected selections remain separate objects.
+
+Destination welding uses persistent control-point groups, with exact knot
+insertion on degree-one curves and surface boundaries for partial overlaps.
+Solid vertices use the same unique cage ordering as component selection and
+their groups persist in native JSON. General curved intersections and face
+interior cuts are outside this operation.
+Affine planar faces that acquired extra degree-one knots while welding remain
+extrudable: their exact UV map is validated and canonicalized to a 2x2 seed
+without changing its parameter domains or trims. Existing shared boundary
+vertices are reinserted in the new solid and retain their weld groups even
+when destination welding is disabled. Partial shared walls between unequal
+adjacent face sweeps are partitioned before their internal wall pieces are
+removed.
 
 Connected operations use exact NURBS boundary patches, without a display mesh
 becoming authoritative. One operation creates one undo entry.
@@ -31,7 +51,7 @@ face indices are logged so the exact operation can be reconstructed.
 
 Fill-created boxes with rectangular parameter-domain cap trims are converted
 to the equivalent exact connected boundary before a face is edited. This
-preserves face indices and supports all six faces with Weld or Manifold.
+preserves face indices and supports all six faces in either mode.
 
 The source solid must be a valid closed shell whose materialized faces are untrimmed,
 nonrational degree-one `2x2` NURBS patches. Every face must be planar and its
@@ -84,10 +104,13 @@ including when a longer patch edge meets multiple shorter edges. Implicit extrus
 caps can resize their stored base/vector directly in Manifold mode, including
 supported trimmed caps; connected wall editing remains limited to planar quads.
 
-Only one face per solid may be extruded in one operation. Multiple solids may
-participate when they accept the same displacement. This contract does not
-cover simultaneous extrusion of adjacent faces, arbitrary BRep topology
-changes, Boolean operations, or extrusion of trimmed or curved faces.
+Multiple coplanar rectangular faces of one solid may extrude together with one
+shared displacement and matching outward normals. Their sweep is evaluated as
+one region, so shared internal edges do not produce internal walls. The result
+reports each moving face's resulting slot in input order. Separate selected
+solids may participate when they accept the same displacement. Noncoplanar
+multi-face selections are rejected explicitly. Arbitrary BRep changes, Boolean
+operations, and curved-face extrusion remain unsupported.
 
 Blender behavior reference: `use_dissolve_ortho_edges` in
 https://github.com/blender/blender/blob/main/source/blender/bmesh/operators/bmo_extrude.cc

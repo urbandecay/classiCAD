@@ -11,6 +11,7 @@
 #include "tool_context.h"
 #include "core/geometry/nurbs_surface_factory.h"
 #include "core/geometry/nurbs_solid_face_extrusion.h"
+#include "core/geometry/extrusion_weld.h"
 #include "core/debug_log.h"
 #include "core/serialization/shape_json_codec.h"
 
@@ -391,6 +392,10 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
         if (!input.autoRepeat) toggleManifold(context);
         return true;
     }
+    if (input.key == Qt::Key_E) {
+        if (!input.autoRepeat) toggleManifold(context);
+        return true;
+    }
     if (input.key == Qt::Key_X || input.key == Qt::Key_Y ||
         input.key == Qt::Key_Z) {
         normalConstraint_ = false;
@@ -447,8 +452,28 @@ void PointExtrudeTool::commit(ToolContext &context)
         return;
     }
 
+    QVector<Shape> sourceAttachments;
+    for (const SourcePoint &source : sourcePoints_) {
+        if (source.surface.controlPoints.isEmpty() && source.solidFaceIndex < 0) continue;
+        const Shape *original = context.document().shape(source.objectId);
+        const SceneObject *object = context.document().object(source.objectId);
+        if (original == nullptr || original->controlPointWeldGroups.isEmpty()) continue;
+        const auto vertices = extrusionWeldControlPoints(*original,
+            object != nullptr ? object->placementTranslation : Point3D{});
+        for (int vertex = 0; vertex < vertices.size(); ++vertex) {
+            const quint64 group = original->controlPointWeldGroups.value(vertex, 0);
+            if (group == 0) continue;
+            Shape attachment;
+            attachment.geometryType = GeometryType::Point;
+            attachment.points = {{0,0}};
+            attachment.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            attachment.workPlaneFrame.origin = vertices[vertex];
+            attachment.controlPointWeldGroups = {group};
+            sourceAttachments.append(attachment);
+        }
+    }
     DocumentTransaction transaction = context.beginTransaction();
-    if (weldEnabled_) {
+    { // Extrusions always share their starting boundary with the source.
         quint64 nextWeldGroup = 1;
         for (int objectIndex = 0;
              objectIndex < context.document().size(); ++objectIndex) {
@@ -466,6 +491,9 @@ void PointExtrudeTool::commit(ToolContext &context)
         }
 
         const auto controlPointCount = [](const Shape &shape) -> int {
+            if (shape.geometryType == GeometryType::NurbsSolid) {
+                return extrusionWeldControlPoints(shape).size();
+            }
             if (shape.geometryType == GeometryType::Point) {
                 return shape.points.size();
             }
@@ -547,6 +575,25 @@ void PointExtrudeTool::commit(ToolContext &context)
             const int surfacePointCount =
                 lines[index].nurbsSurface.controlPoints.size();
             if (!source.curve.controlPoints.isEmpty()) {
+                if (source.sourceControlPointIndices.isEmpty()) {
+                    const SceneObject *object = context.document().object(source.objectId);
+                    const auto sourceVertices = extrusionWeldControlPoints(
+                        *sourceShapeRead, object != nullptr ? object->placementTranslation : Point3D{});
+                    for (int curvePoint = 0; curvePoint < source.curve.controlPoints.size(); ++curvePoint) {
+                        const Point3D point = workPlaneFramePointToWorld(
+                            source.curve.controlPoints[curvePoint],
+                            source.curve.dimension == 3 ? source.curve.normalCoordinates[curvePoint] : 0.0,
+                            source.workPlaneFrame);
+                        int match = -1;
+                        for (int vertex = 0; vertex < sourceVertices.size(); ++vertex) {
+                            if (length(subtract(point, sourceVertices[vertex])) <= 1.0e-8) {
+                                match = vertex;
+                                break;
+                            }
+                        }
+                        source.sourceControlPointIndices.append(match);
+                    }
+                }
                 if (surfacePointCount !=
                     source.sourceControlPointIndices.size() * 2) {
                     continue;
@@ -621,10 +668,29 @@ void PointExtrudeTool::commit(ToolContext &context)
     QVector<CompletedFaceExtrusion> faceExtrusions;
     for (int index = 0; index < sourcePoints_.size(); ++index) {
         const SourcePoint &source = sourcePoints_[index];
+        const int owner = candidateOwners_.value(index, index);
+        if (owner != index) {
+            if (source.objectId != sourcePoints_[owner].objectId &&
+                !transaction.removeObject(source.objectId)) {
+                transaction.rollback();
+                return;
+            }
+            faceExtrusions.append({sourcePoints_[owner].objectId,
+                                   generatedFaceIndices.value(index, 1)});
+            continue;
+        }
         const bool faceSource = !source.surface.controlPoints.isEmpty() ||
                                 source.solidFaceIndex >= 0;
-        if (faceSource && weldEnabled_) {
-            // Only connected extrusion may replace the source geometry.
+        const Shape *original = context.document().shape(source.objectId);
+        const bool entireCurve = original != nullptr &&
+            original->geometryType != GeometryType::PolyCurve &&
+            validateNurbsCurve(original->nurbs) &&
+            !source.sourceControlPointIndices.isEmpty() &&
+            !source.curve.controlPoints.isEmpty() &&
+            source.sourceControlPointIndices.size() == original->nurbs.controlPoints.size();
+        const bool loosePoint = original != nullptr &&
+            original->geometryType == GeometryType::Point;
+        if (faceSource || entireCurve || loosePoint) {
             const SceneObject *sceneObject =
                 context.document().object(source.objectId);
             if (sceneObject == nullptr) {
@@ -651,8 +717,12 @@ void PointExtrudeTool::commit(ToolContext &context)
                 publish(context);
                 return;
             }
-            faceExtrusions.append({source.objectId,
-                generatedFaceIndices.value(index,1)});
+            if (faceSource) {
+                faceExtrusions.append({source.objectId,
+                    generatedFaceIndices.value(index,1)});
+            } else {
+                createdObjectIds.append(source.objectId);
+            }
         } else {
             const ObjectId createdObjectId = transaction.addShape(
                 lines[index], context.document().containerId(source.objectId));
@@ -665,6 +735,93 @@ void PointExtrudeTool::commit(ToolContext &context)
             }
             createdObjectIds.append(createdObjectId);
             if (faceSource) faceExtrusions.append({createdObjectId, 1});
+        }
+    }
+    if (weldEnabled_ || !sourceAttachments.isEmpty()) {
+        QVector<Shape> staged;
+        QVector<Point3D> placements;
+        QVector<ObjectId> ids;
+        QVector<int> extruded;
+        for (int index = 0; index < context.document().size(); ++index) {
+            const ObjectId id = context.document().objectIdAt(index);
+            const SceneObject *object = context.document().object(id);
+            if (object == nullptr || !context.document().isObjectEditable(id) ||
+                !context.document().isObjectVisible(id)) continue;
+            const bool isOutput = createdObjectIds.contains(id) || std::any_of(
+                    faceExtrusions.cbegin(), faceExtrusions.cend(),
+                    [id](const CompletedFaceExtrusion &face) { return face.objectId == id; });
+            if (!weldEnabled_ && !isOutput) continue;
+            ids.append(id);
+            staged.append(*context.document().shape(id));
+            placements.append(object->placementTranslation);
+            if (isOutput) {
+                extruded.append(staged.size() - 1);
+            }
+        }
+        for (const Shape &attachment : sourceAttachments) {
+            ids.append(ObjectId::invalid());
+            staged.append(attachment);
+            placements.append(Point3D{});
+        }
+        QString failure;
+        const QVector<Shape> beforeWeld = staged;
+        if (!weldExtrusionDestination(&staged, extruded, placements, 1.0e-6, &failure)) {
+            transaction.rollback();
+            status_.text = QStringLiteral("Extrude: %1").arg(failure);
+            status_.canCommit = false;
+            publish(context);
+            return;
+        }
+        QVector<CompletedFaceExtrusion> remappedFaces;
+        for (const CompletedFaceExtrusion &completion : faceExtrusions) {
+            const int objectIndex = ids.indexOf(completion.objectId);
+            if (objectIndex < 0) continue;
+            const auto oldFaces = nurbsSolidFaces(beforeWeld[objectIndex].nurbsSolid);
+            const auto newFaces = nurbsSolidFaces(staged[objectIndex].nurbsSolid);
+            if (oldFaces.size() == newFaces.size() || completion.faceIndex < 0 ||
+                completion.faceIndex >= oldFaces.size()) {
+                remappedFaces.append(completion);
+                continue;
+            }
+            const auto &oldFace = oldFaces[completion.faceIndex];
+            WorkPlaneFrame frame;
+            if (oldFace.controlPoints.size() != 4 || !nurbsSolidBaseFrame(oldFace, &frame)) {
+                remappedFaces.append(completion);
+                continue;
+            }
+            const Point3D origin = oldFace.controlPoints[0];
+            const Point3D u = subtract(oldFace.controlPoints[2], origin);
+            const Point3D v = subtract(oldFace.controlPoints[1], origin);
+            const qreal uu = dot(u,u), uv = dot(u,v), vv = dot(v,v);
+            const qreal determinant = uu * vv - uv * uv;
+            if (determinant <= 1.0e-20) {
+                remappedFaces.append(completion);
+                continue;
+            }
+            bool found = false;
+            for (int faceIndex = 0; faceIndex < newFaces.size(); ++faceIndex) {
+                bool inside = true;
+                for (const Point3D &point : newFaces[faceIndex].controlPoints) {
+                    const Point3D delta = subtract(point, origin);
+                    const qreal a = (dot(delta,u) * vv - dot(delta,v) * uv) / determinant;
+                    const qreal b = (dot(delta,v) * uu - dot(delta,u) * uv) / determinant;
+                    inside = inside && std::abs(dot(delta, frame.normal)) <= 1.0e-7 &&
+                        a >= -1.0e-8 && a <= 1.0 + 1.0e-8 && b >= -1.0e-8 && b <= 1.0 + 1.0e-8;
+                }
+                if (inside) {
+                    remappedFaces.append({completion.objectId, faceIndex});
+                    found = true;
+                }
+            }
+            if (!found) remappedFaces.append(completion);
+        }
+        faceExtrusions = std::move(remappedFaces);
+        for (int index = 0; index < staged.size(); ++index) {
+            if (!ids[index].isValid()) continue;
+            if (!transaction.replaceGeometry(ids[index], staged[index])) {
+                transaction.rollback();
+                return;
+            }
         }
     }
     if (!context.commitTransaction(transaction)) {
@@ -723,11 +880,14 @@ ToolPreview PointExtrudeTool::preview() const
         }
         result.worldPoints.append(cursorPoint_);
         if (!displayShapes_.isEmpty()) {
-            result.shapes = displayShapes_;
-            result.extrusionPreviewFaceIndices = displayFaceIndices_;
+            for (int index = 0; index < displayShapes_.size(); ++index) {
+                if (displayOwners_.value(index, index) != index) continue;
+                result.shapes.append(displayShapes_[index]);
+                result.extrusionPreviewFaceIndices.append(displayFaceIndices_.value(index, 1));
+            }
             if (!result.shapes.isEmpty()) {
                 for (const SourcePoint &source : sourcePoints_) {
-                    if (weldEnabled_ && (!source.surface.controlPoints.isEmpty() ||
+                    if ((!source.surface.controlPoints.isEmpty() ||
                          source.solidFaceIndex >= 0) &&
                         source.objectId.isValid()) {
                         result.hiddenObjectIds.append(source.objectId);
@@ -875,14 +1035,19 @@ bool PointExtrudeTool::makeLineShape(const SourcePoint &source,
 
 QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint,
                                               QVector<int> *faceIndices,
-                                              QString *error) const
+                                              QString *error,
+                                              QVector<int> *owners) const
 {
     if (error != nullptr) error->clear();
     QVector<Shape> lines;
+    if (owners != nullptr) {
+        owners->clear();
+        for (int index = 0; index < sourcePoints_.size(); ++index) owners->append(index);
+    }
     if (faceIndices != nullptr) {
         faceIndices->clear();
         for (const SourcePoint &source : sourcePoints_)
-            faceIndices->append(weldEnabled_ && source.solidFaceIndex >= 0 ? source.solidFaceIndex : 1);
+            faceIndices->append(source.solidFaceIndex >= 0 ? source.solidFaceIndex : 1);
     }
     lines.reserve(sourcePoints_.size());
     if (sourcePoints_.isEmpty()) {
@@ -894,27 +1059,24 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint,
     // spacing is preserved instead of making all lines converge at one spot.
     const Point3D displacement = subtract(endPoint,
                                          sourcePoints_.first().worldPoint);
+    QHash<quint64, SolidFaceExtrusionResult> regionResults;
     for (const SourcePoint &source : sourcePoints_) {
         Shape line;
         if (source.solidFaceIndex >= 0) {
-            if (!weldEnabled_) {
-                const auto faces = nurbsSolidFaces(source.solid);
-                if (source.solidFaceIndex >= faces.size()) {
-                    if (error != nullptr) *error = QStringLiteral("Selected face no longer exists");
-                    return {};
+            QVector<int> faces;
+            QVector<int> sourceIndices;
+            for (int index = 0; index < sourcePoints_.size(); ++index) {
+                if (sourcePoints_[index].objectId == source.objectId &&
+                    sourcePoints_[index].solidFaceIndex >= 0) {
+                    faces.append(sourcePoints_[index].solidFaceIndex);
+                    sourceIndices.append(index);
                 }
-                line.geometryType = GeometryType::NurbsSolid;
-                line.workPlaneFrame = source.workPlaneFrame;
-                if (!makeNurbsExtrusionSolid(faces[source.solidFaceIndex],
-                                             displacement, &line.nurbsSolid)) {
-                    if (error != nullptr) *error = QStringLiteral("Independent face extrusion requires a nonzero displacement away from its plane");
-                    return {};
-                }
-                lines.append(line);
-                continue;
             }
-            const SolidFaceExtrusionResult extrusion = planNurbsSolidFaceExtrusion(
-                source.solid, source.solidFaceIndex, displacement, manifoldEnabled_);
+            if (!regionResults.contains(source.objectId.value())) {
+                regionResults.insert(source.objectId.value(), planNurbsSolidRegionExtrusion(
+                    source.solid, faces, displacement, manifoldEnabled_));
+            }
+            const SolidFaceExtrusionResult &extrusion = regionResults[source.objectId.value()];
             if (!extrusion.succeeded()) {
                 if (error != nullptr) *error = extrusion.error;
                 return {};
@@ -922,7 +1084,9 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint,
             line.geometryType = GeometryType::NurbsSolid;
             line.workPlaneFrame = source.workPlaneFrame;
             line.nurbsSolid = extrusion.solid;
-            if (faceIndices != nullptr) (*faceIndices)[lines.size()] = extrusion.faceIndex;
+            if (faceIndices != nullptr) (*faceIndices)[lines.size()] =
+                extrusion.faceIndices.value(sourceIndices.indexOf(lines.size()), extrusion.faceIndex);
+            if (owners != nullptr) (*owners)[lines.size()] = sourceIndices.first();
             lines.append(line);
         } else if (!source.surface.controlPoints.isEmpty()) {
             line.geometryType = GeometryType::NurbsSolid;
@@ -943,6 +1107,20 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint,
             lines.append(line);
         }
     }
+    QVector<int> standaloneFaces;
+    for (int index = 0; index < sourcePoints_.size(); ++index) {
+        if (!sourcePoints_[index].surface.controlPoints.isEmpty()) standaloneFaces.append(index);
+    }
+    QVector<int> mergedOwners;
+    QVector<int> mergedCaps;
+    if (lines.size() == sourcePoints_.size() &&
+        !mergeAdjacentExtrusionSolids(&lines, standaloneFaces, &mergedOwners, &mergedCaps, error)) {
+        return {};
+    }
+    for (int index : standaloneFaces) {
+        if (owners != nullptr) (*owners)[index] = mergedOwners.value(index, index);
+        if (faceIndices != nullptr) (*faceIndices)[index] = mergedCaps.value(index, 1);
+    }
     return lines;
 }
 
@@ -954,7 +1132,7 @@ void PointExtrudeTool::updateStatus()
     candidateError_.clear();
     if (!sourcePoints_.isEmpty() && hasCursorPoint_) {
         candidateShapes_ = makeLineShapes(cursorPoint_, &candidateFaceIndices_,
-                                         &candidateError_);
+                                         &candidateError_, &candidateOwners_);
         if (candidateShapes_.size() != sourcePoints_.size()) {
             candidateShapes_.clear();
             candidateFaceIndices_.clear();
@@ -968,6 +1146,7 @@ void PointExtrudeTool::updateStatus()
     if (status_.canCommit) {
         displayShapes_ = candidateShapes_;
         displayFaceIndices_ = candidateFaceIndices_;
+        displayOwners_ = candidateOwners_;
     }
     if (!sourcePoints_.isEmpty() && hasCursorPoint_) {
         const Point3D displacement = subtract(cursorPoint_, sourcePoints_.first().worldPoint);
@@ -1014,11 +1193,11 @@ void PointExtrudeTool::updateStatus()
         status_.text += QStringLiteral(" • face normal");
     }
     status_.text += weldEnabled_
-        ? QStringLiteral(" • W Weld on")
-        : QStringLiteral(" • W Weld off");
+        ? QStringLiteral(" • W Weld to snap on")
+        : QStringLiteral(" • W Weld to snap off");
     status_.text += manifoldEnabled_
-        ? QStringLiteral(" • M Manifold on")
-        : QStringLiteral(" • M Manifold off");
+        ? QStringLiteral(" • E Extrude")
+        : QStringLiteral(" • E Extrude with Division");
 }
 
 bool PointExtrudeTool::weldEnabled() const
@@ -1031,7 +1210,6 @@ void PointExtrudeTool::toggleWeld(ToolContext &context)
     displayShapes_.clear();
     displayFaceIndices_.clear();
     weldEnabled_ = !weldEnabled_;
-    if (!weldEnabled_) manifoldEnabled_ = false;
     updateStatus();
     publish(context);
 }
@@ -1046,7 +1224,6 @@ void PointExtrudeTool::toggleManifold(ToolContext &context)
     displayShapes_.clear();
     displayFaceIndices_.clear();
     manifoldEnabled_ = !manifoldEnabled_;
-    if (manifoldEnabled_) weldEnabled_ = true;
     updateStatus();
     publish(context);
 }

@@ -508,7 +508,7 @@ bool ViewportTransform::screenToWorkPlaneUnclipped(
     const qreal viewDepth = perspective_
                                 ? distance * dot(basis.forward, rayDirection)
                                 : distance;
-    if (!std::isfinite(viewDepth) || viewDepth < -1.0e-9) {
+    if (!std::isfinite(viewDepth) || (perspective_ && viewDepth < -1.0e-9)) {
         return false;
     }
 

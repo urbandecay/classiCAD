@@ -76,12 +76,18 @@ bool verifyExtrudeOptionKeys(QApplication &application)
                         "Extrude option keys must override main-window Mirror and Weld shortcuts");
     }
     sendKey(viewport.get(), Qt::Key_M);
-    passed &= check(extrude->manifoldEnabled() && extrude->weldEnabled(),
-                    "M must toggle the active extrusion's Manifold option");
+    passed &= check(!extrude->manifoldEnabled() && !extrude->weldEnabled(),
+                    "division mode must toggle independently of destination welding");
     QKeyEvent repeatedM(QEvent::KeyPress, Qt::Key_M, Qt::NoModifier, {}, true);
     QApplication::sendEvent(viewport.get(), &repeatedM);
+    passed &= check(!extrude->manifoldEnabled(),
+                    "holding the mode key must not repeatedly toggle division");
+    sendKey(viewport.get(), Qt::Key_E);
     passed &= check(extrude->manifoldEnabled(),
-                    "holding M must not repeatedly toggle Manifold");
+                    "E during extrusion must toggle the division mode");
+    sendKey(viewport.get(), Qt::Key_W);
+    passed &= check(extrude->weldEnabled() && extrude->manifoldEnabled(),
+                    "destination welding must preserve the current extrusion mode");
     sendKey(viewport.get(), Qt::Key_Escape);
     QKeyEvent idleM(QEvent::ShortcutOverride, Qt::Key_M, Qt::NoModifier);
     idleM.ignore();

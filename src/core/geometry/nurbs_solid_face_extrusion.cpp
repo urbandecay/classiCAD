@@ -81,7 +81,12 @@ class OrthogonalSweep {
 public:
     OrthogonalSweep(const NurbsExtrusionSolid3D &solid, int selected,
                     Point3D displacement, bool manifold)
-        : source_(solid), selected_(selected), movement_(displacement), manifold_(manifold) {}
+        : source_(solid), selected_(selected), selectedIndices_{selected}, movement_(displacement), manifold_(manifold) {}
+
+    OrthogonalSweep(const NurbsExtrusionSolid3D &solid, const QVector<int> &selected,
+                    Point3D displacement, bool manifold)
+        : source_(solid), selected_(selected.first()), selectedIndices_(selected),
+          movement_(displacement), manifold_(manifold) {}
 
     SolidFaceExtrusionResult run();
 
@@ -124,6 +129,7 @@ private:
 
     const NurbsExtrusionSolid3D &source_;
     int selected_;
+    QVector<int> selectedIndices_;
     Point3D movement_,origin_;
     std::array<Point3D,3> basis_;
     bool manifold_,mergeWalls_=false;
@@ -139,10 +145,12 @@ int OrthogonalSweep::owner(const Rectangle &r,int sign) const
 {
     Coordinates center;
     for (int a=0;a<3;++a) center[a]=(r.low[a]+r.high[a])*0.5;
-    if (r.axis==2 && std::abs(center[2]-target_)<=tolerance_ &&
-        sign==outward_ && covers(rectangles_[selected_],center)) return selected_;
+    if (r.axis==2 && std::abs(center[2]-target_)<=tolerance_ && sign==outward_) {
+        for (int selected : selectedIndices_)
+            if (covers(rectangles_[selected],center)) return selected;
+    }
     for (int i=0;i<rectangles_.size();++i) {
-        if (i==selected_) continue;
+        if (selectedIndices_.contains(i)) continue;
         const auto &old=rectangles_[i];
         if (old.axis==r.axis && std::abs(old.low[r.axis]-center[r.axis])<=tolerance_ &&
             covers(old,center)) return i;
@@ -153,14 +161,19 @@ int OrthogonalSweep::owner(const Rectangle &r,int sign) const
         int nearest=-1;
         double best=std::numeric_limits<double>::max();
         const int transverse=1-r.axis;
-        const auto &selected=rectangles_[selected_];
         for (int i=0;i<rectangles_.size();++i) {
-            if (i==selected_) continue;
+            if (selectedIndices_.contains(i)) continue;
             const auto &old=rectangles_[i];
             if (old.axis!=r.axis || std::abs(old.low[r.axis]-center[r.axis])>tolerance_ ||
-                std::min(old.high[transverse],selected.high[transverse])-
-                    std::max(old.low[transverse],selected.low[transverse])<=tolerance_ ||
                 old.low[2]>tolerance_ || old.high[2]<-tolerance_) continue;
+            bool touchesRegion=false;
+            for (int selectedIndex:selectedIndices_) {
+                const auto &selected=rectangles_[selectedIndex];
+                if (std::min(old.high[transverse],selected.high[transverse])-
+                    std::max(old.low[transverse],selected.low[transverse])>tolerance_)
+                    touchesRegion=true;
+            }
+            if (!touchesRegion) continue;
             double distance=0;
             for (int a=0;a<3;++a) {
                 const double gap=std::max({old.low[a]-center[a],center[a]-old.high[a],0.0});
@@ -198,7 +211,7 @@ NurbsSurface3D OrthogonalSweep::surface(const BoundaryRectangle &boundary) const
 
     result=source_.boundaryFaces[boundary.owner];
     Point3D original=result.controlPoints[0];
-    if (boundary.owner==selected_) original=add(original,movement_);
+    if (selectedIndices_.contains(boundary.owner)) original=add(original,movement_);
     const Point3D du=sub(result.controlPoints[2],result.controlPoints[0]);
     const Point3D dv=sub(result.controlPoints[1],result.controlPoints[0]);
     double u0=std::numeric_limits<double>::max(),u1=-u0,v0=u0,v1=-u0;
@@ -265,6 +278,19 @@ SolidFaceExtrusionResult OrthogonalSweep::run()
         rectangles_.append(r);
         for (int a=0;a<3;++a) { planes_[a].push_back(r.low[a]); planes_[a].push_back(r.high[a]); }
     }
+    for (int index : selectedIndices_) {
+        const auto &r = rectangles_[index];
+        if (r.axis != 2 || std::abs(r.low[2]) > tolerance_)
+            return rejected("Select coplanar faces for a shared region extrusion");
+        const auto &cv = source_.boundaryFaces[index].controlPoints;
+        Point3D normal = unit(cross(sub(cv[2],cv[0]),sub(cv[1],cv[0])));
+        if (source_.boundaryFaceReversed[index]) normal = mul(normal,-1);
+        const auto &first = source_.boundaryFaces[selected_].controlPoints;
+        Point3D firstNormal = unit(cross(sub(first[2],first[0]),sub(first[1],first[0])));
+        if (source_.boundaryFaceReversed[selected_]) firstNormal = mul(firstNormal,-1);
+        if (dot(normal,firstNormal) < 1.0 - 1.0e-8)
+            return rejected("Selected region faces must have matching outward normals");
+    }
     Coordinates center;
     for (int a=0;a<3;++a) center[a]=(rectangles_[selected_].low[a]+rectangles_[selected_].high[a])*0.5;
     // Infer solid side from the closed boundary, rather than trusting winding
@@ -304,8 +330,12 @@ SolidFaceExtrusionResult OrthogonalSweep::run()
                             (planes_[1][y]+planes_[1][y+1])*0.5,
                             (planes_[2][z]+planes_[2][z+1])*0.5};
         bool filled=inside(p);
-        if (covers(rectangles_[selected_],p) && p[2]>std::min(0.0,target_) && p[2]<std::max(0.0,target_))
-            filled=target_*outward_>0;
+        if (p[2]>std::min(0.0,target_) && p[2]<std::max(0.0,target_)) {
+            for (int index : selectedIndices_) if (covers(rectangles_[index],p)) {
+                filled=target_*outward_>0;
+                break;
+            }
+        }
         cells_[offset(x,y,z)]=filled;
     }
 
@@ -359,18 +389,27 @@ SolidFaceExtrusionResult OrthogonalSweep::run()
     SolidFaceExtrusionResult result;
     result.solid=source_;
     result.solid.boundaryFaces.clear();result.solid.boundaryFaceReversed.clear();
-    int movingCount=0;
+    QVector<int> movingCounts(selectedIndices_.size(),0);
+    result.faceIndices.fill(-1,selectedIndices_.size());
     for (const auto &patch:ordered) {
         NurbsSurface3D face=surface(patch);
-        if (patch.owner==selected_) { result.faceIndex=result.solid.boundaryFaces.size();++movingCount; }
+        const int selectedSlot=selectedIndices_.indexOf(patch.owner);
+        if (selectedSlot>=0) {
+            result.faceIndices[selectedSlot]=result.solid.boundaryFaces.size();
+            ++movingCounts[selectedSlot];
+        }
         const auto normal=cross(sub(face.controlPoints[2],face.controlPoints[0]),sub(face.controlPoints[1],face.controlPoints[0]));
         result.solid.boundaryFaceReversed.append(dot(normal,basis_[patch.rectangle.axis])*patch.sign<0);
         result.solid.boundaryFaces.append(std::move(face));
     }
-    if (movingCount!=1) return rejected("The requested extrusion reaches or crosses an opposing boundary");
-    const auto &moving=result.solid.boundaryFaces[result.faceIndex];
-    for (int i=0;i<4;++i) if (norm(sub(moving.controlPoints[i],add(selected.controlPoints[i],movement_)))>tolerance_*4)
-        return rejected("The requested extrusion would split or remove the selected face");
+    result.faceIndex=result.faceIndices.first();
+    for (int slot=0;slot<selectedIndices_.size();++slot) {
+        if (movingCounts[slot]!=1) return rejected("The requested extrusion reaches or crosses an opposing boundary");
+        const auto &moving=result.solid.boundaryFaces[result.faceIndices[slot]];
+        const auto &original=source_.boundaryFaces[selectedIndices_[slot]];
+        for (int i=0;i<4;++i) if (norm(sub(moving.controlPoints[i],add(original.controlPoints[i],movement_)))>tolerance_*4)
+            return rejected("The requested extrusion would split or remove a selected face");
+    }
     if (!validateNurbsSolid(result.solid)) return rejected("The extrusion could not produce a closed NURBS boundary");
     return result;
 }
@@ -412,6 +451,30 @@ SolidFaceExtrusionResult planNurbsSolidFaceExtrusion(
     if (dot(result.solid.displacement,solid.displacement)<=0 || !validateNurbsSolid(result.solid))
         return rejected("The requested extrusion reaches or crosses the opposite cap");
     return result;
+}
+
+SolidFaceExtrusionResult planNurbsSolidRegionExtrusion(
+    const NurbsExtrusionSolid3D &solid,const QVector<int> &faceIndices,
+    const Point3D &displacement,bool manifold)
+{
+    if (faceIndices.isEmpty()) return rejected("Select at least one solid face");
+    if (faceIndices.size()==1) {
+        auto result=planNurbsSolidFaceExtrusion(solid,faceIndices.first(),displacement,manifold);
+        if (result.succeeded()) result.faceIndices={result.faceIndex};
+        return result;
+    }
+    if (!validateNurbsSolid(solid)) return rejected("The source solid has an invalid boundary");
+    NurbsExtrusionSolid3D boundary=solid;
+    if (!materializeNurbsSolidBoundary(&boundary))
+        return rejected("Connected region extrusion requires rectangular planar boundary patches");
+    QVector<int> unique;
+    for (int index:faceIndices) {
+        if (index<0 || index>=boundary.boundaryFaces.size())
+            return rejected("A selected solid face no longer exists");
+        if (unique.contains(index)) return rejected("A region face was selected more than once");
+        unique.append(index);
+    }
+    return OrthogonalSweep(boundary,unique,displacement,manifold).run();
 }
 
 bool extrudeNurbsSolidFace(const NurbsExtrusionSolid3D &solid,int faceIndex,

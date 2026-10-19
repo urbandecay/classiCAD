@@ -70,7 +70,8 @@ private:
                        Shape *shape) const;
     QVector<Shape> makeLineShapes(const Point3D &endPoint,
                                  QVector<int> *faceIndices = nullptr,
-                                 QString *error = nullptr) const;
+                                 QString *error = nullptr,
+                                 QVector<int> *owners = nullptr) const;
     void updateStatus();
     void publish(ToolContext &context);
 
@@ -83,8 +84,10 @@ private:
     QVector<CompletedFaceExtrusion> completedFaceExtrusions_;
     QVector<Shape> candidateShapes_;
     QVector<int> candidateFaceIndices_;
+    QVector<int> candidateOwners_;
     QVector<Shape> displayShapes_;
     QVector<int> displayFaceIndices_;
+    QVector<int> displayOwners_;
     QString candidateError_;
     QString lastDiagnostic_;
     bool stagedControlPointSourcesRequested_ = false;
@@ -94,7 +97,7 @@ private:
     int constraintAxisKey_ = 0;
     bool normalConstraint_ = false;
     bool weldEnabled_ = false;
-    bool manifoldEnabled_ = false;
+    bool manifoldEnabled_ = true;
     bool hasLastInput_ = false;
     bool hasCursorPoint_ = false;
     SnapResult snap_;

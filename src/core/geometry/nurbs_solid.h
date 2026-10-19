@@ -20,8 +20,10 @@ struct NurbsExtrusionSolid3D {
 
 bool materializeNurbsSolidBoundary(NurbsExtrusionSolid3D *solid);
 
+// Accepts affine degree-one patches with exact knot-inserted CV rows/columns.
 bool nurbsSolidBaseFrame(const NurbsSurface3D &surface, WorkPlaneFrame *frame);
 bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid);
+// Canonicalizes an affine base to 2x2 without changing its UV domain or trims.
 bool makeNurbsExtrusionSolid(const NurbsSurface3D &surface,
                              const Point3D &displacement,
                              NurbsExtrusionSolid3D *solid);
@@ -32,6 +34,10 @@ bool extrudeNurbsSolidFace(const NurbsExtrusionSolid3D &solid,
                           bool manifold = false,
                           int *resultFaceIndex = nullptr);
 QVector<NurbsSurface3D> nurbsSolidFaces(const NurbsExtrusionSolid3D &solid);
+// Unique cage vertices in face order and flattened U/V order, matching solid
+// component selection and control-point transforms. Coincident positions are
+// shared at the control-cage tolerance (squared distance <= 1e-16).
+QVector<Point3D> nurbsSolidControlPoints(const NurbsExtrusionSolid3D &solid);
 bool nurbsSolidFaceReversed(const NurbsExtrusionSolid3D &solid, int faceIndex);
 
 } // namespace classiCAD

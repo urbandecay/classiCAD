@@ -187,11 +187,8 @@ bool controlPointWeldDomainsCompatible(ControlPointWeldDomain first,
         second == ControlPointWeldDomain::None) {
         return false;
     }
-    return first == second ||
-           (first == ControlPointWeldDomain::Point &&
-            second == ControlPointWeldDomain::Curve) ||
-           (first == ControlPointWeldDomain::Curve &&
-            second == ControlPointWeldDomain::Point);
+    // Persistent weld IDs identify shared vertices across geometry types.
+    return true;
 }
 
 QString outlinerGeometryName(const Shape &shape)
@@ -1718,6 +1715,39 @@ public:
         return history_.canRedo();
     }
 
+    struct HistorySolidFaceSelection {
+        int index = -1;
+        NurbsSurface3D surface;
+        Point3D outwardNormal;
+    };
+    using HistorySolidFaceSelections = QHash<quint64, QVector<HistorySolidFaceSelection>>;
+
+    HistorySolidFaceSelections selectedSolidFacesForHistory() const
+    {
+        HistorySolidFaceSelections selected;
+        if (objectEditMode_ && componentSelectionMode_ == ComponentSelectionMode::Face) {
+            for (const ObjectId id : selection_.objectIds()) {
+                const Shape *shape = document_.shape(id);
+                if (shape != nullptr && shape->geometryType == GeometryType::NurbsSolid) {
+                    const auto faces = shapeSurfaceFaces(*shape);
+                    const auto indices = componentSelections_[static_cast<int>(
+                        ComponentSelectionMode::Face)].value(id.value());
+                    for (const int index : indices) {
+                        if (index < 0 || index >= faces.size()) continue;
+                        WorkPlaneFrame frame;
+                        if (!nurbsSolidBaseFrame(faces[index],&frame)) continue;
+                        Point3D normal = frame.normal;
+                        if (nurbsSolidFaceReversed(shape->nurbsSolid,index)) {
+                            normal = {-normal.x,-normal.y,-normal.z};
+                        }
+                        selected[id.value()].append({index,faces[index],normal});
+                    }
+                }
+            }
+        }
+        return selected;
+    }
+
     void undo()
     {
         if (!history_.canUndo()) {
@@ -1725,12 +1755,13 @@ public:
             return;
         }
 
+        const auto previousSolidFaces = selectedSolidFacesForHistory();
         history_.undo();
         viewportTransform_.setGridSpacing(
             documentGridSpacingInMillimeters(document_.settings()));
         viewportRenderer_.setGridBaseStep(
             documentGridSpacingInMillimeters(document_.settings()));
-        resetInteractionAfterHistory();
+        resetInteractionAfterHistory(previousSolidFaces);
         notifyHistoryChanged();
         notifyLayersChanged();
         DebugLog::instance().write(QStringLiteral("undo applied shapes=%1 undoRemaining=%2 redoAvailable=%3")
@@ -1746,12 +1777,13 @@ public:
             return;
         }
 
+        const auto previousSolidFaces = selectedSolidFacesForHistory();
         history_.redo();
         viewportTransform_.setGridSpacing(
             documentGridSpacingInMillimeters(document_.settings()));
         viewportRenderer_.setGridBaseStep(
             documentGridSpacingInMillimeters(document_.settings()));
-        resetInteractionAfterHistory();
+        resetInteractionAfterHistory(previousSolidFaces);
         notifyHistoryChanged();
         notifyLayersChanged();
         DebugLog::instance().write(QStringLiteral("redo applied shapes=%1 undoAvailable=%2 redoRemaining=%3")
@@ -2323,13 +2355,13 @@ public:
     {
         QVector<ObjectId> resultObjectIds;
         QSet<quint64> faceExtrusionObjectValues;
-        QHash<quint64, int> faceExtrusionIndices;
+        QHash<quint64, QSet<int>> faceExtrusionIndices;
         for (const CompletedFaceExtrusion &faceExtrusion : faceExtrusions) {
             const ObjectId objectId = faceExtrusion.objectId;
             if (objectId.isValid() && document_.shape(objectId) != nullptr) {
                 faceExtrusionObjectValues.insert(objectId.value());
-                faceExtrusionIndices.insert(objectId.value(),
-                                            faceExtrusion.faceIndex);
+                faceExtrusionIndices[objectId.value()].insert(
+                    faceExtrusion.faceIndex);
                 if (!resultObjectIds.contains(objectId)) {
                     resultObjectIds.append(objectId);
                 }
@@ -2363,74 +2395,75 @@ public:
             if (faceExtrusion &&
                 shape->geometryType == GeometryType::NurbsSolid) {
                 const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(*shape);
-                const int faceIndex = faceExtrusionIndices.value(
-                    objectId.value(), 1);
-                if (faceIndex >= 0 && faceIndex < faces.size()) {
-                    if (componentSelectionMode_ ==
-                        ComponentSelectionMode::Face) {
-                        resultComponentSelection.insert(faceIndex);
-                    } else {
-                        Shape faceShape;
-                        faceShape.geometryType = GeometryType::NurbsSurface;
-                        faceShape.nurbsSurface = faces[faceIndex];
-                        const ViewportDepthGeometry solidCage =
-                            selectedSurfaceControlNet(*shape);
-                        const ViewportDepthGeometry faceCage =
-                            selectedSurfaceControlNet(faceShape);
+                for (const int faceIndex : faceExtrusionIndices.value(
+                         objectId.value())) {
+                    if (faceIndex >= 0 && faceIndex < faces.size()) {
                         if (componentSelectionMode_ ==
-                            ComponentSelectionMode::Vertex) {
-                            for (int facePointIndex = 0;
-                                 facePointIndex < faceCage.pointVertices.size();
-                                 ++facePointIndex) {
-                                const Point3D facePoint = duplicateCagePoint(
-                                    faceCage.pointVertices[facePointIndex]);
-                                for (int solidIndex = 0;
-                                     solidIndex <
-                                         solidCage.pointVertices.size();
-                                     ++solidIndex) {
-                                    if (duplicatePointsEqual(
-                                            facePoint,
-                                            duplicateCagePoint(
-                                                solidCage.pointVertices[
-                                                    solidIndex]))) {
-                                        resultComponentSelection.insert(
-                                            solidIndex);
-                                        break;
+                            ComponentSelectionMode::Face) {
+                            resultComponentSelection.insert(faceIndex);
+                        } else {
+                            Shape faceShape;
+                            faceShape.geometryType = GeometryType::NurbsSurface;
+                            faceShape.nurbsSurface = faces[faceIndex];
+                            const ViewportDepthGeometry solidCage =
+                                selectedSurfaceControlNet(*shape);
+                            const ViewportDepthGeometry faceCage =
+                                selectedSurfaceControlNet(faceShape);
+                            if (componentSelectionMode_ ==
+                                ComponentSelectionMode::Vertex) {
+                                for (int facePointIndex = 0;
+                                     facePointIndex < faceCage.pointVertices.size();
+                                     ++facePointIndex) {
+                                    const Point3D facePoint = duplicateCagePoint(
+                                        faceCage.pointVertices[facePointIndex]);
+                                    for (int solidIndex = 0;
+                                         solidIndex <
+                                             solidCage.pointVertices.size();
+                                         ++solidIndex) {
+                                        if (duplicatePointsEqual(
+                                                facePoint,
+                                                duplicateCagePoint(
+                                                    solidCage.pointVertices[
+                                                        solidIndex]))) {
+                                            resultComponentSelection.insert(
+                                                solidIndex);
+                                            break;
+                                        }
                                     }
                                 }
-                            }
-                        } else {
-                            for (int faceEdge = 0;
-                                 faceEdge + 1 <
-                                     faceCage.preciseLineVertices.size();
-                                 faceEdge += 2) {
-                                const Point3D first = duplicateCagePoint(
-                                    faceCage.preciseLineVertices[faceEdge]);
-                                const Point3D second = duplicateCagePoint(
-                                    faceCage.preciseLineVertices[faceEdge + 1]);
-                                for (int solidEdge = 0;
-                                     solidEdge + 1 <
-                                         solidCage.preciseLineVertices.size();
-                                     solidEdge += 2) {
-                                    const Point3D solidFirst =
-                                        duplicateCagePoint(
-                                            solidCage.preciseLineVertices[
-                                                solidEdge]);
-                                    const Point3D solidSecond =
-                                        duplicateCagePoint(
-                                            solidCage.preciseLineVertices[
-                                                solidEdge + 1]);
-                                    if ((duplicatePointsEqual(first,
-                                                              solidFirst) &&
-                                         duplicatePointsEqual(second,
-                                                              solidSecond)) ||
-                                        (duplicatePointsEqual(first,
-                                                              solidSecond) &&
-                                         duplicatePointsEqual(second,
-                                                              solidFirst))) {
-                                        resultComponentSelection.insert(
-                                            solidEdge / 2);
-                                        break;
+                            } else {
+                                for (int faceEdge = 0;
+                                     faceEdge + 1 <
+                                         faceCage.preciseLineVertices.size();
+                                     faceEdge += 2) {
+                                    const Point3D first = duplicateCagePoint(
+                                        faceCage.preciseLineVertices[faceEdge]);
+                                    const Point3D second = duplicateCagePoint(
+                                        faceCage.preciseLineVertices[faceEdge + 1]);
+                                    for (int solidEdge = 0;
+                                         solidEdge + 1 <
+                                             solidCage.preciseLineVertices.size();
+                                         solidEdge += 2) {
+                                        const Point3D solidFirst =
+                                            duplicateCagePoint(
+                                                solidCage.preciseLineVertices[
+                                                    solidEdge]);
+                                        const Point3D solidSecond =
+                                            duplicateCagePoint(
+                                                solidCage.preciseLineVertices[
+                                                    solidEdge + 1]);
+                                        if ((duplicatePointsEqual(first,
+                                                                  solidFirst) &&
+                                             duplicatePointsEqual(second,
+                                                                  solidSecond)) ||
+                                            (duplicatePointsEqual(first,
+                                                                  solidSecond) &&
+                                             duplicatePointsEqual(second,
+                                                                  solidFirst))) {
+                                            resultComponentSelection.insert(
+                                                solidEdge / 2);
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -2961,9 +2994,6 @@ public:
                         surfaceFaceSources.append(std::move(source));
                     }
                 } else if (shape->geometryType == GeometryType::NurbsSolid) {
-                    if (selectionIt.value().size() != 1) {
-                        continue;
-                    }
                     QVector<int> selectedIndices;
                     for (const int faceIndex : selectionIt.value()) {
                         selectedIndices.append(faceIndex);
@@ -4011,18 +4041,18 @@ public:
                        document_.isObjectEditable(sourceObjectId)) {
                 const auto selectedFace = selectedFaces.constFind(
                     sourceObjectId.value());
-                if (selectedFace != selectedFaces.cend() &&
-                    selectedFace.value().size() == 1) {
-                    const int faceIndex = *selectedFace.value().cbegin();
-                    const SceneObject *sceneObject =
-                        document_.object(sourceObjectId);
-                    PointExtrudeTool::SolidFaceSource faceSource;
-                    if (sceneObject != nullptr &&
-                        makeSolidFaceSource(sourceObjectId, *sourceShape,
-                                            *sceneObject, faceIndex,
-                                            &faceSource)) {
-                        solidFaceSources.append(std::move(faceSource));
-                        ++pointCount;
+                if (selectedFace != selectedFaces.cend()) {
+                    for (const int faceIndex : selectedFace.value()) {
+                        const SceneObject *sceneObject =
+                            document_.object(sourceObjectId);
+                        PointExtrudeTool::SolidFaceSource faceSource;
+                        if (sceneObject != nullptr &&
+                            makeSolidFaceSource(sourceObjectId, *sourceShape,
+                                                *sceneObject, faceIndex,
+                                                &faceSource)) {
+                            solidFaceSources.append(std::move(faceSource));
+                            ++pointCount;
+                        }
                     }
                 }
                 continue;
@@ -13297,8 +13327,25 @@ private:
         handlers.beginGrab = [this](int) {
             return ApplicationCommandResult{beginGrabFromSelection(), 0};
         };
-        handlers.beginPointExtrude = [this](int) {
+        handlers.beginPointExtrude = [this](int mode) {
+            if (mode == 2 && activeTool_ == Tool::PointExtrude) {
+                if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                        toolRegistry_.find(Tool::PointExtrude))) {
+                    extrudeTool->toggleManifold(toolContext_);
+                    update();
+                    return ApplicationCommandResult{true, 0};
+                }
+            }
             const int count = beginPointExtrude();
+            if (count > 0) {
+                if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                        toolRegistry_.find(Tool::PointExtrude))) {
+                    const bool manifold = mode != 1;
+                    if (extrudeTool->manifoldEnabled() != manifold) {
+                        extrudeTool->toggleManifold(toolContext_);
+                    }
+                }
+            }
             return ApplicationCommandResult{count > 0, count};
         };
         handlers.weld = [this](int) {
@@ -15791,8 +15838,91 @@ private:
         dragAxisLock_ = DragAxisLock::None;
     }
 
-    void resetInteractionAfterHistory()
+    void resetInteractionAfterHistory(
+        const HistorySolidFaceSelections &previousSolidFaces)
     {
+        const int faceMode = static_cast<int>(ComponentSelectionMode::Face);
+        const auto previousFaces = componentSelections_[faceMode];
+        const ObjectId previousPrimary = selection_.primaryObjectId();
+        QHash<quint64, QSet<int>> survivingFaces;
+        QVector<ObjectId> survivingObjects;
+        if (objectEditMode_ && componentSelectionMode_ == ComponentSelectionMode::Face) {
+            for (const ObjectId objectId : selection_.objectIds()) {
+                const Shape *shape = document_.shape(objectId);
+                if (shape == nullptr || !document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId) ||
+                    !belongsToActiveEditContainer(objectId)) {
+                    continue;
+                }
+                const QSet<int> selectedFaces = previousFaces.value(objectId.value());
+                QSet<int> validFaces;
+                const auto previousSolidSelections = previousSolidFaces.value(objectId.value());
+                if (shape->geometryType == GeometryType::NurbsSurface &&
+                    (selectedFaces.contains(0) ||
+                     !previousSolidSelections.isEmpty())) {
+                    // Undoing its first extrusion restores a single face in
+                    // place of the solid's selected translated cap.
+                    validFaces.insert(0);
+                } else if (shape->geometryType == GeometryType::NurbsSolid) {
+                    const auto faces = shapeSurfaceFaces(*shape);
+                    if (previousSolidSelections.isEmpty()) {
+                        for (const int index : selectedFaces) {
+                            if (index >= 0 && index < faces.size()) validFaces.insert(index);
+                        }
+                    }
+                    for (const auto &previous : previousSolidSelections) {
+                        int bestIndex = -1;
+                        qreal closestDistance = std::numeric_limits<qreal>::max();
+                        for (int index = 0; index < faces.size(); ++index) {
+                            const auto &face = faces[index];
+                            WorkPlaneFrame frame;
+                            if (!nurbsSolidBaseFrame(face,&frame) ||
+                                face.controlPoints.size() != previous.surface.controlPoints.size()) continue;
+                            Point3D normal = frame.normal;
+                            if (nurbsSolidFaceReversed(shape->nurbsSolid,index)) {
+                                normal = {-normal.x,-normal.y,-normal.z};
+                            }
+                            const auto &n = previous.outwardNormal;
+                            if (normal.x*n.x + normal.y*n.y + normal.z*n.z < 1.0-1.0e-8) continue;
+                            qreal coordinateScale = 1.0;
+                            for (const auto &point : previous.surface.controlPoints) {
+                                coordinateScale = std::max({coordinateScale,std::abs(point.x),
+                                                           std::abs(point.y),std::abs(point.z)});
+                            }
+                            const qreal tolerance = coordinateScale*1.0e-8;
+                            QSet<int> matched;
+                            qreal distance = 0.0;
+                            bool footprintMatches = true;
+                            for (const auto &point : previous.surface.controlPoints) {
+                                bool found = false;
+                                for (int cv = 0; cv < face.controlPoints.size(); ++cv) {
+                                    if (matched.contains(cv)) continue;
+                                    const auto &target = face.controlPoints[cv];
+                                    const Point3D delta{point.x-target.x,point.y-target.y,point.z-target.z};
+                                    const qreal offset = delta.x*n.x + delta.y*n.y + delta.z*n.z;
+                                    const Point3D planar{delta.x-offset*n.x,delta.y-offset*n.y,delta.z-offset*n.z};
+                                    if (planar.x*planar.x + planar.y*planar.y + planar.z*planar.z > tolerance*tolerance) continue;
+                                    matched.insert(cv);
+                                    distance = std::max(distance,std::abs(offset));
+                                    found = true;
+                                    break;
+                                }
+                                if (!found) { footprintMatches = false; break; }
+                            }
+                            if (footprintMatches && distance < closestDistance) {
+                                bestIndex = index;
+                                closestDistance = distance;
+                            }
+                        }
+                        if (bestIndex >= 0) validFaces.insert(bestIndex);
+                    }
+                }
+                if (!validFaces.isEmpty()) {
+                    survivingObjects.append(objectId);
+                    survivingFaces.insert(objectId.value(),validFaces);
+                }
+            }
+        }
         pendingPoints_.clear();
         selection_.clear();
         clearComponentSelections();
@@ -15821,9 +15951,19 @@ private:
         subdivisionTool_.finish();
         lineCommandActive_ = false;
         setTool(Tool::Select);
+        if (!survivingObjects.isEmpty()) {
+            const ObjectId primary = survivingObjects.contains(previousPrimary)
+                ? previousPrimary : survivingObjects.back();
+            selection_.setObjectIds(survivingObjects,primary);
+            componentSelections_[faceMode] = survivingFaces;
+            componentSelectionObject_ = primary;
+            activeComponentIndices_[faceMode] =
+                *survivingFaces.value(primary.value()).cbegin();
+        }
         if (commandFinished_) {
             commandFinished_(Tool::Select);
         }
+        session_.notifySelectionChanged();
         update();
     }
 

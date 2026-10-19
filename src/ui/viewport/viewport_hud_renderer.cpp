@@ -83,7 +83,7 @@ void ViewportHudRenderer::draw(QPainter &painter,
                              .arg(joinCount));
     }
 
-    if (activeTool == Tool::PointExtrude) {
+    if (activeTool == Tool::PointExtrude || grabActive) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         const qreal baseline = viewportSize.height() - 18.0;
         const QRectF checkBox(19.0, baseline - 12.0, 12.0, 12.0);
@@ -106,6 +106,14 @@ void ViewportHudRenderer::draw(QPainter &painter,
         painter.drawText(37.0,
                          baseline,
                          QStringLiteral("Weld to Snap (W)"));
+        if (grabActive) {
+            painter.setPen(QColor(QStringLiteral("#f0a45a")));
+            painter.drawText(18.0, baseline - 28.0,
+                grabPickingBasePoint
+                    ? QStringLiteral("Click an OSnap point on the selection for the move base  •  Esc/RMB cancels")
+                    : QStringLiteral("Move selection  •  X/Y/Z: constrain  •  B: base point  •  Click: confirm  •  Esc: cancel"));
+            return;
+        }
         const bool divided = !state.pointExtrudeManifoldEnabled;
         const QRectF manifoldBox(181.0, baseline - 12.0, 12.0, 12.0);
         painter.setPen(QPen(divided

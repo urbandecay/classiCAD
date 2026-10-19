@@ -19,6 +19,10 @@ struct NurbsExtrusionSolid3D {
 };
 
 bool materializeNurbsSolidBoundary(NurbsExtrusionSolid3D *solid);
+// Inserts exact bilinear subpatches at shared edge junctions before corner
+// movement, so a corner on a neighboring longer edge remains connected.
+bool conformNurbsSolidBoundaryForVertexEditing(
+    NurbsExtrusionSolid3D *solid, QVector<int> *originalFaceIndices = nullptr);
 
 // Accepts affine degree-one patches with exact knot-inserted CV rows/columns.
 bool nurbsSolidBaseFrame(const NurbsSurface3D &surface, WorkPlaneFrame *frame);

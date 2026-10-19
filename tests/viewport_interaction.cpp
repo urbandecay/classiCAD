@@ -13,6 +13,8 @@
 #include "core/geometry/shape_mapping.h"
 #include "core/geometry/nurbs_surface_factory.h"
 #include "core/geometry/nurbs_solid.h"
+#include "core/geometry/extrusion_weld.h"
+#include "core/serialization/shape_json_codec.h"
 #include "core/serialization/blender_project_file.h"
 #include "app/application_session.h"
 
@@ -363,6 +365,60 @@ bool verifyCoincidentVertexBoxSelection(QApplication &application)
     return passed;
 }
 
+bool verifyCurveVertexEligibility(QApplication &application)
+{
+    bool passed = true;
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        ApplicationSession session;
+        Shape curve;
+        curve.geometryType = GeometryType::Nurbs;
+        curve.nurbs = scenario == 2
+            ? makeDegreeOneNurbs({{-6, -3}, {0, 6}, {6, -3}})
+            : makeBezierNurbs({{-6, -3}, {-2, 6}, {2, -6}, {6, 3}});
+        const ObjectId id = session.document().append(curve);
+        std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+        viewport->resize(640, 480);
+        viewport->show();
+        application.processEvents();
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        if (!waitForViewPreset(viewport.get(), ViewportViewPreset::Top)) return false;
+        viewport->setTool(ToolId::Select);
+        viewport->selectOutlinerObject(id, false);
+        viewport->setObjectEditMode(true);
+        viewport->setComponentSelectionMode(0);
+        viewport->setControlPointsVisible(scenario == 1);
+        viewport->setOsnapEnabled(false);
+        const int index = scenario == 3 ? 0 : 1;
+        ViewportTransform projection;
+        projection.setCameraPreferences(viewport->cameraPreferences());
+        projection.setViewPreset(ViewportViewPreset::Top);
+        QPointF from;
+        projection.worldPointToScreen(shapePointToWorld(
+            curve, curve.nurbs.controlPoints[index]), viewport->size(), &from);
+        const QPointF to = from + QPointF(25, 10);
+        sendMouse(viewport.get(), QEvent::MouseButtonPress, from,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(viewport.get(), QEvent::MouseMove, to,
+                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(viewport.get(), QEvent::MouseButtonRelease, to,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        application.processEvents();
+        const Shape *result = session.document().shape(id);
+        const bool moved = result != nullptr &&
+            result->nurbs.controlPoints[index] != curve.nurbs.controlPoints[index];
+        bool otherPointsFixed = result != nullptr;
+        if (result != nullptr) {
+            for (int other = 0; other < curve.nurbs.controlPoints.size(); ++other) {
+                if (other != index && result->nurbs.controlPoints[other] !=
+                    curve.nurbs.controlPoints[other]) otherPointsFixed = false;
+            }
+        }
+        passed &= check(moved == (scenario != 0) && otherPointsFixed,
+            "Vertex must hide spline handles, CP must expose them, and endpoints and degree-one corners must remain draggable");
+    }
+    return passed;
+}
+
 bool verifyVertexComponentSelection(QApplication &application)
 {
     bool passed = true;
@@ -626,6 +682,8 @@ bool verifySurfaceVertexGrab(QApplication &application)
                     "corner-grab cube fixture must be valid");
     Shape adjoining = plane;
     adjoining.nurbsSurface.controlPoints = {{-8,-8,8},{-8,-16,8},{-16,-8,8},{-16,-16,8}};
+    cube.controlPointWeldGroups = {0,0,0,0,741,0,0,0};
+    adjoining.controlPointWeldGroups = {741,0,0,0};
     Document source;
     source.append(cube);
     source.append(adjoining);
@@ -640,6 +698,10 @@ bool verifySurfaceVertexGrab(QApplication &application)
     probe->setViewPreset(ViewportViewPreset::Top);
     passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
                     "corner-grab camera must settle");
+    probe->selectOutlinerObject(source.objectIdAt(0),false);
+    probe->setObjectEditMode(true);
+    probe->setComponentSelectionMode(0);
+    probe->setControlPointsVisible(false);
     ViewportTransform camera;
     camera.setCameraPreferences(probe->cameraPreferences());
     camera.setViewPreset(ViewportViewPreset::Top);
@@ -766,6 +828,10 @@ bool verifySurfaceVertexGrab(QApplication &application)
     probe->setViewPreset(ViewportViewPreset::Top);
     passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
                     "standalone plane camera must settle");
+    probe->selectOutlinerObject(planeOnly.objectIdAt(0),false);
+    probe->setObjectEditMode(true);
+    probe->setComponentSelectionMode(0);
+    probe->setControlPointsVisible(false);
     sendMouse(probe.get(), QEvent::MouseButtonPress, start,
               Qt::RightButton, Qt::RightButton, Qt::NoModifier);
     sendMouse(probe.get(), QEvent::MouseButtonRelease, start,
@@ -2986,9 +3052,195 @@ bool verifyStandaloneFaceExtrusionHistory(QApplication &application,
     return passed;
 }
 
+bool verifyGrabComponents(QApplication &application)
+{
+    bool passed=true;
+    const auto near=[](const Point3D &a,const Point3D &b) {
+        return std::hypot(a.x-b.x,std::hypot(a.y-b.y,a.z-b.z))<1.0e-6;
+    };
+    for (int scenario=0;scenario<10;++scenario) {
+        ApplicationSession session;
+        Shape sheet;
+        sheet.geometryType=GeometryType::NurbsSurface;
+        auto &surface=sheet.nurbsSurface;
+        surface.controlVertexCountU=surface.controlVertexCountV=2;
+        surface.controlPoints={{-4,-4,0},{-4,4,0},{4,-4,0},{4,4,0}};
+        surface.weights={1,1,1,1};surface.knotsU={0,1};surface.knotsV={0,1};
+        Shape source=sheet;
+        Point3D pick{-4,-4,0};
+        int mode=0,axis=Qt::Key_Z;
+        if (scenario==1 || scenario==2 || scenario==5 || scenario==9) {
+            source.geometryType=GeometryType::NurbsSolid;
+            if (!makeNurbsExtrusionSolid(surface,{0,0,4},&source.nurbsSolid)) return false;
+            mode=scenario==2?2:1;
+            pick=scenario==2?Point3D{0,0,4}:Point3D{4,0,4};
+            if (scenario==2) axis=Qt::Key_X;
+            if (scenario==9) {mode=0;pick={-4,-4,4};axis=Qt::Key_X;}
+        } else if (scenario==3) {
+            source.geometryType=GeometryType::Line;
+            source.nurbs=makeDegreeOneNurbs({{-4,-4},{4,-4}});
+            source.workPlaneFrame=makeWorkPlaneFrame(WorkPlane::XY);
+            source.controlPointWeldGroups={712,0};
+        } else if (scenario==4) {
+            source={};source.geometryType=GeometryType::Point;
+            source.points={{-4,-4}};
+        } else if (scenario==6) {
+            source.nurbsSurface.controlVertexCountU=3;
+            source.nurbsSurface.controlPoints={{-4,-4,0},{-4,4,0},{0,-4,0},{0,4,0},{4,-4,0},{4,4,0}};
+            source.nurbsSurface.weights={1,1,1,1,1,1};
+            source.nurbsSurface.knotsU={0,0.5,1};
+            pick={0,-4,0};
+        } else if (scenario==7 || scenario==8) {
+            const auto circle=makeCircleNurbs({{0,0},{4,0}});
+            NurbsSurface3D disk;
+            if (!makeNurbsPlanarFillSurface(circle,makeWorkPlaneFrame(WorkPlane::XY),&disk)) return false;
+            source={};source.geometryType=GeometryType::NurbsSolid;
+            if (!makeNurbsExtrusionSolid(disk,{0,0,4},&source.nurbsSolid)) return false;
+            pick=scenario==7 ? Point3D{0,0,4} : Point3D{4,0,2};
+            mode=2;axis=Qt::Key_X;
+        }
+        const ObjectId id=session.document().append(source);
+        ObjectId neighbor;
+        Shape other;
+        if (scenario==3) {
+            other=sheet;
+            other.controlPointWeldGroups={712,0,0,0};
+            neighbor=session.document().append(other);
+            session.document().setObjectContainer(neighbor,id);
+        } else if (scenario==4) {
+            other.geometryType=GeometryType::Line;
+            other.nurbs=makeDegreeOneNurbs({{-6,-4},{-2,-4}});
+            other.workPlaneFrame=makeWorkPlaneFrame(WorkPlane::XY,3);
+            neighbor=session.document().append(other);
+            session.document().setObjectContainer(neighbor,id);
+        }
+        std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+        viewport->resize(640,480);viewport->show();application.processEvents();
+        const auto view=scenario==9 ? ViewportViewPreset::Top : ViewportViewPreset::Isometric;
+        viewport->setViewPreset(view);
+        if (!waitForViewPreset(viewport.get(),view)) return false;
+        viewport->setOsnapEnabled(false);
+        viewport->setControlPointsVisible(false);
+        viewport->setPanButton(Qt::RightButton);
+        viewport->selectOutlinerObject(id,false);
+        viewport->setObjectEditMode(true);
+        viewport->setComponentSelectionMode(mode);
+        ViewportTransform projection;
+        projection.setCameraPreferences(viewport->cameraPreferences());
+        projection.setViewPreset(view);
+        QPointF start,destination;
+        const Point3D delta=axis==Qt::Key_X?Point3D{3,0,0}:Point3D{0,0,3};
+        projection.worldPointToScreen(pick,viewport->size(),&start);
+        projection.worldPointToScreen({pick.x+delta.x,pick.y+delta.y,pick.z+delta.z},viewport->size(),&destination);
+        destination += QPointF(start.toPoint()) - start;
+        start = QPointF(start.toPoint());
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,start,Qt::RightButton,Qt::RightButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,start,Qt::RightButton,Qt::NoButton,Qt::NoModifier);
+        if (scenario==5) {
+            QPointF opposite;
+            projection.worldPointToScreen({-4,0,4},viewport->size(),&opposite);
+            sendMouse(viewport.get(),QEvent::MouseButtonPress,opposite,Qt::RightButton,Qt::RightButton,Qt::ShiftModifier);
+            sendMouse(viewport.get(),QEvent::MouseButtonRelease,opposite,Qt::RightButton,Qt::NoButton,Qt::ShiftModifier);
+        }
+        QCursor::setPos(viewport->mapToGlobal(start.toPoint()));
+        const auto key=[&](int code) {QKeyEvent event(QEvent::KeyPress,code,Qt::NoModifier);QApplication::sendEvent(viewport.get(),&event);};
+        const auto begin=viewport->executeCommand(ViewportCommand::BeginGrab);
+        if (!begin.accepted) qCritical()<<"Grab scenario rejected"<<scenario;
+        passed &= check(begin.accepted,"every selected vertex, edge, and face must start Grab");
+        if (!begin.accepted) continue;
+        if (scenario==4) key(Qt::Key_W);
+        key(axis);
+        for (int repeat=0;repeat<3;++repeat)
+            sendMouse(viewport.get(),QEvent::MouseMove,destination,Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+        const Shape preview=*session.document().shape(id);
+        const auto verify=[&](const Shape &actual) {
+            if (scenario==7 || scenario==8) {
+                if (!validateNurbsSolid(actual.nurbsSolid) || !actual.nurbsSolid.boundaryFaces.isEmpty() ||
+                    !near(actual.nurbsSolid.displacement,scenario==7 ? Point3D{3,0,4} : Point3D{0,0,4})) return false;
+                for (int cv=0;cv<4;++cv) {
+                    auto expected=source.nurbsSolid.baseSurface.controlPoints[cv];
+                    if (scenario==8) expected.x+=3;
+                    if (!near(actual.nurbsSolid.baseSurface.controlPoints[cv],expected)) return false;
+                }
+                return true;
+            }
+            if (scenario==6) {
+                if (actual.nurbsSurface.controlPoints.size()!=6) return false;
+                for (int index=0;index<6;++index) {
+                    auto expected=source.nurbsSurface.controlPoints[index];
+                    if (index==2) expected.z+=3;
+                    if (!near(actual.nurbsSurface.controlPoints[index],expected)) return false;
+                }
+                return true;
+            }
+            if (scenario==1 || scenario==2 || scenario==5 || scenario==9) {
+                if (!validateNurbsSolid(actual.nurbsSolid)) return false;
+                auto original=source.nurbsSolid;
+                materializeNurbsSolidBoundary(&original);
+                if (actual.nurbsSolid.boundaryFaces.size()!=original.boundaryFaces.size()) return false;
+                for (int face=0;face<original.boundaryFaces.size();++face) for(int cv=0;cv<4;++cv) {
+                    const auto &p=original.boundaryFaces[face].controlPoints[cv];
+                    const bool moved=scenario==9 ? near(p,pick) :
+                        (scenario==2 || scenario==5 ? std::abs(p.z-4)<1e-8 : std::abs(p.z-4)<1e-8 && std::abs(p.x-4)<1e-8);
+                    const Point3D expected{p.x+(moved?delta.x:0),p.y+(moved?delta.y:0),p.z+(moved?delta.z:0)};
+                    if (!near(actual.nurbsSolid.boundaryFaces[face].controlPoints[cv],expected)) return false;
+                }
+                return true;
+            }
+            const auto points=extrusionWeldControlPoints(actual);
+            if (points.isEmpty() || !near(points.first(),{-4,-4,3})) return false;
+            if (scenario==0) for(int cv=1;cv<4;++cv)
+                if (!near(actual.nurbsSurface.controlPoints[cv],surface.controlPoints[cv])) return false;
+            if (scenario==3 && !near(session.document().shape(neighbor)->nurbsSurface.controlPoints[0],points.first())) return false;
+            return true;
+        };
+        const bool previewValid=verify(preview);
+        if(!previewValid) qCritical()<<"Grab wrong component preview scenario"<<scenario;
+        passed &= check(previewValid,"Grab moves selected components and their shared connections only");
+        key(Qt::Key_Escape);
+        passed &= check(shapeToJson(*session.document().shape(id))==shapeToJson(source) && session.history().undoCount()==0,
+                        "Escape restores exact source geometry without history");
+        if (neighbor.isValid()) passed &= check(shapeToJson(*session.document().shape(neighbor))==shapeToJson(other),
+                        "Escape restores linked and destination geometry");
+        QCursor::setPos(viewport->mapToGlobal(start.toPoint()));
+        passed &= check(viewport->executeCommand(ViewportCommand::BeginGrab).accepted,"same component remains selected after cancel");
+        key(axis);
+        sendMouse(viewport.get(),QEvent::MouseMove,destination,Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonPress,destination,Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);
+        sendMouse(viewport.get(),QEvent::MouseButtonRelease,destination,Qt::LeftButton,Qt::NoButton,Qt::NoModifier);
+        passed &= check(verify(*session.document().shape(id)) && session.history().undoCount()==1,
+                        "component move commits as one history operation");
+        if (scenario==4) {
+            const Shape *edge=session.document().shape(neighbor);
+            const Shape *point=session.document().shape(id);
+            passed &= check(edge->nurbs.controlPoints.size()==3 && point->controlPointWeldGroups.size()==1 &&
+                            edge->controlPointWeldGroups.value(1,0)==point->controlPointWeldGroups[0] && point->controlPointWeldGroups[0]!=0,
+                            "Grab destination welding splits an edge and shares the moved vertex");
+        }
+        if (scenario==5) {
+            const auto extrude=viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+            passed &= check(extrude.accepted && extrude.count==2,
+                            "Grab must preserve only the two selected opposite edges without selecting their connectors");
+            key(Qt::Key_Escape);
+        }
+        passed &= check(viewport->executeCommand(ViewportCommand::Undo).accepted &&
+                        shapeToJson(*session.document().shape(id))==shapeToJson(source),
+                        "Undo restores source before the connected component edit");
+        if (neighbor.isValid()) passed &= check(shapeToJson(*session.document().shape(neighbor))==shapeToJson(other),
+                        "Undo restores destination splitting and every linked object atomically");
+    }
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_GRAB_COMPONENTS_ONLY")) {
+        return verifyGrabComponents(application) ? 0 : 1;
+    }
+    if (qEnvironmentVariableIsSet("CLASSICAD_CURVE_VERTEX_ELIGIBILITY_ONLY")) {
+        return verifyCurveVertexEligibility(application) ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_EXTRUSION_HISTORY_ONLY")) {
         const bool standalone = verifyStandaloneFaceExtrusionHistory(application);
         const bool region = verifyStandaloneFaceExtrusionHistory(application,true);

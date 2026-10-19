@@ -247,7 +247,8 @@ QVector<Point3D> extrusionWeldControlPoints(const Shape &shape, Point3D placemen
 bool weldExtrusionDestination(QVector<Shape> *shapes,
                               const QVector<int> &extrudedShapeIndices,
                               const QVector<Point3D> &placements,
-                              qreal tolerance, QString *failure)
+                              qreal tolerance, QString *failure,
+                              const QHash<int, QVector<Point3D>> *eligibleVertices)
 {
     const auto fail=[&](const QString &message) { if(failure) *failure=message; return false; };
     if (!shapes || !std::isfinite(tolerance) || tolerance<=0 ||
@@ -255,12 +256,13 @@ bool weldExtrusionDestination(QVector<Shape> *shapes,
         return fail(QStringLiteral("Invalid destination weld inputs"));
     QSet<int> focused;
     for (int i:extrudedShapeIndices) {
-        if(i<0 || i>=shapes->size()) return fail(QStringLiteral("Invalid extrusion index"));
+        if(i<0 || i>=shapes->size()) return fail(QStringLiteral("Invalid destination weld shape index"));
         focused.insert(i);
     }
     QVector<Shape> staged=*shapes;
     const auto placement=[&](int i) { return placements.isEmpty()?Point3D{}:placements[i]; };
     QVector<QVector<Point3D>> originalPoints;
+    QVector<QVector<QPair<Point3D, Point3D>>> eligibleEdges(staged.size());
     quint64 next=1;
     for (int i=0;i<staged.size();++i) {
         originalPoints.append(vertices(staged[i],placement(i)));
@@ -272,19 +274,72 @@ bool weldExtrusionDestination(QVector<Shape> *shapes,
             next=std::max(next,group+1);
         }
     }
+    const auto selectedPoint = [&](int index, Point3D point) {
+        if (!eligibleVertices) return focused.contains(index);
+        for (const auto &selected : eligibleVertices->value(index))
+            if (distance2(point, selected) <= tolerance*tolerance) return true;
+        return false;
+    };
+    if (eligibleVertices) for (int index : focused) {
+        const auto appendEdge = [&](Point3D first, Point3D second) {
+            first=plus(first,placement(index));
+            second=plus(second,placement(index));
+            if (selectedPoint(index,first) && selectedPoint(index,second))
+                eligibleEdges[index].append({first,second});
+        };
+        const auto appendSurface = [&](const NurbsSurface3D &surface) {
+            if (surface.degreeU!=1 || surface.degreeV!=1) return;
+            const int nu=surface.controlVertexCountU, nv=surface.controlVertexCountV;
+            for(int u=0;u<nu;++u) for(int v=0;v<nv;++v) {
+                const auto first=surface.controlPoints[u*nv+v];
+                if(u+1<nu) appendEdge(first,surface.controlPoints[(u+1)*nv+v]);
+                if(v+1<nv) appendEdge(first,surface.controlPoints[u*nv+v+1]);
+            }
+        };
+        const auto &shape=staged[index];
+        if(shape.geometryType==GeometryType::NurbsSurface) appendSurface(shape.nurbsSurface);
+        else if(shape.geometryType==GeometryType::NurbsSolid)
+            for(const auto &face:nurbsSolidFaces(shape.nurbsSolid)) appendSurface(face);
+        else for(const auto &component:nurbsCurveComponentsForShape(shape)) {
+            if(component.curve.degree!=1) continue;
+            for(int cv=1;cv<component.curve.controlPoints.size();++cv)
+                appendEdge(curvePoint(component.curve,cv-1,component.workPlaneFrame),
+                           curvePoint(component.curve,cv,component.workPlaneFrame));
+        }
+    }
+    const auto eligiblePoint = [&](int index, Point3D point) {
+        if(selectedPoint(index,point)) return true;
+        if(!eligibleVertices) return false;
+        for(const auto &edge:eligibleEdges[index]) {
+            qreal fraction;
+            if(fractionOnEdge(point,edge.first,edge.second,tolerance,&fraction)) return true;
+        }
+        return false;
+    };
     for (int target=0;target<staged.size();++target)
         for (int source=0;source<staged.size();++source) {
-            if(target==source || (!focused.contains(target)&&!focused.contains(source))) continue;
-            for (const auto &p:originalPoints[source]) splitAt(&staged[target],placement(target),p,tolerance);
+            if((target==source && !eligibleVertices) ||
+               (!focused.contains(target)&&!focused.contains(source))) continue;
+            for (const auto &p:originalPoints[source]) {
+                if (!eligibleVertices ||
+                    (focused.contains(source) && eligiblePoint(source,p)) ||
+                    (focused.contains(target) && eligiblePoint(target,p)))
+                    splitAt(&staged[target],placement(target),p,tolerance);
+            }
         }
     QVector<QVector<Point3D>> points;
     for (int i=0;i<staged.size();++i) points.append(vertices(staged[i],placement(i)));
     QHash<quint64,quint64> aliases;
     const auto root=[&](quint64 g) { while(aliases.contains(g)) g=aliases.value(g); return g; };
-    for (int a=0;a<staged.size();++a) for (int b=a+1;b<staged.size();++b) {
+    for (int a=0;a<staged.size();++a)
+      for (int b=a+(eligibleVertices?0:1);b<staged.size();++b) {
         if(!focused.contains(a)&&!focused.contains(b)) continue;
         for(int ai=0;ai<points[a].size();++ai) for(int bi=0;bi<points[b].size();++bi) {
+            if(a==b && bi<=ai) continue;
             if(distance2(points[a][ai],points[b][bi])>tolerance*tolerance) continue;
+            if(eligibleVertices &&
+               !(focused.contains(a) && eligiblePoint(a,points[a][ai])) &&
+               !(focused.contains(b) && eligiblePoint(b,points[b][bi]))) continue;
             auto &ga=staged[a].controlPointWeldGroups;
             auto &gb=staged[b].controlPointWeldGroups;
             if(ga.isEmpty()) ga.fill(0,points[a].size());

@@ -658,11 +658,12 @@ bool transformShapeControlPoints(
                 }
             }
         }
+        NurbsExtrusionSolid3D candidate = shape->nurbsSolid;
         if (selectedPositions.isEmpty() ||
-            !materializeNurbsSolidBoundary(&shape->nurbsSolid)) {
+            !conformNurbsSolidBoundaryForVertexEditing(&candidate)) {
             return false;
         }
-        for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
+        for (NurbsSurface3D &face : candidate.boundaryFaces) {
             for (Point3D &point : face.controlPoints) {
                 const bool selected = std::any_of(
                     selectedPositions.cbegin(), selectedPositions.cend(),
@@ -679,7 +680,23 @@ bool transformShapeControlPoints(
                 point = moved;
             }
         }
-        return validateNurbsSolid(shape->nurbsSolid);
+        if (!validateNurbsSolid(candidate)) return false;
+        if (!shape->controlPointWeldGroups.isEmpty()) {
+            const QVector<Point3D> newPositions = nurbsSolidControlPoints(candidate);
+            QVector<quint64> remappedGroups(newPositions.size(), 0);
+            for (int oldIndex = 0; oldIndex < uniquePositions.size() &&
+                 oldIndex < shape->controlPointWeldGroups.size(); ++oldIndex) {
+                const Point3D position = controlPointIndices.contains(oldIndex)
+                    ? transform(uniquePositions[oldIndex]) : uniquePositions[oldIndex];
+                for (int newIndex = 0; newIndex < newPositions.size(); ++newIndex) {
+                    if (close(position, newPositions[newIndex]))
+                        remappedGroups[newIndex] = shape->controlPointWeldGroups[oldIndex];
+                }
+            }
+            shape->controlPointWeldGroups = std::move(remappedGroups);
+        }
+        shape->nurbsSolid = std::move(candidate);
+        return true;
     }
 
     QSet<int> indicesToTransform = controlPointIndices;

@@ -1205,6 +1205,12 @@ bool PointExtrudeTool::weldEnabled() const
     return weldEnabled_;
 }
 
+void PointExtrudeTool::setWeldEnabled(bool enabled)
+{
+    weldEnabled_ = enabled;
+    updateStatus();
+}
+
 void PointExtrudeTool::toggleWeld(ToolContext &context)
 {
     displayShapes_.clear();

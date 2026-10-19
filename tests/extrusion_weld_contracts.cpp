@@ -23,6 +23,28 @@ bool near(Point3D a,Point3D b)
 int main()
 {
     bool ok=true;
+    // Grab must not attach an untouched endpoint just because its object moved.
+    QVector<Shape> grabbed{line({0,0},{5,0}),line({0,0},{0,3}),line({5,0},{5,3})};
+    QHash<int,QVector<Point3D>> eligible{{0,{{5,0,0}}}};
+    ok &= check(weldExtrusionDestination(&grabbed,{0},{},1e-6,nullptr,&eligible),
+                "Grab destination weld accepts selected vertex mask");
+    ok &= check(grabbed[1].controlPointWeldGroups.isEmpty() &&
+                grabbed[0].controlPointWeldGroups[0]==0 &&
+                grabbed[0].controlPointWeldGroups[1]!=0 &&
+                grabbed[0].controlPointWeldGroups[1]==grabbed[2].controlPointWeldGroups[0],
+                "Grab weld excludes untouched vertices on moved object");
+    grabbed={line({0,0},{10,0}),line({3,0},{3,3})};
+    eligible={{0,{{0,0,0},{10,0,0}}}};
+    ok &= check(weldExtrusionDestination(&grabbed,{0},{},1e-6,nullptr,&eligible) &&
+                grabbed[0].nurbs.controlPoints.size()==3 &&
+                grabbed[0].controlPointWeldGroups[1]==grabbed[1].controlPointWeldGroups[0],
+                "Grab selected edge splits at stationary target vertex");
+    grabbed={line({0,0},{10,0}),line({3,0},{3,3})};
+    eligible={{0,{{0,0,0}}}};
+    ok &= check(weldExtrusionDestination(&grabbed,{0},{},1e-6,nullptr,&eligible) &&
+                grabbed[0].nurbs.controlPoints.size()==2 &&
+                grabbed[1].controlPointWeldGroups.isEmpty(),
+                "Grab unselected adjoining edge does not weld its interior");
     // A translated incoming line overlaps only the middle of the target.
     QVector<Shape> curves{line({0,0},{10,0}),line({0,0},{4,0})};
     curves[0].controlPointWeldGroups={31,32};

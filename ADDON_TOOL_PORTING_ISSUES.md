@@ -247,6 +247,22 @@ misread or implemented incorrectly.
 
 ## Point tool port findings
 
+- Grab's Face mode must resolve selected face control vertices rather than
+  fall back to whole-object movement. A single selected surface corner is a
+  valid target with CP hidden; selecting both ends of a boundary is not a
+  prerequisite for moving either corner.
+- Orthographic corners can share the same screen position at different depths.
+  CPU component picking must resolve equal screen-distance hits by the nearer
+  depth; otherwise Top view can grab the bottom corner underneath the visible
+  top corner. This also applies when the raster picker is unavailable.
+- Partial-edge extrusion junctions require exact boundary subdivision before
+  deformation. Validation-only edge subdivision leaves no stored vertex for
+  Grab to update and can reject an otherwise valid shared corner movement.
+- User override: G may twist adjacent faces as smooth bilinear NURBS patches.
+  Vertex mode shows spline endpoints; CP exposes the remaining control points.
+  Weld to Snap is shared with Extrude, applies only to moved components at
+  Grab completion, and belongs in the same atomic Undo as the movement.
+
 - A cube corner edit cannot mutate the affine extrusion base: its single-CV
   deformation fails `nurbsSolidBaseFrame` and removes every derived face from
   rendering. Use the explicit connected bilinear boundary contract in

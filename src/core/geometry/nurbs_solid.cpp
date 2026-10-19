@@ -361,4 +361,88 @@ bool materializeNurbsSolidBoundary(NurbsExtrusionSolid3D *solid)
     return true;
 }
 
+bool conformNurbsSolidBoundaryForVertexEditing(
+    NurbsExtrusionSolid3D *solid, QVector<int> *originalFaceIndices)
+{
+    if (solid == nullptr) return false;
+    NurbsExtrusionSolid3D candidate = *solid;
+    if (!materializeNurbsSolidBoundary(&candidate)) return false;
+    QVector<int> sourceIndices;
+    for (int i = 0; i < candidate.boundaryFaces.size(); ++i) sourceIndices.append(i);
+    // Each subdivision is an exact restriction of a bilinear patch, retaining
+    // its original parameter domain. Propagate opposite-edge cuts as well:
+    // merely inserting the moved corner on one face would leave a new T joint
+    // on the other side of that face.
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        QVector<Point3D> vertices;
+        for (const auto &face : candidate.boundaryFaces)
+            vertices += face.controlPoints;
+        QVector<NurbsSurface3D> faces;
+        QVector<bool> reversed;
+        QVector<int> nextSourceIndices;
+        bool changed = false;
+        for (int faceIndex = 0; faceIndex < candidate.boundaryFaces.size(); ++faceIndex) {
+            const auto &face = candidate.boundaryFaces[faceIndex];
+            const auto &cv = face.controlPoints;
+            QVector<qreal> cutsU{0, 1}, cutsV{0, 1};
+            const auto edgeCuts = [&](int a, int b, QVector<qreal> *cuts) {
+                const Point3D direction = subtract(cv[b], cv[a]);
+                const qreal squaredLength = dot(direction, direction);
+                for (const auto &point : vertices) {
+                    const qreal t = dot(subtract(point, cv[a]), direction) / squaredLength;
+                    if (t <= 1.0e-9 || t >= 1.0 - 1.0e-9) continue;
+                    if (length(subtract(point, add(cv[a], multiply(direction, t)))) <= 1.0e-8 &&
+                        std::none_of(cuts->cbegin(), cuts->cend(), [t](qreal value) {
+                            return std::abs(value - t) <= 1.0e-9;
+                        })) cuts->append(t);
+                }
+            };
+            edgeCuts(0, 2, &cutsU);
+            edgeCuts(1, 3, &cutsU);
+            edgeCuts(0, 1, &cutsV);
+            edgeCuts(2, 3, &cutsV);
+            std::sort(cutsU.begin(), cutsU.end());
+            std::sort(cutsV.begin(), cutsV.end());
+            if (cutsU.size() == 2 && cutsV.size() == 2) {
+                faces.append(face);
+                reversed.append(candidate.boundaryFaceReversed[faceIndex]);
+                nextSourceIndices.append(sourceIndices[faceIndex]);
+                continue;
+            }
+            changed = true;
+            const auto evaluate = [&](qreal u, qreal v) {
+                return add(multiply(add(multiply(cv[0], 1-v), multiply(cv[1], v)), 1-u),
+                           multiply(add(multiply(cv[2], 1-v), multiply(cv[3], v)), u));
+            };
+            const qreal u0 = face.knotsU.first(), uRange = face.knotsU.last() - u0;
+            const qreal v0 = face.knotsV.first(), vRange = face.knotsV.last() - v0;
+            for (int u = 0; u + 1 < cutsU.size(); ++u) {
+                for (int v = 0; v + 1 < cutsV.size(); ++v) {
+                    NurbsSurface3D patch = face;
+                    patch.controlPoints = {evaluate(cutsU[u], cutsV[v]),
+                        evaluate(cutsU[u], cutsV[v+1]), evaluate(cutsU[u+1], cutsV[v]),
+                        evaluate(cutsU[u+1], cutsV[v+1])};
+                    patch.knotsU = {u0 + cutsU[u]*uRange, u0 + cutsU[u+1]*uRange};
+                    patch.knotsV = {v0 + cutsV[v]*vRange, v0 + cutsV[v+1]*vRange};
+                    faces.append(std::move(patch));
+                    reversed.append(candidate.boundaryFaceReversed[faceIndex]);
+                    nextSourceIndices.append(sourceIndices[faceIndex]);
+                }
+            }
+            // Bound pathological propagation without accepting a broken edit.
+            if (faces.size() > 16384) return false;
+        }
+        if (!changed) {
+            if (!validateNurbsSolid(candidate)) return false;
+            *solid = std::move(candidate);
+            if (originalFaceIndices) *originalFaceIndices = sourceIndices;
+            return true;
+        }
+        candidate.boundaryFaces = std::move(faces);
+        candidate.boundaryFaceReversed = std::move(reversed);
+        sourceIndices = std::move(nextSourceIndices);
+    }
+    return false;
+}
+
 } // namespace classiCAD

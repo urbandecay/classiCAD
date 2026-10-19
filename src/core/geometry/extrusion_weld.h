@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document/shape.h"
+#include <QHash>
 
 namespace classiCAD {
 
@@ -15,11 +16,14 @@ QVector<Point3D> extrusionWeldControlPoints(const Shape &shape,
 // Solid cage vertices use the same unique ordering as component selection.
 // Rectangular solid edges split into exact 2x2 boundary patches. Curved spans
 // and face interiors are not split by this operation.
+// Grab supplies eligibleVertices to limit new joins to moved vertices and
+// degree-one edges with both endpoints moved, including same-object contact.
 bool weldExtrusionDestination(QVector<Shape> *shapes,
                               const QVector<int> &extrudedShapeIndices,
                               const QVector<Point3D> &placements = {},
                               qreal tolerance = 1.0e-6,
-                              QString *failure = nullptr);
+                              QString *failure = nullptr,
+                              const QHash<int, QVector<Point3D>> *eligibleVertices = nullptr);
 
 // Combine adjacent standalone planar sweeps by removing identical opposing
 // walls. The result arrays use shape indices; owners identifies the first

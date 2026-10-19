@@ -47,6 +47,7 @@ public:
     ToolPreview preview() const override;
     ToolStatus status() const override;
     bool weldEnabled() const;
+    void setWeldEnabled(bool enabled);
     void toggleWeld(ToolContext &context);
     bool manifoldEnabled() const;
     void toggleManifold(ToolContext &context);

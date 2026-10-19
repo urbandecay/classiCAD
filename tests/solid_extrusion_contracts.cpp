@@ -902,6 +902,47 @@ int main(int argc, char **argv)
     }
     auto holedFace = face;
     {
+        Shape junction;
+        junction.geometryType = GeometryType::NurbsSolid;
+        junction.nurbsSolid = rectangularSolid;
+        passed &= check(materializeNurbsSolidBoundary(&junction.nurbsSolid),
+                        "junction fixture materializes");
+        const auto original = junction.nurbsSolid.boundaryFaces[1];
+        const auto midpoint = [](const Point3D &a, const Point3D &b) {
+            return Point3D{(a.x+b.x)/2, (a.y+b.y)/2, (a.z+b.z)/2};
+        };
+        auto first = original, second = original;
+        first.controlPoints[2] = second.controlPoints[0] =
+            midpoint(original.controlPoints[0], original.controlPoints[2]);
+        first.controlPoints[3] = second.controlPoints[1] =
+            midpoint(original.controlPoints[1], original.controlPoints[3]);
+        const qreal middleU = (original.knotsU.first()+original.knotsU.last())/2;
+        first.knotsU.last() = second.knotsU.first() = middleU;
+        junction.nurbsSolid.boundaryFaces[1] = first;
+        junction.nurbsSolid.boundaryFaces.append(second);
+        junction.nurbsSolid.boundaryFaceReversed.append(
+            junction.nurbsSolid.boundaryFaceReversed[1]);
+        const auto before = nurbsSolidControlPoints(junction.nurbsSolid);
+        int selected = -1;
+        for (int i=0; i<before.size(); ++i)
+            if (near(before[i], first.controlPoints[2])) selected = i;
+        junction.controlPointWeldGroups.fill(0, before.size());
+        if (selected >= 0) junction.controlPointWeldGroups[selected] = 741;
+        passed &= check(selected >= 0 && transformShapeControlPoints(&junction, {selected},
+                            [](const Point3D &p) { return Point3D{p.x+0.2,p.y-0.1,p.z+0.4}; }) &&
+                            validateNurbsSolid(junction.nurbsSolid),
+                        "moving a T junction subdivides incident faces and keeps a closed smooth solid");
+        const auto after = nurbsSolidControlPoints(junction.nurbsSolid);
+        bool retainedGroup = false;
+        for (int i=0; i<after.size(); ++i) {
+            const auto &old = first.controlPoints[2];
+            if (near(after[i], {old.x+0.2,old.y-0.1,old.z+0.4}))
+                retainedGroup = junction.controlPointWeldGroups.value(i) == 741;
+        }
+        passed &= check(retainedGroup,
+                        "junction subdivision remaps existing weld identity by world position");
+    }
+    {
         Shape edited;
         edited.geometryType = GeometryType::NurbsSolid;
         edited.nurbsSolid = rectangularSolid;
